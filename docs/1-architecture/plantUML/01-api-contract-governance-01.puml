@@ -1,0 +1,21 @@
+@startuml
+[*] --> EXPERIMENTAL : 新增(CA 记录, 轻)
+EXPERIMENTAL --> EXPERIMENTAL : 随时改\n(CA 记录)
+EXPERIMENTAL --> FROZEN : 冻结批次/个案 RFC\n前置: 已交付调度器矩阵全绿
+FROZEN --> FROZEN : 纯新增\n(PR + golden 同步)
+FROZEN --> DEPRECATED : 语义变更/移除意向\n(RFC + 迁移指南)
+DEPRECATED --> FROZEN : 撤销弃用\n(决策记录)
+DEPRECATED --> [*] : 周期到期\n(两个 minor 无使用)
+note right of EXPERIMENTAL
+  不在 golden(CI 不保护)
+  标注 TG_API_EXPERIMENTAL
+end note
+note right of FROZEN
+  在 golden: 删/签名/布局变 = 红
+  标注 TG_API_FROZEN
+end note
+note right of DEPRECATED
+  仍在 golden(门禁仍保护)
+  编译警告(deprecated 属性)
+end note
+@enduml

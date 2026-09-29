@@ -1,0 +1,50 @@
+@startuml
+skinparam componentStyle rectangle
+
+package "APP 类(消费标准)" as G_APP {
+  [APP · 测试 · 样例 · 工具] as APPN
+}
+package "Interface 插件 — 严格叶子: 除 APP 外没有任何插件依赖它们" as G_IF {
+  [iface-posix(薄皮肤)] as IF_P
+  [iface-min(直通 native)] as IF_MIN
+  [iface-pkcs11 …(域标准)] as IF_O
+}
+package "Service 层 — 服务间可声明依赖(init-DAG 无环)" as G_SVC {
+  [svc-posix] as SPX
+  [三方移植件(sqlite…)] as S3
+  [lwIP / crypto / trace …] as SX
+}
+package "框架件(D19–D21) — 能力基础设施" as G_FW {
+  [vfs-core: 纯 VFS\ntg_file / tg_open 挂载表·单路由] as VFSC2
+  [cdev-core: 字符设备 + flash 子型\nopen_file 钩子] as CDEVC2
+  [bdev-core: bdev 子分类] as BDEVC2
+  [dev-core: 通用设备注册表] as DEVC2
+}
+package "FS 插件(管理类)" as G_FS {
+  [fs/tmpfs: rootfs] as TMP2
+  [fs/devfs: /dev 设备节点] as DFS2
+}
+package "Core — native API(tg_*) + 服务注册表" as G_CORE {
+  [服务表] as COREN
+}
+APPN --> IF_P
+APPN --> IF_MIN
+APPN --> IF_O
+IF_P --> SPX : 再导出(D13)
+IF_O --> SX
+IF_MIN --> COREN : 直通 native(依赖仅 core)
+S3 ..> SPX : 声明依赖(D18)
+SPX --> SX : socket 路由
+SPX --> VFSC2 : 依赖(D19)
+VFSC2 --> COREN
+CDEVC2 --> VFSC2 : 类型/适配钩子
+CDEVC2 --> DEVC2 : 依赖
+BDEVC2 --> DEVC2 : 依赖
+DEVC2 --> COREN
+CDEVC2 --> COREN
+BDEVC2 --> COREN
+TMP2 --> VFSC2 : 挂载 /
+DFS2 --> VFSC2 : 挂载 /dev
+DFS2 --> DEVC2 : 枚举/钩子协议
+SX --> COREN
+@enduml

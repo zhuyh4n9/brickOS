@@ -107,23 +107,9 @@
 
 依赖链(为什么动态加载只能是 v3):
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
-left to right direction
+![依赖链(为什么动态加载只能是 v3)](pics/02-roadmap-01.png)
 
-[MMU 恒等映射(v1)] as MMU
-[重定位(v2)] as REL
-[crypto 插件(v2)] as CRYPTO
-[符号表导出(v1.x 工具链)] as SYMS
-[动态插件加载 + 鉴权(v3.0)] as DYN
-
-MMU --> REL
-REL --> DYN
-CRYPTO --> DYN
-SYMS --> DYN
-@enduml
-```
+> 源文件: [plantUML/02-roadmap-01.puml](plantUML/02-roadmap-01.puml)
 
 **v3.0 插件清单(2 件):**
 

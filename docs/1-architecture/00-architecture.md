@@ -88,79 +88,9 @@
 
 ## 3. 总体分层
 
-```plantuml
-@startuml
-' 布局说明: 每层 = 一个 creole 表格组件(单元格边框即模块框)+ 白色隐形撑宽 card
-' (点数按表格宽度逐层校准, 保证九个层框等宽 ~980px; 1 点 ≈ 4.5px, 改内容后微调)
-skinparam shadowing false
-skinparam componentStyle rectangle
-skinparam packageStyle rectangle
-skinparam roundCorner 10
-skinparam nodesep 14
-skinparam ranksep 40
-skinparam cardFontColor white
-skinparam cardBorderColor white
-skinparam cardBackgroundColor white
+![3. 总体分层](pics/00-architecture-01.png)
 
-rectangle "TangramOS" as TOS {
-
-  package "L5 · APP 插件(唯一)" as L5 {
-    [|业务逻辑|manifest 声明编码面对的接口|] as L5T
-    card ".........................................................................................................................................." as SP5
-  }
-
-  package "L4 · Interface — 严格叶子 · 可叠加" as L4 {
-    [|iface-posix(薄皮肤)|iface-min(直通)|iface-pkcs11 …(域标准)|] as L4T
-    card ".........................................................................................................." as SP4
-  }
-
-  package "3a · Service — 消费者与移植基座" as L3A {
-    [|svc-posix(POSIX 运行时, fd 表主人)|三方移植(sqlite…)|\n|lwIP|crypto|trace|] as L3AT
-    card "..........................................................................................................." as SPA
-  }
-
-  package "3b · FS — 文件系统" as L3B {
-    [|tmpfs(rootfs)|devfs(/dev)|littlefs|EROFS|] as L3BT
-    card "......................................................................................................................................." as SPB
-  }
-
-  package "3c · 框架件 — 能力契约中心(D19–D21)" as L3C {
-    [|vfs-core(纯 VFS)|cdev-core(字符+flash)|\n|bdev-core(块)|dev-core(设备注册表)|] as L3CT
-    card "......................................................................................................................................" as SPC
-  }
-
-  package "3d · I/O — 驱动(契约实现者)" as L3D {
-    [|uart|can|QSPI-NOR|virtio-blk|display …|] as L3DT
-    card "........................................................................................................................................." as SPD
-  }
-
-  package "3e · Platform — 板级数据(硬件抽象)" as L3E {
-    [|pinmux|时钟|中断控制器|console|region 表|] as L3ET
-    card "......................................................................................................................................" as SPE
-  }
-
-  package "L2 · Scheduler 插件(恰一)" as L2 {
-    [|sched-coop(v1.0)|sched-preempt(v2.0)|sched-tt(v3.0)|] as L2T
-    card "..............................................................................................................." as SP2
-  }
-
-  package "L1 · OS Core — 不可组合, 刻意保持小" as L1 {
-    [|调度框架|int|memory(MMU)|plugin_manager|\n|native API(tg_*)|服务注册表||] as L1T
-    card "........................................................................................................." as SP1
-  }
-
-  ' 层间单向流(§7.2); 3a–3e 为 L3 能力层的阅读序(隐藏边约束纵向堆叠)
-  L5 -down-> L4
-  L4 -down-> L3A : 单向依赖
-  L3A -[hidden]down-> L3B
-  L3B -[hidden]down-> L3C
-  L3C -[hidden]down-> L3D
-  L3D -[hidden]down-> L3E
-  L3E -down-> L2
-  L2 -down-> L1
-}
-@enduml
-```
+> 源文件: [plantUML/00-architecture-01.puml](plantUML/00-architecture-01.puml)
 
 要点:
 - **L3 可组合能力层 = 五个子层(3a–3e, 阅读序)**: 消费者(服务)→ 文件系统 → 契约中心(框架件)→ 实现者(驱动)→ 板级数据; 总图**只画层间单向流**——层内具体依赖/注册拓扑不进总图(避免拉宽), **详见 `docs/6-vfs-device/06-device.md` §1 依赖图**; 框架件是能力层枢纽: 驱动与 FS 向它注册/挂载, 服务经它取能力
@@ -405,58 +335,9 @@ typedef struct {
 
 v0.4 的铁律"能力插件永不依赖接口插件"是安全的**结构代理**; v0.5 起由治理机器本身接管安全, 规则重写为:
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
+![7.2 依赖宪法(D18 修订: 铁律 → 四条治理规则)](pics/00-architecture-02.png)
 
-package "APP 类(消费标准)" as G_APP {
-  [APP · 测试 · 样例 · 工具] as APPN
-}
-package "Interface 插件 — 严格叶子: 除 APP 外没有任何插件依赖它们" as G_IF {
-  [iface-posix(薄皮肤)] as IF_P
-  [iface-min(直通 native)] as IF_MIN
-  [iface-pkcs11 …(域标准)] as IF_O
-}
-package "Service 层 — 服务间可声明依赖(init-DAG 无环)" as G_SVC {
-  [svc-posix] as SPX
-  [三方移植件(sqlite…)] as S3
-  [lwIP / crypto / trace …] as SX
-}
-package "框架件(D19–D21) — 能力基础设施" as G_FW {
-  [vfs-core: 纯 VFS\ntg_file / tg_open 挂载表·单路由] as VFSC2
-  [cdev-core: 字符设备 + flash 子型\nopen_file 钩子] as CDEVC2
-  [bdev-core: bdev 子分类] as BDEVC2
-  [dev-core: 通用设备注册表] as DEVC2
-}
-package "FS 插件(管理类)" as G_FS {
-  [fs/tmpfs: rootfs] as TMP2
-  [fs/devfs: /dev 设备节点] as DFS2
-}
-package "Core — native API(tg_*) + 服务注册表" as G_CORE {
-  [服务表] as COREN
-}
-APPN --> IF_P
-APPN --> IF_MIN
-APPN --> IF_O
-IF_P --> SPX : 再导出(D13)
-IF_O --> SX
-IF_MIN --> COREN : 直通 native(依赖仅 core)
-S3 ..> SPX : 声明依赖(D18)
-SPX --> SX : socket 路由
-SPX --> VFSC2 : 依赖(D19)
-VFSC2 --> COREN
-CDEVC2 --> VFSC2 : 类型/适配钩子
-CDEVC2 --> DEVC2 : 依赖
-BDEVC2 --> DEVC2 : 依赖
-DEVC2 --> COREN
-CDEVC2 --> COREN
-BDEVC2 --> COREN
-TMP2 --> VFSC2 : 挂载 /
-DFS2 --> VFSC2 : 挂载 /dev
-DFS2 --> DEVC2 : 枚举/钩子协议
-SX --> COREN
-@enduml
-```
+> 源文件: [plantUML/00-architecture-02.puml](plantUML/00-architecture-02.puml)
 
 单向流语义: 箭头只许指向"更靠近 core"; 同类内部允许接口叠接口(再导出)、服务依赖服务(含 svc-posix 与框架件)、框架件间单向(cdev-core→dev-core 与 vfs-core, bdev-core→dev-core); **设备经 fs/devfs 接入 VFS, 挂载经 fs 插件接入**(D21)。
 
@@ -536,19 +417,9 @@ static int sqlite_port_init(void) {
 
 **答案: 是插件职责——但形态是"数据 + 特化", 机制接口在 core, ISA 公共部分提炼为共享库:**
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
-left to right direction
+![8. 平台能力三层模式(评审: memory map / 中断控制器可否为插件)](pics/00-architecture-03.png)
 
-[Core 接口(语义契约)\ntg_mm · tg_pic · 早期 console · tg_clock] as CORE_IF
-[ISA 共享实现库(可复用库, 非插件)\naarch64 页表构造 / GICv3 驱动 / PL011 / arch timer] as ISA_LIB
-[Platform 插件(每 SoC 一个)\n数据 + 特化: region 表 / 中断号绑定 / 时钟树 / 引脚 / quirk] as PLAT_PLUGIN
-
-PLAT_PLUGIN --> ISA_LIB : 数据 + 特化
-ISA_LIB --> CORE_IF : 实现并填表
-@enduml
-```
+> 源文件: [plantUML/00-architecture-03.puml](plantUML/00-architecture-03.puml)
 
 | 能力 | core 接口 | ISA 共享库 | Platform 插件提供 |
 |---|---|---|---|
@@ -563,67 +434,15 @@ ISA_LIB --> CORE_IF : 实现并填表
 
 ## 9. 启动序列
 
-```plantuml
-@startuml
-start
-:reset
-platform 向量表(汇编) · BSS 清零(汇编);
-:platform.early_init
-时钟 / 引脚 / RAM / 恒等映射页表(tg_mm) / 早期 console;
-:core.init
-堆 · 中断框架 · 注册表 · 调度框架对象(无线程);
-:plugin_manager
-扫描 .tg_plugins → 拓扑排序(环 = 硬错误);
-:EARLY
-调度插件注册 tg_sched_ops → core 锁定;
-:CORE
-非服务插件 init(堆可用)
-FS 插件执行挂载计划: tmpfs→/ · devfs→/dev · littlefs→/data;
-:LATE
-Service → Interface 依序 init;
-:全局开中断;
-:各插件 start()
-中断可用, 可创建线程;
-:app.start()
-创建 APP 线程(main 语义);
-:tg_sched_run()
-首次调度, idle 进 WFI;
-stop
-@enduml
-```
+![9. 启动序列](pics/00-architecture-04.png)
+
+> 源文件: [plantUML/00-architecture-04.puml](plantUML/00-architecture-04.puml)
 
 ## 10. 存储栈(评审: FS & Block Device) — 详细设计: `docs/6-vfs-device/04-vfs.md` / `05-bdev.md` / `06-device.md` / `07-concrete-fs.md`
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
+![10. 存储栈](pics/00-architecture-05.png)
 
-[APP / svc-posix\nopen/read/write(fd)] as TOP
-[VFS = vfs-core 插件\ntg_open 挂载表·单路由 · v1.0] as VFS
-[fs/tmpfs — rootfs(D21)\nRAM FS, 挂 / 兜底] as TMP
-[fs/devfs — /dev 设备节点(D21)\n实时枚举 dev-core 注册表] as DFS
-[littlefs(可写, v1.0, D17)] as FS1
-[EROFS(只读压缩, v2.0)] as FS2
-[bdev 子分类 = bdev-core 插件\n磁盘型: 扇区 read/write/flush] as BD
-[flash = cdev-core 子型\nspi-nor/nand: read/program/erase/sync] as FL
-[page cache 无感层\nvx.0 选配(堆叠 bdev)] as PC
-[virtio-blk / SD 驱动] as DRV1
-[QSPI-NOR 驱动] as DRV2
-
-TOP --> VFS : fd
-VFS --> TMP : tg_fs_ops
-VFS --> DFS : tg_fs_ops
-VFS --> FS1 : tg_fs_ops
-VFS --> FS2 : tg_fs_ops
-FS1 --> FL : tg_flash_ops(真硬件)
-FS1 ..> BD : bdev 适配(QEMU 测试)
-FS2 --> BD : tg_bdev_ops
-BD --> PC : tg_bdev_ops(可堆叠)
-PC --> DRV1
-BD ..> DRV1 : 未组合 cache 直连
-FL --> DRV2
-@enduml
-```
+> 源文件: [plantUML/00-architecture-05.puml](plantUML/00-architecture-05.puml)
 
 - **rootfs 与设备节点(D21)**: **fs/tmpfs 挂载为 rootfs("/")**(命名空间骨架, 无介质产品也有完整 VFS); **所有设备经 fs/devfs 以 /dev 节点接入 VFS**(实时枚举 dev-core 注册表, 打开经 open_file 钩子)——Linux devtmpfs/rCore DeviceFS 同型
 - **VFS ops 分层(D23)**: super(fs 级)/inode/file/dentry(预留)四层, Linux 型; **路径走查(lookup 链)在 vfs-core**; inode v1 瞬态(无缓存); 设备节点 inode 由 devfs+钩子产出——详见 `docs/6-vfs-device/04-vfs.md` §2

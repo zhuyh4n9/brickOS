@@ -1,0 +1,15 @@
+@startuml
+skinparam componentStyle rectangle
+left to right direction
+
+[MMU 恒等映射(v1)] as MMU
+[重定位(v2)] as REL
+[crypto 插件(v2)] as CRYPTO
+[符号表导出(v1.x 工具链)] as SYMS
+[动态插件加载 + 鉴权(v3.0)] as DYN
+
+MMU --> REL
+REL --> DYN
+CRYPTO --> DYN
+SYMS --> DYN
+@enduml

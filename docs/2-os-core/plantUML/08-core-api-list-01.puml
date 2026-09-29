@@ -1,0 +1,18 @@
+@startuml
+participant "PMIC 子中断 3/7" as P
+participant "GIC 物理线" as G
+participant "core demux ISR" as D
+participant "demux work(SLOW 域)" as W
+participant "子 handler" as H
+P -> G: 多个子中断合并到一根物理线
+G -> D: IRQ → core demux
+D -> W: SLOW 域: tg_work_submit(I2C 读不能在 ISR)
+W -> P: pending() → I2C 读状态位图 {3, 7}
+W -> H: 分发 sub=3(线程上下文, bh 契约)
+W -> P: ack(3)
+W -> H: 分发 sub=7
+W -> P: ack(7)
+note over W, H
+  处理中新子中断触发 → 线重新置位 → 新 IRQ 循环
+end note
+@enduml

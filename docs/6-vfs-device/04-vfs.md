@@ -122,27 +122,9 @@ page cache 以堆叠 bdev 形态存在(`05-bdev` §3), **VFS 与 FS 对它无感
 
 ## 5. 关键流程: open 全链路(SD-1/SD-3/D23 的运转视图)
 
-```plantuml
-@startuml
-participant "APP" as APP
-participant "svc-posix" as PX
-participant "vfs-core 插件" as VF
-participant "littlefs inode_ops" as IN
-APP -> PX: open("/data/log.txt", O_WRONLY|O_CREAT)
-PX -> VF: tg_open("/data/log.txt", flags)
-VF -> VF: 挂载表最长前缀 → /data 根 inode
-VF -> IN: inode_ops.lookup(dir, "log.txt")
-note over IN
-  瞬态 inode = 路径前缀包装
-  未命中且 O_CREAT → inode_ops.create
-end note
-IN --> VF: 文件 inode(fops = lf_file_ops)
-VF -> VF: fops->open(会话建立) → tg_file_t
-VF --> PX: tg_file_t*
-PX -> PX: fd 表分配
-PX --> APP: fd
-@enduml
-```
+![5. 关键流程: open 全链路(SD-1/SD-3/D23 的运转视图)](pics/04-vfs-01.png)
+
+> 源文件: [plantUML/04-vfs-01.puml](plantUML/04-vfs-01.puml)
 
 ## 6. 决策记录(本篇)
 

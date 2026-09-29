@@ -28,78 +28,15 @@
 | **QSPI-NOR / NAND 驱动** | **cdev-core**(`tg_flash_register`) |
 | virtio-blk / SD 驱动 | bdev-core(`tg_bdev_register`) |
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
+![1. 域总览: 框架件归属与依赖(D19/D20)](pics/06-device-01.png)
 
-[svc-posix] as PXP
-[fs/tmpfs\nrootfs(D21)] as TMP
-[fs/devfs\n/dev 设备节点(D21)] as DFS
-[littlefs] as LF
-[EROFS] as EF
-[vfs-core 插件\ntg_file_t · tg_open(挂载表·单路由)\n挂载表 · tg_fs_ops] as VFSC
-[cdev-core 插件\ntg_cdev_ops · flash 子型\nopen_file 钩子] as CDEVC
-[dev-core 插件\n通用设备注册表\n子分类协议(+open_file)] as DEVC
-[bdev-core 插件\ntg_bdev_ops · 几何 · 堆叠 · 分区] as BDEVC
-[virtio-blk / SD 驱动] as VBD
-[uart / can / QSPI-NOR / NAND 驱动] as QN
-[OS Core native\ntg_task · tg_mm · tg_irq · 服务注册表] as COREN
-
-PXP --> VFSC : open/fd 原语
-TMP --> VFSC : 挂载 /
-DFS --> VFSC : 挂载 /dev
-LF --> VFSC : 挂载 /data(fs_ops)
-EF --> VFSC : 挂载 /assets(fs_ops)
-LF --> CDEVC : flash 子型绑定
-LF ..> BDEVC : bdev 适配(QEMU)
-EF --> BDEVC : bdev 绑定
-DFS --> DEVC : 枚举注册表
-DFS ..> CDEVC : open_file 钩子实现方
-VBD --> BDEVC : tg_bdev_register
-QN --> CDEVC : tg_cdev_register / tg_flash_register
-BDEVC --> DEVC : 依赖 dev-core
-CDEVC --> DEVC : 依赖 dev-core
-CDEVC --> VFSC : 类型/适配钩子
-DEVC --> VFSC : 类型(open_file 钩子引用 tg_file_ops)
-DEVC --> COREN
-VFSC --> COREN
-CDEVC --> COREN
-BDEVC --> COREN
-@enduml
-```
+> 源文件: [plantUML/06-device-01.puml](plantUML/06-device-01.puml)
 
 **存储栈全景:**
 
-```plantuml
-@startuml
-skinparam componentStyle rectangle
+![存储栈全景](pics/06-device-02.png)
 
-[APP / svc-posix\nopen/read/write(fd)] as TOP
-[VFS = vfs-core 插件\ntg_open 挂载表·单路由 · v1.0] as VFS
-[fs/tmpfs — rootfs(D21)\nRAM FS, 挂 / 兜底] as TMP
-[fs/devfs — /dev 设备节点(D21)\n实时枚举 dev-core 注册表] as DFS
-[littlefs(可写, v1.0, D17)] as FS1
-[EROFS(只读压缩, v2.0)] as FS2
-[bdev 子分类 = bdev-core 插件\n磁盘型: 扇区 read/write/flush] as BD
-[flash = cdev-core 子型\nspi-nor/nand: read/program/erase/sync] as FL
-[page cache 无感层\nvx.0 选配(堆叠 bdev)] as PC
-[virtio-blk / SD 驱动] as DRV1
-[QSPI-NOR 驱动] as DRV2
-
-TOP --> VFS : fd
-VFS --> TMP : tg_fs_ops
-VFS --> DFS : tg_fs_ops
-VFS --> FS1 : tg_fs_ops
-VFS --> FS2 : tg_fs_ops
-FS1 --> FL : tg_flash_ops(真硬件)
-FS1 ..> BD : bdev 适配(QEMU 测试)
-FS2 --> BD : tg_bdev_ops
-BD --> PC : tg_bdev_ops(可堆叠)
-PC --> DRV1
-BD ..> DRV1 : 未组合 cache 直连
-FL --> DRV2
-@enduml
-```
+> 源文件: [plantUML/06-device-02.puml](plantUML/06-device-02.puml)
 
 **框架件的治理身份**: **插件的身份, core 的纪律**——插件形态 ⇒ 可按组合裁剪(无存储产品不链 vfs-core/bdev-core); core 纪律 ⇒ API 面进 golden/门禁(`docs/1-architecture/01-api-contract-governance.md`, D12 机制), 不透明句柄(D14)。这是 core 的第三次收缩: POSIX→接口插件(v0.3), POSIX 运行时→服务(v0.5/D18), **能力框架→框架件(v0.6/D19)**; D20 进一步把设备侧框架**按子分类再切细**。
 

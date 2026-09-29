@@ -1,0 +1,28 @@
+@startuml
+skinparam componentStyle rectangle
+
+[APP / svc-posix\nopen/read/write(fd)] as TOP
+[VFS = vfs-core 插件\ntg_open 挂载表·单路由 · v1.0] as VFS
+[fs/tmpfs — rootfs(D21)\nRAM FS, 挂 / 兜底] as TMP
+[fs/devfs — /dev 设备节点(D21)\n实时枚举 dev-core 注册表] as DFS
+[littlefs(可写, v1.0, D17)] as FS1
+[EROFS(只读压缩, v2.0)] as FS2
+[bdev 子分类 = bdev-core 插件\n磁盘型: 扇区 read/write/flush] as BD
+[flash = cdev-core 子型\nspi-nor/nand: read/program/erase/sync] as FL
+[page cache 无感层\nvx.0 选配(堆叠 bdev)] as PC
+[virtio-blk / SD 驱动] as DRV1
+[QSPI-NOR 驱动] as DRV2
+
+TOP --> VFS : fd
+VFS --> TMP : tg_fs_ops
+VFS --> DFS : tg_fs_ops
+VFS --> FS1 : tg_fs_ops
+VFS --> FS2 : tg_fs_ops
+FS1 --> FL : tg_flash_ops(真硬件)
+FS1 ..> BD : bdev 适配(QEMU 测试)
+FS2 --> BD : tg_bdev_ops
+BD --> PC : tg_bdev_ops(可堆叠)
+PC --> DRV1
+BD ..> DRV1 : 未组合 cache 直连
+FL --> DRV2
+@enduml

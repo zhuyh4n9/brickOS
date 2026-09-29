@@ -1,0 +1,26 @@
+@startuml
+start
+:reset
+platform 向量表(汇编) · BSS 清零(汇编);
+:platform.early_init
+时钟 / 引脚 / RAM / 恒等映射页表(tg_mm) / 早期 console;
+:core.init
+堆 · 中断框架 · 注册表 · 调度框架对象(无线程);
+:plugin_manager
+扫描 .tg_plugins → 拓扑排序(环 = 硬错误);
+:EARLY
+调度插件注册 tg_sched_ops → core 锁定;
+:CORE
+非服务插件 init(堆可用)
+FS 插件执行挂载计划: tmpfs→/ · devfs→/dev · littlefs→/data;
+:LATE
+Service → Interface 依序 init;
+:全局开中断;
+:各插件 start()
+中断可用, 可创建线程;
+:app.start()
+创建 APP 线程(main 语义);
+:tg_sched_run()
+首次调度, idle 进 WFI;
+stop
+@enduml

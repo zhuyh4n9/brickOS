@@ -1,0 +1,188 @@
+@startuml
+' TangramOS 总体分层图
+'
+' ── 层级表达 ──────────────────────────────────────────────────────────────
+' L3 是 package 容器, 3a–3e 是它的子 package(子层)。"同属 L3"靠嵌套表达, 不靠平铺。
+' 内容原则: 只画层间单向流(§7.2); 层内依赖/注册拓扑不进本图(见 6-vfs-device/06-device.md §1)。
+'
+' ── 等长 / 对齐 / 箭头居中机制(改图前必读, 破哪条都会退化成参差不齐) ────────
+' 1) skinparam minClassWidth 128 —— 所有模块盒子强制等宽(128+20=148px)。
+'    任何标签的单行文字都不能超过 128px, 否则该模块被撑宽、破坏等长; 超长文案请手动折行
+'    (见 L5T 和 L3A1 的写法)。
+' 2) 每行固定 5 格 —— 奇数格是关键: 5 格的正中恰好是第 3 格, 层间箭头才能落在水平中线上。
+'    真实模块不足 5 个的行, 用透明的 rectangle<<pad>> 占位补齐, 并用 -[hidden]right-> 串成一行。
+' 3) 4 个顶层带子(L5/L4/L2/L1)内各套一层隐形的 package<<inner>>, 让嵌套深度与 L3 一致,
+'    否则 L3 会比其它带子宽 48px。(<<inner>> 用 skinparam 设成透明背景+透明边框,
+'    再用 hide stereotype 藏掉 «inner» 字样)
+' 4) 层间箭头一律走【第 3 格】的 node→node 边: L5P2→L4C→L3A3, L3E3→L2C→L1C。
+'    - node→node 的箭头落在节点中心, 所以四条箭头 x 完全相同(实测 453) → 形成一条居中竖线;
+'    - 实测 package→package 的箭头一律落在盒子右边缘, 达不到居中, 所以这里不用;
+'    - 代价: 竖线会贴着 L4 的 iface-pkcs11、L2 的 sched-tt 上下边框穿过去 ——
+'      它只是"层间流向"的指示线, 不代表这两个模块在依赖链上, 改图时别误读。
+' 5) L1 的 6 个模块拆成两行(3+3): 5 格放不下 6 个, 拆两行既保持等长, 也让 L1 更整齐。
+' 6) 标签统一两行(不足两行补一个空行), 保证各行等高。
+' 7) 每行"首个模块"用 -[hidden]down-> 串起, 钉死 3a→3e 的纵向阅读序; L1 的两行之间也串一条。
+'
+' 自检: 渲染后 5 个层框应全部 x=7 / 宽=892, 5 个子层框宽=844, 全部模块 148×50.3,
+'       4 个箭头头部 x≈453。
+skinparam shadowing false
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam roundCorner 6
+skinparam nodesep 18
+skinparam ranksep 30
+skinparam defaultTextAlignment center
+skinparam ArrowColor #546E7A
+skinparam ArrowThickness 1.3
+skinparam packageBorderColor #90A4AE
+skinparam componentBorderColor #B0BEC5
+skinparam componentFontSize 13
+skinparam minClassWidth 128
+skinparam rectangle<<pad>> {
+  BackgroundColor transparent
+  BorderColor transparent
+  FontColor transparent
+}
+skinparam package<<inner>> {
+  BackgroundColor transparent
+  BorderColor transparent
+  FontColor transparent
+}
+top to bottom direction
+hide stereotype
+
+title TangramOS Architecture Overview
+
+  package "L5 · APP Plugins(Unique)" as L5 #EDE7F6 {
+    package " " as L5IN <<inner>> {
+      [业务逻辑 manifest\n声明编码面对的接口] as L5T
+      rectangle "  " as L5P1 <<pad>>
+      rectangle "  " as L5P2 <<pad>>
+      rectangle "  " as L5P3 <<pad>>
+      rectangle "  " as L5P4 <<pad>>
+      L5T -[hidden]right-> L5P1
+      L5P1 -[hidden]right-> L5P2
+      L5P2 -[hidden]right-> L5P3
+      L5P3 -[hidden]right-> L5P4
+    }
+  }
+
+  package "L4 · Interface Plugins" as L4 #E3F2FD {
+    package " " as L4IN <<inner>> {
+      [iface-posix\n] as L4A
+      [iface-min\n] as L4B
+      [iface-pkcs11 …\n] as L4C
+      rectangle "  " as L4P1 <<pad>>
+      rectangle "  " as L4P2 <<pad>>
+      L4A -[hidden]right-> L4B
+      L4B -[hidden]right-> L4C
+      L4C -[hidden]right-> L4P1
+      L4P1 -[hidden]right-> L4P2
+    }
+  }
+
+package "L3 · 功能组合层" as L3 #ECEFF1 {
+  package "3a · Service Plugins" as L3A #FFFFFF {
+    [svc-posix (POSIX\n运行时, fd 表主人)] as L3A1
+    [三方移植\n(sqlite…)] as L3A2
+    [lwIP\n] as L3A3
+    [crypto\n] as L3A4
+    [trace\n] as L3A5
+    L3A1 -[hidden]right-> L3A2
+    L3A2 -[hidden]right-> L3A3
+    L3A3 -[hidden]right-> L3A4
+    L3A4 -[hidden]right-> L3A5
+  }
+  package "3b · Filesystem Plugins" as L3B #FFFFFF {
+    [tmpfs\n(rootfs)] as L3B1
+    [devfs\n(/dev)] as L3B2
+    [littlefs\n] as L3B3
+    [EROFS\n] as L3B4
+    rectangle "  " as L3BP1 <<pad>>
+    L3B1 -[hidden]right-> L3B2
+    L3B2 -[hidden]right-> L3B3
+    L3B3 -[hidden]right-> L3B4
+    L3B4 -[hidden]right-> L3BP1
+  }
+  package "3c · Framework Plugins" as L3C #FFFFFF {
+    [vfs-core\n(纯 VFS)] as L3C1
+    [cdev-core\n(字符 + flash)] as L3C2
+    [bdev-core\n(块)] as L3C3
+    [dev-core\n(设备注册表)] as L3C4
+    rectangle "  " as L3CP1 <<pad>>
+    L3C1 -[hidden]right-> L3C2
+    L3C2 -[hidden]right-> L3C3
+    L3C3 -[hidden]right-> L3C4
+    L3C4 -[hidden]right-> L3CP1
+  }
+  package "3d · I/O Device Driver Plugins" as L3D #FFFFFF {
+    [uart\n] as L3D1
+    [can\n] as L3D2
+    [QSPI-NOR\n] as L3D3
+    [virtio-blk\n] as L3D4
+    [display …\n] as L3D5
+    L3D1 -[hidden]right-> L3D2
+    L3D2 -[hidden]right-> L3D3
+    L3D3 -[hidden]right-> L3D4
+    L3D4 -[hidden]right-> L3D5
+  }
+  package "3e · Platform" as L3E #FFFFFF {
+    [pinmux\n] as L3E1
+    [时钟\n] as L3E2
+    [中断控制器\n] as L3E3
+    [console\n] as L3E4
+    [region 表\n] as L3E5
+    L3E1 -[hidden]right-> L3E2
+    L3E2 -[hidden]right-> L3E3
+    L3E3 -[hidden]right-> L3E4
+    L3E4 -[hidden]right-> L3E5
+  }
+  L3A1 -[hidden]down-> L3B1
+  L3B1 -[hidden]down-> L3C1
+  L3C1 -[hidden]down-> L3D1
+  L3D1 -[hidden]down-> L3E1
+}
+
+  package "L2 · Scheduler 插件" as L2 #FFF3E0 {
+    package " " as L2IN <<inner>> {
+      [sched-coop\n(v1.0)] as L2A
+      [sched-preempt\n(v2.0)] as L2B
+      [sched-tt\n(v3.0)] as L2C
+      rectangle "  " as L2P1 <<pad>>
+      rectangle "  " as L2P2 <<pad>>
+      L2A -[hidden]right-> L2B
+      L2B -[hidden]right-> L2C
+      L2C -[hidden]right-> L2P1
+      L2P1 -[hidden]right-> L2P2
+    }
+  }
+
+package "L1 · OS Core" as L1 #E8F5E9 {
+  package " " as L1IN <<inner>> {
+    [调度框架\n] as L1A
+    [int\n] as L1B
+    [memory\n(MMU)] as L1C
+    rectangle "  " as L1P1 <<pad>>
+    rectangle "  " as L1P2 <<pad>>
+    L1A -[hidden]right-> L1B
+    L1B -[hidden]right-> L1C
+    L1C -[hidden]right-> L1P1
+    L1P1 -[hidden]right-> L1P2
+    [plugin_manager\n] as L1D
+    [native API\n(tg_*)] as L1E
+    [服务注册表\n] as L1F
+    rectangle "  " as L1Q1 <<pad>>
+    rectangle "  " as L1Q2 <<pad>>
+    L1D -[hidden]right-> L1E
+    L1E -[hidden]right-> L1F
+    L1F -[hidden]right-> L1Q1
+    L1Q1 -[hidden]right-> L1Q2
+    L1A -[hidden]down-> L1D
+  }
+}
+
+L5P2 -down-> L4C
+L4C -down-> L3A3 : 单向依赖
+L3E3 -down-> L2C
+L2C -down-> L1C
+@enduml

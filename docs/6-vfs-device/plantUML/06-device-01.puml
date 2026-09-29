@@ -1,0 +1,37 @@
+@startuml
+skinparam componentStyle rectangle
+
+[svc-posix] as PXP
+[fs/tmpfs\nrootfs(D21)] as TMP
+[fs/devfs\n/dev 设备节点(D21)] as DFS
+[littlefs] as LF
+[EROFS] as EF
+[vfs-core 插件\ntg_file_t · tg_open(挂载表·单路由)\n挂载表 · tg_fs_ops] as VFSC
+[cdev-core 插件\ntg_cdev_ops · flash 子型\nopen_file 钩子] as CDEVC
+[dev-core 插件\n通用设备注册表\n子分类协议(+open_file)] as DEVC
+[bdev-core 插件\ntg_bdev_ops · 几何 · 堆叠 · 分区] as BDEVC
+[virtio-blk / SD 驱动] as VBD
+[uart / can / QSPI-NOR / NAND 驱动] as QN
+[OS Core native\ntg_task · tg_mm · tg_irq · 服务注册表] as COREN
+
+PXP --> VFSC : open/fd 原语
+TMP --> VFSC : 挂载 /
+DFS --> VFSC : 挂载 /dev
+LF --> VFSC : 挂载 /data(fs_ops)
+EF --> VFSC : 挂载 /assets(fs_ops)
+LF --> CDEVC : flash 子型绑定
+LF ..> BDEVC : bdev 适配(QEMU)
+EF --> BDEVC : bdev 绑定
+DFS --> DEVC : 枚举注册表
+DFS ..> CDEVC : open_file 钩子实现方
+VBD --> BDEVC : tg_bdev_register
+QN --> CDEVC : tg_cdev_register / tg_flash_register
+BDEVC --> DEVC : 依赖 dev-core
+CDEVC --> DEVC : 依赖 dev-core
+CDEVC --> VFSC : 类型/适配钩子
+DEVC --> VFSC : 类型(open_file 钩子引用 tg_file_ops)
+DEVC --> COREN
+VFSC --> COREN
+CDEVC --> COREN
+BDEVC --> COREN
+@enduml

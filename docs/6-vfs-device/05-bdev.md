@@ -62,26 +62,9 @@ int tg_bdev_partition(const char *parent_name, uint64_t offset_lba,
 
 ## 5. 关键流程: virtio-blk 中断驱动读(ISR→bh→唤醒)
 
-```plantuml
-@startuml
-participant "读线程" as T
-participant "virtio-blk 驱动" as BD
-participant "virtqueue" as Q
-participant "ISR" as ISR
-participant "bottom half" as BH
-T -> BD: bdev_ops.read(lba, buf, n_lba)
-BD -> Q: 入队描述符并提交
-note over T, BD: 线程在完成信号量上睡眠
-note over Q: 设备 DMA 完成, 触发 IRQ
-ISR -> Q: 探测中断源并应答
-ISR -> BH: tg_work_submit(完成处理)
-note over ISR: ISR 结束 — 最小工作原则
-BH -> Q: 收割完成环
-BH -> T: tg_sem_give(完成信号量)
-T -> T: tg_mm_cache_invalidate + 拷贝
-T -> T: 返回 n_lba
-@enduml
-```
+![5. 关键流程: virtio-blk 中断驱动读(ISR→bh→唤醒)](pics/05-bdev-01.png)
+
+> 源文件: [plantUML/05-bdev-01.puml](plantUML/05-bdev-01.puml)
 
 ## 6. 决策记录(本篇)
 

@@ -227,26 +227,9 @@ int tg_irq_disable_child(tg_irq_domain_t *dom, uint32_t sub);
 
 **运行模型**(SLOW 域, 以 PMIC 为例):
 
-```plantuml
-@startuml
-participant "PMIC 子中断 3/7" as P
-participant "GIC 物理线" as G
-participant "core demux ISR" as D
-participant "demux work(SLOW 域)" as W
-participant "子 handler" as H
-P -> G: 多个子中断合并到一根物理线
-G -> D: IRQ → core demux
-D -> W: SLOW 域: tg_work_submit(I2C 读不能在 ISR)
-W -> P: pending() → I2C 读状态位图 {3, 7}
-W -> H: 分发 sub=3(线程上下文, bh 契约)
-W -> P: ack(3)
-W -> H: 分发 sub=7
-W -> P: ack(7)
-note over W, H
-  处理中新子中断触发 → 线重新置位 → 新 IRQ 循环
-end note
-@enduml
-```
+![运行模型(SLOW 域, 以 PMIC 为例)](pics/08-core-api-list-01.png)
+
+> 源文件: [plantUML/08-core-api-list-01.puml](plantUML/08-core-api-list-01.puml)
 
 - **FAST 域**(GPIO 控制器, 状态寄存器内存映射): pending → 分发 → ack 全在 demux ISR 内完成, 子 handler = **ISR 契约**
 - **子 handler 契约随域类型**(conformance 分档执法): FAST = ISR 纪律(§11 白名单); SLOW = 线程上下文(bh 契约: 可短临界操作, **禁长阻塞**——会堵 demux 工作队列)

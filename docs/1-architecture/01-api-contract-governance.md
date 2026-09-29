@@ -120,29 +120,9 @@ api/frozen/tg-sched.txt        ← golden 文件(生成物, 勿手编)
 
 #### 2.6.2 生命周期状态机(机械语义)
 
-```plantuml
-@startuml
-[*] --> EXPERIMENTAL : 新增(CA 记录, 轻)
-EXPERIMENTAL --> EXPERIMENTAL : 随时改\n(CA 记录)
-EXPERIMENTAL --> FROZEN : 冻结批次/个案 RFC\n前置: 已交付调度器矩阵全绿
-FROZEN --> FROZEN : 纯新增\n(PR + golden 同步)
-FROZEN --> DEPRECATED : 语义变更/移除意向\n(RFC + 迁移指南)
-DEPRECATED --> FROZEN : 撤销弃用\n(决策记录)
-DEPRECATED --> [*] : 周期到期\n(两个 minor 无使用)
-note right of EXPERIMENTAL
-  不在 golden(CI 不保护)
-  标注 TG_API_EXPERIMENTAL
-end note
-note right of FROZEN
-  在 golden: 删/签名/布局变 = 红
-  标注 TG_API_FROZEN
-end note
-note right of DEPRECATED
-  仍在 golden(门禁仍保护)
-  编译警告(deprecated 属性)
-end note
-@enduml
-```
+![2.6.2 生命周期状态机(机械语义)](pics/01-api-contract-governance-01.png)
+
+> 源文件: [plantUML/01-api-contract-governance-01.puml](plantUML/01-api-contract-governance-01.puml)
 
 > 注: "CA 记录" = `docs/2-os-core/08-core-api-list.md` §14 的契约决策记录(CA-*)——轻量存档; experimental 区改动无流程门槛、仅留此存档(§2.2)。
 
