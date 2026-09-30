@@ -1,17 +1,17 @@
 /*
- * TangramOS prototype v0.1.0 — Platform Entry (aarch64)
+ * brickOS prototype v0.1.0 — Platform Entry (aarch64)
  *
- * ======================= WORKAROUND(tg-wa-entry-001) =======================
+ * ======================= WORKAROUND(br-wa-entry-001) =======================
  * 设计上这段汇编属于 **Platform 插件**(设计 1-01 §6.3: Platform 类 = reset 汇编、
  * 时钟/引脚/RAM、中断控制器实现、console、cache、timer、region 表; 每 SoC 一个)。
- * v0.1.0 没有 `tg` 组合器与插件管理器, 所以它被 Makefile 直接编进镜像 —— 见
- * platform/include/tg/platform/tg_plat.h 顶部与 WORKAROUNDS.md 的退出条件。
+ * v0.1.0 没有 `br` 组合器与插件管理器, 所以它被 Makefile 直接编进镜像 —— 见
+ * platform/include/br/platform/br_plat.h 顶部与 WORKAROUNDS.md 的退出条件。
  * ==========================================================================
  *
  * 与设计启动序列(1-01 §9)的对应:
  *   reset -> platform 向量表(汇编) + BSS 清零(汇编)   [本文件]
- *         -> platform.early_init                        [tg_plat_early_init]
- *         -> core.init ...                              [tg_core_main, 见 tg-wa-boot-001]
+ *         -> platform.early_init                        [br_plat_early_init]
+ *         -> core.init ...                              [br_core_main, 见 br-wa-boot-001]
  *
  * 本文件只做 5 件事, 不碰内存管理与中断控制器:
  *   1. 选 CPU(boot 核继续, 其余核 park)
@@ -61,7 +61,7 @@ _start:
     /* ---- 3b. 设异常向量表 ----
      * v0.1.0 不开中断, 但 fault/SError 仍可能来; 没有向量表就会跳到地址 0
      * 静默挂死 —— 那是最难查的一种 bug。这里至少保证"能喊一声"。 */
-    ldr     x0, =tg_plat_vectors
+    ldr     x0, =br_plat_vectors
     msr     vbar_el1, x0
 
     /* ---- 4. 清零 BSS(链接脚本保证 __bss_end - __bss_start 为 8 的倍数) ---- */
@@ -75,13 +75,13 @@ _start:
 .Lbss_done:
 
     /* ---- 5a. 平台早期初始化: 早期 console 就绪(之后才有可观测性) ---- */
-    bl      tg_plat_early_init
+    bl      br_plat_early_init
 
     /* ---- 5b. 交 core: MainLoop(延时 + 日志), 不返回 ---- */
-    bl      tg_core_main
+    bl      br_core_main
 
     /* 理论上到不了这里; 到了也按不可恢复处理 */
-    b       tg_plat_park_forever
+    b       br_plat_park_forever
 
     .size   _start, . - _start
 
@@ -92,34 +92,34 @@ _start:
  */
     .section .text.vectors, "ax"
     .balign 2048
-    .global tg_plat_vectors
-    .type   tg_plat_vectors, %object
+    .global br_plat_vectors
+    .type   br_plat_vectors, %object
 
-.macro TG_VECTOR idx
+.macro BR_VECTOR idx
     .balign 0x80
     mov     x0, #\idx
-    b       tg_plat_unexpected_exception
+    b       br_plat_unexpected_exception
 .endm
 
-tg_plat_vectors:
-    TG_VECTOR 0    /* Current EL with SP_EL0: Synchronous        */
-    TG_VECTOR 1    /* Current EL with SP_EL0: IRQ                */
-    TG_VECTOR 2    /* Current EL with SP_EL0: FIQ                */
-    TG_VECTOR 3    /* Current EL with SP_EL0: SError             */
-    TG_VECTOR 4    /* Current EL with SP_ELx: Synchronous        */
-    TG_VECTOR 5    /* Current EL with SP_ELx: IRQ                */
-    TG_VECTOR 6    /* Current EL with SP_ELx: FIQ                */
-    TG_VECTOR 7    /* Current EL with SP_ELx: SError             */
-    TG_VECTOR 8    /* Lower EL using AArch64: Synchronous        */
-    TG_VECTOR 9    /* Lower EL using AArch64: IRQ                */
-    TG_VECTOR 10   /* Lower EL using AArch64: FIQ                */
-    TG_VECTOR 11   /* Lower EL using AArch64: SError             */
-    TG_VECTOR 12   /* Lower EL using AArch32: Synchronous        */
-    TG_VECTOR 13   /* Lower EL using AArch32: IRQ                */
-    TG_VECTOR 14   /* Lower EL using AArch32: FIQ                */
-    TG_VECTOR 15   /* Lower EL using AArch32: SError             */
+br_plat_vectors:
+    BR_VECTOR 0    /* Current EL with SP_EL0: Synchronous        */
+    BR_VECTOR 1    /* Current EL with SP_EL0: IRQ                */
+    BR_VECTOR 2    /* Current EL with SP_EL0: FIQ                */
+    BR_VECTOR 3    /* Current EL with SP_EL0: SError             */
+    BR_VECTOR 4    /* Current EL with SP_ELx: Synchronous        */
+    BR_VECTOR 5    /* Current EL with SP_ELx: IRQ                */
+    BR_VECTOR 6    /* Current EL with SP_ELx: FIQ                */
+    BR_VECTOR 7    /* Current EL with SP_ELx: SError             */
+    BR_VECTOR 8    /* Lower EL using AArch64: Synchronous        */
+    BR_VECTOR 9    /* Lower EL using AArch64: IRQ                */
+    BR_VECTOR 10   /* Lower EL using AArch64: FIQ                */
+    BR_VECTOR 11   /* Lower EL using AArch64: SError             */
+    BR_VECTOR 12   /* Lower EL using AArch32: Synchronous        */
+    BR_VECTOR 13   /* Lower EL using AArch32: IRQ                */
+    BR_VECTOR 14   /* Lower EL using AArch32: FIQ                */
+    BR_VECTOR 15   /* Lower EL using AArch32: SError             */
 
-    .size   tg_plat_vectors, . - tg_plat_vectors
+    .size   br_plat_vectors, . - br_plat_vectors
 
 /*
  * 其余核的停机位。放在 .text 尾(不进 .text.boot, 免得挤占入口布局)。

@@ -1,12 +1,12 @@
-# TangramOS prototype v0.1.0 — 构建入口
+# brickOS prototype v0.1.0 — 构建入口
 #
 # 目标: aarch64 裸机 ELF, 跑在 QEMU virt 上。
 # 工具链: **外部 gcc**
-#   WORKAROUND(tg-wa-toolchain-001): 内部工具链就绪前借用宿主交叉编译器。
+#   WORKAROUND(br-wa-toolchain-001): 内部工具链就绪前借用宿主交叉编译器。
 #   退出条件 = 只改 CROSS_COMPILE(见 WORKAROUNDS.md), 构建规则本身不动。
 #
 # 用法:
-#   make                    构建 build/tangram.elf + .bin
+#   make                    构建 build/brick.elf + .bin
 #   make run                在 QEMU 上跑(Ctrl-A X 退出)
 #   make smoke              3 秒冒烟: 自动判定启动与延时是否正常
 #   make size / disasm      体积 / 反汇编
@@ -34,9 +34,9 @@ QEMU ?= qemu-system-aarch64
 # ------------------------------------------------------------------ 目录/产物
 BUILD_DIR := build
 OBJ_DIR   := $(BUILD_DIR)/obj
-ELF       := $(BUILD_DIR)/tangram.elf
-BIN       := $(BUILD_DIR)/tangram.bin
-MAP       := $(BUILD_DIR)/tangram.map
+ELF       := $(BUILD_DIR)/brick.elf
+BIN       := $(BUILD_DIR)/brick.bin
+MAP       := $(BUILD_DIR)/brick.map
 LDSCRIPT  := platform/src/aarch64/link.ld
 
 # ------------------------------------------------------------------- 源文件

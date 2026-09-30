@@ -1,9 +1,9 @@
 /*
- * TangramOS prototype v0.1.0 — 链接脚本(aarch64 / QEMU virt)
+ * brickOS prototype v0.1.0 — 链接脚本(aarch64 / QEMU virt)
  *
- * WORKAROUND(tg-wa-entry-001): 设计侧链接脚本是 Platform 插件的产出物之一
+ * WORKAROUND(br-wa-entry-001): 设计侧链接脚本是 Platform 插件的产出物之一
  * (设计 4-02 §2 第 4 项「物理(二进制)布局映射」; 组合器生成链接脚本片段)。
- * v0.1.0 由本文件手工承担, 未经 `tg` 生成 —— 见 WORKAROUNDS.md。
+ * v0.1.0 由本文件手工承担, 未经 `br` 生成 —— 见 WORKAROUNDS.md。
  *
  * 地址选择: QEMU virt 的 RAM 起于 0x40000000; 传统上内核加载在 0x40080000
  * (留出 512 KiB 给固件/ATF 的惯例)。本原型无固件依赖, 沿用该惯例以免
