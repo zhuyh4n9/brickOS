@@ -4,7 +4,8 @@
 > 定位: **prototype v1.0 核心交付产物之一**(与 manifest 格式、repo 骨架并列; 1-03 §5 第 4/5 项)。`br-tools` 的 **v0.1** = 原型 v1.0 的第一件工具交付。
 > 来源: `2-02`(BR-D1–BR-D8 倾向 / §5 命令面 / §7 演进路线); `2-01` §2 大纲; `4-02`(布局)/`4-03`(manifest)/`4-04`(依赖); `1-01` §6(插件模型)/§13(工作流); `1-02`(三态/golden/三层门禁); `3-05`(运行期管理面); `10-01`(接口插件); 需求方给出的 v0.1 功能清单与本轮硬约束(TOML / 两维分类(+`subkind` 派生) / 三语言 / manifest 字段集 / 导出面分类 ≡ `api_type`)。
 > 分工: 本篇 = **`br` 工具 v0.1 的可实现规格**(命令面 / TOML schema / 版本模型 / 接口发布机制 / 依赖分析规则 / 验收标准); `br` 的**全局**架构与选型 → `docs/2-toolchain/2-02-br-arch.md`; 工具链总纲 → `docs/2-toolchain/2-01-toolchain.md`; manifest 与依赖的**语义权威** → `4-03` / `4-04`(本篇给出 v0.1 的具体形态并回填其开放问题)。
-> 怎么用: 逐条拍板 **§4 的 BRV-D1–BRV-D10**(倾向已给; D10 是需求方硬规则, 已采纳), 消化 **§11 的 BRV-Q1–BRV-Q13**; 拍板后本篇转"成文", §13 的待对齐修订清单回灌 `1-01`/`4-01`/`4-03`/`4-04`/`4-02`。
+> 怎么用: 逐条拍板 **§4 的 BRV-D1–BRV-D11**(倾向已给; **D6 版本模型 / D10 导出面分类 / D11 冻结语义** 已由需求方规则给定), 消化 **§11 的 BRV-Q1–BRV-Q16**; 拍板后本篇转"成文", §13.2 的待对齐修订清单(现已 **A-1…A-26**)回灌各篇。
+> **本轮修订(v2)**: 版本模型改为 **`FROZEN_GEN.MAJOR.MINOR.REVISE`**(F 与 M 解耦、依赖精确钉代), 并新增**解冻/重新冻结**机制与 **append vs modify** 条目级判定 —— 依据需求方版本号规则 + 备忘 [`r1/05`](comment/v0.1-review/r1/05-version-model-frozen.md)(F1/F2/F3 已定)与 [`r1/06`](comment/v0.1-review/r1/06-frozen-semantics-terminology.md)(术语与解冻)。此修订**关闭 BRV-Q1**, 并解掉评审 `r1/01` P0-1/P0-2、`r1/03` P0-4(三者同源)。改动集中在 §5 全节、§6.1–§6.5、§7.4–§7.7、§8、§10、§12、§13.2。
 > 图: 本篇暂用 ASCII 图与表格(本机无 PlantUML/Graphviz, 待图源环境就绪后按 README 流程补 `plantUML/` + `pics/`)。
 
 ## 缩略词(abbreviations)
@@ -25,7 +26,7 @@
 | **M0–M5** | — | v1.0/v1.x 内部里程碑(1-03 §3; M5 = HSM 完整样例) |
 | **native / runtime_adapter / third_party** | — | 插件按 **API 遵守规范** 的三分类(§3.1) |
 | **app / interface / ability / platform** | — | 插件按 **架构层级** 的四分类(§3.2) |
-| **semver** | semantic versioning | 语义化版本(maj.min.pat); 本篇扩展为四段 `a.b.c.d` |
+| **semver** | semantic versioning | 语义化版本(maj.min.pat); 本篇为四段 `FROZEN_GEN.MAJOR.MINOR.REVISE`(§5.2) |
 | **subkind** | — | `ability` 的细分类(scheduler/framework/io/fs/service), 用于承接旧八类信息(§3.3) |
 | **TOML** | Tom's Obvious Minimal Language | 配置文件格式(**本篇定稿: manifest 唯一表达格式**) |
 
@@ -41,13 +42,19 @@
   br new ability service/crypto --api native --lang c
         │  ① 骨架生成: plugin.toml(真值) + 实现骨架 + 生成器落 build/gen/
         ▼
-  br gen / br check
-        │  ② 依赖管理: init-DAG 无环 + 版本区间交集 + 相位一致 + 分类学禁则
+  br gen / br check [--profile dev|release]
+        │  ② 依赖管理: init-DAG 无环 + frozen_gen 精确匹配 + range(3段) + 相位一致 + 分类学禁则
         ▼
   br iface publish service/crypto
-        │  ③ 接口发布: 接口面 → 规范化 → hash → 变更集 → 自动版本推进 → 影响报告
+        │  ③ 接口发布: 接口面 → IFACE-IR 规范化 → hash → 变更集(append/modify)
+        │     → 自动版本推进 → 影响报告
         ▼
-  br.lock + api/iface/**(版本文件) + CHANGELOG + dependents 索引
+  br.lock + api/iface/**(版本文件: 面 + status + freeze_state + 四段版本) + CHANGELOG + dependents 索引
+
+  改/删已有 frozen 接口时, 中间多两步(§5.3):
+      br iface unfreeze <unit> --note <RFC>   →  改代码  →  br iface refreeze <unit>
+                                                        ⇒ FROZEN_GEN+1
+  仅新增接口时: 无 unfreeze, 只有 MINOR+1
 ```
 
 **v0.1 的四件能力**(需求方清单, 逐条落到 §5–§8):
@@ -56,7 +63,7 @@
 |---|---|---|
 | 1 | 插件骨架代码生成 | §8.4(`br new` / `br init` / `br gen`) |
 | 2 | 插件依赖管理与分析 | §7(`br dep *` / `br check`) |
-| 3 | 版本管理 `va.b.c.d` | §5(`br ver *` / 内嵌于发布) |
+| 3 | 版本管理 `FROZEN_GEN.MAJOR.MINOR.REVISE` | §5(`br ver *` / `br iface publish` / `unfreeze`·`refreeze`) |
 | 4 | 接口发布(变更标记 / 新增 / 自动版本+hash / 三态) | §6(`br iface *`) |
 
 **v0.1 明确不做**(需求方定为 **v0.x 后续**):
@@ -81,7 +88,7 @@
 | C4 | M0 验收 = "故意造环看组合器报完整环路径" ⇒ 求解器必须先于 CLI 完整体存在 | `2-02` §2 C2 |
 | C5 | host/target 双后端同命令 ⇒ 平台是参数不是分支; v0.1 只做声明侧, 不涉及后端 | `2-02` BR-D6 |
 | C6 | 生成物不手改; 输出目录内容 hash 幂等 | `2-02` BR-D5 |
-| **C7** | **接口面变更不可能靠人工诚实**: `a` 段的判定必须由机器从接口面产物算出, 否则版本号退化为声明 | 本篇(需求方要求"自动的版本更新") |
+| **C7** | **`FROZEN_GEN` 不可能靠人工诚实**: 它只能由"解冻 → 改/删已有接口 → 重新冻结"这一**事件序列**产生, 且必须是机器判定(人工只能声明 `MAJOR`/`MINOR`/`REVISE`), 否则版本号退化为声明 | 本篇(需求方要求"自动的版本更新" + 版本号规则) |
 | **C8** | **表达格式已定 TOML** ⇒ 关闭 `4-03` §3 的 YAML/TOML/DSL 开放问题 | 需求方本轮硬约束 |
 | **C9** | 核心逻辑 C++/Rust, Python3 只做粘合 ⇒ 需要一个**稳定的进程间 JSON 契约**(否则粘合层会退化成业务逻辑) | 需求方本轮硬约束 |
 | **C10** | v0.1 无编译 ⇒ 接口面真值只能是**声明层**; 它必须在 v0.x 被符号层接管, 且**不得**成为第三种真值(§6.6) | `1-02` §2.6.1 + `4-02` §1 双真值 |
@@ -95,8 +102,8 @@ C1 + C4 + C10 三条合起来决定: **v0.1 的交付重心是"求解器 + 版�
 
 | §6.4 | 校验项 | v0.1 | 说明 |
 |---|---|---|---|
-| 1 | 依赖闭包 + 版本区间交集 | ✅ 全量 | 单版本政策(§7.4) |
-| 2 | 环检测(报完整环路径) | ✅ 全量 | **仅 init 边**; runtime 边成环只报 info(§7.1) |
+| 1 | 依赖闭包 + 版本区间交集 | ✅ 全量 | **`frozen_gen` 精确匹配 + `range` 3 段交集**; 单版本政策(§7.4) |
+| 2 | 环检测(报完整环路径) | ✅ 全量 | **仅 init 边**; runtime/type 边成环只报 info(§7.1) |
 | 3 | 调度类别 + 双保险静态分析(D10) | ◐ 声明面 | `sched_class` 与调度器组合合法性可查; 源码静态分析 → v0.x |
 | 4 | 接口校验(APP 声明在闭包内 / 符号族碰撞) | ◐ 模块级 | 接口**单元**级碰撞可查 + **导出面分类不变量全量执法**(§3.5); **符号级** → v0.2(1-02 D13 双层粒度) |
 | 5 | 资源预算(ΣRAM/栈) + IRQ/DMA 独占冲突 | ✅ 全量 | 纯声明计算 |
@@ -219,7 +226,7 @@ device_names = ["hsm0"]
 2. **依赖侧按分类判合法**: `requires_iface`(§5.3)引用一个单元时, 若无脑跨类消费则红 —— **`native` 插件不得 require 分类为 `runtime_adapter` 的接口单元**; 这正是 §3.1 的 `native ↛ runtime_adapter` 禁则在**接口粒度**上的投影(v0.2 起生效, 因为 v0.1 不扫描接口依赖)。
 3. **`skin` 边必须豁免 api_type 禁则**: `iface-posix`(runtime_adapter 皮肤)要依赖 `svc-posix`(runtime_adapter 基座), 若照搬"runtime_adapter 只许依赖 native"会被误杀。因此规则精确表述为: **`form = "api"` / `service` 的依赖边受 `api_type` 禁则约束; `form = "skin"` 的再导出边豁免**, 且豁免必须由 `reexport_of` 显式声明方能成立(不可隐式)。
 
-> **`third_party` 的后果要写清楚**: 三方件的能力面**不进入**接口发布与版本治理 —— 它既没有接口单元, 也就没有 `a.b.c.d`、没有 hash、没有三态、没有 dependents 报告。这是有意的记账取舍(上游 API 不受我们治理), 代价是"三方件被谁用了"在 v0.1 只能从 `[[dep]]` 看, 无法从接口面反查 —— 记为 RV-9; 若三方件需要注册表发布能力(如 sqlite 的 `db`), 归 BRV-Q13。
+> **`third_party` 的后果要写清楚**: 三方件的能力面**不进入**接口发布与版本治理 —— 它既没有接口单元, 也就没有四段版本、没有 hash、没有三态、没有 dependents 报告。这是有意的记账取舍(上游 API 不受我们治理), 代价是"三方件被谁用了"在 v0.1 只能从 `[[dep]]` 看, 无法从接口面反查 —— 记为 RV-9; 若三方件需要注册表发布能力(如 sqlite 的 `db`), 归 BRV-Q13。
 >
 > **v0.1 只发布与哈希, 不生成代码**(生成物的消费方在 v0.3 之后)。
 
@@ -279,15 +286,30 @@ device_names = ["hsm0"]
 | 生成物(描述符/头文件/注册表 C 代码) | `build/gen/**` | **否**(`.gitignore` 已有 `build/`) | 生成物纪律(C6); 可随时 `br gen` 重建 |
 | 反向依赖索引 / 求解缓存 | `build/index/**` | 否 | 可重建的派生物 |
 | 锁定文件(闭包与版本区间解) | `br.lock`(仓库根) | **是** | 复现性: 闭包解不是派生物, 是决策 |
-| 接口面快照(版本文件) | `api/iface/<provider>/<unit>.toml` | **是** | 接口发布的**记录**, 是 `a` 段推导的历史输入 |
+| 接口面快照(版本文件) | `api/iface/<provider>/<unit>.toml` | **是** | 接口发布的**记录**, 是 `FROZEN_GEN` 与 hash 推导的历史输入 |
 | 变更日志 | `api/iface/CHANGELOG.md` | **是** | 衍生物但需人读与评审 |
 | 决策记录 | `docs/decisions/NNNN-*.md` | 是 | `1-02` §2.2 |
 
 **倾向: 采纳**。同时关闭 `2-02` Q5(状态目录 = `build/`, 不放 `.br/`; 需要进版本库的那两件单独放根与 `api/`)。
 
-### BRV-D6 — 版本号模型 `va.b.c.d`(详见 §5)
+### BRV-D6 — 版本号模型 `FROZEN_GEN.MAJOR.MINOR.REVISE`(详见 §5)
 
-**倾向: 采纳四段 + 单调 + 右段清零**(§5.2); 关键分歧在 `a` 段语义(每次发版的标志位 vs 冻结面兼容代数)⇒ **BRV-Q1**, 倾向后者。
+**已采纳**(需求方规则给定, 非备选):
+
+- 段 = `FROZEN_GEN . MAJOR . MINOR . REVISE`; **`FROZEN_GEN` 与 `MAJOR` 正交**(首版未解耦, 是三个 P0 的共同根因)。
+- `FROZEN_GEN` **仅由"解冻 → 改/删已有接口 → 重新冻结"更新**; **新增接口不动它**。
+- 依赖**必须精确指定 `FROZEN_GEN`**; `>=`/`>`/`=` 只比较 `MAJOR.MINOR.REVISE`。
+- 单调: 段只增不减, 右段随左段增量清零; **跨 `FROZEN_GEN` 比较无意义**(§5.5)。
+
+### BRV-D11 — 冻结语义与解冻机制(需求方规则 + 术语澄清)
+
+**已采纳**:
+
+- **`frozen` 语义不修改** —— `1-02` §2.1 本就写明"**新增=轻量**; 语义/签名变更=决策记录+弃用周期", 与本篇"新增免解冻"**逐字一致** ⇒ 无需重开既有决策。补一句 gloss: `frozen` = **单向冻结(append-only 保护)**。
+- **段名用 `frozen_gen` 而非 `frozen_version`** —— 后者会被读成"冻结时的版本"而诱导**跨代比较**(§5.5 明令无意义)。
+- **`unfreezing` 是单元级瞬态**(`freeze_state`), 不是第 4 个条目 `status`; `unfreeze` 需最高门槛 RFC, `refreeze` 仅在"确有改/删已冻结条目"时 `FROZEN_GEN+1`(空解冻不 bump)。
+- **append vs modify 必须按条目内部结构判定**(§5.4): "给已冻结结构体加字段"= **修改** ⇒ 须解冻(对齐 `1-01` D22"后补字段 = 布局破坏")。
+- 详见备忘 [`r1/06`](comment/v0.1-review/r1/06-frozen-semantics-terminology.md)。
 
 ### BRV-D7 — 接口面真值的 v0.1 过渡态与 v0.x 迁移
 
@@ -302,6 +324,31 @@ device_names = ["hsm0"]
 ### BRV-D8 — 诊断模型: 编号化 + 位置化 + 可机读
 
 **倾向: 采纳**(无备选争议)。每条诊断 = `{code, severity, target, file, span, message, hint}`; 编号 `BRV-<域>-NNNN`(域: `MF` manifest / `DEP` 依赖 / `VER` 版本 / `IFACE` 接口 / `TAX` 分类学 / `PRIV` 特权 / `GEN` 生成); `br check` 的**环报错**输出完整边路径(满足 C4 的 M0 验收), 且 `--json` 下是结构化边列表而非字符串。
+
+**已分配编码表**(v0.1 全集; 首版 **`VER` 域一个码都没有**, 导致 V-7 无码可断 —— 见评审 `r1/03` P1-13):
+
+| 域 | 码 | 含义 | 严重度 |
+|---|---|---|---|
+| `MF` | `0007` | `product.toml` 重复声明插件自述字段(违反 BRV-D4 唯一真值) | error |
+| `DEP` | `0009` | 相位单调违例(§7.2) | error |
+| `DEP` | `0010` | `[[dep]].phase` 断言与提供方自述相位冲突 | error |
+| `DEP` | `0011` | 同插件多版本共存(违反单版本政策) | error |
+| `VER` | `0001` | **`frozen_gen` 不匹配**(依赖钉 N × 提供方在 M) | error |
+| `VER` | `0002` | 同代内 `range` 越界 | error |
+| `VER` | `0003` | 依赖未声明 `frozen_gen`(必填缺失) | error |
+| `VER` | `0004` | **依赖未冻结接口**(`frozen_gen = 0`): `dev` ⇒ info; **`release` ⇒ error**(§7.5) | info/error |
+| `VER` | `0005` | 版本串段数错误(应为 4 段) | error |
+| `VER` | `0006` | `range` 含 4 段(应只含 3 段) | error |
+| `VER` | `0007` | 版本回退(`--set` 低于当前版本) | error |
+| `IFACE` | `0009` | **单元处于 `unfreezing` 而 `--profile release`**(§5.3.4 规则 3) | error |
+| `TAX` | `0013` | 新增插件名不符推荐 namespace 形态 | warning |
+| `TAX` | `0014` | 所选 `api_type` 模板尚未交付(v0.x) | info |
+| `TAX` | `0015` | `subkind` 推导与显式声明冲突 | error |
+| `TAX` | `0016/0017/0018` | 导出面分类不变量 1/2/3(§3.5) | error |
+| `TAX` | `0019` | `form != "skin"` 却声明 `reexport_of`/`symbols`(反向不变量, 评审 P2-2) | error |
+| `PRIV` | `0001` | 声明的特权面**越出** `[privileged].level` 允许的档位 | error |
+| `PRIV` | `0002` | (ops × granularity × region) 组合非法(§3.4 正交性) | error |
+| `GEN` | `0002` | 生成目标已存在且非生成物目录 | error |
 
 ### BRV-D9 — 退出码与输出契约
 
@@ -322,62 +369,167 @@ device_names = ["hsm0"]
 - **收益**: 一个"不变量"取代了一个独立分类维度 —— 分类不会漂移; 且 `native ↛ runtime_adapter` 禁则获得了接口粒度的执法点(原先只在插件粒度)。
 - **需一并确认**: `skin` 边豁免(§3.5 消费方 3)、三方件注册表发布归属(BRV-Q13)。
 
-## 5. 版本管理 `va.b.c.d`
+## 5. 版本管理 `FROZEN_GEN.MAJOR.MINOR.REVISE`
+
+> **本节口径来源**: 需求方版本号规则 + 备忘 [`r1/05`](comment/v0.1-review/r1/05-version-model-frozen.md)(F1/F2/F3 已定)与 [`r1/06`](comment/v0.1-review/r1/06-frozen-semantics-terminology.md)(术语与解冻机制)。
+> **相对首版的变化**: **推翻**首版的 `va.b.c.d` 推进矩阵与 `^`/`~` 区间语义。首版把第一段定义为"冻结面兼容代数"但**未解耦主版本**, 导致该段与主版本恒同步、四段退化为三段(评审 `r1/01` P0-1/P0-2、`r1/03` P0-4)。
 
 ### 5.1 存储与展示
 
-- **存储/比较**: 无 `v` 前缀的 `a.b.c.d`, 四段均为非负整数, 写入 TOML 为字符串 `version = "0.1.0.0"`。
-- **展示**: `v` 前缀, `v0.1.0.0`。
-- **hash 附着**: `iface_ref` = `vA.B.C.D+sha256:<hex>`; hash 是**构建元数据**, **不参与**任何比较与区间求解(语义同 semver 的 build metadata)。完整 64 位 hex 存于 lock/版本文件; 展示取前 12 位。
+- **段**: `FROZEN_GEN . MAJOR . MINOR . REVISE`, 四段均为非负整数。
+- **存储/比较**: 无 `v` 前缀, 写入 TOML 为字符串 `version = "0.1.0.0"`; **展示**加 `v` 前缀 `v0.1.0.0`。
+- **hash 附着**: `iface_ref` = `vF.M.m.r+sha256:<hex>`; hash 是**构建元数据**, **不参与**比较与区间求解(语义同 semver 的 build metadata)。完整 64 位 hex 存于 lock/快照; 展示取前 12 位。
+- **段名为什么是 `FROZEN_GEN` 而不是 `frozen_version`**: 该段是"**已承诺面被破坏的次数**"(代数), 不是"冻结发生在哪个版本"(序列上的指针)。`frozen_version` 会主动诱导**跨 `FROZEN_GEN` 比较** —— 而这恰恰是 §5.5 明令无意义的操作。详见 `r1/06` §3。
 
-### 5.2 四段语义与推进规则(核心)
+### 5.2 段语义与「事件 → 段」推进规则(核心)
 
-| 段 | 名称 | 回答的问题 |
-|---|---|---|
-| `a` | **接口兼容代数**(倾向, 见 BRV-Q1) | "已有(受保护)接口面是否变过?" |
-| `b` | 主版本 | "能力代际是否变了?" |
-| `c` | 次版本 | "是否兼容地新增了能力?" |
-| `d` | 修订 | "接口面未动, 只是实现/文档/性能变了?" |
+| 段 | 名称 | 谁决定 | 回答的问题 |
+|---|---|---|---|
+| `FROZEN_GEN` | **冻结代**(兼容代数) | **工具强制**(解冻/重冻序列) | "已承诺的接口面**被改/删过几次**?" |
+| `MAJOR` | 主版本 | **人声明** | "产品能力代际是否变了?" |
+| `MINOR` | 次版本 | **人声明** | "是否新增了接口或功能?" |
+| `REVISE` | 修订 | **人声明** | "面未动, 只是实现/文档/性能变了?" |
 
-**推进矩阵**(`br iface publish` 自动判定; 人工可用 `--set` 覆盖但必须给出理由):
+**关键: `FROZEN_GEN` 与 `MAJOR` 正交**(首版让二者恒同步, 是三个 P0 的共同根因)。`FROZEN_GEN` 由**接口契约**驱动, `MAJOR` 由**产品演进**驱动 ⇒ 可同时出现 `F=3,M=1`(接口被破坏过三代但产品大版本没动)与 `F=1,M=2`(产品翻代但接口没动)。
 
-| 变更集(§6.3) | a | b | c | d | 例 |
+**推进规则**(`br iface publish` 判定; `MAJOR`/`MINOR`/`REVISE` 由 `br ver bump --rule` 或 `publish --set` 声明):
+
+| 事件 | `FROZEN_GEN` | `MAJOR` | `MINOR` | `REVISE` | 依据 |
 |---|---|---|---|---|---|
-| `NONE`(无接口面变化) | — | — | — | **+1** | 修 bug / 改文档 |
-| `ADDED`(纯新增, append-only) | — | — | **+1** | →0 | 新增一个函数/一个 service 名 |
-| `STATUS`: experimental→frozen(承诺升级)/ frozen→deprecated(弃用开始)/ 撤销弃用 | — | — | **+1** | →0 | 治理状态转移(不改面) |
-| `CHANGED`(已有条目变更), 受影响条目**全部** experimental | — | — | **+1** | →0 | 探索期改动(无保护面) |
-| `CHANGED`(已有条目变更), 含 **frozen/deprecated** 条目 | **+1** | **+1** | →0 | →0 | 破坏性变更 |
-| `REMOVED`, 含 frozen 条目 | **+1** | **+1** | →0 | →0 | 需前置弃用周期(`1-02` §2.6.2) |
-| `REMOVED`, 仅 experimental 条目 | — | — | **+1** | →0 | 探索期回收 |
-| 重发同面(仅重新打包/hash 变) | — | — | — | **+1** | 供应链事件 |
+| **改/删已有 `frozen` 条目**(经解冻 → 重新冻结) | **+1** | 不动 | →0 | →0 | §5.3 硬路径 |
+| 改/删已有 `deprecated` 条目(移除) | **+1** | 不动 | →0 | →0 | 仍须满足弃用周期(`1-02` §2.6.5) |
+| **新增条目**(append-only) | **不动** | 不动 | **+1** | →0 | 需求方规则"新增接口一般不动" |
+| **追加枚举成员 / 预留槽位填充** | **不动** | 不动 | **+1** | →0 | append 语义, 见 §5.4 |
+| 治理状态转移(`experimental→frozen` / `→deprecated` / 撤销弃用) | **不动** | 不动 | **+1** | →0 | 面未动(`1-02` §2.6.2) |
+| 改已有**全部 `experimental`** 条目 | **不动** | 不动 | **+1** | →0 | 无承诺可破(`1-02` §2.1) |
+| 删已有**仅 `experimental`** 条目 | **不动** | 不动 | **+1** | →0 | 同上 |
+| **空解冻**(解冻后未改/删任何已冻结条目) | **不动** | 不动 | 不动 | 不动 | `r1/06` §4.3 规则 2 |
+| **重大产品版本**(能力代际) | 不动 | **+1** | →0 | →0 | 人工声明, 与接口面无关 |
+| 小功能(面未动) | 不动 | 不动 | **+1** | →0 | — |
+| 修 bug / 改文档(面未动) | 不动 | 不动 | 不动 | **+1** | 需求方规则 |
+| 面完全未变(冗余重跑) | 不动 | 不动 | 不动 | 不动 | **空操作**, 见 §6.5 幂等 |
 
-**右段清零规则**(单调性): 任一段增量 ⇒ 其右侧所有段归零。由此 `(a,b,c,d)` 字典序即版本序, 且**永不回退**。
+- **右段清零**: `MAJOR` 增量 ⇒ `MINOR`/`REVISE` 归零; `MINOR` 增量 ⇒ `REVISE` 归零。
+- **`FROZEN_GEN` 不清零任何段**(它与产品版本轴正交); 其增量只对"已承诺面"有语义。
+- **单调不回退**: 任一段只增不减; 由工具校验(`BRV-VER-0007`)。
 
-> **为什么 `a` 不因 experimental 变更而抖**: 若 `a` 对任何接口改动都 +1, 依赖者的"重验证信号"会被探索期噪音淹没, 且 `^` 区间(约束 `a` 不变, §7.4)会频繁误报。把 `a` 定义为**冻结面代数**后, `a` 的变化恰好等价于 `1-02` §2.3 层 1 的"硬红"集合, 版本号与门禁就此对齐——这是 BRV-Q1 倾向后者的核心理由。**"本次是否变更了已有接口"** 这个需求方原始问句, 由发布报告的布尔字段 `iface_changed` 回答(机器可读、进 lock、不进版本号)。
+> **⚠ "修 bug" 与 "冗余重跑" 的面**完全相同**, 靠「是否显式声明」区分**(这是本节最易误读之处):
+>
+> | 意图 | 命令 | 结果 |
+> |---|---|---|
+> | 修了 bug / 改了实现或文档(面不变) | `br ver bump <unit> --rule revise` | `REVISE+1` |
+> | 无意图地重跑 publish(CI 重跑 / 手工重复) | `br iface publish <unit>` | **空操作**(不推进任何段、不写盘、退出 0) |
+>
+> 理由: v0.1 **无编译、无符号、无测试**(§0 边界)⇒ 工具**看不见**"实现变了但面没变"。若让 `publish` 自行判断, 只能退化为"每次都 `REVISE+1`"(首版正是如此, 导致每次 CI 重跑都烧掉一个版本号 —— 评审 `r1/01` P0-3 / `r1/03` P0-1)。因此 `REVISE` 必须是**人工显式意图**, 而不是工具的猜测。
 
-### 5.3 版本文件(接口面快照)与兼容信息
+### 5.3 冻结与解冻机制
+
+#### 5.3.1 两条轴, 缺一不可
+
+| 轴 | 取值 | 粒度 | 回答 |
+|---|---|---|---|
+| `status`(既有, `1-02` §2.1) | `experimental` \| `frozen` \| `deprecated` | **条目** | "这个条目受不受保护?" |
+| `freeze_state`(**新增**) | `unfrozen` \| `frozen` \| **`unfreezing`** | **接口单元** | "这个单元当前在不在冻结窗口里?" |
+
+> `freeze_state = unfreezing` 是**瞬态**: 窗口内条目**仍是我们不打算放弃的承诺**, 只是正在**重新谈判** ⇒ 因此**不**引入第 4 个 `status` 值(否则 `frozen→unfreezing` 会被误读为"放弃承诺")。
+
+#### 5.3.2 `frozen` 的语义 gloss(须与 `1-02` §2.1 对齐)
+
+> `frozen` = **单向冻结(append-only 保护)**: 面**只能追加**, 不能改写/删除已承诺条目。
+> 追加 ≠ 破坏承诺 ⇒ **无需解冻**; 改写/删除 = 破坏承诺 ⇒ **必须走解冻 → 重新冻结**。
+
+该语义**与 `1-02` §2.1/§2.2 既有定义逐字一致**(§2.1 行 46"新增=轻量; 语义/签名变更=决策记录+弃用周期"; §2.2 行 75"frozen 新增纯函数 = 轻量") ⇒ 本节**不重开**既有决策, 只是把它形式化并与版本段挂钩。**`frozen` 从来就不意味着"面不再生长"** —— 这与 glibc 的 `soname` 演化同构(`libc.so.6` 数十年不变而期间新增数千符号, soname 只在不兼容时 bump)。
+
+#### 5.3.3 两条改变受保护面的路径
+
+| 路径 | 动作 | `FROZEN_GEN` | 依据 | 适用 |
+|---|---|---|---|---|
+| **软** | 面内演化: 语义变更 / 弃用 → RFC + 弃用周期(不 unfreeze) | **不变** | `1-02` §2.2 / §2.6.2 | 不破坏源码兼容的演化 |
+| **硬** | **`unfreeze` → 改/删已有条目 → `refreeze`** | **+1** | 本节 | 签名变更 / 删除 / 破坏性重排 |
+
+> **两条要求独立**: 删除 frozen 接口走**硬路径**(`FROZEN_GEN+1`), **同时**仍须满足 `1-02` §2.6.5 的弃用周期 —— 一个管兼容代, 一个管通知期。
+
+#### 5.3.4 解冻窗口三条规则
+
+| # | 规则 | 理由 |
+|---|---|---|
+| 1 | `br iface unfreeze <unit>` 需**最高门槛 RFC**(`--note <决策记录>`) | 解冻让**全部依赖方强制重新验证**, 影响面大于单次签名变更 ⇒ 纳入 `1-02` §2.2 已有的"最高门槛"行 |
+| 2 | `refreeze` 时**确有"改/删已冻结条目"才 `FROZEN_GEN+1`**; 否则不 bump | 精确对齐需求方"**已有接口发生变动**"—— 空解冻不该让全体依赖方重钉 |
+| 3 | **`br check --profile release` 在任何单元处于 `unfreezing` 时失败**(`BRV-IFACE-0009`) | 防止 release 停在半谈判状态(与 §7.5 的 release 门禁同轴) |
+
+命令面(并入 §6.5):
+
+| 命令 | 作用 |
+|---|---|
+| `br iface unfreeze <unit> --note <path>` | 进入解冻窗口(`freeze_state: frozen → unfreezing`) |
+| `br iface refreeze <unit> [--note <path>]` | 退出窗口; **按 §5.4 判定矩阵决定是否 `FROZEN_GEN+1`** |
+
+### 5.4 ⚠ append vs modify: 判定必须落在**条目内部结构**上
+
+**陷阱**: "新增无需解冻"**只在条目级成立**。给一个已冻结的**结构体加字段**, 直觉上是"新增", 但在 D14 的二进制兼容模型里是**修改**:
+
+| 出处 | 原文 |
+|---|---|
+| `1-01` **D22**(行 132) | "动机 = D14: ops 布局入 golden, **后补字段 = 布局破坏**——**预留即免破坏**" |
+| `1-02` §4.1-2 | "内联访问器…其**布局变更按硬门禁处理**" |
+| `1-02` §4.1-4 / §2.4 | "**枚举 append-only** 进 golden"; "枚举只追加、**不重排**、不当位标志跨版本扩展" |
+
+因此 `br check` **不能只比"条目集合的差"**, 必须比**条目内部结构**, 按 kind 判定:
+
+| 条目 kind | 「追加」(免解冻) | 「修改」(**须解冻**) |
+|---|---|---|
+| `func` | 新增一个函数 | 签名变更 / `--strict-params` 下形参名变更 / 语义变更 |
+| `type`(struct) | 新增一个**独立**结构体 | **给已有结构体加/删/重排字段** ← D22 |
+| `enum` | **末尾追加**成员 | **重排** / 复用旧位 / 删除成员 |
+| `service` | 新增一个 service 名 | 已有服务的 ops 表**加槽** / 改签名 |
+| `macro` / `var` | 新增 | 改已有宏的值/定义 |
+
+> **本条与 §6.2 的 hash 文法缺一不可**: 若 `macro`/`var`/`service` 条目**没有参与 hash 的字段**(评审 `r1/03` P0-2), 则本节这个陷阱**连检测手段都没有**。二者必须一起修。
+>
+> **D22 的启示**: 既有"**预留槽位**"设计在新模型下价值翻倍 —— 它把"将来必须解冻"变成"现在就已存在", 让 `FROZEN_GEN` 更稳定。建议把"**冻结前应预留扩展槽**"写进冻结评审清单(回灌 A-25)。
+
+### 5.5 三件证据的分工(不可互替)
+
+| 证据 | 回答 | 谁维护 | 频率 |
+|---|---|---|---|
+| **`FROZEN_GEN`** | "**承诺被破坏过几次**"(权威) | 工具强制(解冻/重冻序列) | 低频, 需 RFC |
+| **`iface_hash`** | "**这个面具体长什么样**"(含追加) | 工具计算(IFACE-IR) | 高频 |
+| 条目 **`status`** | "**哪些条目受保护**" | 人工声明 + 状态机校验 | 中 |
+
+**由此得到发布报告的判定表**(**替代首版的 `iface_changed` 布尔**, 该布尔已可删除):
+
+| `FROZEN_GEN` | `hash` | 结论 | 对应需求方问句 |
+|---|---|---|---|
+| 不变 | 不变 | 面完全未动 | — |
+| 不变 | **变** | **纯追加 / 状态转移 / experimental 改动** | "**是否增加接口?**" → 是 |
+| **+1** | 变 | **已有 `frozen`/`deprecated` 条目被改或删** | "**是否变更/删除了某个接口?**" → 是 |
+
+**跨 `FROZEN_GEN` 比较无意义**(须写明): 依赖精确匹配 `FROZEN_GEN` ⇒ 求解**永不跨代比较**。`(F,M,m,r)` 字典序**只可用于同一 `F` 内**排序/展示。跨代不存在"更新/更旧": `F=4` 出现在 `F=3` 之后, 但 `F=4` 可能**删掉了** `F=3` 的接口 ⇒ 对依赖方而言是"**不兼容的另一代**"而非"升级"。迁移语义由 `deprecated` + 弃用周期承担, **不由版本序承担**。
+
+### 5.6 版本文件(接口面快照)与兼容信息
 
 需求方点名的"兼容信息"四件, 落点如下:
 
 | 兼容信息 | 落点 | v0.1 |
 |---|---|---|
-| 版本文件 | `api/iface/<provider>/<unit>.toml`(接口面快照: 条目 + 状态 + 版本 + hash) | ✅ 生成 |
-| 版本 hash | 快照与 `plugin.toml [compat].iface_hash` | ✅ |
+| 版本文件 | `api/iface/<provider>/<unit>.toml`(接口面快照: 条目 + 状态 + `freeze_state` + 四段版本 + hash) | ✅ 生成 |
+| 版本 hash | 快照与 `plugin.toml [compat].iface_hash`(按单元) | ✅ |
 | 对 core 的版本依赖 | `plugin.toml [compat].core = ">=1.0.0"` | ✅(区间求解参与) |
-| 接口依赖(对其他插件接口单元的依赖) | `[compat].requires_iface = [{id, api_iface, version, mode}]` | **预留字段, v0.1 不扫描**(`2-02` Q; 需求方明确"预留在文档中") |
+| 接口依赖(对其他插件接口单元的依赖) | `[compat].requires_iface = [{id, api_iface, frozen_gen, range, mode}]` | **预留字段, v0.1 不扫描**(需求方明确"预留在文档中") |
 
 `requires_iface` 的预留语义(写进 schema, v0.2 启用):
 
 ```toml
 [[compat.requires_iface]]
-id        = "ability/vfs-core#file"   # <provider>#<unit>
-api_iface = "native"                   # 被消费单元的分类; 必须与本插件 api_type 相容(§3.5)
-version   = "^1.0.0.0"
-mode      = "decl"                     # decl(v0.1 语义) | sym(v0.2 符号级) | exact-hash
+id         = "ability/vfs-core#file"   # <provider>#<unit>
+api_iface  = "native"                   # 被消费单元的分类; 必须与本插件 api_type 相容(§3.5)
+frozen_gen = 3                          # 必填, **精确匹配**(§5.5: 跨代比较无意义)
+range      = ">=1.2.0"                  # 只比较 MAJOR.MINOR.REVISE(固定 3 段)
+mode       = "decl"                     # decl(v0.1 语义) | sym(v0.2 符号级)
 ```
 
-**分类相容规则(v0.2 执法)**: `native` 插件不得 require `api_iface = "runtime_adapter"` 的单元(§3.5 消费方 2)——否则"不链适配基座"的裁剪承诺会从接口依赖这条侧门被绕过。
+- **`frozen_gen` 与 `range` 拆成两个字段**, 而非合成一个字符串: 二者语义不同(`frozen_gen` 精确、`range` 范围), 混写无法分别校验(且违反 BRV-D2"禁止隐式")。
+- **分类相容规则(v0.2 执法)**: `native` 插件不得 require `api_iface = "runtime_adapter"` 的单元(§3.5 消费方 2)——否则"不链适配基座"的裁剪承诺会从接口依赖这条侧门被绕过。
 
 ## 6. 接口发布机制(interface publishing)
 
@@ -390,14 +542,19 @@ mode      = "decl"                     # decl(v0.1 语义) | sym(v0.2 符号级)
   │     ├── name       : 条目名(函数名/类型名/service 名)
   │     ├── sig        : 规范化签名字符串(仅 func; 见 §6.2)
   │     ├── layout     : 结构布局摘要 | "# opaque"(仅 type)
+  │     ├── value      : 宏值 / 枚举成员表 / 常量值(仅 macro|var|enum; 见 §6.2 规则9)
+  │     ├── ops        : ops 表槽位摘要(仅 service; 见 §6.2 规则9)
   │     └── status     : experimental | frozen | deprecated
-  ├── version          : a.b.c.d
+  ├── version          : FROZEN_GEN.MAJOR.MINOR.REVISE(§5.2)
+  ├── freeze_state     : unfrozen | frozen | unfreezing   ← 单元级瞬态(§5.3.1)
   ├── api_iface        : native | runtime_adapter   ← 恒等于提供者的 api_type(§3.5)
   ├── iface_hash       : sha256(canonical(surface))
   └── hash_scope       : "decl"(v0.1) | "sym"(v0.x)
 ```
 
 **粒度对齐 `1-02` D13(双层)**: v0.1 管**接口单元级**(人读层: 单元名/版本/状态/依赖), 并且**允许**在声明中显式列出条目(符号级**意图**); 符号级**真值**由 v0.2 的构建产物提取接管。**v0.1 的 `iface_hash` 是声明面 hash, 不是 ABI hash**——这条必须印在快照文件头, 否则会制造"已经兼容"的假安全感(RV-3)。
+
+> **`value`/`ops` 字段是**评测 `r1/03` P0-2 的修法**: 若不给 `macro`/`var`/`enum`/`service` 定义参与 hash 的字段, 则 `#define BR_MAX 16→4096` 与"已有 service 的 ops 表加槽"都会算出**同一 hash**、变更集报 `NONE`。而这两种变化前者是**面变更**、后者按 §5.4 是**必须解冻的 modify** ⇒ 缺这两个字段会使 §5.4 的判定矩阵**无输入**。
 
 ### 6.2 IFACE-IR 规范化规则(定死, 否则 hash 抖动)
 
@@ -406,23 +563,31 @@ mode      = "decl"                     # decl(v0.1 语义) | sym(v0.2 符号级)
 | 1 | 条目按 `(kind, name)` **字节序**升序 | 声明顺序不得影响 hash |
 | 2 | 空白归一(单空格/无尾随) | 排版不得影响 hash |
 | 3 | **参数名不参与** sig(只留类型与顺序); `--strict-params` 可选开启 | 形参改名是源码兼容的, 不应抖 hash |
-| 4 | 类型别名展开到规范名; 依赖 `typedef` 表显式声明 | 避免"同一类型的两种写法"产生两个面 |
+| 4 | 类型别名展开到规范名; 依赖 `typedef` 表显式声明(`[iface.typedefs]`) | 避免"同一类型的两种写法"产生两个面 |
 | 5 | 注释/文档字符串**不进** hash(但进快照) | 文档改动 ≠ 接口变更 |
-| 6 | `status` **不进** hash(单列为 `STATUS` 变更类别) | 状态是治理属性, 不是面 |
-| 7 | 枚举: `append-only`(只追加不重排), 值进 hash | `1-02` §2.4 纪律 |
+| 6 | `status` / `freeze_state` **不进** hash(单列为 `STATUS` / `FREEZE` 变更类别) | 治理属性, 不是面 |
+| 7 | 枚举: `append-only`(只追加不重排), 成员**按声明序**输出, 值进 hash | `1-02` §2.4 纪律; 明确输出序才能检测重排 |
 | 8 | hash = `SHA-256` over UTF-8 canonical text; 展示 12 hex | 与 `1-02` 的 hash 纪律同族 |
+| 9 | **`macro`/`var` 取其值、`enum` 取成员表、`service` 取 ops 槽位摘要**进 hash | 关闭 `r1/03` P0-2(缺字段 ⇒ 面变化不可见) |
+| 10 | hash 做**域分隔**(unit id + hash_rev 前缀), 且 `strict_params` **存进快照** | 防跨单元碰撞; 防跨环境 hash 抖动 |
+
+> **规则 4 依赖的 `[iface.typedefs]` 表必须写进 §8.1 schema** —— 首版只在规则里提到它, schema 中没有该表(评审 `r1/01` P1-1), 规则不可实现。
 
 ### 6.3 变更集(change set)与"标记接口变更状态 + 依赖的插件"
 
-`br iface publish` 对**旧快照 vs 新面**做 diff, 产出变更集(五类), 并**必须**附上受影响者:
+`br iface publish` 对**旧快照 vs 新面**做 diff, 产出变更集, 并**必须**附上受影响者。**判定先分「追加 / 修改」**(§5.4), 再定治理后果:
 
-| 类别 | 判定 | 硬性要求 |
-|---|---|---|
-| `ADDED` | 新增条目 | 无(绿) |
-| `CHANGED` | 已有条目的 sig/layout 变化 | 若条目为 `frozen` ⇒ 必须 `--note <决策记录>`(`1-02` §2.2 PR 门钩的机械等价) |
-| `REMOVED` | 条目消失 | 若条目为 `frozen` ⇒ 必须已 `deprecated` 且满足弃用周期(`1-02` §2.6.2) |
-| `STATUS` | 三态转移 | 合法性按 `1-02` §2.6.2 状态机校验(如 `experimental→deprecated` 直跳 ⇒ 红) |
-| `NONE` | 面未变 | 无 |
+| 类别 | 判定 | 是否须解冻 | 硬性要求 |
+|---|---|---|---|
+| `ADDED` | 新增**条目**(新增函数 / 独立结构体 / 新 service 名) | **免** | 无(绿) |
+| `EXTENDED` | 已冻结条目的**合法追加**(枚举末尾加成员 / 填充预留槽位) | **免** | 无(绿); 按 §5.4 判定表校验是"追加"而非"修改" |
+| `CHANGED` | 已有条目的 **sig/layout/value/ops** 变化(**含结构体加字段**) | **必须**(已 `frozen` 条目) | 必须处于 `unfreezing` 且 `--note <决策记录>` |
+| `REMOVED` | 条目消失 | **必须**(已 `frozen` 条目) | 必须已 `deprecated` + 满足弃用周期(`1-02` §2.6.5) |
+| `STATUS` | 三态转移 | 免 | 合法性按 `1-02` §2.6.2 状态机校验(如 `experimental→deprecated` 直跳 ⇒ 红) |
+| `FREEZE` | `freeze_state` 转移(`unfreezing` 进/出) | — | 进出均需 `--note`; `refreeze` 决定是否 `FROZEN_GEN+1` |
+| `NONE` | 面未变 | — | **空操作**(不写盘、退出 0), 见 §6.5 |
+
+**组合变更集**: 一次 publish 可同时含多类(如 `ADDED` + `CHANGED`)。**判定取最严**: 存在任一 `CHANGED`/`REMOVED`(涉及已冻结条目)⇒ `FROZEN_GEN+1`; 否则只要存在 `ADDED`/`EXTENDED`/`STATUS` ⇒ `MINOR+1`; 全 `NONE` ⇒ 空操作。
 
 **影响报告(dependents report)**——需求方要求的"标记接口变更状态, 依赖的插件":
 
@@ -430,44 +595,68 @@ mode      = "decl"                     # decl(v0.1 语义) | sym(v0.2 符号级)
 $ br iface publish ability/vfs-core --check --json
 {
   "unit": "ability/vfs-core#file",
-  "changes": [{"kind":"CHANGED","entry":"br_open","from":"…","to":"…","status":"frozen"}],
-  "iface_changed": true,
-  "version": {"from":"1.2.0.0","to":"2.3.0.0","reasons":["a+1: frozen 面变更","b+1: 破坏性"]},
+  "changes": [
+    {"kind":"CHANGED","entry":"br_open","from":"…","to":"…","status":"frozen"},
+    {"kind":"EXTENDED","entry":"br_open_flags","note":"enum 末尾追加成员"}
+  ],
+  "frozen_gen_changed": true,
+  "version": {"from":"1.2.0.0","to":"2.0.0.0",
+              "reasons":["FROZEN_GEN+1: 已有 frozen 条目被改","MINOR→0"]},
   "dependents": {
     "direct":   ["ability/fs-tmpfs","app/hello"],
     "transitive": ["app/hello"],
-    "unsatisfied": [{"plugin":"ability/fs-tmpfs","requires":"^1.0.0.0","why":"a 段已变, 需重新确认"}]
+    "unsatisfied": [{"plugin":"ability/fs-tmpfs","requires":{"frozen_gen":1,"range":">=1.0.0"},
+                     "why":"frozen_gen 已由 1 变 2, 需重新确认"}]
   },
   "verdict": "red"
 }
 ```
 
+> **`frozen_gen_changed` 替代首版的 `iface_changed` 布尔**: 后者与 `FROZEN_GEN` 是否变动、`hash` 是否变动构成三重冗余(§5.5 的判定表已完整确定三者关系) ⇒ 删除, 少一个真值。
+
 **反向依赖索引**: `build/index/dependents.json`(派生物, 由 `br dep index` 全树重建)。接口发布**只读**它, 缺失则先重建并提示——避免接口发布依赖陈旧索引。
 
-### 6.4 三态(frozen/deprecated/experimental)在 v0.1 的落地
+### 6.4 三态 + 冻结瞬态在 v0.1 的落地
 
-`1-02` §2.1/§2.6.2 的三态与状态机**原样继承**, v0.1 只实现其**声明与转移校验**部分:
+`1-02` §2.1/§2.6.2 的三态与状态机**原样继承**(语义**不修改** —— §2.1 行 46 本就写明"新增=轻量", 与本篇"新增免解冻"逐字一致), v0.1 实现其**声明与转移校验**部分, 并**新增**解冻瞬态(§5.3):
 
 | 能力 | v0.1 | 说明 |
 |---|---|---|
-| 在条目/单元上标注三态 | ✅ | `status = "frozen"` |
-| 状态转移合法性校验 | ✅ | 按 §2.6.2 转换表 |
+| 在条目上标注三态 | ✅ | `status = experimental\|frozen\|deprecated` |
+| 状态转移合法性校验 | ✅ | 按 `1-02` §2.6.2 转换表 |
+| **单元级 `freeze_state`**(含 `unfreezing` 瞬态) | ✅ | §5.3.1; **新增机制**(`1-02` 无此路径) |
+| `unfreeze` / `refreeze` 门钩 | ✅ | 最高门槛 `--note`; `refreeze` 决定是否 `FROZEN_GEN+1` |
+| **append vs modify 判定**(§5.4) | ✅ | 按条目 kind 判"是追加还是修改" —— 这是"新增免解冻"能否安全成立的关键 |
 | 冻结面变更 ⇒ 需决策记录 | ✅ | `--note` 门钩(§6.3) |
 | 弃用周期(两个 minor 无使用)计数 | ◐ | v0.1 只能统计**声明面**的使用者数量; 真实使用统计需符号级 ⇒ v0.2 |
 | 编译期 `deprecated` 警告 | ✗ | 需生成头文件与编译 ⇒ v0.3 |
+
+> **⚠ `freeze` 的前置条件缺口(须显式声明)**: `1-02` §2.6.2 规定 `EXPERIMENTAL→FROZEN` 的前置是"**当期已交付调度器的 conformance 矩阵全绿**"(层 2), 且升格产物含"**golden 收录**"。而本篇把 test/conformance 排到 **v0.4**、golden 排到 **v0.6** ⇒ **v0.1 无法完成一次合法冻结**。
+> **v0.1 的处理(采纳评审 `r1/02` P0-2 的建议)**: `br iface freeze` 在 v0.1 **只能生成"待升格提案"**(写入 `build/gen/proposals/<unit>.toml` + 要求 `--note`), **不得落 `frozen` 快照、不得 bump `FROZEN_GEN`**; 真正的升格在 v0.4+(有矩阵)执行。这条是**显式例外声明**, 不是对 `1-02` §2.6.2 的静默偏离(回灌 A-26)。
 
 ### 6.5 发布命令面与幂等
 
 | 命令 | 作用 | 副作用 |
 |---|---|---|
 | `br iface list [--json]` | 列出插件树内全部接口单元与状态 | 无 |
-| `br iface show <id>` | 展示接口面(条目 + 状态 + 版本 + hash) | 无 |
-| `br iface diff <id> [--json]` | 旧快照 vs 当前声明的变更集 | 无 |
+| `br iface show <id>` | 展示接口面(条目 + `status` + `freeze_state` + 四段版本 + hash) | 无 |
+| `br iface diff <id> [--json]` | 旧快照 vs 当前声明的变更集(§6.3) | 无 |
 | `br iface publish <id> [--check] [--note <path>] [--set <ver>]` | 计算 → diff → 影响报告 → 版本推进 → 落盘 | 写快照/lock/CHANGELOG/`plugin.toml [compat]` |
 | `br iface status <id> [--check]` | 独立重算 hash 与快照比对(CI 门禁用; 防手编) | 无 |
-| `br iface freeze/deprecate/undeprecate <id>[#entry]` | 三态转移 | 写快照 + 要求 `--note` |
+| `br iface freeze <id>[#entry]` | `status: *→frozen`(承诺升级); 须 `--note` | 写快照 + 要求 `--note` |
+| `br iface deprecate/undeprecate <id>[#entry]` | `status: frozen↔deprecated`; 须 `--note` | 同上 |
+| **`br iface unfreeze <unit> --note <path>`** | **进入解冻窗口**(`freeze_state: frozen→unfreezing`); 最高门槛门钩 | 写快照 |
+| **`br iface refreeze <unit> [--note <path>]`** | **退出窗口**; 按 §5.4 判定矩阵决定是否 `FROZEN_GEN+1` | 写快照 + 可能 bump `FROZEN_GEN` |
 
-**幂等纪律**: 同一声明面重复 `publish` ⇒ 除 `d+1` 外无任何 diff; `--check` 重复执行 ⇒ 逐字节一致(继承 `docs/render-plantuml.sh` 的"按内容而非 mtime"纪律, `2-02` BR-D5)。
+**幂等纪律**(修正首版的自相矛盾——首版写"NONE ⇒ `d+1`"却又宣称重复 publish 无 diff, 每次调用都烧掉一个版本号):
+
+> **面内容幂等**: 若 `canonical(new surface) == snapshot.iface_hash` **且** 条目集合/`status`/`freeze_state` 全等 ⇒ `publish` 是**空操作**(不写任何文件、不推进任何段、退出 0; `--check` 逐字节一致)。
+
+要点:
+1. **`NONE` 不再 `REVISE+1`** —— 首版的 `NONE ⇒ d+1`(例"修 bug/改文档")在 v0.1 **不可观测**(无编译、无符号、无测试 ⇒ 工具看不见"实现变了但面没变")。`REVISE` 改为**人工声明**(`br ver bump --rule revise`)。
+2. **diff 与 hash 一律忽略** `version` / `hash` / `status` / `freeze_state`(§6.2 规则 6) —— 否则 publish 自己写回的字段会成为下一轮的输入, 形成 `FROZEN_GEN+1` 的**无限升级环**(评审 `r1/03` P0-1)。
+3. **`--set` 必须 ≥ 当前版本**(单调性校验 `BRV-VER-0007`)。
+4. 重复 `--check` ⇒ 逐字节一致(继承 `docs/render-plantuml.sh` 的"按内容而非 mtime"纪律, `2-02` BR-D5)。
 
 ### 6.6 v0.1 → v0.x 的真值迁移(BRV-D7 的落地)
 
@@ -482,16 +671,21 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
 
 ## 7. 依赖管理与分析
 
-### 7.1 两类依赖(继承 `1-01` §6.5, 但补上 v0.1 的规则)
+### 7.1 三类依赖(继承 `1-01` §6.5 的两分, 新增 `type`)
 
-| | init 依赖 | runtime 依赖 |
-|---|---|---|
-| 声明 `kind` | `"init"` | `"runtime"` |
-| 含义 | "你必须先 init 完我才能 init" | "我运行时会调你" |
-| 环政策 | **禁止** ⇒ 拓扑硬错误, 报完整环路径 | **允许** ⇒ 只报 `info` |
-| 相位约束 | **有**(§7.2) | 无 |
-| 闭包参与 | ✅ | ✅(同属插件闭包) |
-| v0.1 执法 | 硬错误 | 只登记 + 影响报告(§6.3) |
+| | init 依赖 | runtime 依赖 | **type 依赖**(新增) |
+|---|---|---|---|
+| 声明 `kind` | `"init"` | `"runtime"` | **`"type"`** |
+| 含义 | "你必须先 init 完我才能 init" | "我运行时会调你" | **"我只需要你的头文件/类型可见"** |
+| 环政策 | **禁止** ⇒ 拓扑硬错误, 报完整环路径 | **允许** ⇒ 只报 `info` | **允许** ⇒ 只报 `info` |
+| 相位约束 | **有**(§7.2) | 无 | 无 |
+| 闭包参与 | ✅ | ✅ | ✅(**但不拉入运行期依赖**, 见下) |
+| 钉 `frozen_gen`? | ✗(依 F3) | ✗(依 F3) | ✗(依 F3) |
+| v0.1 执法 | 硬错误 | 只登记 + 影响报告(§6.3) | 只登记 |
+
+> **为什么必须有 `type`**(评审 `r1/03` P0-3③): `dev-core → vfs-core` 是**仅头文件类型依赖**(`8-01` §1.3 / O-S7)。旧模型只有 `init|runtime` 两值 ⇒ 写成 `runtime` 会按"runtime 参与闭包"把 vfs-core **拉进组合**, 从而落入 `8-01` 的"形态 B", **推翻 `1-01` D19 / O-S7**(设备框架本可独立于 VFS 成立)。`type` 边表达"编译期需要类型、运行期不需要该插件在场"。
+>
+> **与 §7.5 profile 的关系**: 三类结构依赖**都不钉 `frozen_gen`**, 故都不参与 "release 不允许依赖未冻结接口" 的判定 —— 这正是 **M0–M2 能继续工作**的原因(其依赖全是结构边)。
 
 ### 7.2 init-DAG 与相位一致性(§7.3 之外的第二条硬约束)
 
@@ -518,47 +712,78 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
 
 > **框架件之间的特例**不写成通用规则: `cdev-core→dev-core`、`bdev-core→dev-core`、`cdev-core→vfs-core(类型)` 这类边由 `7-01`/`8-01` 的显式白名单承载(v0.1 以 `allow_edges` 清单形式内置), 否则通用规则会被迫放宽到无法执法。
 
-### 7.4 版本区间语义(四段版, 关闭 `4-04` §3 一半)
+### 7.4 版本区间语义(3 段范围 + 精确 `frozen_gen`)
 
-| 写法 | 语义 |
-|---|---|
-| `=a.b.c.d` | 精确 |
-| `>=a.b.c.d` / `<=` / `>` / `<` | 按 `(a,b,c,d)` **字典序**比较 |
-| `~a.b.c.d` | 允许 `c`/`d` 上升, **不允许** `b` 变且**要求 `a` 不变**(约等于"锁定接口代数与主版本") |
-| `^a.b.c.d` | 允许 `b`/`c`/`d` 上升, **要求 `a` 不变** |
-| `*` | 任意 |
-| `,`(逗号) | 交集(AND) |
+**依赖 = `(frozen_gen 精确值, range 范围表达式)`**: `frozen_gen` **精确匹配**(§5.5: 跨代比较无意义), `range` 只作用于 `MAJOR.MINOR.REVISE`。
 
-**关键设计**: `^` 与 `~` 都把 **`a` 段当作不可变前置条件**——由于 `a` 只在冻结面变更时 +1(BRV-Q1 倾向), 这条约束恰好表达"**我只接受不碰我依赖面代数的新版本**", 把 `1-02` 门禁的语义直接编进了依赖求解器。
+| 写法 | 语义 | 备注 |
+|---|---|---|
+| `=M.m.r` | 精确 | 需求方点名 |
+| `>=M.m.r` / `>M.m.r` / `<=M.m.r` / `<M.m.r` | 按 `(M,m,r)` **字典序**比较 | 需求方点名 |
+| `~M.m.r` | 允许 `r` 升, `m`/`M` 固定 | 可选语法糖 |
+| `^M.m.r` | 允许 `m`/`r` 升, `M` 固定 | 可选语法糖 |
+| `*` | 任意(仍受 `frozen_gen` 精确匹配约束) | — |
+| `,` | 交集(AND) | — |
+| **`>=F.M.m.r`(4 段)** | **非法** `BRV-VER-0006` | 直接落实"只比较 `M.m.r`" |
+
+> **`^` 与 `~` 的争议在首版存在、现已消失**: 首版因主版本是第一段的函数, 二者**外延完全相同**(评审 `r1/01` P0-2 实测各覆盖 28 个可达版本)。现 `frozen_gen` 已精确钉住, `MAJOR` 恢复独立 ⇒ `^`(跨 `m`)与 `~`(不跨 `m`)**自然分开**。二者是否保留为语法糖属可选优化, 不影响正确性。
+
+**版本 arity 归一化(关闭评审 `r1/03` P1-13)**: 既有文档混用 2/3/4 段(`1-01` §7.6 写 `">=1.0"`, 首版写 `">=1.0.0"` 与 `">=0.1.0.0"`)。规则: **`range` 固定 3 段, 缺段右补 0**(`">=1.0"` ≡ `">=1.0.0"`), 4 段即错。
 
 **单版本政策(v0.1 定)**: 同一插件名在闭包内**只允许一个版本**; 多版本共存 ⇒ 组合期硬错误 `BRV-DEP-0011`(关闭 `4-04` §3「多版本共存」——v1 明令禁止)。
 
-### 7.5 闭包求解(纯函数, 单测友好)
+### 7.5 `profile` 门禁(dev / release)
+
+**规则**(需求方口径):
+
+| profile | 依赖**未冻结**接口(`frozen_gen = 0`) | 诊断 |
+|---|---|---|
+| **`dev`** | **允许** | `BRV-VER-0004` 降为 **info**(仅提示"该依赖未受保护") |
+| **`release`** | **禁止** | `BRV-VER-0004` **error** ⇒ 退出码 1 |
+
+- **适用范围**: **接口消费**(`requires_iface` / `[[export]].form="skin"` 的再导出边)。**不适用**于结构依赖(`init`/`runtime`/`type`)——依 F3 结构依赖不钉 `frozen_gen`, 故不参与本判定。这条边界正是 **M0–M2 能继续工作**的原因(其依赖全是结构边)。
+- **为什么是 profile 开关而非强度分级**: 需求方口径是"**阶段**决定严格度", 而非"同一阶段内可调松紧" ⇒ 二者语义不同, profile 更干净。
+- **CLI 与 manifest**: `br check --profile dev|release`(默认 `dev`); product manifest 可声明默认值 `[product] stage`, **CLI 覆盖 manifest**。
+- **与镜像 profile 的关系(须写明, 否则会被误读为同一件事)**: 本 profile = **组合期检查严格度**(工具侧); 既有 `release 构建`(`1-01` §13 `br build --release`; `3-02` IR-15/INV-C 的 debug=panic / release=trace)= **镜像内断言行为**。二者**不同轴**, 但**建议耦合**: `br build --release` 应**强制**以 `--profile release` 完成检查, 否则会出现"release 镜像由 dev 级检查放行"的漏洞。
+- **CI 落地**: dev 门禁全量跑; release 门禁**唯一多出的一条**就是 `--profile release` 的 `BRV-VER-0004`(加 §5.3.4 规则 3 的 `unfreezing` 阻断)。
+
+> **⚠ 由此照出一条必须补的排期空白**(评审发现的连带问题): "release 不允许依赖未冻结接口"把**冻结排期**变成 release 的**硬前置**, 而现行 `3-01` §15 冻结计划**只覆盖 core native 组**(`br-sched`/`mem`/`mm`/`irq`/`svc`)。**框架件四件**(`br-devcore` 等, `3-01` §0 行 44 有文件名)、**svc-posix POSIX 面**(`br-svcposix.txt`, §0 行 45)、**crypto/keyring ops**(仍为开放问题)均**有治理声明却无冻结批次** ⇒ 任何依赖它们的 release 会被 `BRV-VER-0004` **永久阻断且无排期可解**。已在 §13.2 记为 **A-18/A-19**。
+
+### 7.6 闭包求解(纯函数, 单测友好)
 
 ```
 求解器签名(概念):
-  solve(plugin_tree, product) -> Closure | Diagnostics
-  Closure = { plugins: [{name, version, api_type, plugin_type, phase, budget}],
-              init_edges, runtime_edges, topo_order, totals }
+  solve(plugin_tree, product, profile) -> Closure | Diagnostics
+  Closure = { plugins: [{name, version, frozen_gen, api_type, plugin_type, phase, budget}],
+              init_edges, runtime_edges, topo_order, totals, profile }
 ```
 
-- **求解顺序**: 产品 manifest 选择集 → init+runtime 边闭包 → 版本区间交集(单版本) → 拓扑 + 环检测 → 相位单调 → 分类学/特权声明 → 预算合计。
-- **求解器是纯函数**(无 IO), IO 全在 Python 粘合层与 Rust 的 `br-model` 加载器——满足 `2-02` §4 建议 1(可单测, 不依赖编译器与 QEMU)。
-- **报错可解释**: 环报完整边路径; 版本冲突报"谁和谁在哪条边上、各自区间、候选版本"; 缺失报"依赖名 + 哪条边引入"。
+- **求解顺序**: 产品 manifest 选择集 → init+runtime 边闭包 → **`frozen_gen` 精确匹配** → `range` 交集(单版本) → 拓扑 + 环检测 → 相位单调 → 分类学/特权声明 → 预算合计 → **profile 判定(§7.5)**。
+- **求解器是纯函数**(无 IO), IO 全在 Python 粘合层与 Rust 的 `br-model` 加载器——满足 `2-02` §4 建议 1(可单测, 不依赖编译器与 QEMU)。`profile` 作为**入参**传入, 不影响纯度。
+- **报错可解释**: 环报完整边路径; **版本冲突报"谁钉了哪一代 `frozen_gen` / 提供方在哪一代"**; 缺失报"依赖名 + 哪条边引入"。
 
-### 7.6 命令面
+> **版本冲突从"不可构造"变为可构造**(关闭评审 `r1/03` P1-14): 首版单版本政策 + 一处 `plugin.toml` ⇒ 求解器**永远看不到第二个候选**, "冲突"实为"缺失"。现因 `frozen_gen` **精确匹配**, 冲突有真实来源:
+> - 依赖钉 `frozen_gen = 3`, 而提供方当前在 `frozen_gen = 4`(或 2)⇒ `BRV-VER-0001`
+> - 同代内 `range` 越界(提供方 `1.5.0` 而依赖要求 `>=2.0.0`)⇒ `BRV-VER-0002`
+>
+> 两者都可能因"上游重新冻结"或"上游发新版本"而**在不改动依赖方声明的情况下**发生 —— 这正是 release 门禁要挡的东西。
+
+### 7.7 命令面
 
 | 命令 | 作用 |
 |---|---|
-| `br dep add <plugin> <dep>[@range] [--kind init\|runtime] [--phase late]` | 写 `plugin.toml` 并重算 |
+| `br dep add <plugin> <dep>[@range] [--kind init\|runtime\|type] [--frozen-gen N] [--phase late]` | 写 `plugin.toml` 并重算 |
 | `br dep rm <plugin> <dep>` | 同上 |
-| `br dep tree [--kind init\|runtime\|all] [--json]` | 依赖树 |
+| `br dep tree [--kind init\|runtime\|type\|all] [--json]` | 依赖树 |
 | `br dep graph --format dot\|mermaid\|json` | 图导出(复用 `--json` 的边模型) |
 | `br dep why <a> <b>` | 最短依赖路径解释 |
 | `br dep index` | 重建反向依赖索引 |
 | `br dep closure [--json]` | 产品闭包 + 拓扑序 + 预算合计 |
-| `br check [--deps\|--iface\|--tax\|--priv\|--all] [--json]` | 组合期校验(v0.1 覆盖 §2 表) |
-| `br ver show <plugin>` / `br ver bump <plugin> --rule <added\|changed\|fixed\|breaking>` | 只做版本(release 前手动场景) |
+| `br check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release] [--json]` | 组合期校验(v0.1 覆盖 §2 表 + §7.5 profile) |
+| `br ver show <plugin>` | 展示四段版本 + `frozen_gen` 来源(哪个冻结事件) |
+| `br ver bump <plugin> --rule major\|minor\|revise` | **人工声明** `MAJOR`/`MINOR`/`REVISE`(§5.2: 工具看不见"重大/小/修 bug"这三类事件) |
+
+> `frozen_gen` **不在** `br ver bump` 的可选 rule 里 —— 它只能由 `unfreeze`/`refreeze` 序列产生(§5.3), 拒绝手工任意指定; 这是"工具强制"与"人声明"的边界。
 
 ## 8. 声明面 TOML schema(v0.1 定稿草案)
 
@@ -574,41 +799,62 @@ api_type    = "native"             # native | runtime_adapter | third_party
 subkind     = "service"            # ability 细分: scheduler|framework|io|fs|service
 lang        = "c"                  # c | cxx | rust   (C++: 待定, 见 BRV-Q8)
 phase       = "late"               # early | core | late | app  (init 相位)
-version     = "0.1.0.0"            # §5.2(生成器/发布命令维护)
+version     = "0.1.0.0"            # FROZEN_GEN.MAJOR.MINOR.REVISE(§5.2)
 summary     = "密码服务: SHA-256 / HMAC-SHA256 / AES-CBC,CTR / DRBG"
 license     = "WTFPL"
 
 [compat]
-core          = ">=1.0.0"                  # 对 core 的版本依赖(1-02 层 3)
+core          = ">=1.0.0"                  # 对 core 的版本依赖(1-02 层 3; range 3 段)
 api_rev       = 1                          # 编码面对的 native API 版本
-iface_hash    = "sha256:…"                 # 接口面 hash(§6), 发布命令维护
 hash_scope    = "decl"                     # decl(v0.1) | sym(v0.x)
 truth         = "decl"                     # decl | header   (§6.6)
 abi_id        = ""                         # v0.1 占位; v0.6 由工具链指纹填充
-# requires_iface: 预留, v0.1 不扫描(§5.3)
-# [[compat.requires_iface]]
-# id = "ability/vfs-core#file"; version = "^1.0.0.0"; mode = "decl"
+# iface_hash 见 [[export]].hash —— **按单元**而非插件级(§8.1.1 说明)
 
+# ---- 接口依赖(v0.2 启用; v0.1 只校验 schema)----
+[[compat.requires_iface]]
+id         = "ability/vfs-core#file"   # <provider>#<unit>
+api_iface  = "native"                   # 被消费单元分类; 必须与本插件 api_type 相容(§3.5)
+frozen_gen = 3                          # **必填, 精确匹配**(§5.5)
+range      = ">=1.2.0"                  # 只比较 MAJOR.MINOR.REVISE
+mode       = "decl"                     # decl | sym(v0.2)
+
+# ---- 类型别名表(IFACE-IR 规则 4 的输入, 见 §6.2)----
+[iface.typedefs]                           # 别名 → 规范名; 防"同一类型两种写法"抖 hash
+u32 = "uint32_t"
+br_thread_t = "struct br_thread"
+
+# ---- 结构依赖(不钉 frozen_gen; 依 F3)----
 [[dep]]                            # init 依赖 ⇒ DAG 边
 name    = "platform/qemu-aarch64"
-version = ">=0.1.0.0"
+range   = ">=0.1.0"                # 3 段, 缺段右补 0
 kind    = "init"
 phase   = "early"                  # 相位断言(可省; 缺省 = 本插件自身相位)
 
 [[dep]]
 name    = "ability/vfs-core"       # runtime 依赖 ⇒ 调用边(允许环)
-version = "^1.0.0.0"
+range   = ">=1.0.0"
 kind    = "runtime"
 symbol  = "br_open"                # 可选: 说明调用面(便于 v0.2 符号级核对)
 
+# [[dep]]                          # type 依赖 ⇒ 仅头文件/类型可见(免于"形态 B"误判)
+# name  = "ability/vfs-core"
+# kind  = "type"
+
+# ---- 导出面(每单元一条; 单元 = 冻结与版本的基本粒度, 依 F1)----
 [[export]]                         # §3.5: api_iface 必须等于 [plugin].api_type
-api_iface = "native"               # native | runtime_adapter(= api_type)
-form      = "service"              # api | skin | service
-name      = "crypto"               # 单元名 / 注册表名(form=service)
-version   = "0.1.0.0"
-hash      = "sha256:…"
-status    = "experimental"
-entries   = []                     # 可选: 符号级"意图"清单(§6.1)
+api_iface   = "native"             # native | runtime_adapter(= api_type)
+form        = "service"            # api | skin | service
+name        = "crypto"             # 单元名 / 注册表名(form=service)
+version     = "0.1.0.0"            # 单元自身四段版本(§5.2 按单元推进)
+frozen_gen  = 0                    # 单元级冻结代(§5.3); 0 = 尚未冻结
+freeze_state = "unfrozen"          # unfrozen | frozen | unfreezing(§5.3.1)
+hash        = "sha256:…"           # 单元面 hash(§6.2)
+status      = "experimental"       # 单元级默认状态(条目可各自覆盖)
+# entries: 符号级"意图"清单(§6.1); 展开为子表
+# [[export.entries]]
+# kind = "func"; name = "br_crypto_hash"; sig = "int (const uint8_t*, size_t, uint8_t*)"
+# status = "experimental"
 # reexport_of = "…"                # 仅 form="skin": 指明被再导出的单元(§3.5 不变量 3)
 # symbols     = ["…"]              # 仅 form="skin": 占有的符号族(1-01 §7.3 api_syms)
 
@@ -630,6 +876,19 @@ includes = ["include"]
 
 > **相位归属已定**(关闭 `4-04` §2「自身相位声明机制缺失」): **自身相位**由 `[plugin].phase` 声明(被依赖者自述"我在哪一相完成"); `[[dep]].phase` 是**可选的断言**(依赖方要求提供方不晚于该相完成)。二者冲突(提供方自述晚于依赖方断言)⇒ 红 `BRV-DEP-0010`。`1-01` §6.1 的 `br_dep_t {name, range, phase}` 因此保留形状、语义收窄为断言(§13.2 A-10)。
 
+#### 8.1.1 字段级修订说明(相对首版)
+
+| 字段 | 首版 | 现版 | 理由 |
+|---|---|---|---|
+| `version` | `a.b.c.d` | `FROZEN_GEN.MAJOR.MINOR.REVISE` | §5.2; 段名与语义 |
+| `compat.iface_hash` | 插件级单数 | **删除**; 改为 `[[export]].hash`(**按单元**) | 依 F1(`F` 与 hash 的粒度都是**接口单元**); 首版"插件级单数 vs `[[export]]` 可多个"是评审 `r1/03` P1-10 指出的双真值 |
+| `requires_iface.version` | 单字符串 | **`frozen_gen` + `range` 两字段** | §5.6; 精确与范围语义不同, 混写无法分别校验 |
+| `[[dep]].version` | — | 改名 `[[dep]].range`, **不带 `frozen_gen`** | 依 F3 结构依赖不钉代 |
+| `[[dep]].kind` | `init\|runtime` | 增 **`type`** | 评审 `r1/03` P0-3③: `dev-core→vfs-core` 仅头文件类型依赖, 写 `runtime` 会把 vfs-core 拖进"形态 B"、推翻 D19/O-S7 |
+| `[[export]]` | 无冻结字段 | 增 **`frozen_gen` / `freeze_state`** | §5.3 |
+| `[[export]].entries` | `entries = []` | 展开为 **`[[export.entries]]` 子表** | 评审 `r1/03` P0-2: 数组空表没有字段形状, `macro`/`service` 的面变化无法表达 |
+| `[iface.typedefs]` | **缺失** | **新增** | 评审 `r1/01` P1-1 / `r1/03` P0-2: 规则 4 依赖此表, 首版 schema 中不存在 |
+
 ### 8.2 `product.toml`(产品级选择)
 
 ```toml
@@ -637,9 +896,10 @@ schema = 1
 
 [product]
 name    = "hsm"
-version = "0.1.0.0"
+version = "0.1.0.0"                # FROZEN_GEN.MAJOR.MINOR.REVISE(§5.2)
 app     = "app/hsm"                # 恰一个(§3.2)
 core    = ">=1.0.0"
+stage   = "dev"                    # dev | release —— §7.5 profile 的 manifest 默认值; CLI 覆盖
 
 [select]
 plugins = [                        # 显式选择; 闭包自动补齐依赖
@@ -654,9 +914,11 @@ ram_kib = 512
 stack_kib = 16
 
 [lint]
+frozen_deps = "inherit"            # inherit(跟随 [product].stage) | allow | deny —— §7.5 的显式覆盖
 allow_edges = [                    # §7.3 的框架件白名单特例
   ["ability/cdev-core", "ability/dev-core"],
   ["ability/bdev-core", "ability/dev-core"],
+  ["ability/cdev-core", "ability/vfs-core"],   # 类型依赖(§7.3 正文第三例)
 ]
 ```
 
@@ -734,39 +996,47 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | V-1 | 骨架生成 | `br new` 对 `native` × {app, interface, ability, platform} × `c` 各生成一套; 生成的插件立刻通过 `br check`(0 错误) |
 | V-2 | 生成物幂等 | 重复 `br gen` 无任何文件 diff; `--check` 逐字节一致 |
 | V-3 | 环检测 | 故意造环 ⇒ `br check` 报**完整环路径**(结构化边列表)且退出码 1(满足 `1-03` §3 M0) |
-| V-4 | 版本引擎 | §5.2 推进矩阵**逐行**有单测(输入旧面/新面 ⇒ 输出四段与理由) |
-| V-5 | 接口发布 | `br iface publish` 产出快照+lock+CHANGELOG+影响报告; 重复执行幂等; `--check` 独立重算一致 |
-| V-6 | 影响报告 | 变更 frozen 条目时, 报告列出全部直接/传递依赖者, 并标出区间失配者; 缺 `--note` ⇒ 退出码 1 |
-| V-7 | 依赖求解 | 单版本政策下闭包正确; 版本冲突报"谁和谁在哪条边上" |
+| V-4 | **版本引擎(「事件 → 段」)** | §5.2 推进表**逐行**有单测: (a) 解冻+改已有接口+重新冻结 ⇒ **仅 `FROZEN_GEN+1`**; (b) **新增条目 ⇒ `FROZEN_GEN` 不动**; (c) 重大产品版本 ⇒ **仅 `MAJOR+1`**; (d) 小功能 ⇒ `MINOR+1`; (e) 修 bug ⇒ `REVISE+1`; (f) **空解冻 ⇒ 四段全不动**。其中 (a)(c) 必须验证 **`FROZEN_GEN` 与 `MAJOR` 互不牵连**(这正是首版 `a≡b` 缺陷的回归测试) |
+| V-5 | 接口发布 | `br iface publish` 产出快照+lock+CHANGELOG+影响报告; **面未变时为空操作**(不写盘、退出 0); `--check` 独立重算一致 |
+| V-6 | 影响报告 | 变更 frozen 条目时, 报告列出全部直接/传递依赖者, 并标出 `frozen_gen`/`range` 失配者; 缺 `--note` ⇒ 退出码 1 |
+| V-7 | 依赖求解 | 单版本政策下闭包正确; **版本冲突可构造**: 依赖钉 `frozen_gen=3` × 提供方 `FROZEN_GEN=4` ⇒ `BRV-VER-0001`; 同代 `range` 越界 ⇒ `BRV-VER-0002` |
 | V-8 | 分类学执法 | 三条硬禁则(§7.3)各有正/反用例; 相位单调违例有反用例 |
 | V-9 | 零编译依赖 | 在**未安装** cc/cargo/nm 的环境跑完整测试套件全绿; `--json` schema 稳定(快照测试) |
 | V-10 | 接口预留 | `requires_iface` 字段能被解析、校验 schema、并在文档中标注"v0.1 不扫描" |
 | V-11 | hash 语义可读 | 每份快照文件头与 `--json` 输出都带 `hash_scope`/`truth`; `br iface show` 明示"声明面 hash ≠ ABI 兼容证明" |
 | V-12 | 导出分类不变量 | `api_iface ≠ api_type`、`third_party` 声明 `[[export]]`、`form="skin"` 缺 `reexport_of`(或指向单元分类不符)三种违例各有反用例, 报错码分别为 `BRV-TAX-0016/0017/0018`; 且 `third_party` 插件在**无 export** 时能正常通过 `br check` |
+| **V-13** | **版本串与范围格式** | `frozen_gen` 缺失 ⇒ `0003`; 4 段版本串 ⇒ `0005`; **4 段 `range` ⇒ `0006`**; `range` 缺段右补 0(`">=1.0"` ≡ `">=1.0.0"`); `--set` 低于当前版本 ⇒ `0007`(单调不回退) |
+| **V-14** | **profile 门禁** | **同一输入、两种 profile、两种结论**(各需快照测试): 含未冻结接口依赖的树, `br check --profile dev` ⇒ exit 0; `br check --profile release` ⇒ exit 1 + `BRV-VER-0004` |
+| **V-15** | **append vs modify 判定**(§5.4) | 正例: 新增独立结构体 / 枚举**末尾**追加成员 / 填充预留槽位 ⇒ 报 `ADDED`/`EXTENDED`, **免解冻**。反例: **给已冻结结构体加字段** / 枚举**重排** / service ops 加槽 ⇒ 报 `CHANGED`, **未处于 `unfreezing` 时报红** |
+| **V-16** | **解冻窗口** | `unfreeze` 无 `--note` ⇒ 红; 窗口内 `--profile release` ⇒ `BRV-IFACE-0009`; **空解冻后 `refreeze` ⇒ 四段全不动**(§5.3.4 规则 2) |
+| **V-17** | hash 输入完整性 | `#define BR_MAX 16→4096` 与"已有 service ops 加槽"**必须各产生不同的 `iface_hash`**(首版的 `NONE` 是错的); 枚举重排必须被 hash 感知 |
 
 ## 11. 开放问题(待拍板)
 
-| # | 问题 | 倾向 | 阻塞谁 |
+| # | 问题 | 结论 / 倾向 | 状态 |
 |---|---|---|---|
-| **BRV-Q1** | `a` 段语义: (A) 每次发版的"已有接口变更"标志位 (B) 冻结面兼容代数(单调) | **B**, 并把"本次是否变更"另置布尔 `iface_changed`(§5.2) | §5 全篇; 依赖区间语义(§7.4) |
-| **BRV-Q2** | 接口面真值迁移(v0.1 声明 → v0.x 头文件/符号)与 `truth`/`hash_scope` 字段设计 | BRV-D7 C 方案 | `1-02` §2.6.4 衔接; v0.2 |
-| **BRV-Q3** | 分类学收敛: 四类 `plugin_type` + `subkind` 是否接受为 `1-01` §6.3 八类的粗化? 八类去留? | 接受粗化, 八类降为 `subkind` + 特例清单 | `1-01` §6.3 / `4-01` §2 / `4-02` |
-| **BRV-Q4** | `third_party` 的**依赖**许可(需求原文被截断"可以依赖…"): 是否允许依赖 `runtime_adapter`? 谁可以依赖 `third_party`? | **允许**依赖 native + runtime_adapter; **不得被 native 依赖**(导出面规则已定: 不抛接口, §3.5) | §3.1; `11-01` |
-| **BRV-Q5** | 特权接口级别划分(P0–P4)与 memory 粒度模型 | 采纳 §3.4 草案 | §3.4; `3-04` 内存; v0.2 静态扫描 |
-| **BRV-Q6** | APP"仅经 interface"是否作为最终口径(推翻"直调 native")? | **是**(由 `iface-min` 提供零开销合规出口) | `1-01` §6.3 / `4-01` §2 / `9-01`(comment/README P0 清单第 12 项 / review2/05 P0-3) |
-| **BRV-Q7** | 描述符 `ver[3]` → `ver[4]` + `iface_hash` 字段的跨文档修订 | 改为 `ver[4]` + `const char *iface_hash` | `1-01` §6.1 / `3-05` §2 |
-| **BRV-Q8** | C++ 在 v0.1 的职责边界(生成器)与 `lang = "cxx"` 是否支持 | 生成器归 C++; `cxx` 模板待 `1-03` 的 Rust/C++ 插件能力排期 | §9.1; `1-03` v2.0 |
-| **BRV-Q9** | 插件名/目录形态最终版(与 `4-02` §3 Q8) | §8.3(顶层 namespace + 名 opaque + 对旧名宽容) | `4-02` |
-| **BRV-Q10** | 可选/弱依赖(feature/裁剪变体)是否进 v0.1?(`4-04` §3) | **不进**; schema 预留 `optional = false` | §7 |
-| **BRV-Q11** | 接口发布的"发布"是否需要远端 registry(本地快照是否够)? | v0.1 仅本地; registry 属 v2+ 生态位(与 `2-02` BR-D1 C 方案同期) | §6.5 |
-| **BRV-Q12** | 自动版本推进与 `1-02` §2.2 决策记录流程的耦合强度: `--note` 是硬门还是警告? | 硬门(触及 frozen 面时) | §6.3; `1-02` §2.2 |
-| **BRV-Q13** | `third_party` 不抛接口(§3.5)后, 三方件的**运行期能力注册**(如 sqlite `br_service_publish("db", …)`, `1-01` §7.6)算不算"抛出接口"? | **不算**: 注册表 = 运行期机制(允许), 接口单元 = 契约治理对象(不允许); 但该能力面游离在版本治理外 ⇒ RV-9 | §3.5; `1-01` §7.6; `3-06` |
+| **BRV-Q1** | ~~`a` 段语义~~ | **已由需求方规则关闭**: 改为 `FROZEN_GEN`(仅解冻/重新冻结后更新; 新增接口不动), 依赖精确钉代、`range` 只比 3 段(§5.2/§5.6/§7.4)。首版"把 `a` 当冻结面代数但未解耦主版本"⇒ `a≡b`、四段退化(评审 P0), 现由 `FROZEN_GEN` 与 `MAJOR` 正交解掉 | ✅ **已关闭** |
+| **BRV-Q2** | 接口面真值迁移(v0.1 声明 → v0.x 头文件/符号)与 `truth`/`hash_scope` 字段设计 | BRV-D7 C 方案 | 待拍 |
+| **BRV-Q3** | 分类学收敛: 四类 `plugin_type` + `subkind` 是否接受为 `1-01` §6.3 八类的粗化? 八类去留? | 接受粗化, 八类降为 `subkind` + 特例清单 | 待拍 |
+| **BRV-Q4** | `third_party` 的依赖许可与消费面(原文被截断): 是否允许依赖 `runtime_adapter`? 谁可以依赖 `third_party`? | **允许**依赖 native + runtime_adapter; **不得被 native 依赖** | 待拍(与 BRV-Q13 / `r1/04` D1–D5 同片) |
+| **BRV-Q5** | 特权接口级别划分(P0–P4)与 memory 粒度模型 | 采纳 §3.4 草案 | 待拍 |
+| **BRV-Q6** | APP"仅经 interface"是否作为最终口径(推翻"直调 native")? | **是**(由 `iface-min` 提供零开销合规出口) | 待拍 |
+| **BRV-Q7** | 描述符 `ver[3]` → `ver[4]` + 单元级 hash 的跨文档修订 | 改为 `ver[4]`, 语义即 `FROZEN_GEN.MAJOR.MINOR.REVISE`; hash 按单元 | 待拍(与 A-3/A-14 合并) |
+| **BRV-Q8** | C++ 在 v0.1 的职责边界(生成器)与 `lang = "cxx"` 是否支持 | 生成器归 C++; `cxx` 模板待 `1-03` 的 Rust/C++ 插件能力排期 | 待拍 |
+| **BRV-Q9** | 插件名/目录形态最终版(与 `2-02` §8 Q8 / `4-02` §3) | §8.3(顶层 namespace + 名 opaque + 对旧名宽容) | 待拍 |
+| **BRV-Q10** | 可选/弱依赖(feature/裁剪变体)是否进 v0.1?(`4-04` §3) | **不进**; schema 预留 `optional = false` | 待拍 |
+| **BRV-Q11** | 接口发布的"发布"是否需要远端 registry(本地快照是否够)? | v0.1 仅本地; registry 属 v2+ 生态位 | 待拍 |
+| **BRV-Q12** | 自动版本推进与 `1-02` §2.2 决策记录流程的耦合强度: `--note` 是硬门还是警告? | 硬门(触及 frozen 面 / 解冻时) | 待拍 |
+| **BRV-Q13** | 三方件的**运行期能力注册**(如 sqlite `br_service_publish("db", …)`)算不算"抛出接口"? | **不算**: 注册表 = 运行期机制(允许), 接口单元 = 契约治理对象 | 待拍(与 `r1/04` D3 同片) |
+| **BRV-Q14** | `^`/`~` 是否保留为 `range` 语法糖? | 保留(等价形式已在 §7.4 给出); 不影响正确性 | 可延后 |
+| **BRV-Q15** | `crypto`/`keyring` 的 **ops 表是否入 golden**? (`11-01` §3 开放问题) | 倾向**入**(v2 换后端要求布局稳定) | **待拍 —— 它决定 HSM 样例能否 `release`**(§7.5 连带结论 A-19) |
+| **BRV-Q16** | `third_party`/`upstream` 族是否进 `FROZEN_GEN` 体系? | 倾向**不进**(我们无权冻结上游面 ⇒ upstream 族只有"上游版本 + 面 hash", 无代); 与 `r1/04` D1(拆轴)同片 | 待拍 |
 
 ## 12. 风险
 
 | # | 风险 | 缓解 |
 |---|---|---|
-| **RV-1** | 四段版本偏离 semver 生态习惯 ⇒ 求解器/工具互操作成本 | `a` 不进区间、`^`/`~` 显式定义(§7.4); 提供 semver 视图(`b.c.d`)导出 |
+| **RV-1** | 四段版本偏离 semver 生态习惯 ⇒ 求解器/工具互操作成本 | **`FROZEN_GEN` 不进 `range`**(只精确匹配, §5.5); `^`/`~` 等价形式显式给出(§7.4); 可提供 `MAJOR.MINOR.REVISE` 三段的 semver 视图导出 |
 | **RV-2** | 声明面唯一真值(C2)与接口面头文件真值(C3)是**两种真值**, 容易被混为一谈 | 明确切开"插件声明面"与"接口面", 并用 `truth`/`hash_scope` 字段显式化(§6.6) |
 | **RV-3** | v0.1 的 `iface_hash` 是**声明面 hash**, 可能被误读为"ABI 兼容证明" | 快照文件头强制声明 `hash_scope="decl"`; CLI 输出带 `NOT_ABI` 提示; V-11 验收 |
 | **RV-4** | 分类学改写波及 `1-01`/`4-01`/`4-02`/`4-04`/`3-05` 五处 | §13 待对齐清单一次性回灌; 保留 `subkind` 使旧信息不丢失 |
@@ -776,6 +1046,9 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | **RV-8** | v0.1 无编译 ⇒ 生成物(描述符 C 代码)可能"生成了但编不过"直到 v0.3 | 生成器与 `1-01` §6.1 宏形态**同源**并要求形态先定稿(BRV-Q7); v0.1 附"生成物语法自检"(仅括号/宏配对级) |
 | **RV-9** | `third_party` 不抛接口(§3.5)⇒ 三方件的能力面没有接口单元, 既不入版本治理, 也无法从接口面反查"谁用了它" | 消费关系仍可从 `[[dep]]` 反查(反向依赖索引); v0.1 在 `br dep` 报告中单列"三方件消费方"; 若未来需要治理, 出口是"由 native 包装件持有接口单元"(BRV-Q13) |
 | **RV-10** | 导出分类不变量的严格性可能与既有 Interface 语义冲突: `iface-posix` 之类的 runtime_adapter **皮肤**是否需要占用 `[[export]]` | 由不变量 3 的 `reexport_of` 承接; 若 `1-01` §7.3 的"再导出不转移所有权"在符号层无法表达为单元引用, 则回退为 v0.2 的符号级校验(A-11) |
+| **RV-11** | **跨 `FROZEN_GEN` 比较的心智诱惑**: 使用者会自然地认为"代大 = 更新", 从而写出跨代版本序判断 | §5.5 **明令**跨代比较无意义(字典序仅限同代内); 依赖**必须**精确匹配 ⇒ 求解器结构上不可能跨代比较; `br ver show` 输出显式标注"代不参与比较" |
+| **RV-12** | **`FROZEN_GEN` 与 `MAJOR` 可能同时变动**, 使用者难以判断"是接口破了还是产品翻代了" | 发布报告给出**分段理由**(§6.3 `reasons`); `br ver show` 分别显示"上次解冻事件"与"产品代际"; V-4 要求二者互不牵连的回归测试 |
+| **RV-13** | **冻结排期成为 release 的硬前置**(§7.5 连带结论): 框架件/svc-posix/crypto 面若长期无冻结批次, 其 release 会被 `BRV-VER-0004` **永久阻断** | A-18/A-19 补齐排期; 过渡期可用 `[lint] frozen_deps = "allow"` **显式**放行(可评审的例外, 而非静默); `BRV-Q15` 需先定 |
 
 ## 13. 与既有文档的接口与待对齐修订清单
 
@@ -783,13 +1056,13 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 
 | 对手方 | 接口 |
 |---|---|
-| `2-02` | v0.1 = L0/L1/L2/L5 纵切; 把 BR-D1/BR-D2/BR-D5/BR-D7 的"倾向"在 v0.1 范围内升为"已定"; 命令面在 §5/§7.6/§6.5 细化 |
+| `2-02` | v0.1 = L0/L1/L2/L5 纵切; 把 BR-D1/BR-D2/BR-D5/BR-D7 的"倾向"在 v0.1 范围内升为"已定"; 命令面在 §5/§7.7/§6.5 细化 |
 | `2-01` | 承接 §2 大纲第 1/2/3/5 项中属 v0.1 的部分; 本篇是 `2-01` 第 1 项(manifest 格式定稿)的**工具侧** |
 | `4-03` | 本篇给出 `plugin.toml`/`product.toml` 的 v0.1 schema 草案与真值裁定; 语义权威仍在 `4-03`, 拍板后 `4-03` §2/§3 收缩为指针 |
-| `4-04` | 本篇给出四段区间语义、单版本政策、相位单调规则、分类学禁则; `4-04` §2/§3 据此收敛 |
+| `4-04` | 本篇给出**带 `frozen_gen` 精确匹配的 3 段区间语义**、单版本政策、相位单调规则、分类学禁则; `4-04` §2/§3 据此收敛 |
 | `4-02` | 本篇只钉三件(§8.3), 其余仍归 `4-02` |
 | `3-05` | 运行期**单向**消费 v0.1 的生成物(init 顺序表/描述符段); 运行期零检测不变 |
-| `1-02` | 三态/状态机/门钩/golden 语料原样继承; 本篇补上"声明面 hash"这一**过渡真值**并给出迁移门禁 |
+| `1-02` | 三态/状态机/门钩/golden 语料原样继承(**语义不修改** —— §2.1 本就写"新增=轻量"); 本篇**新增**解冻瞬态与两条改面路径, 并补上"声明面 hash"这一**过渡真值**及其迁移门禁 |
 | `1-03` | 本篇是 §5 DoD 第 4/5 项的**工具侧交付**; M0 的"环检测验收"由 V-3 承接 |
 
 ### 13.2 待对齐修订清单(拍板后回灌)
@@ -807,24 +1080,41 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | A-9 | `--json` 与 manifest schema 同源(关闭 Q7) | `2-02` §8 |
 | A-10 | `br_dep_t.phase` 语义收窄为"相位断言"; 新增自身相位声明 `[plugin].phase` | `1-01` §6.1 / `4-04` §2 |
 | A-11 | 导出面分类规则(`export.api_iface ≡ api_type`; `third_party` 无导出面; `skin` 边豁免 api_type 禁则) | `1-01` §7.3(`api_syms`/再导出) / `10-01` §2 第 1 项 / `4-03` §2 / `11-01` |
+| **A-12** | **版本模型**: 段为 `FROZEN_GEN.MAJOR.MINOR.REVISE`; **`FROZEN_GEN` 与 `MAJOR` 解耦**(接口契约 vs 产品演进); 依赖钉精确 `frozen_gen` + `range` 只比 3 段 | `1-01` §6.1 / `4-04` §2 / `1-02` §2.3 层 3 |
+| **A-13** | **新增解冻/重新冻结机制**: 单元级 `freeze_state`(含 `unfreezing` 瞬态); 两条改面路径(软: 面内 RFC+弃用, 代不变 / 硬: 解冻重冻, 代 +1); `1-02` §2.6.2 补该转移 | `1-02` §2.6.2 / §2.2 阈值表 |
+| **A-14** | `br_dep_t` 增 `frozen_gen` 字段(结构依赖不带); `ver[3]` → `ver[4]`, 语义即四段新含义 | `1-01` §6.1 / `3-05` §2 |
+| **A-15** | 依赖 `range` 表达式统一 3 段(旧写法 `">=1.0"`/`">=1.0.0"` 归一; 4 段非法) | `4-04` §2 / `1-01` §7.6 |
+| **A-16** | **`FROZEN_GEN` 的粒度 = 接口/冻结批次单元**; 插件级取 `max(F_u)` | `3-01` §15 / `1-02` §2.6.4 / §3.2 |
+| **A-17** | `VER` 域错误码 7 个 + `IFACE-0009`(见 BRV-D8 编码表) | `BRV-D8`(本篇) |
+| **A-18** | **冻结计划补齐非 core 组批次**: 框架件四件(`br-devcore`/`br-cdevcore`/`br-vfscore`/`br-bdevcore`)、`svc-posix` POSIX 面(`br-svcposix.txt`)——它们**有治理声明却无冻结批次**, 而 §7.5 使"未冻结"在 release 下成为硬阻断 ⇒ 必须排期; 且**以接口单元为粒度**(依 A-16) | `3-01` §1 表 + §15 / `1-02` §2.3 层 1 |
+| **A-19** | 明确 `crypto`/`keyring` **ops 表是否入 golden**(关闭 `11-01` §3 开放问题) | `11-01` §3 / `9-02` §6.2 O-H7 |
+| **A-20** | `frozen` 补 gloss: "**单向冻结(append-only 保护)**"; 明确"新增=轻量"与"新增免解冻"是同一规则 | `1-02` §2.1 |
+| **A-21** | 段名 `frozen_version` → **`frozen_gen`**(避免被读成"冻结时的版本"而诱导跨代比较) | 本篇全篇 / `r1/05` §3.1 |
+| **A-22** | `append vs modify` 的**条目级判定表**(§5.4): 明确"给已冻结结构体加字段 = **修改** ⇒ 须解冻", 与 D22"后补字段 = 布局破坏"对齐 | `1-02` §2.4 / §4.1 |
+| **A-23** | "解冻/重新冻结"纳入 `1-02` §2.2 的**最高门槛**行 | `1-02` §2.2 |
+| **A-24** | `IFACE-IR` 增 `macro`/`var`/`enum`/`service` 的 hash 输入字段(`value`/`ops`)+ `typedef` 表 + 枚举输出序 + hash 域分隔 | `1-02` §2.6.4 / 本篇 §6.2 |
+| **A-25** | 冻结评审清单增"**冻结前应预留扩展槽**"(D22 的推广: 预留即免将来解冻) | `1-02` §2.6.2 / `3-01` §15 |
+| **A-26** | **v0.1 `freeze` 只能生成"待升格提案"**的显式例外(因 `1-02` §2.6.2 要求 conformance 矩阵全绿, 而 test 排 v0.4) | `1-02` §2.6.2 / 本篇 §6.4 |
 
 ## 14. 演进路线(v0.1 → v0.x, 与 M 里程碑对齐)
 
 | 版本 | 新增能力 | 对应里程碑 | 入口条件 |
 |---|---|---|---|
-| **v0.1** | 骨架生成 + 依赖管理/分析 + 版本管理 + 接口发布 | 原型 v1.0 工具首发(M0/M1 之间) | 本篇拍板; BRV-Q1/Q3/Q6/Q7 有结论 |
+| **v0.1** | 骨架生成 + 依赖管理与分析 + 版本管理(`FROZEN_GEN.MAJOR.MINOR.REVISE`)+ 接口发布(含解冻/重新冻结) | 原型 v1.0 工具首发(M0/M1 之间) | 本篇拍板; **BRV-Q1 已关闭**; 余 BRV-Q3/Q6/Q7 有结论 |
 | v0.2 | **接口依赖扫描检查**(符号级; `truth="header"`, `hash_scope="sym"`) | M1 | 头文件形态定稿(`3-01` §13 可见性宏) |
 | v0.3 | **编译**(构建编排 + 描述符/头文件/链接脚本生成物) | M1/M2 | 构建后端选型(2-02 BR-D4) |
-| v0.4 | **test**(conformance 运行器, host 平台) | M3 | host 平台插件(1-03 §5 第 6 项) |
+| v0.4 | **test**(conformance 运行器, host 平台)+ **合法 `freeze` 解锁**(A-26 的例外解除) | M3 | host 平台插件(1-03 §5 第 6 项) |
 | v0.5 | **run**(host-native + QEMU 后端) | M2/M3 | BR-D6 target 抽象拍板 |
-| v0.6 | **兼容性检查**(golden / api-dump / abidiff / 版本矩阵) | M3 | 构建产物符号表 + `abi_id` |
+| v0.6 | **兼容性检查**(golden / api-dump / abidiff / 版本矩阵)+ 框架件/`svc-posix` 面纳入冻结(**A-18 的落点**) | M3 | 构建产物符号表 + `abi_id` |
 
 > **与需求方清单的对齐**: "编译/test/run/兼容性检查/接口依赖扫描检查"五件全部落在 v0.2–v0.6; 次序按"**声明面 → 符号面 → 构建面 → 运行面 → 门禁面**"的依赖方向排, 其中"接口依赖扫描检查"提前到 v0.2 是因为它是 v0.1 接口发布的**自然下一跳**(`hash_scope` 升级), 也是后续 golden 门禁的输入。
+>
+> **v0.1 的 `FROZEN_GEN` 会一直是 0**: 因 `1-02` D15 规定 M3 前不冻结任何东西, 而 `freeze` 在 v0.1 只能出"待升格提案"(§6.4 / A-26)⇒ **v0.1 期间不存在合法解冻**, `FROZEN_GEN+1` 这条路径要到 **v0.4 起才可走通**。这不影响 V-4 的验收——V-4 用**构造的 fixture**(声明面 + 人为 `unfreeze`/`refreeze` 序列)测引擎, 不依赖真实冻结历史。
 
 ## 15. 本篇"成文"的条件
 
 1. §4 的 **BRV-D1–BRV-D10** 逐条拍板(D10 已由需求方规则给定, 只需确认其三条不变量与 `skin` 豁免);
-2. §11 的 **BRV-Q1/Q3/Q5/Q6/Q7** 至少给出结论(其余可挂"v0.x 再定");
-3. §13.2 的待对齐修订**全部回灌**到对应文档(否则同一契约两套口径, 正是 `comment/README.md` 记录的"元契约漂移"病根);
+2. §11 的 **BRV-Q2/Q3/Q5/Q6/Q7** 至少给出结论(**Q1 已关闭**); 其余可挂"v0.x 再定";
+3. §13.2 的 **A-1…A-26** 待对齐修订**全部回灌**到对应文档(否则同一契约两套口径, 正是 `comment/README.md` 记录的"元契约漂移"病根); 其中 **A-18/A-19 属"阻塞 release"级**, 应优先;
 4. 补两张 PlantUML 图(接口发布时序 / 求解器数据流)并按 README 流程生成 `pics/`;
 5. `2-01` §2 大纲第 1/2/3/5 项与 `4-03`/`4-04` 的对应小节收缩为指向本篇的指针。
