@@ -2,9 +2,9 @@
 
 > 章节: **2-toolchain**(旁支子目录 `br-tools/`, 暂不占用章节编号 `2-03`)。状态: **草案(讨论稿)**——能力边界与倾向已列, 结论待拍板。
 > 定位: **prototype v1.0 核心交付产物之一**(与 manifest 格式、repo 骨架并列; 1-03 §5 第 4/5 项)。`br-tools` 的 **v0.1** = 原型 v1.0 的第一件工具交付。
-> 来源: `2-02`(BR-D1–BR-D8 倾向 / §5 命令面 / §7 演进路线); `2-01` §2 大纲; `4-02`(布局)/`4-03`(manifest)/`4-04`(依赖); `1-01` §6(插件模型)/§13(工作流); `1-02`(三态/golden/三层门禁); `3-05`(运行期管理面); `10-01`(接口插件); 需求方给出的 v0.1 功能清单与本轮硬约束(TOML / 两维分类(+`subkind` 派生) / 三语言 / manifest 字段集)。
+> 来源: `2-02`(BR-D1–BR-D8 倾向 / §5 命令面 / §7 演进路线); `2-01` §2 大纲; `4-02`(布局)/`4-03`(manifest)/`4-04`(依赖); `1-01` §6(插件模型)/§13(工作流); `1-02`(三态/golden/三层门禁); `3-05`(运行期管理面); `10-01`(接口插件); 需求方给出的 v0.1 功能清单与本轮硬约束(TOML / 两维分类(+`subkind` 派生) / 三语言 / manifest 字段集 / 导出面分类 ≡ `api_type`)。
 > 分工: 本篇 = **`br` 工具 v0.1 的可实现规格**(命令面 / TOML schema / 版本模型 / 接口发布机制 / 依赖分析规则 / 验收标准); `br` 的**全局**架构与选型 → `docs/2-toolchain/2-02-br-arch.md`; 工具链总纲 → `docs/2-toolchain/2-01-toolchain.md`; manifest 与依赖的**语义权威** → `4-03` / `4-04`(本篇给出 v0.1 的具体形态并回填其开放问题)。
-> 怎么用: 逐条拍板 **§4 的 BRV-D1–BRV-D9**(倾向已给), 消化 **§11 的 BRV-Q1–BRV-Q12**; 拍板后本篇转"成文", §13 的待对齐修订清单回灌 `1-01`/`4-01`/`4-03`/`4-04`/`4-02`。
+> 怎么用: 逐条拍板 **§4 的 BRV-D1–BRV-D10**(倾向已给; D10 是需求方硬规则, 已采纳), 消化 **§11 的 BRV-Q1–BRV-Q13**; 拍板后本篇转"成文", §13 的待对齐修订清单回灌 `1-01`/`4-01`/`4-03`/`4-04`/`4-02`。
 > 图: 本篇暂用 ASCII 图与表格(本机无 PlantUML/Graphviz, 待图源环境就绪后按 README 流程补 `plantUML/` + `pics/`)。
 
 ## 缩略词(abbreviations)
@@ -19,6 +19,7 @@
 | **DAG** | Directed Acyclic Graph | 有向无环图; init-DAG = 初始化依赖拓扑, 环即组合期硬错误 |
 | **DoD** | Definition of Done | 完成定义 |
 | **IFACE-IR** | interface intermediate representation | 接口面规范化中间表示(接口发布与 hash 的输入) |
+| **api_iface** | — | 接口单元的分类标签(`native` \| `runtime_adapter`), 恒等于提供者的 `api_type`(§3.5) |
 | **init 依赖 / runtime 依赖** | — | 初始化顺序依赖(禁环)/ 运行期调用依赖(允许环, 注册表晚绑定; 1-01 §6.5) |
 | **JSON** | JavaScript Object Notation | 结构化数据交换格式(`br --json` 的机器可读输出) |
 | **M0–M5** | — | v1.0/v1.x 内部里程碑(1-03 §3; M5 = HSM 完整样例) |
@@ -66,7 +67,7 @@
 | test(conformance 矩阵) | v0.4 | 需要 host 平台插件与用例表驱动(6-01 §2) |
 | run(host-native / QEMU) | v0.5 | 需要镜像与 run 后端 |
 | 兼容性检查(golden / abidiff / 版本矩阵) | v0.6 | 需要**构建产物符号表**为真值(1-02 §2.6.4) |
-| 接口依赖扫描检查(符号级) | v0.2 | 需要头文件/符号面提取(§6.4 的 `hash_scope` 升级) |
+| 接口依赖扫描检查(符号级) | v0.2 | 需要头文件/符号面提取(§6.6 的 `hash_scope` 升级) |
 
 > **边界纪律**: v0.1 的任何命令**不得**要求 `cc`/`cargo`/`nm` 在场; CI 只需 Python3 + 两个原生子进程二进制。这条纪律同时是 v0.1 的测试前提(§10 V-9)。
 
@@ -84,6 +85,7 @@
 | **C8** | **表达格式已定 TOML** ⇒ 关闭 `4-03` §3 的 YAML/TOML/DSL 开放问题 | 需求方本轮硬约束 |
 | **C9** | 核心逻辑 C++/Rust, Python3 只做粘合 ⇒ 需要一个**稳定的进程间 JSON 契约**(否则粘合层会退化成业务逻辑) | 需求方本轮硬约束 |
 | **C10** | v0.1 无编译 ⇒ 接口面真值只能是**声明层**; 它必须在 v0.x 被符号层接管, 且**不得**成为第三种真值(§6.6) | `1-02` §2.6.1 + `4-02` §1 双真值 |
+| **C11** | **导出的接口分类由 `api_type` 决定**: `native` 只抛 native 接口, `runtime_adapter` 只抛 runtime_adapter 接口, `third_party` **不抛接口** ⇒ 接口分类不是独立维度, 而是一条不变量 | 需求方本轮硬约束(§3.5) |
 
 C1 + C4 + C10 三条合起来决定: **v0.1 的交付重心是"求解器 + 版本/接口引擎 + 幂等生成器", 不是"好用的 CLI"**——CLI 只是让这套引擎可被人和 CI 调用。
 
@@ -96,7 +98,7 @@ C1 + C4 + C10 三条合起来决定: **v0.1 的交付重心是"求解器 + 版�
 | 1 | 依赖闭包 + 版本区间交集 | ✅ 全量 | 单版本政策(§7.4) |
 | 2 | 环检测(报完整环路径) | ✅ 全量 | **仅 init 边**; runtime 边成环只报 info(§7.1) |
 | 3 | 调度类别 + 双保险静态分析(D10) | ◐ 声明面 | `sched_class` 与调度器组合合法性可查; 源码静态分析 → v0.x |
-| 4 | 接口校验(APP 声明在闭包内 / 符号族碰撞) | ◐ 模块级 | 接口**单元**级碰撞可查; **符号级** → v0.2(1-02 D13 双层粒度) |
+| 4 | 接口校验(APP 声明在闭包内 / 符号族碰撞) | ◐ 模块级 | 接口**单元**级碰撞可查 + **导出面分类不变量全量执法**(§3.5); **符号级** → v0.2(1-02 D13 双层粒度) |
 | 5 | 资源预算(ΣRAM/栈) + IRQ/DMA 独占冲突 | ✅ 全量 | 纯声明计算 |
 | 6 | `abi_id` 一致性 | ✗ | 需要工具链指纹 ⇒ v0.6 |
 
@@ -106,13 +108,13 @@ C1 + C4 + C10 三条合起来决定: **v0.1 的交付重心是"求解器 + 版�
 
 ### 3.1 维度一: `api_type`(API 遵守规范)
 
-| `api_type` | 定义 | 依赖许可(强约束) | v0.1 |
-|---|---|---|---|
-| `native` | 严格遵守 brickOS **native API** 规范, 不依赖任何 POSIX/三方基座 | **不允许**依赖 `runtime_adapter` 插件(如 `svc-posix`) | 骨架生成 + 校验 |
-| `runtime_adapter` | 为 `third_party` 提供接口支持的适配基座(如 POSIX 运行时) | **只允许**依赖 `native`(core / 框架件 / native ability) | 校验可识别; 骨架模板预留 |
-| `third_party` | 携带上游源码的三方件(如 sqlite), 移植增量 = 适配层 | 可依赖 `native`(能力)与 `runtime_adapter`(基座); **不得被 `native` 依赖** | 校验可识别; 骨架模板预留 |
+| `api_type` | 定义 | **可抛出的接口分类**(§3.5) | 依赖许可(强约束) | v0.1 |
+|---|---|---|---|---|
+| `native` | 严格遵守 brickOS **native API** 规范, 不依赖任何 POSIX/三方基座 | 仅 `native` 接口 | **不允许**依赖 `runtime_adapter` 插件(如 `svc-posix`) | 骨架生成 + 校验 |
+| `runtime_adapter` | 为 `third_party` 提供接口支持的适配基座(如 POSIX 运行时) | 仅 `runtime_adapter` 接口 | **只允许**依赖 `native`(core / 框架件 / native ability) | 校验可识别; 骨架模板预留 |
+| `third_party` | 携带上游源码的三方件(如 sqlite), 移植增量 = 适配层 | **不抛出任何接口**(纯消费者, §3.5) | 可依赖 `native`(能力)与 `runtime_adapter`(基座); **不得被 `native` 依赖** | 校验可识别; 骨架模板预留 |
 
-> `native ↛ runtime_adapter` 这条禁则的**架构动机**: 保证"极小组合"(不链任何适配基座)永远可裁剪——`1-01` §7.5 的复用经济学。它把 `4-04` §3「调用依赖是否需要声明面」的答案锁在"**必须声明**"上: 一旦允许 native 悄悄调 POSIX, 裁剪承诺就失效。
+> `native ↛ runtime_adapter` 这条禁则的**架构动机**: 保证"极小组合"(不链任何适配基座)永远可裁剪——`1-01` §7.5 的复用经济学。它把 `4-04` §3「调用依赖是否需要声明面」的答案锁在"**必须声明**"上: 一旦允许 native 悄悄调 POSIX, 裁剪承诺就失效。**该禁则在 v0.2 起还会投影到接口粒度**: native 插件不得 `require` 分类为 `runtime_adapter` 的接口单元(§3.5/§5.3)。
 
 ### 3.2 维度二: `plugin_type`(架构层级)
 
@@ -180,18 +182,46 @@ pins         = []
 device_names = ["hsm0"]
 ```
 
-### 3.5 导出面(`export`)类型
+### 3.5 导出面(`export`): 分类由 `api_type` 决定
 
-需求方要求 manifest 声明"export 接口类型"。v0.1 的导出面**恰好四类**, 且每类都对应一个可发布/可校验的对象:
+需求方要求 manifest 声明"export 接口类型", 并给定**硬规则**: 插件抛出的接口分类与其 `api_type` **同域且必须相等**; `third_party` **暂不允许抛出接口**。
 
-| `export.kind` | 语义 | 发布对象 | 对应既有机制 |
+| `[plugin].api_type` | 可抛出的接口分类 | 说明 |
+|---|---|---|
+| `native` | **仅** `native` 接口 | 严格遵守 native API 规范的面 |
+| `runtime_adapter` | **仅** `runtime_adapter` 接口 | 为三方件提供支持的适配面(POSIX 等) |
+| `third_party` | **无** — 不得声明任何 `[[export]]` | 纯消费者: 上游 API 不进入 brickOS 的接口契约治理 |
+
+**因此"接口分类"不是第三个独立维度, 而是一条不变量**(C11)。一个 `[[export]]` 表由两个**正交**字段描述:
+
+| 字段 | 取值 | 语义 |
+|---|---|---|
+| `api_iface` | `native` \| `runtime_adapter` | **接口分类** —— 必须等于 `[plugin].api_type` |
+| `form` | `api` \| `skin` \| `service` | **导出形态**(机制), 与分类正交 |
+
+| `form` | 语义 | 附加字段 | 对应既有机制 |
 |---|---|---|---|
-| `native` | 本插件向插件树暴露的 **native 形 API**(头文件 + 符号) | 接口单元 | `1-02` §2.6 golden 面 |
-| `skin` | 接口插件的**再导出皮肤**(符号别名, 不转移所有权) | 接口单元 | `1-02` D13 `reexports` |
-| `service` | 通过服务注册表发布的**能力名 + ops 契约** | 服务契约单元 | `3-06` 注册表语义 |
-| `symbols` | 直接占有的符号族(仅 `interface` 类) | 符号族声明 | `1-01` §7.3 `api_syms` |
+| `api` | 本插件**自有**的 API 面(头文件 + 符号) | — | `1-02` §2.6 golden 面 |
+| `skin` | **再导出**提供者的面(不转移所有权) | `reexport_of = "<provider>#<unit>"`; 可选 `symbols = [...]`(即 `1-01` §7.3 的 `api_syms`) | `1-02` D13 `reexports` |
+| `service` | 通过服务注册表发布的**能力名 + ops 契约** | `name`(注册表名) | `3-06` 注册表语义 |
 
-> 四类共用一个 `[[export]]` 表, 差别在 `kind` 与其后的字段集; 全部参与接口发布(§6)。**v0.1 只发布与哈希, 不生成代码**(生成物的消费方在 v0.3 之后)。
+**三条不变量(v0.1 全量执法)**:
+
+| # | 不变量 | 违例 ⇒ |
+|---|---|---|
+| 1 | `export.api_iface == [plugin].api_type` | `BRV-TAX-0016` |
+| 2 | `[plugin].api_type == "third_party"` ⇒ 闭包内不得存在该插件的任何 `[[export]]` | `BRV-TAX-0017` |
+| 3 | `form == "skin"` ⇒ 必须有 `reexport_of`, 且被再导出单元的 `api_iface` 与自身相等 | `BRV-TAX-0018` |
+
+**分类的三个消费方**(这条规则为什么有实际后果, 而不是纯声明):
+
+1. **接口单元 id 携带分类**: 单元 `<provider>#<unit>` 的解析结果里带 `api_iface` 字段, 随快照与 `--json` 一起输出(§6.1)。
+2. **依赖侧按分类判合法**: `requires_iface`(§5.3)引用一个单元时, 若无脑跨类消费则红 —— **`native` 插件不得 require 分类为 `runtime_adapter` 的接口单元**; 这正是 §3.1 的 `native ↛ runtime_adapter` 禁则在**接口粒度**上的投影(v0.2 起生效, 因为 v0.1 不扫描接口依赖)。
+3. **`skin` 边必须豁免 api_type 禁则**: `iface-posix`(runtime_adapter 皮肤)要依赖 `svc-posix`(runtime_adapter 基座), 若照搬"runtime_adapter 只许依赖 native"会被误杀。因此规则精确表述为: **`form = "api"` / `service` 的依赖边受 `api_type` 禁则约束; `form = "skin"` 的再导出边豁免**, 且豁免必须由 `reexport_of` 显式声明方能成立(不可隐式)。
+
+> **`third_party` 的后果要写清楚**: 三方件的能力面**不进入**接口发布与版本治理 —— 它既没有接口单元, 也就没有 `a.b.c.d`、没有 hash、没有三态、没有 dependents 报告。这是有意的记账取舍(上游 API 不受我们治理), 代价是"三方件被谁用了"在 v0.1 只能从 `[[dep]]` 看, 无法从接口面反查 —— 记为 RV-9; 若三方件需要注册表发布能力(如 sqlite 的 `db`), 归 BRV-Q13。
+>
+> **v0.1 只发布与哈希, 不生成代码**(生成物的消费方在 v0.3 之后)。
 
 ## 4. 关键决策(待拍板)
 
@@ -284,6 +314,14 @@ device_names = ["hsm0"]
 | 2 | 用法或环境错(TOML 语法/schema 不符/路径不存在) | ✅ |
 | 3 | 编译或运行失败 | ✗(v0.3+) |
 
+### BRV-D10 — 导出面分类 = `api_type`(需求方硬规则, 非备选)
+
+**采纳**(无备选): 插件抛出的接口分类与 `api_type` 同域且必须相等; `third_party` 不抛接口(§3.5 三条不变量 + `BRV-TAX-0016/0017/0018`)。
+
+- **代价**: `third_party` 的能力面脱离接口治理(记 RV-9), 且 `requires_iface` 必须带 `api_iface` 字段(§5.3)。
+- **收益**: 一个"不变量"取代了一个独立分类维度 —— 分类不会漂移; 且 `native ↛ runtime_adapter` 禁则获得了接口粒度的执法点(原先只在插件粒度)。
+- **需一并确认**: `skin` 边豁免(§3.5 消费方 3)、三方件注册表发布归属(BRV-Q13)。
+
 ## 5. 版本管理 `va.b.c.d`
 
 ### 5.1 存储与展示
@@ -327,16 +365,19 @@ device_names = ["hsm0"]
 | 版本文件 | `api/iface/<provider>/<unit>.toml`(接口面快照: 条目 + 状态 + 版本 + hash) | ✅ 生成 |
 | 版本 hash | 快照与 `plugin.toml [compat].iface_hash` | ✅ |
 | 对 core 的版本依赖 | `plugin.toml [compat].core = ">=1.0.0"` | ✅(区间求解参与) |
-| 接口依赖(对其他插件接口单元的依赖) | `[compat].requires_iface = [{id, version, mode}]` | **预留字段, v0.1 不扫描**(`2-02` Q; 需求方明确"预留在文档中") |
+| 接口依赖(对其他插件接口单元的依赖) | `[compat].requires_iface = [{id, api_iface, version, mode}]` | **预留字段, v0.1 不扫描**(`2-02` Q; 需求方明确"预留在文档中") |
 
 `requires_iface` 的预留语义(写进 schema, v0.2 启用):
 
 ```toml
 [[compat.requires_iface]]
-id      = "ability/vfs-core#file"     # <provider>#<unit>
-version = "^1.0.0.0"
-mode    = "decl"                      # decl(v0.1 语义) | sym(v0.2 符号级) | exact-hash
+id        = "ability/vfs-core#file"   # <provider>#<unit>
+api_iface = "native"                   # 被消费单元的分类; 必须与本插件 api_type 相容(§3.5)
+version   = "^1.0.0.0"
+mode      = "decl"                     # decl(v0.1 语义) | sym(v0.2 符号级) | exact-hash
 ```
+
+**分类相容规则(v0.2 执法)**: `native` 插件不得 require `api_iface = "runtime_adapter"` 的单元(§3.5 消费方 2)——否则"不链适配基座"的裁剪承诺会从接口依赖这条侧门被绕过。
 
 ## 6. 接口发布机制(interface publishing)
 
@@ -351,6 +392,7 @@ mode    = "decl"                      # decl(v0.1 语义) | sym(v0.2 符号级) 
   │     ├── layout     : 结构布局摘要 | "# opaque"(仅 type)
   │     └── status     : experimental | frozen | deprecated
   ├── version          : a.b.c.d
+  ├── api_iface        : native | runtime_adapter   ← 恒等于提供者的 api_type(§3.5)
   ├── iface_hash       : sha256(canonical(surface))
   └── hash_scope       : "decl"(v0.1) | "sym"(v0.x)
 ```
@@ -472,6 +514,8 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
 
 三条硬禁则(v0.1 可全量执法): (1) `app` 不得依赖 `ability`/`platform`; (2) `native` 不得依赖 `runtime_adapter`; (3) `interface` 不得被 `app` 以外的任何插件依赖(严格叶子)。
 
+> **禁则 (2) 的两条精确化补充**(§3.5): (a) 在 v0.2 起, 它同时约束**接口粒度** —— `native` 插件不得 require `runtime_adapter` 分类的接口单元; (b) `form = "skin"` 的**再导出边豁免**该禁则(否则 `iface-posix` → `svc-posix` 被误杀), 豁免必须由 `reexport_of` 显式声明。
+
 > **框架件之间的特例**不写成通用规则: `cdev-core→dev-core`、`bdev-core→dev-core`、`cdev-core→vfs-core(类型)` 这类边由 `7-01`/`8-01` 的显式白名单承载(v0.1 以 `allow_edges` 清单形式内置), 否则通用规则会被迫放宽到无法执法。
 
 ### 7.4 版本区间语义(四段版, 关闭 `4-04` §3 一半)
@@ -557,13 +601,16 @@ version = "^1.0.0.0"
 kind    = "runtime"
 symbol  = "br_open"                # 可选: 说明调用面(便于 v0.2 符号级核对)
 
-[[export]]                         # §3.5
-kind    = "service"
-name    = "crypto"
-version = "0.1.0.0"
-hash    = "sha256:…"
-status  = "experimental"
-entries = []                       # 可选: 符号级"意图"清单(§6.1)
+[[export]]                         # §3.5: api_iface 必须等于 [plugin].api_type
+api_iface = "native"               # native | runtime_adapter(= api_type)
+form      = "service"              # api | skin | service
+name      = "crypto"               # 单元名 / 注册表名(form=service)
+version   = "0.1.0.0"
+hash      = "sha256:…"
+status    = "experimental"
+entries   = []                     # 可选: 符号级"意图"清单(§6.1)
+# reexport_of = "…"                # 仅 form="skin": 指明被再导出的单元(§3.5 不变量 3)
+# symbols     = ["…"]              # 仅 form="skin": 占有的符号族(1-01 §7.3 api_syms)
 
 [privileged]                       # §3.4(v0.1 只校验声明合法性)
 level = "P2"
@@ -635,6 +682,7 @@ allow_edges = [                    # §7.3 的框架件白名单特例
 - **语言模板**: v0.1 交付 `c`; `rust` 模板预留(Rust 插件能力排 v2.0, 1-03); `cxx` 待 BRV-Q8 拍板。
 - **`subkind` 推导**: `ability` 的 `subkind` 可由名字 namespace 推导(`service/`→`service`, `sched/`→`scheduler`, `framework/`→`framework`, `io/`→`io`, `fs/`→`fs`); 裸名(如 `sched-coop`)必须显式 `--subkind`。推导与显式声明冲突 ⇒ 红 `BRV-TAX-0015`。
 - **`api_type` 模板**: v0.1 交付 `native`; `runtime_adapter` / `third_party` 的模板目录预留, 选择时报 `BRV-TAX-0014`(提示"v0.x 交付"), 但**校验**已识别这两类。
+- **导出面随 `api_type` 生成**: `native` 模板预置一个 `[[export]]`(`api_iface = "native"`, `form = "api"`); `runtime_adapter` 模板预置 `api_iface = "runtime_adapter"`; **`third_party` 模板不生成任何 `[[export]]`**(§3.5 不变量 2), 生成器对此做自检。
 - **不覆盖人写文件**: 已存在的 `plugin.toml`/`src/*` 一律不覆盖, 冲突 ⇒ `BRV-GEN-0002` + 退出码 1(除非 `--force`, 且 `--force` 只对**生成物**目录生效)。
 - **`br init <product>`**: 生成 `product.toml` + `app/<name>/` 骨架 + `br.lock` 初版。
 
@@ -694,6 +742,7 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | V-9 | 零编译依赖 | 在**未安装** cc/cargo/nm 的环境跑完整测试套件全绿; `--json` schema 稳定(快照测试) |
 | V-10 | 接口预留 | `requires_iface` 字段能被解析、校验 schema、并在文档中标注"v0.1 不扫描" |
 | V-11 | hash 语义可读 | 每份快照文件头与 `--json` 输出都带 `hash_scope`/`truth`; `br iface show` 明示"声明面 hash ≠ ABI 兼容证明" |
+| V-12 | 导出分类不变量 | `api_iface ≠ api_type`、`third_party` 声明 `[[export]]`、`form="skin"` 缺 `reexport_of`(或指向单元分类不符)三种违例各有反用例, 报错码分别为 `BRV-TAX-0016/0017/0018`; 且 `third_party` 插件在**无 export** 时能正常通过 `br check` |
 
 ## 11. 开放问题(待拍板)
 
@@ -702,7 +751,7 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | **BRV-Q1** | `a` 段语义: (A) 每次发版的"已有接口变更"标志位 (B) 冻结面兼容代数(单调) | **B**, 并把"本次是否变更"另置布尔 `iface_changed`(§5.2) | §5 全篇; 依赖区间语义(§7.4) |
 | **BRV-Q2** | 接口面真值迁移(v0.1 声明 → v0.x 头文件/符号)与 `truth`/`hash_scope` 字段设计 | BRV-D7 C 方案 | `1-02` §2.6.4 衔接; v0.2 |
 | **BRV-Q3** | 分类学收敛: 四类 `plugin_type` + `subkind` 是否接受为 `1-01` §6.3 八类的粗化? 八类去留? | 接受粗化, 八类降为 `subkind` + 特例清单 | `1-01` §6.3 / `4-01` §2 / `4-02` |
-| **BRV-Q4** | `third_party` 的依赖许可(需求原文被截断): 是否允许依赖 `runtime_adapter`? | **允许**依赖 native + runtime_adapter; **不得被 native 依赖** | §3.1; `11-01` |
+| **BRV-Q4** | `third_party` 的**依赖**许可(需求原文被截断"可以依赖…"): 是否允许依赖 `runtime_adapter`? 谁可以依赖 `third_party`? | **允许**依赖 native + runtime_adapter; **不得被 native 依赖**(导出面规则已定: 不抛接口, §3.5) | §3.1; `11-01` |
 | **BRV-Q5** | 特权接口级别划分(P0–P4)与 memory 粒度模型 | 采纳 §3.4 草案 | §3.4; `3-04` 内存; v0.2 静态扫描 |
 | **BRV-Q6** | APP"仅经 interface"是否作为最终口径(推翻"直调 native")? | **是**(由 `iface-min` 提供零开销合规出口) | `1-01` §6.3 / `4-01` §2 / `9-01`(comment/README P0 清单第 12 项 / review2/05 P0-3) |
 | **BRV-Q7** | 描述符 `ver[3]` → `ver[4]` + `iface_hash` 字段的跨文档修订 | 改为 `ver[4]` + `const char *iface_hash` | `1-01` §6.1 / `3-05` §2 |
@@ -711,6 +760,7 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | **BRV-Q10** | 可选/弱依赖(feature/裁剪变体)是否进 v0.1?(`4-04` §3) | **不进**; schema 预留 `optional = false` | §7 |
 | **BRV-Q11** | 接口发布的"发布"是否需要远端 registry(本地快照是否够)? | v0.1 仅本地; registry 属 v2+ 生态位(与 `2-02` BR-D1 C 方案同期) | §6.5 |
 | **BRV-Q12** | 自动版本推进与 `1-02` §2.2 决策记录流程的耦合强度: `--note` 是硬门还是警告? | 硬门(触及 frozen 面时) | §6.3; `1-02` §2.2 |
+| **BRV-Q13** | `third_party` 不抛接口(§3.5)后, 三方件的**运行期能力注册**(如 sqlite `br_service_publish("db", …)`, `1-01` §7.6)算不算"抛出接口"? | **不算**: 注册表 = 运行期机制(允许), 接口单元 = 契约治理对象(不允许); 但该能力面游离在版本治理外 ⇒ RV-9 | §3.5; `1-01` §7.6; `3-06` |
 
 ## 12. 风险
 
@@ -724,6 +774,8 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | **RV-6** | 自动版本推进可能绕过 `1-02` §2.2 的 RFC/PR 门钩("工具替我 bump 了") | `--note` 硬门(BRV-Q12); `publish --check` 进 CI, 人工改动无法伪造 hash |
 | **RV-7** | 分类学禁则过严(如 `ability ↛ interface`)可能挡住合理的域标准适配 | 禁则以 `allow_edges` 白名单显式豁免(§7.3), 豁免必须写进 `product.toml` 从而可评审 |
 | **RV-8** | v0.1 无编译 ⇒ 生成物(描述符 C 代码)可能"生成了但编不过"直到 v0.3 | 生成器与 `1-01` §6.1 宏形态**同源**并要求形态先定稿(BRV-Q7); v0.1 附"生成物语法自检"(仅括号/宏配对级) |
+| **RV-9** | `third_party` 不抛接口(§3.5)⇒ 三方件的能力面没有接口单元, 既不入版本治理, 也无法从接口面反查"谁用了它" | 消费关系仍可从 `[[dep]]` 反查(反向依赖索引); v0.1 在 `br dep` 报告中单列"三方件消费方"; 若未来需要治理, 出口是"由 native 包装件持有接口单元"(BRV-Q13) |
+| **RV-10** | 导出分类不变量的严格性可能与既有 Interface 语义冲突: `iface-posix` 之类的 runtime_adapter **皮肤**是否需要占用 `[[export]]` | 由不变量 3 的 `reexport_of` 承接; 若 `1-01` §7.3 的"再导出不转移所有权"在符号层无法表达为单元引用, 则回退为 v0.2 的符号级校验(A-11) |
 
 ## 13. 与既有文档的接口与待对齐修订清单
 
@@ -754,6 +806,7 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | A-8 | 状态目录定为 `build/`(生成物/索引), 新增 `br.lock` 与 `api/iface/**` | `2-02` §3 BR-D5 / Q5 |
 | A-9 | `--json` 与 manifest schema 同源(关闭 Q7) | `2-02` §8 |
 | A-10 | `br_dep_t.phase` 语义收窄为"相位断言"; 新增自身相位声明 `[plugin].phase` | `1-01` §6.1 / `4-04` §2 |
+| A-11 | 导出面分类规则(`export.api_iface ≡ api_type`; `third_party` 无导出面; `skin` 边豁免 api_type 禁则) | `1-01` §7.3(`api_syms`/再导出) / `10-01` §2 第 1 项 / `4-03` §2 / `11-01` |
 
 ## 14. 演进路线(v0.1 → v0.x, 与 M 里程碑对齐)
 
@@ -770,7 +823,7 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 
 ## 15. 本篇"成文"的条件
 
-1. §4 的 **BRV-D1–BRV-D9** 逐条拍板;
+1. §4 的 **BRV-D1–BRV-D10** 逐条拍板(D10 已由需求方规则给定, 只需确认其三条不变量与 `skin` 豁免);
 2. §11 的 **BRV-Q1/Q3/Q5/Q6/Q7** 至少给出结论(其余可挂"v0.x 再定");
 3. §13.2 的待对齐修订**全部回灌**到对应文档(否则同一契约两套口径, 正是 `comment/README.md` 记录的"元契约漂移"病根);
 4. 补两张 PlantUML 图(接口发布时序 / 求解器数据流)并按 README 流程生成 `pics/`;
