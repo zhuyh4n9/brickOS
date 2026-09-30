@@ -14,7 +14,7 @@
 | | | [`1-03-roadmap.md`](1-architecture/1-03-roadmap.md) 版本路线图 + DoD 清单 | 成文 |
 | 2 | **toolchain**(工具链) | [`2-01-toolchain.md`](2-toolchain/2-01-toolchain.md) 工具链总纲(CLI/manifest 工具实现/golden-CI) | 骨架 |
 | | | [`2-02-br-arch.md`](2-toolchain/2-02-br-arch.md) **br 工具架构设计**(备选方案/权衡/开放问题) | 讨论稿 |
-| | | [`br-tools/br-tool-v0.1.md`](2-toolchain/br-tools/br-tool-v0.1.md) **br-tools v0.1 详细设计**(原型 v1.0 核心交付: 骨架生成/依赖分析/版本模型/接口发布; **版本模型已定 `FROZEN_GEN.MAJOR.MINOR.REVISE` + 解冻机制**) | 草案(旁支, 暂不占章节编号) |
+| | | [`br-tools/br-tool-v0.1.md`](2-toolchain/br-tools/br-tool-v0.1.md) **br-tools v0.1 详细设计**(原型 v1.0 核心交付: 骨架生成/依赖分析/版本模型/接口发布; **版本模型已定 `COMPAT_GEN.MAJOR.MINOR.REVISE` + 解冻机制**) | 草案(旁支, 暂不占章节编号) |
 | 3 | **os core**(内核核心) | [`3-01-core-api-list.md`](3-os-core/3-01-core-api-list.md) native API 清单与详细设计(CA-1~10) | 成文 |
 | | | [`3-02-int.md`](3-os-core/3-02-int.md) 中断管理(IRQ 框架/PIC 抽象/生命周期/屏蔽三层/级联域/fault/IR-1~15) | 成文 |
 | | | [`3-03-sched.md`](3-os-core/3-03-sched.md) 调度框架(sched_class/br_sched_ops) | 骨架 |
