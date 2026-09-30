@@ -1,16 +1,18 @@
 # TangramOS 设计文档仓库
 
-设计文档正文在 [`docs/`](docs/README.md)(10 个分类, 全局编号 = 文档稳定身份)。
+设计文档正文在 [`docs/`](docs/README.md)(11 个章节, 文件名 = `<章节号>-<章节内序号>-<文档名>.md`; 跨文档引用用文件号, 如 `3-01 §13.4`)。
 
 ## 文档里的图怎么改
 
 **图源与图片分离: 人只改 `.puml` 图源, 图片由脚本编译生成, 不要手改图片。**
 
 ```
-docs/<分类>/<文档>.md                  ← 正文, 用 ![](pics/xxx.png) 引用图片
-docs/<分类>/plantUML/<文档>-NN.puml    ← 图源(用 PlantUML 语法手改这个)
-docs/<分类>/pics/<文档>-NN.png         ← 编译产物(markdown 引用, 不要手改)
+docs/<章节>/<文档文件名>.md                ← 正文, 用 ![](pics/xxx.png) 引用图片
+docs/<章节>/plantUML/<文档文件名>-NN.puml  ← 图源(用 PlantUML 语法手改这个)
+docs/<章节>/pics/<文档文件名>-NN.png       ← 编译产物(markdown 引用, 不要手改)
 ```
+
+(文档文件名 = `<章节号>-<章节内序号>-<文档名>`, 如 `1-01-architecture`; 图号顺着已有图往后排。)
 
 ```bash
 cd docs
@@ -54,5 +56,5 @@ cd docs
 
 ### 改图时注意
 
-`plantUML/` 下每张图的文件头都写了该图的布局约束(例如 `00-architecture-01.puml` 里
+`plantUML/` 下每张图的文件头都写了该图的布局约束(例如 `1-01-architecture-01.puml` 里
 记着"可见箭头不要连 L3 这类大 cluster"等 dot 布局的坑), 动图前先读一下, 能少走弯路。

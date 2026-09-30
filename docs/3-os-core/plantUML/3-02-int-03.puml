@@ -1,0 +1,53 @@
+@startuml
+' TangramOS 3-02 中断生命周期状态机(Pending / Active / Inactive / Pending+Active)
+'
+' ── 布局约束(改图前必读) ──────────────────────────────────────────────
+' 1) 四态环形: 状态名保持英文短标识(Pending/Active/Inactive), 中文说明放 note —— 中文写进状态名会让
+'    dot 把状态框拉宽, 环就散了。
+' 2) 迁移标签 = "硬件事件 [谁做的]", 两行 \n 分隔; 不要在标签里写长句。
+' 3) 只有两条边从 Active 出去: eoi 后【无 pending】-> Inactive, eoi 后【有 pending】-> Pending。
+'    "Active -> Active+Pending" 是加边(ISR 执行中再次 assert), 这条边是 level 活锁的观察点。
+
+skinparam shadowing false
+
+state "Inactive" as INACTIVE
+state "Pending" as PENDING
+state "Active" as ACTIVE
+state "Pending and Active" as PEND_ACT
+
+[*] --> INACTIVE
+
+INACTIVE --> PENDING : 设备 assert(电平)\n或边沿到达\n[PIC 置 pending]
+PENDING --> ACTIVE : pic_ops.ack()\n[入口桩取走]
+ACTIVE --> PEND_ACT : ISR 执行期间\n设备再次 assert / 边沿再到达
+ACTIVE --> INACTIVE : pic_ops.eoi()\n[无 pending]
+PEND_ACT --> PENDING : pic_ops.eoi()\n[仍有 pending -> 立即重入]
+PEND_ACT --> INACTIVE : pic_ops.eoi()\n[源已清]
+
+INACTIVE : 空闲: 未挂起, 未在处理
+PENDING : 设备已置位, 等待 CPU 取走
+ACTIVE : 已被 ack 取走\nISR 正在(或已被)处理
+PEND_ACT : 处理中又来一次
+
+note right of ACTIVE
+  状态由 PIC 拥有(IR-4)
+  core 不维护第二份状态机;
+  影子只记 depth / 属主 / 统计,
+  且永不用于判定"是否该调用 ISR"
+end note
+
+note bottom of PEND_ACT
+  level 型未清源的征兆
+  eoi 后立即重回 Pending
+  -> 反复进入 = 活锁
+  检出手段 = 风暴计数(§8.3)
+  (edge 型出现此态属正常:
+   ISR 期间确有新边沿)
+end note
+
+note top of PENDING
+  mask 期间的到达是否保留,
+  由 CAP_LATCH 决定(IR-9):
+  level 不丢; edge 可能合并/丢失
+end note
+@enduml

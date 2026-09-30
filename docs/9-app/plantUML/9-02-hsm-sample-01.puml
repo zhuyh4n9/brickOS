@@ -1,0 +1,30 @@
+@startuml
+' 布局约束: 全部节点平铺(不用 package/cluster/rectangle 嵌套), 箭头单向自上而下;
+' 不要出现"跨层斜向 长边"(dot 会把层压扁); 新增节点优先接在已有节点正下方。
+skinparam componentStyle rectangle
+top to bottom direction
+
+[host 脚本 / 上位机(QEMU virt 之外)\ntools/hsm-peer] as HOST
+[io/virtio-hsm — 虚拟 HSM host 链路\nvirtio-serial(virtio-mmio) · COBS+CRC16 成帧\n注册 hsm0 → /dev/hsm0(devfs 投影, D21)] as DEV
+[service/hsm-host — host 协议面\n解帧 / 命令分派 / 结果回填 / 逐条审计] as HS
+[app/hsm — APP(唯一业务逻辑)\n首启 provision · 策略表 · 审计巡检] as APP
+[iface-pkcs11 — Interface(严格叶子)\nPKCS#11 子集薄皮肤] as IF
+[service/keyring — 密钥资产唯一主人\n槽位 / 生命周期 / 用途位 / 计数\n加密落盘 /data/keys] as KEY
+[service/crypto — 密码服务(mbedTLS 子集)\nSHA-256 · HMAC-SHA256 · AES-CBC/CTR · DRBG] as CR
+[service/seclog — 安全日志\n只追加 + SHA-256 摘要链 → /data/seclog] as LOG
+[fs/littlefs → /data(v1.0 复用)\n掉电安全持久化] as LFS
+
+HOST --> DEV : HSM 帧
+DEV --> HS : /dev/hsm0 会话(cdev-core tg_file_ops 适配)
+APP --> IF : 策略与消费
+IF --> KEY
+IF --> CR
+HS --> KEY : 生命周期 / 策略裁定
+HS --> CR : 运算
+HS --> LOG : 审计(含拒绝)
+KEY --> CR : 派生 / 落盘加密
+LOG --> CR : 摘要链
+KEY --> LFS
+LOG --> LFS
+APP ..> KEY : 注册策略表(注册表晚绑定, 主文档 §6.5 规则 3)
+@enduml

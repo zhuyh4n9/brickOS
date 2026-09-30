@@ -1,0 +1,63 @@
+@startuml
+' TangramOS 3-02 中断管理子系统 — 架构图
+'
+' ── 布局约束(改图前必读) ──────────────────────────────────────────────
+' 1) 四个 package = 四层归属(消费者 / core / platform+ISA / 调度接缝), 纵向分层。
+'    只画【跨层】箭头; 层内组件之间的调用关系写在正文表里, 不连箭头(连了 dot 会把层压扁)。
+' 2) core 包内的组件不再互相连箭头 —— 它们是"同一层的机制分工", 用正文 §2 表说明。
+' 3) 可见箭头全部向下(依赖指向"更靠近硬件"), 这是三层的单向流语义。
+' 4) 若某条边跨层且必须保留, 优先保留"少量长边", 不要为对齐而增加短边。
+
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+left to right direction
+
+package "消费者(驱动 / 框架件 / 服务)" as L_USE {
+  [IO 驱动\nuart / spi / i2c / can / gpio] as DRV
+  [级联域驱动\nPMIC / GPIO 控制器] as DOMDRV
+  [debug 消费方\nbridge MEMRD / ramdump / trace] as DBG
+}
+
+package "core — 语义与机制(native API 面: tg_irq_*, 9 函数)" as L_CORE {
+  [native API 面\nregister / enable / disable\nlock / unlock + 级联域四件] as API
+  [中断号空间与描述符池\nvirq <-> (pic, hwirq)\n静态池, 下标 = virq, O(1)] as IRQNUM
+  [生命周期与入口/出口桩\nack -> ISR -> eoi\n顺序与不变量 INV-H] as LIFE
+  [屏蔽三层\nL1 线路 / L2 CPU / L3 优先级\ndepth 嵌套计数] as MASK
+  [优先级 · 触发方式 · 能力协商\nIR-7 饱和规则 / IR-3 降级] as CFG
+  [级联域框架\nFAST demux / SLOW 转 bh\nIR-10] as DOMAIN
+  [fault 分派\n向量分槽 / handler 链 / extable 查表] as FAULT
+  [分发与均衡(Stage 2)\ndispatch mode / affinity 机制] as DISP
+}
+
+package "platform 插件 + ISA 共享库(方言与数据)" as L_PLAT {
+  [tg_pic_ops 填表\nack / eoi / mask / prio / trigger / affinity] as PICOPS
+  [ISA 共享库(可复用库, 非插件)\nGICv3 / GICv2 / PLIC / NVIC 寄存器序列\n异常向量入口汇编 + extable] as ISA
+  [Platform 数据(每 SoC 一个)\n绑定表 / 基址 / 优先级位数 / quirk] as PLATDATA
+}
+
+package "调度框架(Stage 1 <-> Stage 2 接缝)" as L_SCHED {
+  [tg_sched_irq_epilogue()\nStage 1 = 空实现; v2 = 抢占决策] as EPI
+  [bottom half\ntg_work_submit -> work queue] as BH
+}
+
+DRV --> API
+DOMDRV --> API
+DBG --> FAULT
+DBG --> IRQNUM
+API --> IRQNUM
+API --> LIFE
+API --> MASK
+API --> CFG
+API --> DOMAIN
+IRQNUM --> LIFE
+LIFE --> PICOPS
+MASK --> PICOPS
+CFG --> PICOPS
+DOMAIN --> PICOPS
+DOMAIN --> BH
+FAULT --> ISA
+LIFE --> EPI
+PICOPS --> ISA
+ISA --> PLATDATA
+@enduml

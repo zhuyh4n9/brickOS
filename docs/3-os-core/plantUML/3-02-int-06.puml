@@ -1,0 +1,83 @@
+@startuml
+' TangramOS 3-02 Stage 2: 分发决策与亲和性/负载均衡
+'
+' ── 布局约束(改图前必读) ──────────────────────────────────────────────
+' 1) 三列语义: 左 = 中断源类型(SGI/PPI/SPI), 中 = 分发形态(IR-13), 右 = 机制(core) 与 策略(插件)。
+'    这个"源 -> 形态 -> 机制/策略"的三段式是本图要传达的唯一结构。
+' 2) 机制与策略分成两个 package 并列 —— 它们的分离(IR-14)是整节的核心结论, 不要合并成一个包。
+' 3) SPI 的"可迁移"与 PPI 的"不可迁移"用两条 note 表达, 不新增节点。
+
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+skinparam shadowing false
+left to right direction
+
+package "中断源(virq)" as SRC {
+  [SGI 软件生成\n显式目标核] as SGI
+  [PPI 每核私有\narch timer 等] as PPI
+  [SPI 可路由\n外设中断] as SPI
+}
+
+package "分发形态(IR-13, 描述符内 mode 字段)" as DISP {
+  [INLINE\nISR 内处理\n延迟最低] as INLINE
+  [BH\nwork queue\n中等延迟] as BHM
+  [THREAD\n专属/共享线程\n可阻塞] as TH
+}
+
+package "机制在 core" as MECH {
+  [dispatch mode 字段\n静态声明为主(组合期可见/WCET 可算)] as MODE
+  [每 virq 计数 + 频率估计\n(指数滑动平均, TG_IRQ_STATS)] as STAT
+  [tg_irq_set_affinity(v2b)\n前置: CAP_AFFINITY 且非 PERCPU] as AFF
+  [迁移协议\nmask -> 等在途 ISR 归零 -> 改路由 -> 重放 -> unmask] as MIG
+}
+
+package "策略在插件(可替换)" as POL {
+  [动态升级策略(v2, 默认关)\n频率 > threshold => INLINE 升为 BH/THREAD] as UPG
+  [tg_irq_balance_ops(v2b)\n默认实现 = 静态无均衡] as BAL
+}
+
+SGI --> INLINE
+PPI --> INLINE
+SPI --> INLINE
+SPI --> BHM
+SPI --> TH
+INLINE --> STAT
+BHM --> STAT
+TH --> STAT
+STAT --> UPG
+UPG --> MODE
+MODE --> AFF
+BAL --> AFF
+AFF --> MIG
+
+note bottom of PPI
+  不可迁移
+  每核一份, 与核绑定
+  (试图"均衡 arch timer"是设计错误:
+   数据结构用 TG_IRQ_F_PERCPU 拦住)
+end note
+
+note bottom of SPI
+  可迁移, 但有限制(IR-14)
+  level 型: 迁移安全(电平即状态)
+  edge 型: 迁移窗口会丢事件
+    => 默认禁止运行时迁移, 只允许静态亲和
+    => 需驱动显式 TG_IRQ_F_MIGRATABLE 承担
+end note
+
+note top of UPG
+  为什么默认关
+  动态升级/降级本身引入非确定性:
+  同一代码路径在不同负载下
+  处于不同上下文 => 难以做 WCET 分析
+  (车规场景需要显式开关)
+end note
+
+note top of BAL
+  为什么均衡必须是插件
+  "均衡"是策略(要吞吐? 要延迟?
+  要 cache 局部性?), core 只给机制。
+  算法进 core = 一个无法被产品
+  替换的策略决定, 与 D2/D19 冲突
+end note
+@enduml

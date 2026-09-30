@@ -1,0 +1,77 @@
+@startuml
+' TangramOS 3-02 aarch64 向量表分槽与 fault 路径
+'
+' ── 布局约束(改图前必读) ──────────────────────────────────────────────
+' 1) 用活动图(不是组件图): fault 路径的价值在【决策顺序】(extable 优先于 fatal,
+'    double-fault 优先于 handler 链), 组件图表达不出优先级。
+' 2) 向量表以 note 形式贴在起点旁 —— 不要为 16 个槽各画一个节点, 那会把决策链挤到画面外。
+' 3) double-fault 判定必须画在 handler 链【之前】: 它是"上一次 fault 的现场可信吗"的前置门。
+
+skinparam shadowing false
+
+start
+
+note right
+  VBAR_EL1 向量表(2 KB 对齐, 16 槽 x 128 B)
+  0x000 Sync   @ EL1t     -> 不用(单异常级恒 SP_EL1), panic
+  0x080 IRQ    @ EL1t     -> 不用, panic
+  0x100 FIQ    @ EL1t     -> 不用, panic
+  0x180 SError @ EL1t     -> 不用, panic
+  0x200 Sync   @ EL1h     -> fault 路径(本图)
+  0x280 IRQ    @ EL1h     -> 中断路径(见 3-02-int-04)
+  0x300 FIQ    @ EL1h     -> v1 panic; v2 候选: 最高优先级调试通道
+  0x380 SError @ EL1h     -> v1 panic; v2 挂 ramdump
+  0x400-0x780 lower EL 四类 -> 不用(无用户态), panic
+  (0x200 与 0x280 共用同一份保存/恢复汇编)
+  EL1t 四槽(0x000-0x180)必须是真实可用的桩:
+    复位后首个异常可能还在 EL1t(SPSel 未切 1)
+end note
+
+note right
+  入口屏蔽位(§10.2 实现要点)
+  * 桩内一律显式 `msr daifset, #0xf`
+    —— 全屏蔽 DAIF, 不只 I
+  * 理由1: 同步异常是否自动置 I 存疑
+    => 不依赖硬件行为, 两种说法下都正确
+  * 理由2: I 屏蔽不了 SError(A)与 debug(D);
+    捕获期来 SError 会重入并改写现场,
+    随后被判 double fault => 原始 dump 丢失
+end note
+
+:异常发生: Sync @ EL1h (0x200);
+:asm 入口桩: 保存现场\n-> tg_fault_enter(frame);
+:读 ESR_EL1.EC / FAR_EL1 / ELR_EL1\n解出异常类 ec 与 CPU-local 现场(in_fault, curr_virq);
+
+if (in_fault >= 2 ?) then (是: 上一次 fault 的 handler 本身可疑)
+  :tg_panic_bare()\n只轮询 console,不调用任何 handler\n(与 5-01 §2 "panic 通道独立" 同一原则);
+  stop
+else (否)
+endif
+
+if (ec == Data abort (0x24/0x25) ?) then (是)
+  :tg_extable_lookup(ELR_EL1)\n(ISA 库的只读 .tg_extable 表, 非 native API);
+  if (命中修复标签 ?) then (是)
+    :改 ELR_EL1 -> 修复标签\n设置约定返回值;
+    :fault 降级为"函数返回错误码"\n消费者: bridge MEMRD / 驱动 probe;
+    stop
+  else (否)
+  endif
+else (否: Instruction abort 0x20/0x21, Unknown 0x00,\nSVC/BRK/MSR 陷阱等)
+endif
+
+:遍历 fault handler 链(LIFO + prio, 小 = 先调用)\nramdump 捕获应最先看到现场;
+if (有 handler 返回 HANDLED ?) then (是)
+  :记录/捕获: 寄存器组 + TCB + trace 环\n(只用静态缓冲, 不碰堆/调度器);
+else (否)
+endif
+
+:默认路径: 最小打印 + panic\n携 ec / FAR / ELR / in_isr / isr_virq;
+note right
+  in_isr / isr_virq 的诊断价值
+  "某个 ISR 踩了野指针"若只报
+  "Data abort at 0x...", 排查要从
+  全系统 ISR 里找; 带上 virq 直接
+  指向元凶(CPU-local curr_virq)
+end note
+stop
+@enduml

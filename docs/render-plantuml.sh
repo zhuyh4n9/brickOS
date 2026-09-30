@@ -77,9 +77,9 @@ usage() {
 
 示例:
   ./render-plantuml.sh                                   # 增量编译全部
-  ./render-plantuml.sh 1-architecture                    # 只编译某个分类
-  ./render-plantuml.sh -l 6-vfs-device                   # 只看某分类的新鲜度
-  ./render-plantuml.sh -f 1-architecture/plantUML/00-architecture-01.puml
+  ./render-plantuml.sh 1-architecture                    # 只编译某个章节
+  ./render-plantuml.sh -l 7-storage                      # 只看某章节的新鲜度
+  ./render-plantuml.sh -f 1-architecture/plantUML/1-01-architecture-01.puml
   ./render-plantuml.sh -w -t svg                         # 挂监听, 出 svg
 EOF
 }
