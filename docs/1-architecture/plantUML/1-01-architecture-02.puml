@@ -15,7 +15,7 @@ package "Service 层 — 服务间可声明依赖(init-DAG 无环)" as G_SVC {
   [lwIP / crypto / trace …] as SX
 }
 package "框架件(D19–D21) — 能力基础设施" as G_FW {
-  [vfs-core: 纯 VFS\ntg_file / tg_open 挂载表·单路由] as VFSC2
+  [vfs-core: 纯 VFS\nbr_file / br_open 挂载表·单路由] as VFSC2
   [cdev-core: 字符设备 + flash 子型\nopen_file 钩子] as CDEVC2
   [bdev-core: bdev 子分类] as BDEVC2
   [dev-core: 通用设备注册表] as DEVC2
@@ -24,7 +24,7 @@ package "FS 插件(管理类)" as G_FS {
   [fs/tmpfs: rootfs] as TMP2
   [fs/devfs: /dev 设备节点] as DFS2
 }
-package "Core — native API(tg_*) + 服务注册表" as G_CORE {
+package "Core — native API(br_*) + 服务注册表" as G_CORE {
   [服务表] as COREN
 }
 APPN --> IF_P

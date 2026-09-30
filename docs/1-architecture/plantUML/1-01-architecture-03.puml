@@ -2,7 +2,7 @@
 skinparam componentStyle rectangle
 left to right direction
 
-[Core 接口(语义契约)\ntg_mm · tg_pic · 早期 console · tg_clock] as CORE_IF
+[Core 接口(语义契约)\nbr_mm · br_pic · 早期 console · br_clock] as CORE_IF
 [ISA 共享实现库(可复用库, 非插件)\naarch64 页表构造 / GICv3 驱动 / PL011 / arch timer] as ISA_LIB
 [Platform 插件(每 SoC 一个)\n数据 + 特化: region 表 / 中断号绑定 / 时钟树 / 引脚 / quirk] as PLAT_PLUGIN
 

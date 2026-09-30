@@ -1,5 +1,5 @@
 @startuml
-' TangramOS 3-02 Stage 2: 分发决策与亲和性/负载均衡
+' brickOS 3-02 Stage 2: 分发决策与亲和性/负载均衡
 '
 ' ── 布局约束(改图前必读) ──────────────────────────────────────────────
 ' 1) 三列语义: 左 = 中断源类型(SGI/PPI/SPI), 中 = 分发形态(IR-13), 右 = 机制(core) 与 策略(插件)。
@@ -26,14 +26,14 @@ package "分发形态(IR-13, 描述符内 mode 字段)" as DISP {
 
 package "机制在 core" as MECH {
   [dispatch mode 字段\n静态声明为主(组合期可见/WCET 可算)] as MODE
-  [每 virq 计数 + 频率估计\n(指数滑动平均, TG_IRQ_STATS)] as STAT
-  [tg_irq_set_affinity(v2b)\n前置: CAP_AFFINITY 且非 PERCPU] as AFF
+  [每 virq 计数 + 频率估计\n(指数滑动平均, BR_IRQ_STATS)] as STAT
+  [br_irq_set_affinity(v2b)\n前置: CAP_AFFINITY 且非 PERCPU] as AFF
   [迁移协议\nmask -> 等在途 ISR 归零 -> 改路由 -> 重放 -> unmask] as MIG
 }
 
 package "策略在插件(可替换)" as POL {
   [动态升级策略(v2, 默认关)\n频率 > threshold => INLINE 升为 BH/THREAD] as UPG
-  [tg_irq_balance_ops(v2b)\n默认实现 = 静态无均衡] as BAL
+  [br_irq_balance_ops(v2b)\n默认实现 = 静态无均衡] as BAL
 }
 
 SGI --> INLINE
@@ -54,7 +54,7 @@ note bottom of PPI
   不可迁移
   每核一份, 与核绑定
   (试图"均衡 arch timer"是设计错误:
-   数据结构用 TG_IRQ_F_PERCPU 拦住)
+   数据结构用 BR_IRQ_F_PERCPU 拦住)
 end note
 
 note bottom of SPI
@@ -62,7 +62,7 @@ note bottom of SPI
   level 型: 迁移安全(电平即状态)
   edge 型: 迁移窗口会丢事件
     => 默认禁止运行时迁移, 只允许静态亲和
-    => 需驱动显式 TG_IRQ_F_MIGRATABLE 承担
+    => 需驱动显式 BR_IRQ_F_MIGRATABLE 承担
 end note
 
 note top of UPG

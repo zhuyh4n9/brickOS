@@ -66,7 +66,7 @@
 
 ### 2.1 产品画像
 
-安全核侧(本样例 = TangramOS 镜像)对**主机**(外部 SoC)提供三件事: **密码运算**、**密钥生命周期**、**审计**; 主机经一条 **host 链路**发命令。样例在 QEMU virt 上用 virtio-serial(virtio-mmio)承载该链路(§7.1)。
+安全核侧(本样例 = brickOS 镜像)对**主机**(外部 SoC)提供三件事: **密码运算**、**密钥生命周期**、**审计**; 主机经一条 **host 链路**发命令。样例在 QEMU virt 上用 virtio-serial(virtio-mmio)承载该链路(§7.1)。
 
 与**主文档 §14** 的列一一对应: 调度器(§10 置换)/ 接口 = `iface-pkcs11`(**v1.x, D24**, 原排 v2.0)/ 典型组合 = crypto · keyring · hsm-host · seclog(§3.1)/ APP 关注点 = **密钥策略**。
 
@@ -106,7 +106,7 @@
 |---|---|---|
 | `platform/qemu-aarch64` | Platform | EL1 / GICv3 / PL011 / timer / region 表 |
 | `sched-coop` | Scheduler | v1.x 调度(v2 置换为 `sched-preempt`, 源码零改写) |
-| `dev-core` · `cdev-core` · `bdev-core` · `vfs-core` | 框架件 | 四件框架件**全在**——`bdev-core` 由 `/data` 介质链路带入(`io/virtio-blk` → bdev-core → littlefs): 设备注册 / 字符设备会话 / 块设备子分类 / `tg_open` 单路由 |
+| `dev-core` · `cdev-core` · `bdev-core` · `vfs-core` | 框架件 | 四件框架件**全在**——`bdev-core` 由 `/data` 介质链路带入(`io/virtio-blk` → bdev-core → littlefs): 设备注册 / 字符设备会话 / 块设备子分类 / `br_open` 单路由 |
 | `fs/tmpfs` · `fs/devfs` · `fs/littlefs` | FS | rootfs · `/dev/hsm0` 节点 · `/data` 持久化 |
 | `io/virtio-blk` | I/O | `/data` 介质(QEMU bdev + littlefs 适配) |
 | `service/trace` | Service | 热路径事件(含 HSM 命令/拒绝/审计探针) |
@@ -149,9 +149,9 @@ host 脚本 / 上位机
    │  QEMU -chardev socket(QEMU virt 之外, §7.1)
    ▼
 io/virtio-hsm(guest 侧前端: 成帧 + 环)
-   │  ISR → tg_work_submit(bh) → 信号量唤醒
+   │  ISR → br_work_submit(bh) → 信号量唤醒
    ▼
-/dev/hsm0 会话(cdev-core 通用 tg_file_ops 适配)
+/dev/hsm0 会话(cdev-core 通用 br_file_ops 适配)
    │  service/hsm-host: 解帧 → 命令分派 → 结果回填
    ├──► service/keyring   (密钥生命周期 / 策略裁定)
    ├──► service/crypto    (运算)
@@ -237,7 +237,7 @@ v1.x **无单调硬件**(无 RTC / eFuse / 计费计数器的约定), 因此回�
 
 ### 6.2 契约治理
 
-crypto / keyring 的 ops 表是**插件间契约**(v2 换后端不得破坏消费者)⇒ 应按框架件的 golden 纪律治理(`docs/1-architecture/1-02-api-contract-governance.md` §2.6, D12/D14 机制)。v1.x 两服务 API 标 **EXPERIMENTAL**; 是否把 `tg-crypto.txt`/`tg-keyring.txt` 并入 golden 清单(与四件框架件同级)= **O-H7**(倾向: 入, 理由即"v2 后端替换要求布局稳定")。
+crypto / keyring 的 ops 表是**插件间契约**(v2 换后端不得破坏消费者)⇒ 应按框架件的 golden 纪律治理(`docs/1-architecture/1-02-api-contract-governance.md` §2.6, D12/D14 机制)。v1.x 两服务 API 标 **EXPERIMENTAL**; 是否把 `br-crypto.txt`/`br-keyring.txt` 并入 golden 清单(与四件框架件同级)= **O-H7**(倾向: 入, 理由即"v2 后端替换要求布局稳定")。
 
 ### 6.3 熵源缺口(O-H1)
 
@@ -251,19 +251,19 @@ v1.x 软件后端**不承诺侧信道抗性**(无恒定时间保证, 无缓存/�
 
 ### 7.1 QEMU 对端形态
 
-- **guest 侧**: `io/virtio-hsm` 实现 cdev 会话(`docs/8-device/8-01-device.md` §3 的 `tg_cdev_ops`)并注册设备名 `hsm0` → devfs 投影为 `/dev/hsm0`;
+- **guest 侧**: `io/virtio-hsm` 实现 cdev 会话(`docs/8-device/8-01-device.md` §3 的 `br_cdev_ops`)并注册设备名 `hsm0` → devfs 投影为 `/dev/hsm0`;
 - **host 侧对端**: QEMU `-device virtio-serial-device` + `-chardev socket` 接 host 脚本(`tools/hsm-peer`), **无需自研 QEMU 设备模型**——这是选择 virtio-serial 而非自造 virtio 设备的理由;
-- `tg run` 需要把 chardev 参数透出(与 `docs/2-toolchain/2-01-toolchain.md` §3 "`tg run` 的 QEMU 封装参数"开放问题合流, O-H4);
+- `br run` 需要把 chardev 参数透出(与 `docs/2-toolchain/2-01-toolchain.md` §3 "`br run` 的 QEMU 封装参数"开放问题合流, O-H4);
 - **对端形态的备选**(若 virtio-serial 在多实例/时序上不够): 自研最小 virtio-mmio 设备模型 / chardev 直桥 / 真安全核(M4+)——O-H4 记录三项取舍。
 
 ### 7.2 形态归属: 形态 A
 
-本样例走**形态 A**(器件 → cdev-core → dev-core → devfs → VFS, `docs/8-device/8-01-device.md` §1.2): 设备统一为 `/dev/hsm0`, 消费者语义与文件同构。§10 的变体矩阵再给形态 B(仅 `tg_cdev_*` 会话 API, 不链 vfs-core)作裁剪证明。
+本样例走**形态 A**(器件 → cdev-core → dev-core → devfs → VFS, `docs/8-device/8-01-device.md` §1.2): 设备统一为 `/dev/hsm0`, 消费者语义与文件同构。§10 的变体矩阵再给形态 B(仅 `br_cdev_*` 会话 API, 不链 vfs-core)作裁剪证明。
 
 ### 7.3 中断与缓冲纪律
 
 - 帧小(≤ 4KB): **不做 DMA**, 采用中断 + 有界环形缓冲; 硬件密码引擎后端(v2+)才引入 DMA 与 cache 维护(R4 纪律; 该后端的设备归属与 DMA 纪律见 **O-H5**);
-- ISR 只做"取帧首部 + 提交 bh" → `tg_work_submit`; 解帧 / 路由 / 审计全部在 bh 与线程上下文(设备域 ISR 禁令, `docs/8-device/8-01-device.md` §4);
+- ISR 只做"取帧首部 + 提交 bh" → `br_work_submit`; 解帧 / 路由 / 审计全部在 bh 与线程上下文(设备域 ISR 禁令, `docs/8-device/8-01-device.md` §4);
 - 背压: 环满 → `-EAGAIN`(调用方重试); 命令处理在线程上下文, 经信号量同步(SD-6 对外同步阻塞)。
 
 ## 8. 审计与安全日志(`service/seclog`)
@@ -278,15 +278,15 @@ v1.x 软件后端**不承诺侧信道抗性**(无恒定时间保证, 无缓存/�
 ### 9.1 命令(CLI 口径同主文档 §13)
 
 ```bash
-tg init hsm --domain hsm
-tg add platform/qemu-aarch64 sched/sched-coop \
+br init hsm --domain hsm
+br add platform/qemu-aarch64 sched/sched-coop \
        dev-core cdev-core bdev-core vfs-core fs/tmpfs fs/devfs fs/littlefs \
        io/virtio-blk io/virtio-hsm \
        service/crypto service/keyring service/hsm-host service/seclog \
-       iface/pkcs11 app/hsm        # 框架件/闭包由 tg add 自动拉入
-tg build
-tg run qemu --hsm-peer=unix:/tmp/hsm.sock   # 参数形态待 2-01 §3 收口(O-H4)
-tg test hsm                                  # host 平台 CI(含 ASan)
+       iface/pkcs11 app/hsm        # 框架件/闭包由 br add 自动拉入
+br build
+br run qemu --hsm-peer=unix:/tmp/hsm.sock   # 参数形态待 2-01 §3 收口(O-H4)
+br test hsm                                  # host 平台 CI(含 ASan)
 ```
 
 > manifest 示例**略**: 表达格式(YAML/TOML/DSL)仍在 `docs/4-plugin/4-03-plugin-manifest.md` §3 开放, 样例不预设格式; 其**语义输入**见本表 + §3.1 + §5.2(依赖 / 挂载计划 / 策略表 / 熵源开关 `TEST_ENTROPY`)。
@@ -308,7 +308,7 @@ tg test hsm                                  # host 平台 CI(含 ASan)
 
 | 证明 | 操作 | 期望 |
 |---|---|---|
-| **设备接入形态可裁剪** | `io/virtio-hsm` 不链 `fs/devfs`/vfs-core, `hsm-host` 经 `tg_cdev_*` 会话直取(形态 B, `8-01` §1.2) | 设备面组合成立; 但 **`keyring`/`seclog` 仍需 vfs-core 落盘**(`/data/keys`、`/data/seclog`)⇒ **形态 B 只对设备面成立, 整样例不以形态 B 成立** |
+| **设备接入形态可裁剪** | `io/virtio-hsm` 不链 `fs/devfs`/vfs-core, `hsm-host` 经 `br_cdev_*` 会话直取(形态 B, `8-01` §1.2) | 设备面组合成立; 但 **`keyring`/`seclog` 仍需 vfs-core 落盘**(`/data/keys`、`/data/seclog`)⇒ **形态 B 只对设备面成立, 整样例不以形态 B 成立** |
 | **接口面可裁剪** | 不选 `iface-pkcs11`, `app/hsm` 改直调 native(keyring/crypto 服务 API) | 服务层零改写; **APP 源码有差异**(皮肤换成 native 调用) |
 
 **表 B — 需要 v2 能力才能验证的置换(登记为 M5 之外的证明)**
@@ -323,7 +323,7 @@ tg test hsm                                  # host 平台 CI(含 ASan)
 
 | # | 验收项 | 判据 |
 |---|---|---|
-| **A1** | 组合即产品 | 增量审计: HSM 组合相对 v1.0 插件库只新增 §3.1 的 6 件 + `app/hsm`; 无 core / 框架件改动(由组合器 `tg check` 的插件清单与符号表 diff 机械给出; 范围边界纪律见 R-H3) |
+| **A1** | 组合即产品 | 增量审计: HSM 组合相对 v1.0 插件库只新增 §3.1 的 6 件 + `app/hsm`; 无 core / 框架件改动(由组合器 `br check` 的插件清单与符号表 diff 机械给出; 范围边界纪律见 R-H3) |
 | **A2** | 端到端命令 | host 脚本经 `/dev/hsm0` 走通 §4.2 命令全集(INFO/GEN/IMPORT/ACTIVATE/SUSPEND/RESUME/SIGN/VERIFY/CRYPT/DESTROY/AUDIT); 正例结果正确 |
 | **A3** | 策略生效 | 用途不符 / **越限调用** / 试导出 → 拒绝(`-EPERM`)且**必留审计**; 计数达上限本身 → 自动 `SUSPENDED` + 审计(§5.2) |
 | **A4** | 审计链 | `AUDIT` 摘要链自校验通过; 篡改记录 → 校验失败; QEMU 重启后链连续(littlefs 掉电安全) |

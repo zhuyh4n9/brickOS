@@ -29,7 +29,7 @@
 
 ```
 manifest 声明(依赖 / 资源 / RAM 预算)
-→ 描述符 TG_PLUGIN(...)(3-05-plugin-mgr)
+→ 描述符 BR_PLUGIN(...)(3-05-plugin-mgr)
 → 实现 init(选相位)+ ops 表(类别契约)
 → conformance 套件通过(1-02 §2.3 层 2)
 → golden 面合规(1-02 层 1)+ 版本矩阵(层 3)
@@ -39,7 +39,7 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 
 - **依赖声明**: 指向插件名 + 版本区间; init-DAG 无环(§7.2, 环 = 组合期硬错误)
 - **资源声明**: IRQ / DMA 通道 / 引脚 / RAM 预算(§6.4 组合期冲突检测); 设备名唯一(注册表主键)
-- **符号纪律**: `tg_*` 前缀 core 保留(§7.2 命名空间独占); 插件自有符号带插件名前缀
+- **符号纪律**: `br_*` 前缀 core 保留(§7.2 命名空间独占); 插件自有符号带插件名前缀
 - **ISR 纪律**(如涉及中断): 白名单四件之外全部 thread-only(3-01 §11)
 
 ## 2. 八类插件的作者视角(路由表)
@@ -47,7 +47,7 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 | 类别 | 你提供 | 依赖 | 纵深契约 | 验证 |
 |---|---|---|---|---|
 | **Platform** | PIC ops 表 / 早期 console / region / 链接脚本 | — | 主文档 §8(三层模式) | 真硬件 M4 |
-| **Scheduler**(恰一) | `tg_sched_ops` + sched_class 声明 | core | `3-03-sched` | 三形态 conformance 矩阵 |
+| **Scheduler**(恰一) | `br_sched_ops` + sched_class 声明 | core | `3-03-sched` | 三形态 conformance 矩阵 |
 | **框架件** | 能力契约 API(注册表/ops 形状) | core / 框架件间单向(cdev-core→dev-core 与 vfs-core, bdev-core→dev-core) | `7-01`–`7-03` + `8-01`(7-01 §2 / 7-02 §1 / 8-01 §2–3) | golden + conformance |
 | **IO(驱动)** | 设备 ops 表(cdev/bdev/flash) | cdev-core / bdev-core | `8-01-device` §3/§6 | ISR/DMA 静态扫描 |
 | **FS** | ops 四层(super/inode/file/dentry) | vfs-core(挂载) | `7-01-vfs` §2 / `7-03` | 掉电用例 |
@@ -63,8 +63,8 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 
 | 纪律 | 内容 | 执法 |
 |---|---|---|
-| ISR 纪律 | ISR 最小工作 → `tg_work_submit`; 禁阻塞/malloc/持锁跨 ISR 返回 | conformance + 评审清单 |
-| DMA/cache | `tg_dma_alloc` 分配; 传输前后 `tg_mm_cache_flush/invalidate`(R4) | conformance + 真硬件 M4 |
+| ISR 纪律 | ISR 最小工作 → `br_work_submit`; 禁阻塞/malloc/持锁跨 ISR 返回 | conformance + 评审清单 |
+| DMA/cache | `br_dma_alloc` 分配; 传输前后 `br_mm_cache_flush/invalidate`(R4) | conformance + 真硬件 M4 |
 | 资源声明 | manifest: IRQ/通道/引脚/RAM | 组合期冲突检测 |
 
 - 驱动代码**板级无关**(平台差异全在 Platform 插件数据); 换板只换 Platform
@@ -74,7 +74,7 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 
 来自 `7-01-vfs` §2 / `7-03-concrete-fs`, 全量以彼为准:
 
-- 实现 **ops 四层**: `tg_fs_ops`(mount→根 inode/free_inode/sync)+ 目录 `tg_inode_ops`(lookup 链)+ 文件 `tg_file_ops`(open 建会话)+ `tg_dentry_ops`(v1 全 NULL 预留)
+- 实现 **ops 四层**: `br_fs_ops`(mount→根 inode/free_inode/sync)+ 目录 `br_inode_ops`(lookup 链)+ 文件 `br_file_ops`(open 建会话)+ `br_dentry_ops`(v1 全 NULL 预留)
 - inode = vfs-core 公共头 + FS 私有尾; **v1 瞬态**(无缓存, SD-3)
 - 挂载经 manifest 挂载计划(7-03 §6); 挂载点父 FS 依赖声明
 - 可写 FS 的掉电语义是硬要求(littlefs 型: COW + 元数据对)
@@ -101,6 +101,6 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 
 | # | 问题 |
 |---|---|
-| — | 插件作者脚手架: `tg new <kind>` 生成模板(manifest + 描述符 + conformance 骨架)[?]——落点: `4-02-plugin-layout.md` §2 第 6 项 |
+| — | 插件作者脚手架: `br new <kind>` 生成模板(manifest + 描述符 + conformance 骨架)[?]——落点: `4-02-plugin-layout.md` §2 第 6 项 |
 | — | conformance 用例编写指南(断言集形态、host 适配层) |
 | — | 每类插件的样例参考实现盘点(v1.0 已有: uart-pl011/virtio-blk/littlefs/trace) |

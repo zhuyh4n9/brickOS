@@ -17,7 +17,7 @@
 | **MPU** | Memory Protection Unit | 内存保护单元(无 MMU 目标的 region 保护) |
 | **OOM** | Out Of Memory | 内存耗尽 |
 | **R1–R10** | — | 主文档 §16 的风险编号 |
-| **TG_MM_RO / NX / DEVICE / CACHED** | — | region 属性: 只读 / 不可执行 / 设备内存 / 可缓存(append-only, D14) |
+| **BR_MM_RO / NX / DEVICE / CACHED** | — | region 属性: 只读 / 不可执行 / 设备内存 / 可缓存(append-only, D14) |
 | **TLSF** | Two-Level Segregated Fit | O(1) 动态内存分配算法(此仓库的堆池实现) |
 | **VA** | Virtual Address | 虚拟地址 |
 
@@ -28,19 +28,19 @@
 core 提供**三个池(TLSF 堆 / contig 池 / 页池, CA-7/CA-8)+ MMU 接口 + DMA 约定**; 虚拟内存政策 = v1 恒等映射(属性隔离)/ v2 重定位 / vx MPU(v0.4 评审反转后的政策, 主文档 §4.3)。
 
 已有决策(待深化时继承):
-- **TLSF 堆**: `tg_malloc/calloc/realloc/free`(3-01 §6); `sbrk` 挂接 svc-posix libc stub
-- **per-plugin arena**: v1 统计(`tg_heap_usage`), v2 归属分配 + memleak 记账(5-01 §4)
-- **DMA**(CA-6): `tg_dma_buf_t` 含 dma_addr, v1 恒等下 == vaddr(为 v2 重定位预留形状)
-- **tg_mm**: region 表(静态)、map/unmap 签名 v1 起定稿(R4; 升格 frozen 走 D15)、cache 维护(`tg_mm_cache_flush/invalidate`, 驱动 DMA 前后)
-- **region 属性**: `TG_MM_RO/NX/DEVICE/CACHED`(append-only, D14)
+- **TLSF 堆**: `br_malloc/calloc/realloc/free`(3-01 §6); `sbrk` 挂接 svc-posix libc stub
+- **per-plugin arena**: v1 统计(`br_heap_usage`), v2 归属分配 + memleak 记账(5-01 §4)
+- **DMA**(CA-6): `br_dma_buf_t` 含 dma_addr, v1 恒等下 == vaddr(为 v2 重定位预留形状)
+- **br_mm**: region 表(静态)、map/unmap 签名 v1 起定稿(R4; 升格 frozen 走 D15)、cache 维护(`br_mm_cache_flush/invalidate`, 驱动 DMA 前后)
+- **region 属性**: `BR_MM_RO/NX/DEVICE/CACHED`(append-only, D14)
 
 ## 2. 大纲(待成文)
 
-1. 布局: 镜像/链接脚本(`.tg_*` 段)、region 表(platform early_init 声明, 1-01 §9 启动序列)
+1. 布局: 镜像/链接脚本(`.br_*` 段)、region 表(platform early_init 声明, 1-01 §9 启动序列)
 2. TLSF 堆: 初始化(启动早期, §9)、碎片策略、对齐保证
 3. arena 模型: per-plugin 预算(manifest)、归属记账(v2)、OOM 策略 [?]
-4. DMA 区: `tg_dma_alloc` 属性(对齐/一致性)、与驱动契约(8-01 §6 三纪律)
-5. cache 一致性协议: 谁维护(驱动, R4)、`tg_mm_cache_*` 的 aarch64 实现(ISA 库)
+4. DMA 区: `br_dma_alloc` 属性(对齐/一致性)、与驱动契约(8-01 §6 三纪律)
+5. cache 一致性协议: 谁维护(驱动, R4)、`br_mm_cache_*` 的 aarch64 实现(ISA 库)
 6. 重定位(v2): 镜像加载任意 VA、重定位表、与 A/B 更新的衔接
 7. MPU(vx): 无 MMU 目标的 region 替代(实验)
 

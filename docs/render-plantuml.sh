@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================================
-#  TangramOS 设计文档 —— PlantUML 图表编译脚本
+#  brickOS 设计文档 —— PlantUML 图表编译脚本
 #
 #  作用: 把 docs/**/plantUML/*.puml 编译成同级 pics/*.png, 供 markdown 引用。
 #        人类只改 plantUML/ 下的图源, 然后跑这个脚本刷新图片。

@@ -1,5 +1,5 @@
 @startuml
-' TangramOS 3-02 IRQ 处理全流程(入口 -> 取走 -> 分发 -> eoi -> 出口)
+' brickOS 3-02 IRQ 处理全流程(入口 -> 取走 -> 分发 -> eoi -> 出口)
 '
 ' ── 布局约束(改图前必读) ──────────────────────────────────────────────
 ' 1) 参与者顺序 = 硬件/汇编 -> core -> ISR/域 -> bh -> 调度接缝; 参与者名字用两行(第一行角色,
@@ -13,14 +13,14 @@ skinparam shadowing false
 
 participant "设备 / PIC" as HW
 participant "asm 入口桩\n向量 0x280 (IRQ @ EL1h)" as ASM
-participant "core 入口\ntg_irq_enter()" as CORE
+participant "core 入口\nbr_irq_enter()" as CORE
 participant "ISR(驱动)\ndesc->isr" as ISR
 participant "级联域\nFAST demux" as DOM
 participant "bottom half\ndemux_slow" as BH
-participant "调度接缝\ntg_sched_irq_epilogue" as EPI
+participant "调度接缝\nbr_sched_irq_epilogue" as EPI
 
 HW -> ASM : assert -> Pending -> 向 CPU 发 IRQ\n(aarch64 硬件自动置 PSTATE.I)
-ASM -> CORE : 保存现场 -> tg_irq_enter(frame)
+ASM -> CORE : 保存现场 -> br_irq_enter(frame)
 CORE -> HW : pic_ops.ack()   [Pending -> Active]
 HW --> CORE : hwirq   (无硬件 ack 的控制器返回 NO_IRQ)
 CORE -> CORE : virq = 按 hwirq 查表\n[无绑定/未注册/已屏蔽 -> spurious + trace, 仍要 eoi]
@@ -28,10 +28,10 @@ CORE -> CORE : virq = 按 hwirq 查表\n[无绑定/未注册/已屏蔽 -> spurio
 alt 直连线(Stage 1 唯一形态)
   CORE -> ISR : desc->isr(desc->arg)\nISR 契约: 最小工作, 禁阻塞/malloc/持锁返回
 else FAST 级联域(状态寄存器内存映射)
-  CORE -> DOM : 循环 { pending() -> 逐子 handler -> ack(sub) }\n直到位图空(上限 TG_IRQ_DEMUX_MAX_ROUND)\n无属主的子中断 -> domain_ops.mask(sub)
+  CORE -> DOM : 循环 { pending() -> 逐子 handler -> ack(sub) }\n直到位图空(上限 BR_IRQ_DEMUX_MAX_ROUND)\n无属主的子中断 -> domain_ops.mask(sub)
 else SLOW 级联域(状态需总线事务, Stage 2 起)
   CORE -> HW : pic_ops.mask(parent_hwirq)\nISR 内只碰 MMIO(IR-10 前提: 父线必为 PIC 直连线)
-  CORE -> BH : busy 0->1; tg_work_submit(demux_slow)\n[Stage 2 才存在; Stage 1 无 bh => SLOW 域不可用]
+  CORE -> BH : busy 0->1; br_work_submit(demux_slow)\n[Stage 2 才存在; Stage 1 无 bh => SLOW 域不可用]
   note over CORE, BH
     提交失败(-EAGAIN)必须回滚
     清 busy + unmask 父线 + 计数 + trace
@@ -42,13 +42,13 @@ end
 
 CORE -> HW : pic_ops.eoi()\n[Active -> Inactive; 若仍 pending 则立即重入]
 CORE -> CORE : 断言 cpu->irq_depth == 0\n(INV-C / IR-15: 禁持锁跨 ISR 返回)
-CORE -> CORE : 窗口化风暴判定(§8.3) + TG_TRACE_EVT(IRQ_EXIT, virq)
+CORE -> CORE : 窗口化风暴判定(§8.3) + BR_TRACE_EVT(IRQ_EXIT, virq)
 note over CORE
   不做"出口衰减"
   衰减会让计数永远到不了阈值
   => 检测器恒失效
   (判据 = 窗口内占比, 非"相邻")
 end note
-CORE -> EPI : tg_sched_irq_epilogue()\n[Stage 1 空; v1 coop 空; v2 preempt 可能切栈]
+CORE -> EPI : br_sched_irq_epilogue()\n[Stage 1 空; v1 coop 空; v2 preempt 可能切栈]
 EPI --> ASM : 恢复现场 -> ERET (硬件恢复 PSTATE.I)
 @enduml

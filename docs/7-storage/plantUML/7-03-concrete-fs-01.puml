@@ -5,16 +5,16 @@ participant "vfs-core" as VF
 participant "littlefs" as LF
 participant "flash 驱动" as FL
 APP -> PX: write(fd, buf, 512)
-PX -> VF: tg_file_write(file, buf, 512)
+PX -> VF: br_file_write(file, buf, 512)
 VF -> LF: fops->write(file, buf, 512)
 LF -> LF: COW 写入数据与元数据
 LF -> FL: flash_ops.program(addr, buf, n)
-FL -> FL: tg_mm_cache_flush + 页编程
+FL -> FL: br_mm_cache_flush + 页编程
 LF --> VF: 512
 VF --> PX: 512
 PX --> APP: 512
 APP -> PX: fsync(fd)
-PX -> VF: tg_file_fsync(file)
+PX -> VF: br_file_fsync(file)
 VF -> LF: fops->fsync(file)
 LF -> LF: 提交元数据对(掉电安全点)
 LF -> FL: flash_ops.sync()

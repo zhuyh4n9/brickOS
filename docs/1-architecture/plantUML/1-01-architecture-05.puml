@@ -2,7 +2,7 @@
 skinparam componentStyle rectangle
 
 [APP / svc-posix\nopen/read/write(fd)] as TOP
-[VFS = vfs-core 插件\ntg_open 挂载表·单路由 · v1.0] as VFS
+[VFS = vfs-core 插件\nbr_open 挂载表·单路由 · v1.0] as VFS
 [fs/tmpfs — rootfs(D21)\nRAM FS, 挂 / 兜底] as TMP
 [fs/devfs — /dev 设备节点(D21)\n实时枚举 dev-core 注册表] as DFS
 [littlefs(可写, v1.0, D17)] as FS1
@@ -14,14 +14,14 @@ skinparam componentStyle rectangle
 [QSPI-NOR 驱动] as DRV2
 
 TOP --> VFS : fd
-VFS --> TMP : tg_fs_ops
-VFS --> DFS : tg_fs_ops
-VFS --> FS1 : tg_fs_ops
-VFS --> FS2 : tg_fs_ops
-FS1 --> FL : tg_flash_ops(真硬件)
+VFS --> TMP : br_fs_ops
+VFS --> DFS : br_fs_ops
+VFS --> FS1 : br_fs_ops
+VFS --> FS2 : br_fs_ops
+FS1 --> FL : br_flash_ops(真硬件)
 FS1 ..> BD : bdev 适配(QEMU 测试)
-FS2 --> BD : tg_bdev_ops
-BD --> PC : tg_bdev_ops(可堆叠)
+FS2 --> BD : br_bdev_ops
+BD --> PC : br_bdev_ops(可堆叠)
 PC --> DRV1
 BD ..> DRV1 : 未组合 cache 直连
 FL --> DRV2

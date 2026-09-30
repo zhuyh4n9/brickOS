@@ -48,22 +48,22 @@
 deviceXXX(具体器件)        uart-pl011 / qspi-nor / virtio-blk / PMIC / …
    │  实现 ops 表并注册
    ▼
-具体设备类(class)          cdev-core(tg_cdev_ops;flash 子型 tg_flash_ops)
-   │                       bdev-core(tg_bdev_ops, 见 7-02-bdev §1)
-   │  tg_cdev_register / tg_flash_register / tg_bdev_register
+具体设备类(class)          cdev-core(br_cdev_ops;flash 子型 br_flash_ops)
+   │                       bdev-core(br_bdev_ops, 见 7-02-bdev §1)
+   │  br_cdev_register / br_flash_register / br_bdev_register
    ▼
 dev-core(通用设备)          唯一扁平命名空间、命名规则、调用语义/错误模型、
    │                       ioctl 编码、子分类注册协议(§2/§3)
    │  fs/devfs 枚举注册表 → /dev/<name> 节点 + open_file 钩子
    ▼
-VFS(vfs-core)              tg_open 挂载表 · tg_file_t / tg_file_ops(7-01-vfs §1/§2)
+VFS(vfs-core)              br_open 挂载表 · br_file_t / br_file_ops(7-01-vfs §1/§2)
    │
    ▼
 消费者                     APP(POSIX 经 svc-posix fd 表) / native 直调
 ```
 
 要点:
-- **每一层都可独立存在**: 器件不必注册(形态 C), 设备类不必上行到 VFS(形态 B), 只有需要 `tg_open` 统一命名空间时才引 VFS(形态 A)。
+- **每一层都可独立存在**: 器件不必注册(形态 C), 设备类不必上行到 VFS(形态 B), 只有需要 `br_open` 统一命名空间时才引 VFS(形态 A)。
 - **层的职责不串**: dev-core 只管"是个设备"(命名/语义/注册表), 形状归子分类; devfs 只做**投影**(注册表 → 文件节点), 不拥有设备; vfs-core 零设备知识(D21)。
 - 图中 VFS 及其以上**不是设备管理的必需部分**——本节的形态 B/C 说明其余两种合法组合。
 
@@ -74,17 +74,17 @@ VFS(vfs-core)              tg_open 挂载表 · tg_file_t / tg_file_ops(7-01-vfs
 **形态 A — 体系化接入 VFS(全栈)**: 器件 → 设备类 → dev-core → devfs → VFS。
 
 - 组成: `deviceXXX` + 对应 `*-core` + `dev-core` + `vfs-core` + `fs/devfs`(+ `fs/tmpfs` rootfs 可选)
-- 设备可见性: 以 **`/dev/<name>`** 出现; 打开/session 经子分类 **open_file 钩子**(cdev-core 的通用 `tg_file_ops` 适配层)接入
-- 消费者: APP 经 svc-posix fd 表(POSIX)或 native `tg_open`
+- 设备可见性: 以 **`/dev/<name>`** 出现; 打开/session 经子分类 **open_file 钩子**(cdev-core 的通用 `br_file_ops` 适配层)接入
+- 消费者: APP 经 svc-posix fd 表(POSIX)或 native `br_open`
 - 适用: **POSIX 产品、需要"文件与设备同一命名空间/同一句柄"的产品**(SD-1 单路由的完整收益)
 - 代价: 链入 vfs-core + devfs; 每次打开多一层挂载表路由
 
 **形态 B — 只用设备框架(无 VFS)**: 器件 → 设备类 → dev-core, 到此为止。
 
 - 组成: `deviceXXX` + 对应 `*-core` + `dev-core`(**不链** `vfs-core` / `fs/devfs` / 任何 FS)
-- 设备可见性: 消费者经**类 API 直取**——`tg_cdev_*` 会话、`tg_flash_get("nor0")`、`tg_bdev_get("blk0")`
+- 设备可见性: 消费者经**类 API 直取**——`br_cdev_*` 会话、`br_flash_get("nor0")`、`br_bdev_get("blk0")`
 - 保留: 注册表与命名唯一性、调用语义/错误模型(SD-6/SD-10)、子分类纪律、ops 预留(D22)、golden/门禁(SD-11/SD-12)
-- 失去: `/dev` 命名空间; cdev-core 的 `tg_file_ops` 适配层与 `poll`/`close` 的 file 面**不再必需**
+- 失去: `/dev` 命名空间; cdev-core 的 `br_file_ops` 适配层与 `poll`/`close` 的 file 面**不再必需**
 - 适用: **简易 OS / 无文件系统需求的产品**——裸机式控制件、只有 UART/GPIO/ADC 的设备、不需要路径概念的组合
 - 这正是 **D19 "框架件 = 可裁剪插件"** 的直接兑现: 不选 vfs-core 就没有 VFS 成本
 
@@ -116,10 +116,10 @@ VFS(vfs-core)              tg_open 挂载表 · tg_file_t / tg_file_ops(7-01-vfs
 
 | 框架件 | 提供(契约) | 依赖 |
 |---|---|---|
-| **dev-core** | **通用设备**: 注册表(唯一扁平命名空间)、命名规则、调用语义/错误模型、ioctl 编码、**子分类注册协议**(§2) | core native + vfs-core(类型, 仅头文件——open_file 钩子引用 `tg_file_ops`, §2) |
-| **cdev-core** | **字符设备子分类**: `tg_cdev_ops`(会话形状)+ `tg_cdev_register`; **flash 子型**: `tg_flash_ops` + `tg_flash_register`(**spi-nor/nand 对接于此**); **open_file 钩子实现**(D21) | **dev-core + vfs-core**(类型/适配钩子) |
-| **bdev-core** | **块设备子分类**: `tg_bdev_ops`/几何/可堆叠、分区映射器(SD-9) | **dev-core** |
-| **vfs-core** | **`tg_file_t`/`tg_file_ops` 契约、`tg_open` 挂载表·单路由、挂载表、`tg_fs_ops`、目录语义** | **core(纯 VFS, D21: 撤销设备路由)** |
+| **dev-core** | **通用设备**: 注册表(唯一扁平命名空间)、命名规则、调用语义/错误模型、ioctl 编码、**子分类注册协议**(§2) | core native + vfs-core(类型, 仅头文件——open_file 钩子引用 `br_file_ops`, §2) |
+| **cdev-core** | **字符设备子分类**: `br_cdev_ops`(会话形状)+ `br_cdev_register`; **flash 子型**: `br_flash_ops` + `br_flash_register`(**spi-nor/nand 对接于此**); **open_file 钩子实现**(D21) | **dev-core + vfs-core**(类型/适配钩子) |
+| **bdev-core** | **块设备子分类**: `br_bdev_ops`/几何/可堆叠、分区映射器(SD-9) | **dev-core** |
+| **vfs-core** | **`br_file_t`/`br_file_ops` 契约、`br_open` 挂载表·单路由、挂载表、`br_fs_ops`、目录语义** | **core(纯 VFS, D21: 撤销设备路由)** |
 
 ### 1.4 消费者的依赖声明(manifest)
 
@@ -130,10 +130,10 @@ VFS(vfs-core)              tg_open 挂载表 · tg_file_t / tg_file_ops(7-01-vfs
 | littlefs | **vfs-core** + cdev-core(flash 子型绑定)/ bdev-core(QEMU bdev 适配)+ fs/tmpfs(挂载点父目录) |
 | EROFS | vfs-core + bdev-core |
 | svc-posix | **vfs-core**(open/fd 的底层原语) |
-| uart / can / adc / gpio / display 驱动 | cdev-core(`tg_cdev_register`) |
-| **virtio-hsm(HSM host 链路, v1.x/M5)** | **cdev-core**(`tg_cdev_register`; 注册 `hsm0` → `/dev/hsm0`, 消费者 = `service/hsm-host`) |
-| **QSPI-NOR / NAND 驱动** | **cdev-core**(`tg_flash_register`) |
-| virtio-blk / SD 驱动 | bdev-core(`tg_bdev_register`) |
+| uart / can / adc / gpio / display 驱动 | cdev-core(`br_cdev_register`) |
+| **virtio-hsm(HSM host 链路, v1.x/M5)** | **cdev-core**(`br_cdev_register`; 注册 `hsm0` → `/dev/hsm0`, 消费者 = `service/hsm-host`) |
+| **QSPI-NOR / NAND 驱动** | **cdev-core**(`br_flash_register`) |
+| virtio-blk / SD 驱动 | bdev-core(`br_bdev_register`) |
 
 ![1.3 框架件归属与依赖(D19/D20)](pics/8-01-device-01.png)
 
@@ -147,47 +147,47 @@ VFS(vfs-core)              tg_open 挂载表 · tg_file_t / tg_file_ops(7-01-vfs
 
 **框架件的治理身份**: **插件的身份, core 的纪律**——插件形态 ⇒ 可按组合裁剪(无存储产品不链 vfs-core/bdev-core); core 纪律 ⇒ API 面进 golden/门禁(`docs/1-architecture/1-02-api-contract-governance.md`, D12 机制), 不透明句柄(D14)。这是 core 的第三次收缩: POSIX→接口插件(v0.3), POSIX 运行时→服务(v0.5/D18), **能力框架→框架件(v0.6/D19)**; D20 进一步把设备侧框架**按子分类再切细**。
 
-> **多域消费者(D24, v1.x/M5)**: HSM 完整样例是这套体系的**首个第二产品域消费者**——`io/virtio-hsm` 走**形态 A**(器件 → cdev-core → dev-core → devfs → VFS, `/dev/hsm0`), 消费者为 `service/hsm-host`; 样例的裁剪变体再给**形态 B**(不链 vfs-core, 经 `tg_cdev_*` 会话直取)作对照。设备侧框架件在此**零改动**——这是 §1.2 "形态选择是组合决策" 的实测。详见 `docs/9-app/9-02-hsm-sample.md` §7.2/§10。
+> **多域消费者(D24, v1.x/M5)**: HSM 完整样例是这套体系的**首个第二产品域消费者**——`io/virtio-hsm` 走**形态 A**(器件 → cdev-core → dev-core → devfs → VFS, `/dev/hsm0`), 消费者为 `service/hsm-host`; 样例的裁剪变体再给**形态 B**(不链 vfs-core, 经 `br_cdev_*` 会话直取)作对照。设备侧框架件在此**零改动**——这是 §1.2 "形态选择是组合决策" 的实测。详见 `docs/9-app/9-02-hsm-sample.md` §7.2/§10。
 
 ## 2. 设备注册表(dev-core)
 
 - 唯一扁平命名空间: 设备名 `[a-z][a-z0-9]*`, 无斜杠(devfs 节点名 = 路径分量)
-- **子分类注册协议**(框架件间协议, 不入 `docs/3-os-core/3-01-core-api-list.md` 通用清单): 子分类框架(cdev-core/bdev-core)的注册 API 经"依赖 dev-core"把条目入同一张表——`/dev/nor0`(经 devfs)、`tg_flash_get("nor0")`、`tg_bdev_get("blk0")` 看到同一对象
+- **子分类注册协议**(框架件间协议, 不入 `docs/3-os-core/3-01-core-api-list.md` 通用清单): 子分类框架(cdev-core/bdev-core)的注册 API 经"依赖 dev-core"把条目入同一张表——`/dev/nor0`(经 devfs)、`br_flash_get("nor0")`、`br_bdev_get("blk0")` 看到同一对象
 
 ```c
 /* dev-core: 通用注册表条目(子分类框架调用; 形状解释权在子分类框架) */
 typedef struct {
-    uint16_t class_id;     /* TG_CLASS_CDEV / TG_CLASS_BDEV / ... (append-only) */
-    void    *class_priv;   /* 子分类框架的 ops 表指针(如 tg_cdev_ops*) */
+    uint16_t class_id;     /* BR_CLASS_CDEV / BR_CLASS_BDEV / ... (append-only) */
+    void    *class_priv;   /* 子分类框架的 ops 表指针(如 br_cdev_ops*) */
     /* D21/D23: 可文件化钩子——devfs 设备节点 lookup 时调用, 返回文件 ops 集与私有 */
-    int (*open_file)(void *dev_priv, const tg_file_ops **fops, void **fpriv);
+    int (*open_file)(void *dev_priv, const br_file_ops **fops, void **fpriv);
     void *dev_priv;        /* 驱动私有 */
-} tg_dev_class_entry_t;
-int tg_dev_add(const char *name, const tg_dev_class_entry_t *entry);
+} br_dev_class_entry_t;
+int br_dev_add(const char *name, const br_dev_class_entry_t *entry);
 ```
 
-- **钩子语义演化(D23)**: 自 D21 的"直接产出 `tg_file_t`"改为"返回 **{fops, fpriv}**"——配合 inode 走查模型(devfs 设备节点 inode 携带该二元组); cdev-core 提供通用会话适配 `tg_file_ops`(open 建会话/read/write/…转发)
+- **钩子语义演化(D23)**: 自 D21 的"直接产出 `br_file_t`"改为"返回 **{fops, fpriv}**"——配合 inode 走查模型(devfs 设备节点 inode 携带该二元组); cdev-core 提供通用会话适配 `br_file_ops`(open 建会话/read/write/…转发)
 - 设备名唯一性 = manifest 组合校验主键(§6)
 - dev-core **不定义任何具体 ops 形状**——形状归子分类框架(§3), 新增子分类不动 dev-core
-- `open_file` 钩子签名引用 `tg_file_ops`(vfs-core 类型)⇒ dev-core 对 vfs-core 为**类型依赖**(仅头文件, 无 init/call 依赖)
+- `open_file` 钩子签名引用 `br_file_ops`(vfs-core 类型)⇒ dev-core 对 vfs-core 为**类型依赖**(仅头文件, 无 init/call 依赖)
 
 ## 3. 设备子分类(D20: dev-core 通用, 向下分 cdev/bdev)
 
 | 子分类 | 框架件 | ops 形状 | 注册 API | 例子 |
 |---|---|---|---|---|
-| **cdev**(字符设备) | **cdev-core** | 会话式 open 工厂(`tg_cdev_ops`) | `tg_cdev_register` | uart / can / adc / gpio / display |
-| **cdev · flash 子型** | **cdev-core** | read/program/erase/sync(`tg_flash_ops`) | `tg_flash_register` | **spi-nor / nand** |
-| **bdev**(块设备) | **bdev-core**(依赖 dev-core) | 扇区 read/write/flush + 几何 | `tg_bdev_register` | virtio-blk / SD / eMMC |
+| **cdev**(字符设备) | **cdev-core** | 会话式 open 工厂(`br_cdev_ops`) | `br_cdev_register` | uart / can / adc / gpio / display |
+| **cdev · flash 子型** | **cdev-core** | read/program/erase/sync(`br_flash_ops`) | `br_flash_register` | **spi-nor / nand** |
+| **bdev**(块设备) | **bdev-core**(依赖 dev-core) | 扇区 read/write/flush + 几何 | `br_bdev_register` | virtio-blk / SD / eMMC |
 
 **设计理由**:
 - **通用与形状分离**: dev-core 只管"是个设备"(命名/语义/注册表), 形状归子分类 ⇒ 新增子分类(netdev, O-S5)不动 dev-core
-- **spi-nor/nand 对接 cdev-core**(D20): flash 是**字符型介质**(按地址 program/erase, 无磁盘式扇区抽象——擦除以 block 为粒度, 见 `tg_flash_geom_t`), 归字符设备子分类; 其 ops 形状是 cdev 的一个**子型**, 与 littlefs `lfs_config` 1:1(零胶水绑定)
+- **spi-nor/nand 对接 cdev-core**(D20): flash 是**字符型介质**(按地址 program/erase, 无磁盘式扇区抽象——擦除以 block 为粒度, 见 `br_flash_geom_t`), 归字符设备子分类; 其 ops 形状是 cdev 的一个**子型**, 与 littlefs `lfs_config` 1:1(零胶水绑定)
 - 磁盘型介质(无擦除、有 flush)语义不同 → bdev 子分类; 强行统一会把两类驱动都写别扭(SD-2 延续)
 - **设备接入 VFS(D21)**: 注册表中的设备自动出现为 **/dev/<name> 节点**(fs/devfs 挂载于 /dev, 实时枚举); 打开经类 open_file 钩子——设备生命周期归驱动注册, 文件系统只做投影(`7-03-concrete-fs` §3)
 
 ```c
 /* ---- cdev(cdev-core 契约): 会话式字符设备形状 ---- */
-typedef struct tg_cdev_ops {
+typedef struct br_cdev_ops {
     int     (*open)(void *dev_priv, uint32_t flags, void **sess);
     ssize_t (*read)(void *sess, void *buf, size_t n);
     ssize_t (*write)(void *sess, const void *buf, size_t n);
@@ -197,16 +197,16 @@ typedef struct tg_cdev_ops {
     /* D22: 电源管理(设备级, dev_priv——非会话级); NULL = 不支持(-ENOTSUP) */
     int     (*suspend)(void *dev_priv);
     int     (*resume)(void *dev_priv);
-} tg_cdev_ops;
-int tg_cdev_register(const char *name, const tg_cdev_ops *, void *dev_priv);
+} br_cdev_ops;
+int br_cdev_register(const char *name, const br_cdev_ops *, void *dev_priv);
 
 /* ---- cdev · flash 子型(cdev-core 契约, 与 littlefs lfs_config 1:1) ---- */
 typedef struct {
     uint32_t read_size, prog_size;   /* 最小读粒度 / 编程页大小 */
     uint32_t block_size;             /* 擦除块 */
     uint32_t block_count;
-} tg_flash_geom_t;
-typedef struct tg_flash_ops {
+} br_flash_geom_t;
+typedef struct br_flash_ops {
     int (*read)  (void *priv, uint32_t addr, void *buf, size_t n);
     int (*program)(void *priv, uint32_t addr, const void *buf, size_t n);
     int (*erase) (void *priv, uint32_t block_idx);
@@ -215,13 +215,13 @@ typedef struct tg_flash_ops {
     int (*ioctl)(void *priv, uint32_t cmd, void *arg);
     int (*suspend)(void *priv);
     int (*resume)(void *priv);
-} tg_flash_ops;
-int tg_flash_register(const char *name, const tg_flash_ops *,
-                      const tg_flash_geom_t *, void *priv);
-const tg_flash_ops *tg_flash_get(const char *name, void **priv);
+} br_flash_ops;
+int br_flash_register(const char *name, const br_flash_ops *,
+                      const br_flash_geom_t *, void *priv);
+const br_flash_ops *br_flash_get(const char *name, void **priv);
 ```
 
-**统一预留槽位(D22)**: 所有设备类别 ops 预留 `ioctl` / `suspend` / `resume`(suspend/resume 恒为设备级; ioctl 于 cdev 为会话级(`sess` 参数)、于 bdev/flash 为设备级); file 面向的 `poll` / `close` 由 **cdev-core** 通用 `tg_file_ops` 适配层提供(devfs 经 open_file 钩子取得该适配)。NULL = -ENOTSUP。
+**统一预留槽位(D22)**: 所有设备类别 ops 预留 `ioctl` / `suspend` / `resume`(suspend/resume 恒为设备级; ioctl 于 cdev 为会话级(`sess` 参数)、于 bdev/flash 为设备级); file 面向的 `poll` / `close` 由 **cdev-core** 通用 `br_file_ops` 适配层提供(devfs 经 open_file 钩子取得该适配)。NULL = -ENOTSUP。
 **动机 = D14**: ops 结构布局入 golden——后补字段 = 布局变更 = 二进制不兼容; **预留即免破坏**。suspend/resume 为电源管理钩子: v1 无统一调用方, v2 由 service/pm(或平台 PM 流程)经注册表枚举调用(O-S6)。
 
 (bdev 子分类契约见 `7-02-bdev` §1。)
@@ -237,9 +237,9 @@ const tg_flash_ops *tg_flash_get(const char *name, void **priv);
 
 ```c
 /* 与 Linux _IOC 位布局一致: dir[31:30] size[29:16] type[15:8] nr[7:0] */
-#define TG_IOR(type, nr, size)   ...
-#define TG_IOW(type, nr, size)   ...
-#define TG_IOWR(type, nr, size)  ...
+#define BR_IOR(type, nr, size)   ...
+#define BR_IOW(type, nr, size)   ...
+#define BR_IOWR(type, nr, size)  ...
 /* type = 设备/驱动族魔数字母(每驱动族一个, 全局唯一分配): 'u' uart, 'c' can, 'b' bdev, 'f' flash, 'd' display ... */
 ```
 
@@ -251,12 +251,12 @@ const tg_flash_ops *tg_flash_get(const char *name, void **priv);
 
 | 纪律 | 内容 | 执法 |
 |---|---|---|
-| ISR 纪律 | ISR 最小工作 → `tg_work_submit`; 禁阻塞/malloc/持锁返回 | conformance + 评审清单 |
-| DMA/cache 纪律 | `tg_dma_alloc` 分配; 传输前后 `tg_mm_cache_flush/invalidate`(R4) | conformance + 真硬件 M4 |
+| ISR 纪律 | ISR 最小工作 → `br_work_submit`; 禁阻塞/malloc/持锁返回 | conformance + 评审清单 |
+| DMA/cache 纪律 | `br_dma_alloc` 分配; 传输前后 `br_mm_cache_flush/invalidate`(R4) | conformance + 真硬件 M4 |
 | 资源声明 | manifest: IRQ 号 / DMA 通道 / 引脚 / RAM 预算 | 组合期冲突检测(主文档 §6.4) |
 
-- **框架件依赖声明(D19/D20, §1)**: uart/can/spi-nor/nand 驱动→**cdev-core**(`tg_cdev_register`/`tg_flash_register`), 块设备驱动→**bdev-core**, FS→vfs-core; init-DAG 保证框架件先于消费者初始化
-- **级联驱动**(PMIC/GPIO 控制器): 实现 `tg_irq_domain_ops` 而非裸 ISR; 子中断消费者用 `tg_irq_register_child`——子 handler 契约随域类型(FAST=ISR 纪律, SLOW=线程上下文, `docs/3-os-core/3-01-core-api-list.md` §8.1)
+- **框架件依赖声明(D19/D20, §1)**: uart/can/spi-nor/nand 驱动→**cdev-core**(`br_cdev_register`/`br_flash_register`), 块设备驱动→**bdev-core**, FS→vfs-core; init-DAG 保证框架件先于消费者初始化
+- **级联驱动**(PMIC/GPIO 控制器): 实现 `br_irq_domain_ops` 而非裸 ISR; 子中断消费者用 `br_irq_register_child`——子 handler 契约随域类型(FAST=ISR 纪律, SLOW=线程上下文, `docs/3-os-core/3-01-core-api-list.md` §8.1)
 - 平台差异(pinmux/时钟/中断号/region)全部由 Platform 插件数据提供(主文档 §8 三层模式)——**驱动代码板级无关**, 换板只换 Platform 插件
 
 ## 7. 决策记录(本篇)
@@ -270,7 +270,7 @@ const tg_flash_ops *tg_flash_get(const char *name, void **priv);
 | SD-11 | **框架件归属(D19)**: file/open/VFS = vfs-core; 通用设备 = dev-core; bdev = bdev-core(依赖 dev-core); littlefs → vfs-core | 用户指定; core 第三次收缩; 框架件 = 插件身份(可裁剪) + core 纪律(golden/门禁)——**可裁剪的具体形态见 §1.2(形态 A/B/C)** |
 | SD-12 | **设备子分类框架化(D20)**: cdev-core 独立框架件(依赖 dev-core); spi-nor/nand → cdev-core(flash 子型); ~~vfs-core 依赖 dev-core + cdev-core~~ → **SD-13/D21 修订**: 撤销; netdev 的答案空间 = 第三个子分类框架(O-S5) | 用户指定; 通用/形状分离; 子分类对称可扩展 |
 | SD-13 | **设备接入 VFS(D21)**: fs/devfs 把 dev-core 注册表发布为 /dev 节点; 类 open_file 钩子(devfs 不依赖子分类形状); **vfs-core 纯化**(撤销设备路由, 依赖收缩到 core); fs/tmpfs 挂载为 rootfs("/") | Linux devtmpfs/rCore DeviceFS 同型; 单路由 = 单一语义; 用户指定 |
-| SD-14 | **设备 ops 统一预留(D22)**: `ioctl`/`suspend`/`resume` 槽位全类别预留(poll/close 由 cdev-core 通用 tg_file_ops 适配层提供, devfs 经钩子取得); NULL → -ENOTSUP | D14: ops 布局入 golden, **预留即免二进制破坏**; PM 设备级钩子(suspend/resume); 用户指定 |
+| SD-14 | **设备 ops 统一预留(D22)**: `ioctl`/`suspend`/`resume` 槽位全类别预留(poll/close 由 cdev-core 通用 br_file_ops 适配层提供, devfs 经钩子取得); NULL → -ENOTSUP | D14: ops 布局入 golden, **预留即免二进制破坏**; PM 设备级钩子(suspend/resume); 用户指定 |
 
 ## 8. 风险与开放问题(本篇)
 
@@ -281,5 +281,5 @@ const tg_flash_ops *tg_flash_get(const char *name, void **priv);
 | O-S4 | 开放 | flash 子型若膨胀(NAND OOB)可在 cdev-core 内扩展或对称拆出 flash-core(依赖 cdev-core)——真实需求出现再定 |
 | O-S5 | 开放 | **netdev(v2.0 网络栈前置)**: D20 子分类模型给出答案空间——**netdev-core 作为第三个子分类框架**(依赖 dev-core, 对称 cdev/bdev); `service/lwip` 对接之; v2.0 设计前定(`docs/1-architecture/1-03-roadmap.md` v2.0 插件清单 ★) |
 | O-S6 | 开放 | **PM 调用方(v2)**: suspend/resume 的统一调用方——service/pm 经 dev-core 注册表枚举, 或平台 PM 流程; 与 sched-tt/低功耗 idle 的组合语义(挂起顺序/失败回滚) |
-| O-S7 | 开放 | **形态 B(无 VFS)的类型依赖成本**: dev-core 的 `open_file` 钩子签名引用 `tg_file_ops`(vfs-core 类型)⇒ 不选 vfs-core 的组合仍会拉进该头文件(仅类型, 无 init/call 依赖, §2)。选项: (a) 接受——头文件级类型依赖不进镜像; (b) 钩子做成可选面(条件编译/弱声明); (c) 钩子下沉到 cdev-core(dev-core 零 vfs 类型)。取舍取决于形态 B 的真实裁剪收益(§1.2) |
+| O-S7 | 开放 | **形态 B(无 VFS)的类型依赖成本**: dev-core 的 `open_file` 钩子签名引用 `br_file_ops`(vfs-core 类型)⇒ 不选 vfs-core 的组合仍会拉进该头文件(仅类型, 无 init/call 依赖, §2)。选项: (a) 接受——头文件级类型依赖不进镜像; (b) 钩子做成可选面(条件编译/弱声明); (c) 钩子下沉到 cdev-core(dev-core 零 vfs 类型)。取舍取决于形态 B 的真实裁剪收益(§1.2) |
 | O-S8 | 开放 | **形态 C 的组合期可见性**: standalone 器件不入注册表 ⇒ 设备名唯一性与类契约合规无从校验(资源冲突仍由 manifest 覆盖)。是否需要"轻注册"(仅入册供校验、不上行 VFS→形态 B)作为 C 的推荐升级路径, 待真实组合评审后定 |

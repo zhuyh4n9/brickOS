@@ -43,7 +43,7 @@
 
 ## 2. tmpfs(v1.0, rootfs — D21)
 
-- **RAM 文件系统**: 节点与数据均出自 core 堆(`tg_malloc`); 完整文件语义(read/write/lseek/truncate/unlink/rename/mkdir/stat)
+- **RAM 文件系统**: 节点与数据均出自 core 堆(`br_malloc`); 完整文件语义(read/write/lseek/truncate/unlink/rename/mkdir/stat)
 - **挂载为 rootfs("/")**: 命名空间骨架——/dev、/data、/tmp 等目录由 manifest **预建目录列表**生成
 - 用途: rootfs 兜底(一切未匹配挂载点的路径落于此)、/tmp 临时文件、**无介质产品也能拥有完整 VFS 命名空间**
 - 数据介质归 littlefs/EROFS——tmpfs 掉电不保持, 这是角色分工不是缺陷
@@ -52,16 +52,16 @@
 
 **所有设备经 devfs 接入 VFS 管理**(D21, Linux devtmpfs / rCore DeviceFS 同型):
 
-- 节点 = **dev-core 注册表实时枚举**: `tg_cdev/tg_flash/tg_bdev_register` 即出现节点(注册即上线), 无持久化
+- 节点 = **dev-core 注册表实时枚举**: `br_cdev/br_flash/br_bdev_register` 即出现节点(注册即上线), 无持久化
 - **inode 映射(D23)**: 根 inode = 注册表投影; `inode_ops.lookup(name)` → 设备节点**文件 inode**({fops, fpriv} 由类 **open_file 钩子**给出, `8-01-device` §2)→ `fops->open` 建会话
-  - cdev-core 提供通用会话适配 `tg_file_ops`(open 建会话/read/write/ioctl/poll/close 转发; lseek/fsync 槽位 NULL → -ENOTSUP)
-  - bdev 的 raw 块访问(/dev/blk0)钩子 = **v2**(v1 置 NULL, FS 经 `tg_bdev_get` 类 API 绑定)
+  - cdev-core 提供通用会话适配 `br_file_ops`(open 建会话/read/write/ioctl/poll/close 转发; lseek/fsync 槽位 NULL → -ENOTSUP)
+  - bdev 的 raw 块访问(/dev/blk0)钩子 = **v2**(v1 置 NULL, FS 经 `br_bdev_get` 类 API 绑定)
 - readdir/stat 列设备名与类别; unlink/mkdir → -ENOTSUP(**设备生命周期归驱动注册, 不归文件系统**)
 - devfs 依赖 dev-core(枚举/钩子协议)、cdev-core(init 依赖, 保证钩子就绪)与 vfs-core(挂载)——**不依赖任何子分类的 ops 形状**
 
 ## 4. littlefs(v1.0, D17)
 
-- **flash 子型绑定 1:1**: `tg_flash_ops`(**cdev-core 的 flash 子型, spi-nor/nand 对接于此**, `8-01-device` §3)与 littlefs 的 `lfs_config` 块设备回调一一对应, 适配层近零
+- **flash 子型绑定 1:1**: `br_flash_ops`(**cdev-core 的 flash 子型, spi-nor/nand 对接于此**, `8-01-device` §3)与 littlefs 的 `lfs_config` 块设备回调一一对应, 适配层近零
 - **inode 映射(D23)**: 目录 inode = **瞬态路径前缀包装**(`lookup(dir, name)` = `lfs_stat(前缀+name)`); 文件 inode 私有尾 = 路径; `fops->open` 建立 lfs_file 会话——无 inode cache, SD-3 不变
 - **QEMU bdev 适配器**(v1 工件): `program→write`, `erase→nop`(磁盘无擦除), `sync→flush`——仅测试用途, **wear-leveling 在磁盘介质上无意义**, 代码注释与文档双标注(R-S2)
 - **掉电安全**: COW + 元数据对提交; `fsync` 路径见 §7
@@ -98,7 +98,7 @@
 ## 8. 决策关联
 
 - **D17**(主文档): littlefs v1.0(数据) + EROFS v2.0(代码/资产)分工
-- **D21**(主文档): tmpfs rootfs + 设备经 devfs 接入 VFS; tg_open 单路由(SD-1 修订)
+- **D21**(主文档): tmpfs rootfs + 设备经 devfs 接入 VFS; br_open 单路由(SD-1 修订)
 - **D22**(主文档): 设备 ops 统一预留 ioctl/PM 钩子(`8-01-device` §3, SD-14)
 - **D23**(主文档): VFS ops 四层分层(super/inode/file/dentry 预留, `7-01-vfs` §2, SD-15)
 - **SD-3/SD-4**(`7-01-vfs`): 瞬态 inode 走查 + 静态挂载计划

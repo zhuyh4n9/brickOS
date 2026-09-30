@@ -1,4 +1,4 @@
-# TangramOS 设计文档索引
+# brickOS 设计文档索引
 
 > **编号规则**: 文件名 = `<章节号>-<章节内序号>-<文档名>.md`, 目录 = 章节 `<章节号>-<章节名>`。
 > **章节号** = 文档在 11 个章节中的归属(章节调整 ⇒ 目录与文件名前缀一起改); **章节内序号** = 该篇在本章节内的顺序(01 起, 新增文档顺排到本章末尾)。
@@ -13,11 +13,11 @@
 | | | [`1-02-api-contract-governance.md`](1-architecture/1-02-api-contract-governance.md) 契约治理(D12–D15 + §2.6 管理机制) | 成文 |
 | | | [`1-03-roadmap.md`](1-architecture/1-03-roadmap.md) 版本路线图 + DoD 清单 | 成文 |
 | 2 | **toolchain**(工具链) | [`2-01-toolchain.md`](2-toolchain/2-01-toolchain.md) 工具链总纲(CLI/manifest 工具实现/golden-CI) | 骨架 |
-| | | [`2-02-tg-arch.md`](2-toolchain/2-02-tg-arch.md) **tg 工具架构设计**(备选方案/权衡/开放问题) | 讨论稿 |
+| | | [`2-02-br-arch.md`](2-toolchain/2-02-br-arch.md) **br 工具架构设计**(备选方案/权衡/开放问题) | 讨论稿 |
 | 3 | **os core**(内核核心) | [`3-01-core-api-list.md`](3-os-core/3-01-core-api-list.md) native API 清单与详细设计(CA-1~10) | 成文 |
 | | | [`3-02-int.md`](3-os-core/3-02-int.md) 中断管理(IRQ 框架/PIC 抽象/生命周期/屏蔽三层/级联域/fault/IR-1~15) | 成文 |
-| | | [`3-03-sched.md`](3-os-core/3-03-sched.md) 调度框架(sched_class/tg_sched_ops) | 骨架 |
-| | | [`3-04-memory.md`](3-os-core/3-04-memory.md) 内存(三池/DMA/tg_mm/布局) | 骨架 |
+| | | [`3-03-sched.md`](3-os-core/3-03-sched.md) 调度框架(sched_class/br_sched_ops) | 骨架 |
+| | | [`3-04-memory.md`](3-os-core/3-04-memory.md) 内存(三池/DMA/br_mm/布局) | 骨架 |
 | | | [`3-05-plugin-mgr.md`](3-os-core/3-05-plugin-mgr.md) **插件管理器**(描述符/生命周期/init-DAG 执行; manifest 语义 → 4-03) | 骨架 |
 | | | [`3-06-service-mgmt.md`](3-os-core/3-06-service-mgmt.md) 服务管理(注册表语义/单一主人/D7) | 骨架 |
 | 4 | **plugin**(插件体系) | [`4-01-plugin-dev.md`](4-plugin/4-01-plugin-dev.md) 插件开发指南(八类路由/通用流程/纪律/合规) | 骨架 |
@@ -49,4 +49,4 @@
 
 **骨架文档的分工**: 主文档(`1-01`)保留全局决策与各子系统概要; 骨架文档是"拆出去深化"的落点——每篇声明范围、大纲、从主文档继承的决策, 待逐篇填实后主文档对应章节收缩为指针(与 7-01–7-03 + 8-01 的拆分模式相同)。
 
-**3-os-core 内的分界**: `3-05-plugin-mgr` = 插件体系运行期管理面(描述符/生命周期/init-DAG 执行); `3-06-service-mgmt` = 服务注册表语义与规则; `2-01-toolchain` = 组合器与 CI 的工具实现(manifest/依赖求解的工具侧); **manifest 与依赖的语义** → `4-03`、`4-04`; **tg 工具自身的架构** → `2-02`。
+**3-os-core 内的分界**: `3-05-plugin-mgr` = 插件体系运行期管理面(描述符/生命周期/init-DAG 执行); `3-06-service-mgmt` = 服务注册表语义与规则; `2-01-toolchain` = 组合器与 CI 的工具实现(manifest/依赖求解的工具侧); **manifest 与依赖的语义** → `4-03`、`4-04`; **br 工具自身的架构** → `2-02`。

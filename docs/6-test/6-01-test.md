@@ -67,12 +67,12 @@
 | id | 用例 | 期望 | 调度 | 平台 |
 |---|---|---|---|---|
 | TC-TASK-001 | create → self==句柄 → join 回收, exit_code 传递 | join 返回 0, code 一致 | ALL | host |
-| TC-TASK-002 | attr 校验: NULL attr / 栈 < TG_STACK_MIN | `-EINVAL` | ALL | host |
+| TC-TASK-002 | attr 校验: NULL attr / 栈 < BR_STACK_MIN | `-EINVAL` | ALL | host |
 | TC-TASK-003 | join 自身 / 二次 join | `-EINVAL` | ALL | host |
 | TC-TASK-004 | sleep(1ms) 实测时长 | ≥ 1ms(INV-2), 晚到统计 | ALL | host |
 | TC-TASK-005 | sleep_until(已过期期限) | 立即返回 0 | ALL | host |
 | TC-TASK-006 | yield 语义: 就绪队列有另一任务时交错 | coop: 交错发生(强制切换点); preempt/tt: 仅断言不死锁(3-01 §2: yield 为提示) | ALL | host |
-| TC-TASK-007 | 线程从 entry 正常返回(trampoline 路径) | 经 tg_task_exit, 不崩 | ALL | host |
+| TC-TASK-007 | 线程从 entry 正常返回(trampoline 路径) | 经 br_task_exit, 不崩 | ALL | host |
 
 ### 3.2 同步组(TC-SYNC)
 
@@ -86,7 +86,7 @@
 | TC-SYNC-006 | cond signal → wait 返回 | 0(无虚假唤醒) | ALL | host |
 | TC-SYNC-007 | cond broadcast: N 等待者 | 全醒且各自重取锁 | ALL | host |
 | TC-SYNC-008 | cond_wait 超时 | `-ETIMEDOUT`, 持锁状态恢复 | ALL | host |
-| TC-SYNC-009 | `TG_MUTEX_DEFINE` 静态 vs `init` 动态 | 行为等价(CA-2) | ALL | host |
+| TC-SYNC-009 | `BR_MUTEX_DEFINE` 静态 vs `init` 动态 | 行为等价(CA-2) | ALL | host |
 
 ### 3.3 时间组(TC-TIME)
 
@@ -109,7 +109,7 @@
 
 | id | 用例 | 期望 | 调度 | 平台 |
 |---|---|---|---|---|
-| TC-MEM-001 | malloc/free 往返 + 对齐 | ≥ TG_MALLOC_ALIGN | ALL | host |
+| TC-MEM-001 | malloc/free 往返 + 对齐 | ≥ BR_MALLOC_ALIGN | ALL | host |
 | TC-MEM-002 | 碎片压力: 交错 alloc/free 后最大块仍可分配 | TLSF 有界碎片 | ALL | host |
 | TC-MEM-003 | calloc 零化 / realloc 保内容 | 成立 | ALL | host |
 | TC-MEM-004 | contig: align=4096 分配, free(ptr,size) 回收 | 地址对齐(CA-7) | ALL | host |
@@ -159,7 +159,7 @@
 | TC-HSM-106 | 置换等价: 同一用例子集在 `sched-coop` 与 `sched-preempt`(v2)下行为一致 | 结果一致(源码零改写, 9-02 §10 表 B) | ALL | host(**前置 v2.0**) |
 
 > **M5 DoD 边界**: 上表 **101–105 属 M5**(9-02 §11 A6); **106 前置 sched-preempt(v2.0)**, 不属 M5 DoD —— 9-02 §1.3 已声明 sched-preempt 对样例是"置换维、非前置"。
-> **A1(组合即产品)的执法方式**: 不设行为用例——它由**组合器机械执法**(`tg check` 的插件清单 + 符号表 diff, 9-02 §11 A1), 属层 1/层 3 的管线产物而非层 2 语义用例(1-02 §2.3 分工)。
+> **A1(组合即产品)的执法方式**: 不设行为用例——它由**组合器机械执法**(`br check` 的插件清单 + 符号表 diff, 9-02 §11 A1), 属层 1/层 3 的管线产物而非层 2 语义用例(1-02 §2.3 分工)。
 
 > **本组暴露的契约缺口(待收口)**: 策略拒绝需要 `-EPERM`, 现有错误码子集无权限码——见 `docs/9-app/9-02-hsm-sample.md` §4.2 O-H8 与 `docs/3-os-core/3-01-core-api-list.md` §11 的待收口说明(先例同 INV-1 的 `-ETIMEDOUT`)。
 

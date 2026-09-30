@@ -1,6 +1,6 @@
 # 1-03 — 版本路线图 (v1.0 → v4.0)
 
-> 依据: 用户手写笔记 `1-01-architecture-comment.md`(仓库外、不随库分发)评审意见。OS 已定名 **TangramOS**(D16), 符号前缀 `tg_`。
+> 依据: 用户手写笔记 `1-01-architecture-comment.md`(仓库外、不随库分发)评审意见。OS 已定名 **brickOS**(D16), 符号前缀 `br_`。
 > v3(本轮): 补全**各版本插件清单**(§1 各小节)——清单暴露了网络栈缺口, 补排 `service/lwip` + `io/virtio-net`(v2.0, 需先定 netdev 设备类, `docs/8-device/8-01-device.md` O-S5); 新增"未排期"小节。
 > v4(D20): 设备子分类框架化——新增 **cdev-core**(v1.0 框架件 3→4 件); **spi-nor/nand 对接 cdev-core**(flash 子型); netdev 答案空间 = 第三个子分类框架。
 > v5(D21): **所有设备经 /dev(devfs)接入 VFS**; 新增 **fs/tmpfs(rootfs)+ fs/devfs**(v1.0 插件 15→17 件); vfs-core 纯化(撤销设备路由)。
@@ -93,7 +93,7 @@
 | sched | **sched-coop**(评审排序; 见下"顺序理由") |
 | 插件管理 | 依赖版本区间 + 拓扑排序 + **环检测硬错误** + 版本管理(描述符 v2) |
 | 接口 | native API(全 experimental, **完整清单: `docs/3-os-core/3-01-core-api-list.md`**)+ **svc-posix(D18: POSIX 运行时服务, fd/VFS/stdio/pthread 子集)** + iface-posix 薄皮肤 + iface-min |
-| 框架件 | **dev-core**(通用设备: 注册表/命名/语义/子分类协议)、**cdev-core**(字符设备 + flash 子型, 依赖 dev-core)、**bdev-core**(bdev 子分类, 依赖 dev-core)、**vfs-core**(tg_file/tg_open/挂载表)——D19/D20, `docs/8-device/8-01-device.md` §1/§3 |
+| 框架件 | **dev-core**(通用设备: 注册表/命名/语义/子分类协议)、**cdev-core**(字符设备 + flash 子型, 依赖 dev-core)、**bdev-core**(bdev 子分类, 依赖 dev-core)、**vfs-core**(br_file/br_open/挂载表)——D19/D20, `docs/8-device/8-01-device.md` §1/§3 |
 | 三方移植 | **sqlite 双模式移植作为移植性验证**(主文档 §7.6: 模式 A 直链 svc-posix 跑通, 模式 B native VFS 后端按需)——移植故事是架构的生死线(战略语境) |
 | 存储 | VFS + **tmpfs rootfs + devfs(/dev)**(D21)+ block 层 + 可写 FS(littlefs, D17) |
 | debug | **trace 插件**(环形缓冲, 主文档 §11) + 最小 debug bridge(memread / trace 流) |
@@ -108,8 +108,8 @@
 | `platform/host` | Platform | host 平台(Linux 进程): CI 单测 + 完整 ASan 直通 | — | M3 |
 | `sched-coop` | Scheduler | 协作调度: FIFO 事件队列, 锁退化为 irq 锁 | core | M1 |
 | `dev-core` | 框架件 | **通用设备**: 注册表 + 命名/语义 + ioctl 编码 + 子分类协议(+open_file 钩子, D19–D21) | core | M2 |
-| `cdev-core` | 框架件 | **字符设备子分类**: tg_cdev_ops(含 **PM 钩子预留, D22**)+ flash 子型 tg_flash_ops + open_file 实现(D20–D23) | dev-core + vfs-core(类型) | M2 |
-| `vfs-core` | 框架件 | **纯 VFS**(D21): tg_file/tg_open 挂载表·单路由/挂载表; **ops 四层分层(D23: super/inode/file/dentry 预留)+ lookup 链走查** | core | M2 |
+| `cdev-core` | 框架件 | **字符设备子分类**: br_cdev_ops(含 **PM 钩子预留, D22**)+ flash 子型 br_flash_ops + open_file 实现(D20–D23) | dev-core + vfs-core(类型) | M2 |
+| `vfs-core` | 框架件 | **纯 VFS**(D21): br_file/br_open 挂载表·单路由/挂载表; **ops 四层分层(D23: super/inode/file/dentry 预留)+ lookup 链走查** | core | M2 |
 | `bdev-core` | 框架件 | bdev 子分类 + 几何 + 分区映射器(SD-9, v1.x) | dev-core | M2 |
 | `fs/tmpfs` | FS | **rootfs(D21)**: RAM 文件系统, 挂 "/", 预建 /dev /data /tmp | vfs-core | M2 |
 | `fs/devfs` | FS | **/dev 设备节点(D21)**: 实时枚举 dev-core 注册表, open 经类钩子 | dev-core + cdev-core + vfs-core | M2 |
@@ -123,7 +123,7 @@
 | `iface-min` | Interface | 极简别名层, 直通 native | core | M2 |
 | `app/hello` + conformance | APP | 启动链演示(M0: 直接主循环, 不依赖 iface)+ native API conformance 首版(M3, **用例目录: `docs/6-test/6-01-test.md`**) | —(M0)/iface(M3) | M0/M3 |
 
-注: 框架件、svc-posix 与 fs/tmpfs/fs/devfs 经**依赖闭包**自动进入组合(`tg add` 无需显式列出; 挂载计划含 "/" 或 "/dev" 即拉入); sqlite(三方移植, 模式 A)在 M2 作为移植性验证件, 不属系统插件。
+注: 框架件、svc-posix 与 fs/tmpfs/fs/devfs 经**依赖闭包**自动进入组合(`br add` 无需显式列出; 挂载计划含 "/" 或 "/dev" 即拉入); sqlite(三方移植, 模式 A)在 M2 作为移植性验证件, 不属系统插件。
 
 ### v1.x "walk+" — 真实平台(选配)+ HSM 完整样例
 
@@ -253,7 +253,7 @@
 |---|---|---|
 | 1 | D7(Service 插件边界)/ D8(中断线程化)收口 | 决策记录入主文档 §1 |
 | 2 | **native API 头文件级规格**(第一契约的完整形态: 任务/时间/锁/内存/中断/注册表) | **清单+管理机制已完成**: `docs/3-os-core/3-01-core-api-list.md`(48 函数+3 宏, CA-1~10, 符号导出 §13, 函数规格样例 §2)+ `docs/1-architecture/1-02-api-contract-governance.md` §2.6(生命周期状态机/golden 管线/变更产物清单); 头文件草案待写 |
-| 3 | **tg_sched_ops 完整规格** + sched-coop v1 语义(yield 点、事件队列、work queue 行为) | 规格文档 |
+| 3 | **br_sched_ops 完整规格** + sched-coop v1 语义(yield 点、事件队列、work queue 行为) | 规格文档 |
 | 4 | 插件描述符 + manifest 文件格式定稿(组合器输入) | 格式规范 + 校验规则清单 |
 | 5 | 构建系统与仓库骨架(构建系统选型论证——make/CMake/自研 [?], 见 `docs/2-toolchain/2-01-toolchain.md` §3; 目录布局、链接脚本、QEMU 脚本) | 设计文档 |
 | 6 | host 平台插件架构(core+插件 → Linux 进程的映射规则) | 设计文档 |

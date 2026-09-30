@@ -1,5 +1,5 @@
 @startuml
-' TangramOS 3-02 aarch64 向量表分槽与 fault 路径
+' brickOS 3-02 aarch64 向量表分槽与 fault 路径
 '
 ' ── 布局约束(改图前必读) ──────────────────────────────────────────────
 ' 1) 用活动图(不是组件图): fault 路径的价值在【决策顺序】(extable 优先于 fatal,
@@ -39,17 +39,17 @@ note right
 end note
 
 :异常发生: Sync @ EL1h (0x200);
-:asm 入口桩: 保存现场\n-> tg_fault_enter(frame);
+:asm 入口桩: 保存现场\n-> br_fault_enter(frame);
 :读 ESR_EL1.EC / FAR_EL1 / ELR_EL1\n解出异常类 ec 与 CPU-local 现场(in_fault, curr_virq);
 
 if (in_fault >= 2 ?) then (是: 上一次 fault 的 handler 本身可疑)
-  :tg_panic_bare()\n只轮询 console,不调用任何 handler\n(与 5-01 §2 "panic 通道独立" 同一原则);
+  :br_panic_bare()\n只轮询 console,不调用任何 handler\n(与 5-01 §2 "panic 通道独立" 同一原则);
   stop
 else (否)
 endif
 
 if (ec == Data abort (0x24/0x25) ?) then (是)
-  :tg_extable_lookup(ELR_EL1)\n(ISA 库的只读 .tg_extable 表, 非 native API);
+  :br_extable_lookup(ELR_EL1)\n(ISA 库的只读 .br_extable 表, 非 native API);
   if (命中修复标签 ?) then (是)
     :改 ELR_EL1 -> 修复标签\n设置约定返回值;
     :fault 降级为"函数返回错误码"\n消费者: bridge MEMRD / 驱动 probe;

@@ -1,10 +1,11 @@
-# TangramOS 架构讨论稿 v0.10
+# brickOS 架构讨论稿 v0.11
 
 > 状态: 讨论中的活文档。标注 **[?]** 为待定决策点。所有图为 PlantUML(plantuml 代码块; VSCode/IDEA 插件或 GitLab 原生渲染, CLI: `plantuml docs/*.md` 直出)。
+> v0.11: **OS 更名 brickOS → brickOS(D16 修订)**——原名与既有项目命名冲突; 隐喻由"七巧板"改为"积木"(有限小块搭出任意形状, 语义不变); 符号前缀 `br_` → `br_`、宏 `BR_` → `BR_`、CLI `br` → `br`、链接段 `.br_*` → `.br_*`、golden 组名 `br-*` → `br-*`, 文档与原型分支同步替换(**分支名与仓库名不动**)。
 > v0.10: **D24–D26 HSM 完整样例入 v1.x(新增 M5)**——第二产品域纵向切片(`io/virtio-hsm` + `service/crypto`/`keyring`/`hsm-host`/`seclog` + `iface-pkcs11` 由 v2.0 前移 + `app/hsm`); **crypto 服务契约 v1.x 定稿**(D25: v2.0 只做后端与算法面扩展, 契约不变); **HSM 资产边界诚实声明 + §14.1 域支撑矩阵**(D26, 收口评审 P1/P2); §12 依赖链按 D25 精确到"ed25519 能力(v2)"; 设计基线 `docs/9-app/9-02-hsm-sample.md`。
 > v0.9a: 全部架构图 mermaid → **PlantUML**(布局可读性)。
-> v0.9: D22 设备 ops 统一预留——**所有设备类别 ops 预留 ioctl/suspend/resume**(poll/close 由 cdev-core 通用 tg_file_ops 适配层提供, devfs 经钩子取得; 动机 = D14: ops 布局入 golden, 预留即免二进制破坏); D23 VFS ops 分层——**super(fs 级)/inode/file/dentry(预留)四层, Linux 型**; 路径走查(lookup 链)移入 vfs-core; inode v1 瞬态(无缓存, SD-3 不变); file_ops 增加 open(会话建立); D20 钩子演化为返回 {fops, fpriv}(`docs/7-storage/7-01-vfs.md` §2, `docs/8-device/8-01-device.md` §2/§3)。
-> v0.8: D21 设备接入 VFS——**所有设备经 /dev(devfs 插件)接入 VFS 管理**(Linux devtmpfs/rCore DeviceFS 同型); **fs/tmpfs 挂载为 rootfs("/")**; `tg_open` 撤销裸名设备路由(单一挂载表路由, SD-1 修订); **vfs-core 纯化**(设备依赖移出); D20 协议扩展 open_file 钩子; 新插件 fs/tmpfs + fs/devfs(`docs/7-storage/7-03-concrete-fs.md` §2/§3)。
+> v0.9: D22 设备 ops 统一预留——**所有设备类别 ops 预留 ioctl/suspend/resume**(poll/close 由 cdev-core 通用 br_file_ops 适配层提供, devfs 经钩子取得; 动机 = D14: ops 布局入 golden, 预留即免二进制破坏); D23 VFS ops 分层——**super(fs 级)/inode/file/dentry(预留)四层, Linux 型**; 路径走查(lookup 链)移入 vfs-core; inode v1 瞬态(无缓存, SD-3 不变); file_ops 增加 open(会话建立); D20 钩子演化为返回 {fops, fpriv}(`docs/7-storage/7-01-vfs.md` §2, `docs/8-device/8-01-device.md` §2/§3)。
+> v0.8: D21 设备接入 VFS——**所有设备经 /dev(devfs 插件)接入 VFS 管理**(Linux devtmpfs/rCore DeviceFS 同型); **fs/tmpfs 挂载为 rootfs("/")**; `br_open` 撤销裸名设备路由(单一挂载表路由, SD-1 修订); **vfs-core 纯化**(设备依赖移出); D20 协议扩展 open_file 钩子; 新插件 fs/tmpfs + fs/devfs(`docs/7-storage/7-03-concrete-fs.md` §2/§3)。
 > v0.7: D20 设备子分类框架化——dev-core 收缩为**通用设备**(注册表/命名/语义/子分类协议), 向下分 **cdev-core(字符, 含 flash 子型)**/**bdev-core(块)** 子分类框架; **spi-nor/nand 对接 cdev-core**; 框架件 3→4 件(§3/§4.5/§6.3/§7.2, `docs/8-device/8-01-device.md` §3)。
 > v0.6: D19 框架件拆分——设备/挂载注册表与 VFS/设备框架成为 **dev-core / vfs-core / bdev-core 插件**(§4.5, `docs/8-device/8-01-device.md` §1); 插件分类七类→八类(+框架件); core 收缩为 native API + 服务注册表; 依赖宪法更新(§7.2)。
 > v0.5: D18 修正案——**POSIX 双角色拆分**: `svc-posix`(POSIX 运行时)从接口插件降为**普通服务**, 三方中间件(sqlite/curl 类)可声明依赖它; 接口插件成为**严格叶子**(仅被 APP 依赖); 依赖铁律重写为四条治理规则(§7.2); 依赖方向论证更新(§7.5); 移植双模式(§7.6)。
@@ -103,7 +104,7 @@
 
 ⇒ 设计原则升格: **契约优先于实现** —— 一切接口按"将来要在别的内核上重新实现"的标准设计。详见 `docs/1-architecture/1-03-roadmap.md` §0。
 
-**命名(D16, 已定)**: OS 定名 **TangramOS(七巧板——七块积木拼出万物, 即 core + 插件组合的隐喻)**; 符号前缀 `tg_` / 宏 `TG_` / CLI `tg` / 链接段 `.tg_*`, 已全局替换, 避开 Unikraft `uk_*` 的正面冲突(量产若基于 Unikraft 二次开发不再撞车)。正式启用前建议做一次商标与开源库检索。
+**命名(D16, v0.11 修订)**: OS 定名 **brickOS(积木——有限的小块, 搭出任意形状, 即 core + 插件组合的隐喻)**; 符号前缀 `br_` / 宏 `BR_` / CLI `br` / 链接段 `.br_*`, 已全局替换, 避开 Unikraft `uk_*` 的正面冲突(量产若基于 Unikraft 二次开发不再撞车)。**原名 brickOS(七巧板)因与既有项目命名冲突而弃用**; 正式启用前仍建议做一次商标与开源库检索。
 
 ## 1. 决策记录(已定)
 
@@ -112,7 +113,7 @@
 | D1 | 组合模型 | **静态优先; v3.0 起动态加载为选配能力(带鉴权)** | v1/v2 纯静态: 无加载器、无运行时符号解析; 插件管理器价值在"构建期 manifest 校验 + 启动期排序"; v3 动态依赖链 = 重定位(v2)+**ed25519 验签能力(v2, D25)**+符号表导出(v1.x), 模块 ed25519 签名 + 加载期 api_rev/abi_id 复核; 认证件可不编入动态路径 |
 | D2 | 并发契约 | **core=抽象调度框架; 协作+抢占并存; 调度器是插件** | 上下文切换原语/超时框架留 core; 策略与锁实现(PI)归调度插件; sched_class 声明 + 组合期校验(§5.3); 实现顺序 coop(v1)→preempt(v2)→tt(v3) |
 | D3 | 首个平台 | **QEMU 虚拟平台先行** | 契约先于硬件固化; 真实 SoC(M4)依战略语境可降级为选配 |
-| D4 | 内存保护 | **暂不做 MPU, 按插件分段保留元数据** | `.tg_plug_<name>` 分段为 vx.0 MPU 插件留钩子 |
+| D4 | 内存保护 | **暂不做 MPU, 按插件分段保留元数据** | `.br_plug_<name>` 分段为 vx.0 MPU 插件留钩子 |
 | D5 | 语言与工具链 | **core: C(v1.0)→C+Rust(v4.0); 插件: C(v1.0)/Rust(v2.0)** | 插件边界恒为 C ABI(D14); Rust 插件走 `extern "C"`, 二进制兼容纪律照旧 |
 | D6 | SMP | **v1.0 单核; v2.0 SMP(与 preempt 同期)** | SMP 触碰锁语义/perCPU/IPI, 建议独立分期 v2b(见 R8) |
 | D9 | ISA | **aarch64** | QEMU virt 先行; riscv 不作卫生检查(评审裁剪) |
@@ -122,14 +123,14 @@
 | D13 | 接口叠加规则 | **已定**: 双层混合(模块级声明 + 符号级真值) | 见 `docs/1-architecture/1-02-api-contract-governance.md` |
 | D14 | 二进制插件分发 | **Day1 按二进制兼容设计** | 不透明句柄纪律 CI 强制; 布局入 golden 硬门禁; 描述符带 `abi_id`(§6.1) |
 | D15 | 冻结启动时机 | **M3(=v1.0 完整化)起分批冻结** | M0–M2 全部 API 留实验区 |
-| D16 | OS 命名 | **TangramOS(七巧板)** | 符号前缀 `tg_` / 宏 `TG_` / CLI `tg` / 段名 `.tg_*`; 避开 Unikraft `uk_*` 撞车 |
+| D16 | OS 命名 | **brickOS(积木)** | 符号前缀 `br_` / 宏 `BR_` / CLI `br` / 段名 `.br_*`; 避开 Unikraft `uk_*` 撞车; 原名 brickOS(七巧板)因命名冲突弃用(v0.11) |
 | D17 | v1.0 可写 FS | **littlefs 入 v1.0** | DA 日志/仪表配置需要落盘; 与 EROFS(v2)分工: littlefs=数据, EROFS=代码/资产 |
 | D18 | POSIX 双角色拆分 | **POSIX 运行时服务化(svc-posix); 接口插件成为严格叶子** | POSIX 实现=普通服务(open/read/pthread/socket 唯一实现, fd 表唯一主人, 实现于 native+注册表); 三方中间件可声明依赖它; 铁律"服务不得依赖接口"退役, 由四条治理规则取代(§7.2); iface-posix 保留为薄皮肤(再导出 + stdio/errno 接线, §7.4); 移植双模式(§7.6) |
 | D19 | 框架件拆分 | **能力框架成为插件: dev-core / vfs-core / bdev-core** | file/open/VFS 契约 = **vfs-core**; 设备相关接口 = **dev-core**; bdev 类 = **bdev-core(依赖 dev-core)**; 具体文件系统(littlefs)依赖 **vfs-core**; 派生: ~~vfs-core→dev-core(设备路由+适配)~~ → **D21 修订**: 该依赖已撤销, 设备路由改经 devfs/cdev-core 侧(见 D21); svc-posix→vfs-core; 框架件 = 插件身份(可裁剪) + core 纪律(golden/门禁); core 收缩为 native API + 服务注册表(§4.5); 详见 `docs/8-device/8-01-device.md` §1 |
-| D20 | 设备子分类框架化 | **dev-core = 通用设备, 向下分 cdev-core(字符)/bdev-core(块)子分类; spi-nor/nand 对接 cdev-core(flash 子型)** | dev-core 只管"是个设备"(注册表/命名/语义/子分类协议), 不定义 ops 形状; cdev-core 拥有 `tg_cdev_ops` + flash 子型 `tg_flash_ops`; 框架件 3→4 件; netdev 答案空间 = 第三个子分类框架(O-S5); 详见 `docs/8-device/8-01-device.md` §3 |
-| D21 | 设备接入 VFS + tmpfs rootfs | **所有设备经 /dev(devfs 插件)接入 VFS 管理; tmpfs 挂载为 rootfs("/")** | Linux devtmpfs/rCore DeviceFS 同型; `tg_open` 单路由(挂载表, 撤销裸名设备路径——SD-1 修订); **vfs-core 纯化**(设备依赖移出, 依赖面收缩到 core); D20 协议扩展 **open_file 钩子**(子分类框架实现可文件化); 新插件 fs/tmpfs(rootfs)+fs/devfs(/dev); 挂载计划: tmpfs→/ → devfs→/dev → littlefs→/data, 挂载点缺失自动 mkdir; 详见 `docs/7-storage/7-03-concrete-fs.md` §2/§3/§6 |
-| D22 | 设备 ops 统一预留 | **所有设备类别 ops 预留 ioctl / suspend / resume(poll/close 由 cdev-core 通用 tg_file_ops 适配层提供, devfs 经钩子取得)** | 动机 = D14: ops 布局入 golden, 后补字段 = 布局破坏——**预留即免破坏**; suspend/resume 为设备级 PM 钩子(v1 无统一调用方, v2 service/pm 经注册表枚举, O-S6); NULL → -ENOTSUP; 详见 `docs/8-device/8-01-device.md` §3 |
-| D23 | VFS ops 分层 | **super(fs 级)/ inode / file / dentry(预留)四层 ops, Linux 型** | **路径走查(lookup 链)在 vfs-core**; inode v1 瞬态(走查产物, free_inode 即弃——有 inode ops, 无 inode cache, SD-3 不变); `tg_dentry_ops` 为 v2 dcache 预留(槽位先占, D14 同理); `tg_file_ops` 增加 open(会话建立); D20 open_file 钩子演化为返回 {fops, fpriv}; littlefs inode = 路径前缀包装, devfs 根 inode = 注册表投影; 详见 `docs/7-storage/7-01-vfs.md` §2 |
+| D20 | 设备子分类框架化 | **dev-core = 通用设备, 向下分 cdev-core(字符)/bdev-core(块)子分类; spi-nor/nand 对接 cdev-core(flash 子型)** | dev-core 只管"是个设备"(注册表/命名/语义/子分类协议), 不定义 ops 形状; cdev-core 拥有 `br_cdev_ops` + flash 子型 `br_flash_ops`; 框架件 3→4 件; netdev 答案空间 = 第三个子分类框架(O-S5); 详见 `docs/8-device/8-01-device.md` §3 |
+| D21 | 设备接入 VFS + tmpfs rootfs | **所有设备经 /dev(devfs 插件)接入 VFS 管理; tmpfs 挂载为 rootfs("/")** | Linux devtmpfs/rCore DeviceFS 同型; `br_open` 单路由(挂载表, 撤销裸名设备路径——SD-1 修订); **vfs-core 纯化**(设备依赖移出, 依赖面收缩到 core); D20 协议扩展 **open_file 钩子**(子分类框架实现可文件化); 新插件 fs/tmpfs(rootfs)+fs/devfs(/dev); 挂载计划: tmpfs→/ → devfs→/dev → littlefs→/data, 挂载点缺失自动 mkdir; 详见 `docs/7-storage/7-03-concrete-fs.md` §2/§3/§6 |
+| D22 | 设备 ops 统一预留 | **所有设备类别 ops 预留 ioctl / suspend / resume(poll/close 由 cdev-core 通用 br_file_ops 适配层提供, devfs 经钩子取得)** | 动机 = D14: ops 布局入 golden, 后补字段 = 布局破坏——**预留即免破坏**; suspend/resume 为设备级 PM 钩子(v1 无统一调用方, v2 service/pm 经注册表枚举, O-S6); NULL → -ENOTSUP; 详见 `docs/8-device/8-01-device.md` §3 |
+| D23 | VFS ops 分层 | **super(fs 级)/ inode / file / dentry(预留)四层 ops, Linux 型** | **路径走查(lookup 链)在 vfs-core**; inode v1 瞬态(走查产物, free_inode 即弃——有 inode ops, 无 inode cache, SD-3 不变); `br_dentry_ops` 为 v2 dcache 预留(槽位先占, D14 同理); `br_file_ops` 增加 open(会话建立); D20 open_file 钩子演化为返回 {fops, fpriv}; littlefs inode = 路径前缀包装, devfs 根 inode = 注册表投影; 详见 `docs/7-storage/7-01-vfs.md` §2 |
 | D24 | HSM 完整样例入 v1.x(M5) | **第二产品域从"声明"变为"可运行样例"**: 新增 6 件插件(`io/virtio-hsm`、`service/crypto`、`service/keyring`、`service/hsm-host`、`service/seclog`、**`iface-pkcs11` 由 v2.0 前移**)+ 样例 APP `app/hsm` | **组合即产品**(增量只有 APP + manifest)/ **置换证明**(调度器 · 密码后端 · 接口各换一次, 插件源码零改写)/ 复用 v1.0 全栈(四件框架件 + vfs 栈 + trace)/ **不依赖 M4**(QEMU virtio-serial 对端); `iface-posix`/`svc-posix` 不在样例组合内(接口可裁剪); 里程碑 = 1-03 §3 M5; 设计基线 `docs/9-app/9-02-hsm-sample.md` |
 | D25 | crypto 服务的版本策略 | **服务契约 v1.x(M5) 定稿; v2.0 只做后端与算法面扩展——契约不变** | v1.x = mbedTLS 算法子集(SHA-256 / HMAC-SHA256 / AES-CBC/CTR / DRBG; **不含 ed25519/TLS**)+ 服务面一次定稿; v2.0 = 完整算法集 + 恒定时间加固 + 硬件引擎后端; **算法实现一律引上游, 不自行实现密码原语**(风格纪律); v3 动态加载的**绑定约束是重定位(v2)**, 不是"crypto 服务是否存在"(§12); 遗留缺口: 熵源契约(O-H1)、ops 是否入 golden(O-H7) |
 | D26 | HSM 资产边界(诚实声明) | **v1.x 无内存隔离 ⇒ 资产保护 = 逻辑边界(密钥只经 keyring 不透明 handle 暴露)+ 落盘加密 + 物理封装/外置安全核假设; 不承诺抵抗同地址空间内的任意读** | 域支撑矩阵(§14.1)逐格写"有/无/部分", 缺口须有编号与版本归宿; 认证件策略(§12: 可完全不编入动态路径)照旧; "伪安全"叙事风险登记 R10; 威胁表详见 `docs/9-app/9-02-hsm-sample.md` §2.3 |
@@ -187,11 +188,11 @@ Core 是唯一"不可组合"的部分(调度框架在 core, 调度策略不在)�
 | 能力 | 理由 |
 |---|---|
 | 上下文切换原语(每 ISA 一段汇编 save/restore) | 任何调度器都要做切换, 与策略无关 |
-| 线程对象 `tg_thread_t`、栈布局、入口 trampoline | 对象表示是公共的 |
+| 线程对象 `br_thread_t`、栈布局、入口 trampoline | 对象表示是公共的 |
 | tickless 超时框架(超时链/绝对时间) | sleep/超时是公共语义 |
-| 调度器注册点 `tg_sched_ops`(§5.1) | 策略插拔的接口 |
+| 调度器注册点 `br_sched_ops`(§5.1) | 策略插拔的接口 |
 | 锁的 **API 与语义契约** | 优先级继承是策略 ⇒ **实现归调度插件** |
-| `tg_work_submit` 延迟工作抽象 | ISR 底半部统一入口, 实现在调度插件 |
+| `br_work_submit` 延迟工作抽象 | ISR 底半部统一入口, 实现在调度插件 |
 
 **core 不做的:** 就绪队列管理、抢占决策、优先级继承、调度表——全部在调度插件。
 
@@ -199,11 +200,11 @@ Core 是唯一"不可组合"的部分(调度框架在 core, 调度策略不在)�
 
 - IRQ 注册表: IRQ 号 → (handler, arg, 插件归属)
 - 中断控制器抽象 ops(mask/unmask/ack/prio/eoi)——接口在 core, **实现由 Platform 插件经三层模式填表**(§8)
-- 临界区原语 `tg_irq_lock()/unlock()` + 嵌套计数
+- 临界区原语 `br_irq_lock()/unlock()` + 嵌套计数
 - **级联中断域(v1.x)**: PMIC/GPIO 复用线——物理线 → 域 → 子中断; FAST/SLOW 双上下文契约(SLOW = 状态读取走 I2C 不能在 ISR), `docs/3-os-core/3-01-core-api-list.md` §8.1
-- **fault 路径(v2)**: aarch64 向量表同步异常分槽 + `tg_fault_handler_register()`(ramdump 挂钩, `docs/5-debug/5-01-debug.md` §3)
+- **fault 路径(v2)**: aarch64 向量表同步异常分槽 + `br_fault_handler_register()`(ramdump 挂钩, `docs/5-debug/5-01-debug.md` §3)
 
-**ISR 契约:** 最小工作, 尽快 `tg_work_submit` 转底半部; 禁止阻塞/malloc/持锁跨 ISR 返回。
+**ISR 契约:** 最小工作, 尽快 `br_work_submit` 转底半部; 禁止阻塞/malloc/持锁跨 ISR 返回。
 **v1.0 即实现 bottom half**(评审要求): coop 调度下 work queue = 事件队列, 是首要延迟路径——v1 就强制"bh + 锁纪律"的编写习惯, v2 抢占到来时插件零返工。
 
 ### 4.3 memory (内存) —— v0.4 政策反转
@@ -217,10 +218,10 @@ Core 是唯一"不可组合"的部分(调度框架在 core, 调度策略不在)�
 | vx.0 | MPU 插件 | Cortex-M/R(A 核继续用 MMU region); 启用 D4 分段元数据。**诚实注**: v1/v2 的全部内存契约(恒等映射页表/region 属性/重定位)只适用 **MMU 平台**——Cortex-R 无 MMU, 其路径完全取决于本行 MPU 插件(vx.0, 未排期), 详见 §14.1 |
 
 **core 职责:**
-- `tg_mm` 接口: region 描述(base/size/attrs)、map/unmap、TLB 维护、cache 维护 API(R4: M2 起定好签名)
+- `br_mm` 接口: region 描述(base/size/attrs)、map/unmap、TLB 维护、cache 维护 API(R4: M2 起定好签名)
 - **region 表由 Platform 插件提供**(三层模式, §8); 页表构造 = ISA 共享实现库
-- 核堆: TLSF, `tg_malloc/tg_free/tg_dma_alloc`; **per-plugin arena 记账**(memleak 归属, `docs/5-debug/5-01-debug.md` §4)
-- 链接布局: `.tg_core` / `.tg_sched_<name>` / `.tg_plug_<name>` / `.tg_iface_<name>` / `.tg_app` 分段
+- 核堆: TLSF, `br_malloc/br_free/br_dma_alloc`; **per-plugin arena 记账**(memleak 归属, `docs/5-debug/5-01-debug.md` §4)
+- 链接布局: `.br_core` / `.br_sched_<name>` / `.br_plug_<name>` / `.br_iface_<name>` / `.br_app` 分段
 
 **非目标(不变):** 换页/swap、多地址空间(单 APP = 单一地址空间)。
 
@@ -229,7 +230,7 @@ Core 是唯一"不可组合"的部分(调度框架在 core, 调度策略不在)�
 纯静态组合下(D1), 其价值在两处:
 
 1. **构建期**: 读产品 manifest, 校验(§6.4: 依赖闭包、版本区间、环检测、调度类别、接口声明、符号碰撞、资源预算), 驱动链接(选段、gc-sections)
-2. **启动期**: 扫 `.tg_plugins` 链接段 → 拓扑排序 → 生命周期回调(§9)
+2. **启动期**: 扫 `.br_plugins` 链接段 → 拓扑排序 → 生命周期回调(§9)
 
 **非目标:** 运行时热插拔(v3 前无运行时加载)。
 
@@ -238,28 +239,28 @@ Core 是唯一"不可组合"的部分(调度框架在 core, 调度策略不在)�
 **服务注册表(core 公地——插件间无环会合点):**
 
 ```c
-tg_service_publish(name, &svc_ops)         /* 命名服务表 */
-tg_service_lookup(name)   → ops
+br_service_publish(name, &svc_ops)         /* 命名服务表 */
+br_service_lookup(name)   → ops
 ```
 
-**设备/挂载注册表已拆为框架件插件(D19–D21, `docs/8-device/8-01-device.md` §1)**: dev-core(**通用设备**注册表/语义/子分类协议)、cdev-core(字符设备, **含 flash 子型——spi-nor/nand 对接于此**)、bdev-core(bdev 子分类, **依赖 dev-core**)、vfs-core(纯 VFS: `tg_file_t`/`tg_open` 挂载表·单路由/挂载表)。**框架件 = 插件的身份(可按组合裁剪) + core 的纪律(API 面进 golden/门禁)**。
+**设备/挂载注册表已拆为框架件插件(D19–D21, `docs/8-device/8-01-device.md` §1)**: dev-core(**通用设备**注册表/语义/子分类协议)、cdev-core(字符设备, **含 flash 子型——spi-nor/nand 对接于此**)、bdev-core(bdev 子分类, **依赖 dev-core**)、vfs-core(纯 VFS: `br_file_t`/`br_open` 挂载表·单路由/挂载表)。**框架件 = 插件的身份(可按组合裁剪) + core 的纪律(API 面进 golden/门禁)**。
 
 **native API(全系统第一契约, 刻意保持小面):**
 
 ```c
 /* 任务/同步: 语义在 core, 实现在调度插件 */
-tg_task_create / tg_task_sleep / tg_task_exit / tg_task_yield
-tg_mutex_lock/unlock  tg_sem_take/give  tg_cond_wait/signal
+br_task_create / br_task_sleep / br_task_exit / br_task_yield
+br_mutex_lock/unlock  br_sem_take/give  br_cond_wait/signal
 /* 时间 */
-tg_clock_now / tg_deadline_from_now
+br_clock_now / br_deadline_from_now
 /* 延迟工作 */
-tg_work_submit
+br_work_submit
 /* 内存 */
-tg_malloc / tg_free / tg_dma_alloc / tg_mm_map
+br_malloc / br_free / br_dma_alloc / br_mm_map
 /* 中断 */
-tg_irq_register / tg_irq_enable / tg_irq_lock
+br_irq_register / br_irq_enable / br_irq_lock
 ```
-(设备/文件/挂载访问 `tg_open`/`tg_file_*`/`tg_bdev_*`/`tg_flash_*` 归框架件契约, 见 `docs/7-storage/7-01-vfs.md` / `docs/8-device/8-01-device.md`; **native API 完整清单与签名: `docs/3-os-core/3-01-core-api-list.md`**)
+(设备/文件/挂载访问 `br_open`/`br_file_*`/`br_bdev_*`/`br_flash_*` 归框架件契约, 见 `docs/7-storage/7-01-vfs.md` / `docs/8-device/8-01-device.md`; **native API 完整清单与签名: `docs/3-os-core/3-01-core-api-list.md`**)
 
 **留 core 的理由:** 服务注册表是插件间无环会合点(§7.2 单向流下服务/框架件层另有声明依赖); native API 是全部插件作者的编码对象。冻结纪律: `docs/1-architecture/1-02-api-contract-governance.md`(D12–D15)。
 **libc 挂接点:** picolibc/newlib 弱符号 stub 由 `svc-posix` 实现(D18); `sbrk` 指向 core 堆[?]。
@@ -269,28 +270,28 @@ tg_irq_register / tg_irq_enable / tg_irq_lock
 ### 5.1 注册接口
 
 ```c
-typedef struct tg_sched_ops {
+typedef struct br_sched_ops {
     const char *name;
     uint32_t    sched_kind;       /* 调度器类别: PREEMPT | COOP | TT(§5.2; 与插件侧 sched_class(§5.3)区分) */
 
     /* 决策 */
-    void        (*thread_ready)(tg_thread_t *t);
-    void        (*thread_block)(tg_thread_t *t);
-    tg_thread_t *(*pick_next)(void);               /* idle 由 core 兜底 */
+    void        (*thread_ready)(br_thread_t *t);
+    void        (*thread_block)(br_thread_t *t);
+    br_thread_t *(*pick_next)(void);               /* idle 由 core 兜底 */
     void        (*on_tick)(void);                 /* TT 调度表驱动点 */
 
     /* 策略相关的阻塞/超时 */
-    int         (*thread_sleep)(tg_thread_t *t, tg_time_t abs);
+    int         (*thread_sleep)(br_thread_t *t, br_time_t abs);
 
     /* 锁的实现归属 (优先级继承等是策略) */
-    int         (*mutex_lock)(tg_mutex *m, tg_time_t timeout);
-    int         (*mutex_unlock)(tg_mutex *m);
-    int         (*sem_take)(tg_sem *s, tg_time_t timeout);
+    int         (*mutex_lock)(br_mutex *m, br_time_t timeout);
+    int         (*mutex_unlock)(br_mutex *m);
+    int         (*sem_take)(br_sem *s, br_time_t timeout);
     ...
-} tg_sched_ops;
+} br_sched_ops;
 
 /* 调度插件在 EARLY 阶段注册; core 在首个线程创建前锁定 */
-void tg_sched_register(const tg_sched_ops *ops);
+void br_sched_register(const br_sched_ops *ops);
 ```
 
 静态组合 ⇒ 每镜像恰一个调度器; ops 调用可经 LTO 特化[?]。
@@ -305,7 +306,7 @@ void tg_sched_register(const tg_sched_ops *ops);
 
 顺序理由(`docs/1-architecture/1-03-roadmap.md` §2): coop 先行最小可用; **SAFE_PREEMPT 纪律下写的插件在 coop 下天然正确** ⇒ v2 引入 preempt 插件零改写——sched_class 设计的第一次实战验证; tt 最后(需要周期元数据与 conformance 成熟度)。
 
-`tg_work_submit(fn, arg)` 实现差异: preempt → 唤醒 worker 线程; coop → 事件入队、主循环分派(v1 形态); TT → 下一帧槽位[?]。
+`br_work_submit(fn, arg)` 实现差异: preempt → 唤醒 worker 线程; coop → 事件入队、主循环分派(v1 形态); TT → 下一帧槽位[?]。
 
 ### 5.3 调度兼容类别 (关键契约)
 
@@ -329,18 +330,18 @@ typedef struct {
     uint16_t    ver[3];            /* 插件自身语义版本 {maj, min, pat} */
     uint16_t    api_rev;           /* 编码面对的 native API 版本 */
     uint32_t    sched_class;       /* §5.3 */
-    const tg_dep_t *deps;          /* {name, ">=1.0,<2.0", phase} 数组 */
+    const br_dep_t *deps;          /* {name, ">=1.0,<2.0", phase} 数组 */
     const char *abi_id;            /* 工具链 + ABI 影响选项指纹(D14 二进制分发) */
     const char *const *api_syms;   /* 仅 Interface 插件: 占有的 API 符号族(§7.3) */
-    tg_res_t    res;               /* RAM/栈/IRQ/DMA 需求, 组合期预算校验 */
+    br_res_t    res;               /* RAM/栈/IRQ/DMA 需求, 组合期预算校验 */
     int  (*early_init)(void);      /* 不使用堆/无线程/关中断(堆已由 core.init 建立, 本相约定不使用) */
     int  (*init)(void);            /* 堆可用, 调度器已锁定, 中断仍关 */
     int  (*start)(void);           /* 中断可用, 可创建线程 */
-} tg_plugin_t;
+} br_plugin_t;
 
-#define TG_PLUGIN(name_, deps_, ...) \
-    const tg_plugin_t _tg_plugin_##name_ \
-    __attribute__((used, section(".tg_plugins"), aligned(4))) = {...};
+#define BR_PLUGIN(name_, deps_, ...) \
+    const br_plugin_t _br_plugin_##name_ \
+    __attribute__((used, section(".br_plugins"), aligned(4))) = {...};
 ```
 
 ### 6.2 生命周期阶段
@@ -362,7 +363,7 @@ typedef struct {
 |---|---|---|---|
 | Platform | reset 汇编、时钟/引脚/RAM、中断控制器实现、console、cache、timer、**内存 region 表** | 每 SoC 一个 | 最底层 |
 | **Scheduler** | 调度策略(§5) | **恰一个** | 用 core 框架 |
-| **框架件(Framework)** | 能力基础设施: **dev-core**(通用设备注册表/语义/子分类协议)、**cdev-core**(字符设备 + flash 子型)、**bdev-core**(bdev 子分类, 依赖 dev-core)、**vfs-core**(tg_file/tg_open/挂载表) | 每件 0 或 1, 按需组合 | 依赖 core; 被驱动/FS/服务依赖; 纪律同 core(golden/门禁) |
+| **框架件(Framework)** | 能力基础设施: **dev-core**(通用设备注册表/语义/子分类协议)、**cdev-core**(字符设备 + flash 子型)、**bdev-core**(bdev 子分类, 依赖 dev-core)、**vfs-core**(br_file/br_open/挂载表) | 每件 0 或 1, 按需组合 | 依赖 core; 被驱动/FS/服务依赖; 纪律同 core(golden/门禁) |
 | I/O | 外设驱动: uart/spi/i2c/can/gpio/adc/display | 任意 | 向 cdev-core / bdev-core 注册设备 |
 | FS | tmpfs(rootfs) / devfs(/dev) / littlefs / EROFS / romfs | 任意 | **依赖 vfs-core**, 注册挂载(D21: 设备经 devfs 接入 VFS) |
 | Service | 中间件: lwIP、UDS 诊断、日志、OTA、crypto、trace、**svc-posix(POSIX 运行时, D18)**、**keyring/hsm-host/seclog(v1.x/M5, D24)**、三方移植件(sqlite…) | 任意 | 向 core 服务注册表发布; **服务间可声明依赖(含 svc-posix 与框架件)** |
@@ -389,7 +390,7 @@ typedef struct {
 
 **环的四种解法模式**(当"互相需要"的诱惑出现时):
 
-1. **依赖降级为数据流**: B 把 handler 回调注册给 A(`tg_service_publish` / 显式 register), A 通过函数指针调用——构建期依赖消失
+1. **依赖降级为数据流**: B 把 handler 回调注册给 A(`br_service_publish` / 显式 register), A 通过函数指针调用——构建期依赖消失
 2. **接口/实现分离**: 抽出小接口插件 C, A、B 都只依赖 C
 3. **注册表中介**: 双方都只依赖 core 注册表(本设计内置的会合点)
 4. **init 依赖 vs 调用依赖分离**: 真正禁环的只有 init 顺序; 运行期互调经 1/3 化解
@@ -465,19 +466,19 @@ POSIX 的**实现**在 `svc-posix`(Service 类, §3): fd 表 + VFS 路由 + pthr
 
 ```c
 /* service/sqlite/plugin.c — 移植的全部增量 */
-TG_PLUGIN(sqlite, .deps = (const tg_dep_t[]){{"svc-posix", ">=1.0", TG_PHASE_LATE}}, ...);  /* deps 形状见 §6.1: {name, 区间, phase} 数组 */
+BR_PLUGIN(sqlite, .deps = (const br_dep_t[]){{"svc-posix", ">=1.0", BR_PHASE_LATE}}, ...);  /* deps 形状见 §6.1: {name, 区间, phase} 数组 */
 static int sqlite_port_init(void) {
-    sqlite3_config(SQLITE_CONFIG_MUTEX, &tg_mutex_methods);  /* tg_mutex */
-    sqlite3_config(SQLITE_CONFIG_MALLOC, &tg_mem_methods);   /* tg_malloc */
+    sqlite3_config(SQLITE_CONFIG_MUTEX, &br_mutex_methods);  /* br_mutex */
+    sqlite3_config(SQLITE_CONFIG_MALLOC, &br_mem_methods);   /* br_malloc */
     sqlite3_initialize();
 }
-/* tg_service_publish("db", &db_ops) → APP/其他服务按名字用 */
+/* br_service_publish("db", &db_ops) → APP/其他服务按名字用 */
 ```
 
 | 模式 | 增量 | 上游同步 | 依赖面 | 适用 |
 |---|---|---|---|---|
 | A: os_unix.c 直链 svc-posix | ~0 | 替换 amalgamation 即升级 | svc-posix 子集 | 快速跑通(QEMU/host 验证) |
-| B: os_tangram.c VFS 后端(~600 行) | 一次写作后稳定 | 同上, 后端不动 | 纯 native + vfs-core 框架件契约(`tg_open`/`tg_file_*`) | 裁剪/性能; **无 svc-posix 的极小组合也能用 sqlite** |
+| B: os_brick.c VFS 后端(~600 行) | 一次写作后稳定 | 同上, 后端不动 | 纯 native + vfs-core 框架件契约(`br_open`/`br_file_*`) | 裁剪/性能; **无 svc-posix 的极小组合也能用 sqlite** |
 
 - 模式 A 的 POSIX 子集需求(sqlite 视角): `pread/pwrite/ftruncate/unlink/stat/fstat/usleep/gettimeofday/pthread_mutex/mmap(可关)`; `fcntl(F_SETLK)` 咨询锁在**单 APP 下退化为进程内互斥**——语义文档化, 这是"单应用"红利
 - **移植成本从此是一个旋钮**: 快速路径(基座)与深度路径(native)都是一等公民
@@ -498,10 +499,10 @@ static int sqlite_port_init(void) {
 
 | 能力 | core 接口 | ISA 共享库 | Platform 插件提供 |
 |---|---|---|---|
-| 内存 map 管理 | `tg_mm`(region/attrs/map/unmap/TLB) | aarch64 页表构造 | **region 表**(RAM/DMA/MMIO/保留区) |
-| 中断控制器 | `tg_pic`(mask/unmask/ack/prio/eoi) | GICv3 驱动 | 中断号绑定、路由策略 |
+| 内存 map 管理 | `br_mm`(region/attrs/map/unmap/TLB) | aarch64 页表构造 | **region 表**(RAM/DMA/MMIO/保留区) |
+| 中断控制器 | `br_pic`(mask/unmask/ack/prio/eoi) | GICv3 驱动 | 中断号绑定、路由策略 |
 | console | 早期 console 语义 | PL011/16550 轮询 | 用哪个 UART、波特率 |
-| timer | `tg_clock` tickless 语义 | arch timer | 频率、校准 |
+| timer | `br_clock` tickless 语义 | arch timer | 频率、校准 |
 
 - 每个平台插件不重写 ISA 公共部分(页表/GIC), 只给数据和 quirk ⇒ 新平台成本 = 一张表 + 少量胶水
 - console 双形态: platform 早期 console(轮询, init 链打印)→ I/O 插件完整 tty(中断驱动)
@@ -522,11 +523,11 @@ static int sqlite_port_init(void) {
 - **两章分工**: 上图是一条**体系链**(deviceXXX → 具体设备类 → dev-core → VFS), 但**不是一条依赖链**——`7-storage`(VFS/块设备/具体 FS)与 `8-device`(设备体系与管理)分立, 正因为设备框架可在没有 VFS 的组合里独立成立。**三种组合形态**(形态 A 接 VFS / 形态 B 只用设备框架 / 形态 C standalone)见 `docs/8-device/8-01-device.md` §1.2
 - **rootfs 与设备节点(D21)**: **fs/tmpfs 挂载为 rootfs("/")**(命名空间骨架, 无介质产品也有完整 VFS); **所有设备经 fs/devfs 以 /dev 节点接入 VFS**(实时枚举 dev-core 注册表, 打开经 open_file 钩子)——Linux devtmpfs/rCore DeviceFS 同型(**形态 A** 的完整收益; 形态 B 不经此路径)
 - **VFS ops 分层(D23)**: super(fs 级)/inode/file/dentry(预留)四层, Linux 型; **路径走查(lookup 链)在 vfs-core**; inode v1 瞬态(无缓存); 设备节点 inode 由 devfs+钩子产出——详见 `docs/7-storage/7-01-vfs.md` §2
-- **设备 ops 统一预留(D22)**: 所有设备类别 ops 预留 ioctl/suspend/resume(设备级 PM); poll/close 由 cdev-core 通用 tg_file_ops 适配层提供(devfs 经钩子取得); 动机 = D14(ops 布局入 golden, 预留即免破坏)——详见 `docs/8-device/8-01-device.md` §3
+- **设备 ops 统一预留(D22)**: 所有设备类别 ops 预留 ioctl/suspend/resume(设备级 PM); poll/close 由 cdev-core 通用 br_file_ops 适配层提供(devfs 经钩子取得); 动机 = D14(ops 布局入 golden, 预留即免破坏)——详见 `docs/8-device/8-01-device.md` §3
 - **框架件归属(D19/D20)**: VFS = vfs-core(纯 VFS, 设备依赖已移出)、bdev 子分类 = bdev-core(**依赖 dev-core**)、**flash = cdev-core 子型(spi-nor/nand 对接 cdev-core)**; **littlefs 依赖 vfs-core**(另按介质绑定 cdev-core/bdev-core)——详见 `docs/8-device/8-01-device.md` §1/§3
 - **双设备类(SD-2)**: bdev(磁盘型: 扇区 read/write/flush)与 flash(raw flash: read/program/erase/sync)——littlefs 块接口天然是 flash 形态, 1:1 零胶水; QEMU 上经 bdev 适配器跑功能测试
-- **统一可打开模型(SD-1, D21 修订)**: 一切 = `tg_file_t`; `tg_open` **只走挂载表**(设备经 /dev 接入) ⇒ svc-posix fd 层设备/文件零特判
-- **block 层 API 可堆叠**: provider 同时可以是 consumer ⇒ page cache 插件成为"三明治"(上层看到同一 `tg_bdev_ops`), VFS 与驱动**无感**(评审要求)
+- **统一可打开模型(SD-1, D21 修订)**: 一切 = `br_file_t`; `br_open` **只走挂载表**(设备经 /dev 接入) ⇒ svc-posix fd 层设备/文件零特判
+- **block 层 API 可堆叠**: provider 同时可以是 consumer ⇒ page cache 插件成为"三明治"(上层看到同一 `br_bdev_ops`), VFS 与驱动**无感**(评审要求)
 - **page cache 约束**: 静态预算(manifest 定死)、无换页无回收——比 Linux 简单一个量级; 写穿优先; **必须转发 flush/barrier**(cache 不能吞 fsync); EROFS 特例: 缓存解压后的页比缓存原始块划算
 - **EROFS 选型理由**: 只读压缩、车规生态熟面孔、`mkfs.erofs` 工具链与 Linux 同源
 - DMA/对齐: bdev 请求带 cache 维护职责标注(对齐 R4)
@@ -536,7 +537,7 @@ static int sqlite_port_init(void) {
 | 能力 | 机制 | 版本 |
 |---|---|---|
 | trace | 定长 16B 事件环形缓冲, ISR 可用, 编译期可整层移除(零开销) | **v1.0** |
-| debug bridge | COBS 帧协议(UART 先行), `tg dbg` 主机工具; **panic 独立通道**(轮询, 不依赖插件栈) | v1.0(M3) 最小集 |
+| debug bridge | COBS 帧协议(UART 先行), `br dbg` 主机工具; **panic 独立通道**(轮询, 不依赖插件栈) | v1.0(M3) 最小集 |
 | mini ramdump | fault handler 注册 + 静态缓冲捕获 + LZ4 + host 离线分析 | **v2.0** |
 | ASan/memleak | **host 完整 ASan 白捡**(host 平台插件, CI 常开); target: TLSF 红区+金丝雀(v1.x)、per-plugin arena 泄漏记账(v2.0)、完整 ASan 为 vx 实验 | 分层 |
 
@@ -557,12 +558,12 @@ static int sqlite_port_init(void) {
 ## 13. 开发工作流
 
 ```
-tg init myapp --domain dashboard
-tg add platform/qemu-aarch64 sched/sched-coop iface/posix \
+br init myapp --domain dashboard
+br add platform/qemu-aarch64 sched/sched-coop iface/posix \
    io/uart-pl011 fs/littlefs service/trace
-tg run qemu          # aarch64 virt, 秒级启动
-tg test              # host 平台插件 + 接口直通, CI 无硬件单测(含完整 ASan)
-tg build --release   # 产线镜像
+br run qemu          # aarch64 virt, 秒级启动
+br test              # host 平台插件 + 接口直通, CI 无硬件单测(含完整 ASan)
+br build --release   # 产线镜像
 ```
 
 版本路线图(v1.0 walk / v2.0 run / v3.0 compose / v4.0 migrate)与内部 M 里程碑: **`docs/1-architecture/1-03-roadmap.md`**。
@@ -596,7 +597,7 @@ tg build --release   # 产线镜像
 
 ## 15. 与现有系统对比
 
-| | TangramOS | FreeRTOS | Zephyr | Unikraft | AUTOSAR OS |
+| | brickOS | FreeRTOS | Zephyr | Unikraft | AUTOSAR OS |
 |---|---|---|---|---|---|
 | 组合粒度 | 插件级(含调度器+接口) | 无(仅调度) | Kconfig+dev tree | 库级 | 静态配置生成 |
 | 调度策略 | 插件(协作/抢占/时间表) | 固定 | 固定(可配置) | 固定 | 静态表 |

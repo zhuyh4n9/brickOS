@@ -4,7 +4,7 @@ participant "svc-posix" as PX
 participant "vfs-core 插件" as VF
 participant "littlefs inode_ops" as IN
 APP -> PX: open("/data/log.txt", O_WRONLY|O_CREAT)
-PX -> VF: tg_open("/data/log.txt", flags)
+PX -> VF: br_open("/data/log.txt", flags)
 VF -> VF: 挂载表最长前缀 → /data 根 inode
 VF -> IN: inode_ops.lookup(dir, "log.txt")
 note over IN
@@ -12,8 +12,8 @@ note over IN
   未命中且 O_CREAT → inode_ops.create
 end note
 IN --> VF: 文件 inode(fops = lf_file_ops)
-VF -> VF: fops->open(会话建立) → tg_file_t
-VF --> PX: tg_file_t*
+VF -> VF: fops->open(会话建立) → br_file_t
+VF --> PX: br_file_t*
 PX -> PX: fd 表分配
 PX --> APP: fd
 @enduml

@@ -1,5 +1,5 @@
 @startuml
-' TangramOS 3-02 中断生命周期状态机(Pending / Active / Inactive / Pending+Active)
+' brickOS 3-02 中断生命周期状态机(Pending / Active / Inactive / Pending+Active)
 '
 ' ── 布局约束(改图前必读) ──────────────────────────────────────────────
 ' 1) 四态环形: 状态名保持英文短标识(Pending/Active/Inactive), 中文说明放 note —— 中文写进状态名会让

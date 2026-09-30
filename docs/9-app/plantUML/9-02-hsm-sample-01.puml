@@ -15,7 +15,7 @@ top to bottom direction
 [fs/littlefs → /data(v1.0 复用)\n掉电安全持久化] as LFS
 
 HOST --> DEV : HSM 帧
-DEV --> HS : /dev/hsm0 会话(cdev-core tg_file_ops 适配)
+DEV --> HS : /dev/hsm0 会话(cdev-core br_file_ops 适配)
 APP --> IF : 策略与消费
 IF --> KEY
 IF --> CR

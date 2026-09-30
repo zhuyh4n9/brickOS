@@ -54,6 +54,6 @@ Service = 可依赖、可被依赖的**能力插件**(运行时/协议栈/中间
 |---|---|
 | **D7** | Service 插件边界判据(与 `docs/3-os-core/3-06-service-mgmt.md` 共同落定) |
 | — | socket 表的主人: svc-posix vs lwip(单一主人规则的应用) |
-| — | 三方服务的符号面治理: POSIX 面 golden(tg-svcposix.txt)之外的符号如何约束 |
+| — | 三方服务的符号面治理: POSIX 面 golden(br-svcposix.txt)之外的符号如何约束 |
 | — | **crypto/keyring 的 ops 表是否入 golden**(与四件框架件同级)——倾向入(v2 换后端要求布局稳定), 见 9-02 §6.2 O-H7 |
 | — | **平台熵源契约**(平台提供 / crypto 消费)缺失, 建议 M4 真实 SoC 设计时收口——9-02 §6.3 O-H1 |

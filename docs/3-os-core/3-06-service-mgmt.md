@@ -21,7 +21,7 @@
 core 的**服务注册表**(名字 → 指针)是插件间**无环会合点**——依赖宪法(§7.2)允许服务间依赖, 会合就发生在注册表。core 只管名字与指针, **不解释类型**(类型契约归服务方文档化)。
 
 已有决策(待深化时继承):
-- **注册表 API**(3-01 §9): `tg_service_publish`(重复 → -EEXIST)/ `tg_service_lookup`(NULL = 无)
+- **注册表 API**(3-01 §9): `br_service_publish`(重复 → -EEXIST)/ `br_service_lookup`(NULL = 无)
 - **依赖宪法**(§7.2): 服务间可依赖(init-DAG 无环)、**共享状态单一主人**(fd 表 = svc-posix)、符号命名空间独占
 - **D18**: svc-posix = 服务(三方中间件可声明依赖); 接口插件 = 严格叶子
 - 发布时机 = 服务方 init; 查找时机 = 依赖方 init(init-DAG 保证顺序)

@@ -1,19 +1,19 @@
 @startuml
-' TangramOS 3-02 中断管理 — 核心数据结构类图
+' brickOS 3-02 中断管理 — 核心数据结构类图
 '
 ' ── 布局约束(改图前必读) ──────────────────────────────────────────────
 ' 1) 这是【结构关系图】, 不是调用图: 实线 = 包含/绑定关系(带重数), 虚线 = "经 core 调用/凭据"。
 ' 2) 类体只列字段名与类型, 不写文档字符串 —— 字段语义在正文 §14.4 的表里, 图里重复会拉宽每格。
 ' 3) 关系线的方向不加箭头(association), 让 dot 自行选择层次; 加了箭头会强制层级导致长边交叉。
 ' 4) 新增类时优先复用现有类的关联锚点, 不要引入新的"中心类"。
-' 5) ★ "配置/身份" 与 "运行期计数" 分属两个类(tg_irq_desc_t / tg_irq_rt_t), 二者都按 virq 下标平行
+' 5) ★ "配置/身份" 与 "运行期计数" 分属两个类(br_irq_desc_t / br_irq_rt_t), 二者都按 virq 下标平行
 '    索引 —— 这是刻意的: 前者布局入 golden 且长期不动, 后者是可以增删计数的运行状态(§3.3)。
 
 skinparam classAttributeIconSize 0
 skinparam shadowing false
 skinparam linetype polyline
 
-class tg_irq_binding_t <<platform .rodata(flash), 16 B>> {
+class br_irq_binding_t <<platform .rodata(flash), 16 B>> {
   virq : uint16
   pic_id : uint8
   flags : uint8
@@ -25,7 +25,7 @@ class tg_irq_binding_t <<platform .rodata(flash), 16 B>> {
   rsv[3] : uint8
 }
 
-class tg_irq_desc_t <<core 池, 下标 = virq, 32 B>> {
+class br_irq_desc_t <<core 池, 下标 = virq, 32 B>> {
   isr : void (*)(void *)
   arg : void *
   hwirq : uint32
@@ -39,21 +39,21 @@ class tg_irq_desc_t <<core 池, 下标 = virq, 32 B>> {
   rsv : uint16
 }
 
-class tg_irq_rt_t <<独立运行期表, 下标 = virq, 8 B>> {
+class br_irq_rt_t <<独立运行期表, 下标 = virq, 8 B>> {
   count : uint32
   storm : uint16
   epoch : uint16
 }
 
-class tg_irq_domain_t <<core 池, 56 B>> {
+class br_irq_domain_t <<core 池, 56 B>> {
   name : const char *
-  ops : tg_irq_domain_ops *
+  ops : br_irq_domain_ops *
   priv : void *
   parent_virq : uint16
   virq_base : uint16
   n_sub : uint16
   flags : uint16
-  sub_desc : tg_irq_desc_t *
+  sub_desc : br_irq_desc_t *
   bitmap : uint32 *
   nwords : uint16
   id : uint8
@@ -62,14 +62,14 @@ class tg_irq_domain_t <<core 池, 56 B>> {
   drop_count : uint16
 }
 
-class tg_irq_domain_ops <<域方言: 驱动填表>> {
+class br_irq_domain_ops <<域方言: 驱动填表>> {
   pending(priv, bits, nwords)
   mask(priv, sub)
   unmask(priv, sub)
   ack(priv, sub)
 }
 
-class tg_pic_ops_t <<控制器方言: ISA 库填表>> {
+class br_pic_ops_t <<控制器方言: ISA 库填表>> {
   init(pic)
   caps_get(pic, out)
   ack(pic) : uint32
@@ -80,14 +80,14 @@ class tg_pic_ops_t <<控制器方言: ISA 库填表>> {
   set_affinity(pic, hwirq, mask)
 }
 
-class tg_pic_caps_t <<能力声明: 决定降级行为>> {
+class br_pic_caps_t <<能力声明: 决定降级行为>> {
   prio_bits : uint8
   nr_irq : uint32
   caps : uint32
 }
 
-class tg_irq_cpu_t <<per-CPU, TPIDR_EL1>> {
-  current : tg_thread_t *
+class br_irq_cpu_t <<per-CPU, TPIDR_EL1>> {
+  current : br_thread_t *
   irq_depth : uint32
   saved_daif : uint32
   isr_nest : uint32
@@ -102,7 +102,7 @@ class tg_irq_cpu_t <<per-CPU, TPIDR_EL1>> {
   prev_fault_elr : uint64
 }
 
-class tg_irq_state_t <<golden 位布局, 32 bit>> {
+class br_irq_state_t <<golden 位布局, 32 bit>> {
   bit0 : 进入前 PSTATE.I
   bit1 : 进入前 PSTATE.F
   bit2 : 进入前 PSTATE.A
@@ -111,14 +111,14 @@ class tg_irq_state_t <<golden 位布局, 32 bit>> {
   bit31_18 : 保留
 }
 
-class tg_irq_dispatch_t <<仅 TG_IRQ_DISPATCH_DYNAMIC=1>> {
+class br_irq_dispatch_t <<仅 BR_IRQ_DISPATCH_DYNAMIC=1>> {
   mode : uint8
   flags : uint8
   worker : uint16
   threshold : uint32
 }
 
-class tg_fault_ctx_t <<fault handler 入参, 只读现场>> {
+class br_fault_ctx_t <<fault handler 入参, 只读现场>> {
   esr / far / elr / spsr : uint64
   sp : uint64
   ec : uint32
@@ -131,15 +131,15 @@ class tg_fault_ctx_t <<fault handler 入参, 只读现场>> {
   frame : const uint64 *
 }
 
-tg_irq_binding_t "1" -- "1" tg_irq_desc_t : 组合期生成 / init 初始化
-tg_irq_binding_t "1" -- "1" tg_irq_rt_t : 同一 virq 的两种视图
-tg_irq_desc_t "1" -- "1" tg_irq_rt_t : 平行数组, 同下标
-tg_irq_domain_t "1" *-- "n" tg_irq_desc_t : sub_desc[n_sub]
-tg_irq_desc_t "1" -- "0..1" tg_irq_domain_t : dom_id >= 0
-tg_irq_domain_t "1" -- "1" tg_irq_domain_ops : 域方言
-tg_irq_desc_t ..> tg_pic_ops_t : 经 core 调用(ack/eoi/mask)
-tg_pic_ops_t -- tg_pic_caps_t : 能力上报
-tg_irq_desc_t *-- tg_irq_dispatch_t : 可选内嵌
-tg_irq_cpu_t ..> tg_irq_state_t : lock/unlock 凭据
-tg_irq_cpu_t ..> tg_fault_ctx_t : fault 现场来源
+br_irq_binding_t "1" -- "1" br_irq_desc_t : 组合期生成 / init 初始化
+br_irq_binding_t "1" -- "1" br_irq_rt_t : 同一 virq 的两种视图
+br_irq_desc_t "1" -- "1" br_irq_rt_t : 平行数组, 同下标
+br_irq_domain_t "1" *-- "n" br_irq_desc_t : sub_desc[n_sub]
+br_irq_desc_t "1" -- "0..1" br_irq_domain_t : dom_id >= 0
+br_irq_domain_t "1" -- "1" br_irq_domain_ops : 域方言
+br_irq_desc_t ..> br_pic_ops_t : 经 core 调用(ack/eoi/mask)
+br_pic_ops_t -- br_pic_caps_t : 能力上报
+br_irq_desc_t *-- br_irq_dispatch_t : 可选内嵌
+br_irq_cpu_t ..> br_irq_state_t : lock/unlock 凭据
+br_irq_cpu_t ..> br_fault_ctx_t : fault 现场来源
 @enduml

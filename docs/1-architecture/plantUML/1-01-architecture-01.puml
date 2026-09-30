@@ -1,5 +1,5 @@
 @startuml
-' TangramOS 总体分层图
+' brickOS 总体分层图
 '
 ' ── 层级表达 ──────────────────────────────────────────────────────────────
 ' L3 是 package 容器, 3a–3e 是它的子 package(子层)。"同属 L3"靠嵌套表达, 不靠平铺。
@@ -51,7 +51,7 @@ skinparam package<<inner>> {
 top to bottom direction
 hide stereotype
 
-title TangramOS Architecture Overview
+title brickOS Architecture Overview
 
   package "L5 · APP Plugins(Unique)" as L5 #EDE7F6 {
     package " " as L5IN <<inner>> {
@@ -169,7 +169,7 @@ package "L1 · OS Core" as L1 #E8F5E9 {
     L1C -[hidden]right-> L1P1
     L1P1 -[hidden]right-> L1P2
     [plugin_manager\n] as L1D
-    [native API\n(tg_*)] as L1E
+    [native API\n(br_*)] as L1E
     [服务注册表\n] as L1F
     rectangle "  " as L1Q1 <<pad>>
     rectangle "  " as L1Q2 <<pad>>
