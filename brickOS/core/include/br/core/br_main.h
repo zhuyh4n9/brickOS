@@ -1,7 +1,7 @@
 /*
  * brickOS prototype v0.1.0 — core 入口
  *
- * v0.1.0 的启动链(设计侧对应见 1-01 §9 启动序列, 在 tangramOS-Design 分支):
+ * v0.1.0 的启动链(设计侧对应见 1-01 §9 启动序列, 在 brickOS-Design 分支):
  *
  *   设计的 M0+ 形态:  reset 汇编 -> platform.early_init -> core.init
  *                     -> plugin_manager(.br_plugins 拓扑) -> EARLY/CORE/LATE
@@ -14,8 +14,8 @@
  * 因此 `br_core_main` 是一个**占位入口**: 它的最终归宿不是"变大", 而是
  * **被拆掉** —— 拆成 core.init + plugin_manager + 插件 start() + br_sched_run()。
  */
-#ifndef BR_CORE_TG_MAIN_H
-#define BR_CORE_TG_MAIN_H
+#ifndef BR_CORE_BR_MAIN_H
+#define BR_CORE_BR_MAIN_H
 
 #include <br/core/br_types.h>
 
@@ -26,4 +26,4 @@
  */
 BR_NORETURN void br_core_main(void);
 
-#endif /* BR_CORE_TG_MAIN_H */
+#endif /* BR_CORE_BR_MAIN_H */

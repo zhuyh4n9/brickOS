@@ -1,4 +1,4 @@
-# WORKAROUND 登记表 — tangram-prototype v0.1.0
+# WORKAROUND 登记表 — brickOS-prototype v0.1.0
 
 > **为什么要有这张表**: 原型允许走捷径, 但不允许**悄悄**走捷径。
 > 每条捷径在这里登记 id / 欠的是什么 / 为什么先欠着 / **还债的具体动作**。

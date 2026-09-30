@@ -11,8 +11,8 @@
  *   → I/O 插件完整 tty(中断驱动, M2 注册 cdev)。v0.1.0 用的正是前者的形态,
  *   所以这里轮询、不注册设备是**设计内行为**, 不是缺陷。
  */
-#ifndef BR_CORE_TG_CONSOLE_H
-#define BR_CORE_TG_CONSOLE_H
+#ifndef BR_CORE_BR_CONSOLE_H
+#define BR_CORE_BR_CONSOLE_H
 
 #include <br/core/br_types.h>
 
@@ -29,4 +29,4 @@ void br_console_write(const char *buf, br_size_t len);
 /* 输出 NUL 结尾字符串。 */
 void br_console_puts(const char *s);
 
-#endif /* BR_CORE_TG_CONSOLE_H */
+#endif /* BR_CORE_BR_CONSOLE_H */

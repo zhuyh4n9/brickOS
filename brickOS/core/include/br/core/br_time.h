@@ -1,7 +1,7 @@
 /*
  * brickOS prototype v0.1.0 — 延时与时钟契约
  *
- * 与设计文档的对应(在 tangramOS-Design 分支上):
+ * 与设计文档的对应(在 brickOS-Design 分支上):
  *   - `br_time_t` = uint64 微秒(3-01 §14 CA-1) —— 本头文件照抄该决策, 不另立单位
  *   - `br_clock_now()`(3-01 §4)在 v0.1.0 只取"单调读数"这一半语义
  *   - **刻意缺席**: br_task_sleep / br_task_sleep_until / 超时表 / 调度器。
@@ -11,8 +11,8 @@
  *   (设计清单里没有它们 —— 设计里"睡眠"一律是 br_task_sleep, 因为它必然阻塞切换)。
  *   等 M1 调度器落地, 这两个函数要么删除、要么降级为 platform 内部件。
  */
-#ifndef BR_CORE_TG_TIME_H
-#define BR_CORE_TG_TIME_H
+#ifndef BR_CORE_BR_TIME_H
+#define BR_CORE_BR_TIME_H
 
 #include <br/core/br_types.h>
 
@@ -45,4 +45,4 @@ br_u64 br_clock_ticks_per_ms(void);
 void br_delay_us(br_time_t us);
 void br_delay_ms(br_time_t ms);
 
-#endif /* BR_CORE_TG_TIME_H */
+#endif /* BR_CORE_BR_TIME_H */

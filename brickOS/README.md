@@ -1,16 +1,16 @@
-# tangram-prototype v0.1.0
+# brickOS-prototype v0.1.0
 
-brickOS 的**可运行原型**。分支 `tangram-prototype-v0.1.0`(从 `main` 开出)。
+brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` 开出)。
 
 > **仓库是"设计 / 原型"双线分行的**:
-> - 设计文档在 **`tangramOS-Design`** 分支(`docs/` + `comment/`);
+> - 设计文档在 **`brickOS-Design`** 分支(`docs/` + `comment/`);
 > - 原型代码在本分支(仓库根 `brickOS/`), `main` 上只有 `LICENSE`。
 >
-> 所以本分支**没有** `docs/`。下文引用设计文档时写的是"章节号", 去 `tangramOS-Design`
+> 所以本分支**没有** `docs/`。下文引用设计文档时写的是"章节号", 去 `brickOS-Design`
 > 分支上读(如 `docs/3-os-core/3-01-core-api-list.md` = `3-01`)。
 >
 > **落点约定**: 开发中的原型树 = 仓库根 `brickOS/`(core / platform 两个顶层);
-> 一个版本稳定后再冻结为 `tangram-prototype-v<版本>/`(或按分支/标签冻结), 冻结件只读。
+> 一个版本稳定后再冻结为 `brickOS-prototype-v<版本>/`(或按分支/标签冻结), 冻结件只读。
 
 ---
 
@@ -108,7 +108,7 @@ make CROSS_COMPILE=aarch64-none-elf-
 实际输出(QEMU virt, `-cpu cortex-a53`):
 
 ```
-[    0.000093] INFO  tangram-prototype v0.1.0 -- core MainLoop (delay + logging)
+[    0.000093] INFO  brickOS-prototype v0.1.0 -- core MainLoop (delay + logging)
 [    0.000985] INFO  platform: qemu-aarch64/virt (aarch64)
 [    0.001140] INFO  clock: 62500000 Hz (arch timer), 62500 ticks/ms (exact integer conversion)
 [    0.001446] INFO  entry chain: start.S -> br_plat_early_init -> br_core_main
@@ -151,7 +151,7 @@ v0.1.0 有三条欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**:
 
 ## 6. 代码 ↔ 设计对应
 
-| 本原型 | 设计出处(`tangramOS-Design` 分支) | 形态差异 |
+| 本原型 | 设计出处(`brickOS-Design` 分支) | 形态差异 |
 |---|---|---|
 | `start.S` 的 reset/向量表/BSS | `1-01 §9` 启动序列 | 设计是 Platform **插件**的汇编; 此处直编(`br-wa-entry-001`) |
 | `br_plat_early_init()` | `1-01 §9` 的 `platform.early_init`; `1-01 §8` 三层模式 | 只做 console; 时钟/region/MMU 未做 |

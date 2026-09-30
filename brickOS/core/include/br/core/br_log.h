@@ -1,7 +1,7 @@
 /*
  * brickOS prototype v0.1.0 — 日志契约
  *
- * 与设计文档的关系(设计在 tangramOS-Design 分支):
+ * 与设计文档的关系(设计在 brickOS-Design 分支):
  *   设计侧的"日志"是 **Service 插件**(11-01: 日志/OTA/crypto...; trace 是观测设施, 5-01)。
  *   v0.1.0 还没有插件管理器, 所以这里是一个**core 内的最小打印设施**, 不是那个服务。
  *   等 M0/M2 落地后, 本文件的职责应收敛为:
@@ -12,8 +12,8 @@
  * 格式化支持子集(不拉 libc 的 printf): %c %s %d %i %u %x %X %p %% 与长度修饰 l/ll/z,
  * 以及宽度与 '0' 填充(如 %08x / %6u)。未识别的转换符原样丢弃并打出其字符。
  */
-#ifndef BR_CORE_TG_LOG_H
-#define BR_CORE_TG_LOG_H
+#ifndef BR_CORE_BR_LOG_H
+#define BR_CORE_BR_LOG_H
 
 #include <br/core/br_types.h>
 
@@ -47,4 +47,4 @@ void br_log_write(br_log_level_t level, const char *fmt, ...)
 #define br_log_warn(...)  br_log_write(BR_LOG_WARN,  __VA_ARGS__)
 #define br_log_error(...) br_log_write(BR_LOG_ERROR, __VA_ARGS__)
 
-#endif /* BR_CORE_TG_LOG_H */
+#endif /* BR_CORE_BR_LOG_H */

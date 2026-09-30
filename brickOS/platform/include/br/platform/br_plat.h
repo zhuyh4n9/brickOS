@@ -24,8 +24,8 @@
  *   ISA 共享实现   ->  直接用内联汇编读 arch timer(platform/src/aarch64/timer_arch.c)
  *   平台提供的数据 ->  PL011 基址 / 波特率 / 时钟频率 / region 表(QEMU virt 值)
  */
-#ifndef BR_PLATFORM_TG_PLAT_H
-#define BR_PLATFORM_TG_PLAT_H
+#ifndef BR_PLATFORM_BR_PLAT_H
+#define BR_PLATFORM_BR_PLAT_H
 
 #include <br/core/br_types.h>
 
@@ -60,4 +60,4 @@ BR_NORETURN void br_plat_park_forever(void);
  */
 BR_NORETURN void br_plat_unexpected_exception(br_u64 vector);
 
-#endif /* BR_PLATFORM_TG_PLAT_H */
+#endif /* BR_PLATFORM_BR_PLAT_H */
