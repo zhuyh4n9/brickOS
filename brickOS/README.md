@@ -4,12 +4,12 @@ brickOS 的**可运行原型**。分支 `tangram-prototype-v0.1.0`(从 `main` �
 
 > **仓库是"设计 / 原型"双线分行的**:
 > - 设计文档在 **`tangramOS-Design`** 分支(`docs/` + `comment/`);
-> - 原型代码在本分支(仓库根 `tangramOS/`), `main` 上只有 `LICENSE`。
+> - 原型代码在本分支(仓库根 `brickOS/`), `main` 上只有 `LICENSE`。
 >
 > 所以本分支**没有** `docs/`。下文引用设计文档时写的是"章节号", 去 `tangramOS-Design`
 > 分支上读(如 `docs/3-os-core/3-01-core-api-list.md` = `3-01`)。
 >
-> **落点约定**: 开发中的原型树 = 仓库根 `tangramOS/`(core / platform 两个顶层);
+> **落点约定**: 开发中的原型树 = 仓库根 `brickOS/`(core / platform 两个顶层);
 > 一个版本稳定后再冻结为 `tangram-prototype-v<版本>/`(或按分支/标签冻结), 冻结件只读。
 
 ---
@@ -52,7 +52,7 @@ brickOS 的**可运行原型**。分支 `tangram-prototype-v0.1.0`(从 `main` �
 ## 3. 目录结构
 
 ```
-tangramOS/
+brickOS/
 ├── Makefile                     构建 / 运行 / 冒烟 / 门禁
 ├── README.md                    本文件
 ├── WORKAROUNDS.md               WORKAROUND 登记表(欠债清单)
