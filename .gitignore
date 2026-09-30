@@ -1,0 +1,6 @@
+# 构建产物(设计侧纪律: 状态目录不进版本库 —— 2-02 §BR-D5 / Q5)
+build/
+
+# 原型树属于 tangram-prototype-v0.1.0 分支; 本分支若因切分支残留其目录, 不纳入版本库
+brickOS/
+tangramOS/
