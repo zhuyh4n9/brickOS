@@ -25,6 +25,8 @@
 #   make                    ①编工具 → ②构建 build/brick.elf + .bin
 #   make tools              只编工具(不需要交叉编译器)
 #   make tools-test         跑工具自身用例(生成器自检 + 端到端)
+#   source setup.sh         配置开发环境(PATH + 环境变量; 见 ADR-0002 §7.5)
+#   make env                打印同样的 shell 片段(CI: eval "$(make -s env)")
 #   make run                在 QEMU 上跑(Ctrl-A X 退出)
 #   make smoke              3 秒冒烟: 自动判定启动与延时是否正常
 #   make size / disasm      体积 / 反汇编
@@ -157,7 +159,7 @@ LDFLAGS := -nostdlib -nostartfiles -static -no-pie \
         tools tools-test tools-clean tools-prebuilt tools-prebuilt-check \
         run smoke size disasm check-workarounds check-build \
         clean clean-brickos help print-host-triple print-host-bin-dir \
-        print-prebuilt-bin-dir print-cross-compile
+        print-prebuilt-bin-dir print-cross-compile env
 
 # ============================================================== ⓪ prebuilt 工具集
 # 锁版本 + SHA256 校验的外部工具链**下载缓存**(配方 = prebuilts/toolchain.lock.toml), 见 ADR-0002。
@@ -302,6 +304,13 @@ print-prebuilt-bin-dir:
 print-cross-compile:
 	@echo $(CROSS_COMPILE)
 
+# 开发环境(shell 片段): 工具链 bin 目录 + CROSS_COMPILE + brickie 的根路径。
+#   eval "$(make -s env)"   —— 直接进当前 shell(等价于 source setup.sh)
+#   source setup.sh         —— 常规用法; 另带 --unset / --with-make / 缺失提示
+# 这里只做**打印**: Makefile 不该去改调用者的环境(它做不到, 也不该假装能做到)。
+env:
+	@bash setup.sh --print
+
 # ------------------------------------------------------------------- 清理
 # `clean` 清掉本文件构建的**全部**产物(①工具 + ②镜像); 只清工具用 tools-clean。
 #
@@ -317,7 +326,7 @@ help:
 	@echo "目标: all(缺省) prebuilt prebuilt-check prebuilt-clean"
 	@echo "      tools tools-test tools-prebuilt tools-prebuilt-check run smoke size disasm"
 	@echo "      check-workarounds check-build clean tools-clean"
-	@echo "      print-host-triple print-host-bin-dir print-prebuilt-bin-dir print-cross-compile"
+	@echo "      print-host-triple print-host-bin-dir print-prebuilt-bin-dir print-cross-compile env"
 	@echo "变量: CROSS_COMPILE=$(CROSS_COMPILE)  CC=$(CC)"
 	@echo "      QEMU=$(QEMU)  QEMUFLAGS=$(QEMUFLAGS)"
 	@echo "      HOST_TRIPLE=$(HOST_TRIPLE)  HOST_BIN_DIR=$(HOST_BIN_DIR)"

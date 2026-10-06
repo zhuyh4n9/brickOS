@@ -463,6 +463,42 @@ def print_hash(url: str) -> int:
     return 0
 
 
+def print_env(lock: dict) -> int:
+    """输出一份 **shell 片段**(供 `setup.sh` source): 工具链各 bin 目录与 CROSS_COMPILE 前缀。
+
+    **为什么由这里输出, 而不是让 setup.sh 自己拼路径**: 路径的唯一真值是锁文件
+    (`prebuilts/toolchain.lock.toml`), 而"某个条目解出来之后 bin 在哪"这条推理只应该有一处
+    实现。若 shell 侧再来一遍 glob/推导, 就又出现两个真值 —— 正是 ADR-0002 §7.3-1 记的那类坑。
+
+    只读锁文件, **不要求已取件** ⇒ 全新 checkout(还没跑 `make prebuilt`)也能拿到路径,
+    由消费方自己去判断目录在不在。
+    """
+    tc = lock.get("toolchain") or {}
+    prebuilt_rel = PREBUILT.relative_to(REPO_ROOT).as_posix()
+    bin_dirs: list[str] = []
+    cross = ""
+    make_dir = ""
+    for key, rel in sorted(tc.items()):
+        if rel.endswith("-"):
+            cross = f"{prebuilt_rel}/{rel}"
+            d = os.path.dirname(rel)              # .../bin/aarch64-none-elf- → .../bin
+        else:
+            d = os.path.dirname(rel)              # make/bin/make → make/bin
+            if key == "make":
+                make_dir = f"{prebuilt_rel}/{d}"
+        if d:
+            full = f"{prebuilt_rel}/{d}"
+            if full not in bin_dirs:
+                bin_dirs.append(full)
+    print(f"# 由 tools/fetch-prebuilt.py --print-env 生成 —— 路径真值 = {LOCK.name}")
+    print("# 路径都是**仓库根相对**(消费方自行加上 $BRICKOS_ROOT) —— 免得忘加前缀拼错")
+    print(f"PREBUILT_REL='{prebuilt_rel}'")
+    print(f"PREBUILT_CROSS='{cross}'")
+    print(f"PREBUILT_MAKE_BIN_DIR='{make_dir}'")
+    print(f"PREBUILT_BIN_DIRS='{' '.join(bin_dirs)}'")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="fetch-prebuilt",
@@ -474,12 +510,17 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("--verify", action="store_true", help="重算缓存文件的 SHA256")
     ap.add_argument("--force", action="store_true", help="忽略缓存重下")
     ap.add_argument("--print-hash", metavar="URL", help="下载并打印该 URL 的 sha256(维护锁用)")
+    ap.add_argument("--print-env", action="store_true",
+                    help="打印 shell 片段(工具链 bin 目录 + CROSS_COMPILE 前缀), 供 setup.sh source")
     args = ap.parse_args(argv)
 
     if args.print_hash:
         return print_hash(args.print_hash)
 
     lock = load_lock()
+
+    if args.print_env:
+        return print_env(lock)
 
     if args.list:
         print(f"{LOCK.relative_to(REPO_ROOT)}  (version {lock['version']})")

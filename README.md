@@ -160,9 +160,32 @@ make tools-prebuilt          # 编工具 → 发布种子(cmp 相同则不写盘
 make tools-prebuilt-check    # 只检查种子是否落后于源码
 ```
 
-> ⚠ 别和 `prebuilts/toolchain/`(**单数**, 外部工具链的下载缓存, 派生、不进库)混淆;
-> 目录名只差一个 `s`, 但一个是缓存、一个是随源码提交的资产。详见
-> [prebuilts/README.md](prebuilts/README.md) 与设计侧 ADR `0004`。
+> **`prebuilts/` 下分两侧**(单一顶层目录, 见 ADR `0005`):
+> `seed/`(**进库**, 就是上面这份自举种子)与 `toolchain/`(**派生、不进库**, 外部工具链)。
+> 原先"两个顶层目录只差一个 `s`"的歧义已消除。详见 [prebuilts/README.md](prebuilts/README.md)。
+
+### 配置开发环境(`setup.sh`)
+
+把 `prebuilts/` 的工具链与 brickie 放进当前 shell(**必须 `source`** —— 子进程改不了父 shell):
+
+```bash
+source setup.sh              # 配置 PATH + 环境变量
+source setup.sh --quiet      # 静默
+source setup.sh --with-make  # 额外把 prebuilts 的 make 放到最前(会遮蔽宿主 make)
+source setup.sh --unset      # 撤销(逐字节还原)
+```
+
+| 项 | 内容 |
+|---|---|
+| `PATH` 前置(左优先) | `build/host/<triple>/bin`(**本机新编优先**) → `prebuilts/seed/brickie/<triple>/bin` → `prebuilts/toolchain/<arm…>/bin` → `prebuilts/toolchain/ninja/bin` |
+| 环境变量 | `BRICKOS_ROOT` · `BRICKOS_HOST_TRIPLE` · `BRICKIE_REPO_ROOT` · `BRICKIE_TOOL_ROOT` · `CROSS_COMPILE` |
+
+设计取舍: **默认不加 `make`** —— 它会遮蔽宿主 `make`(构建内部本来就用 `prebuilt` 的
+`$(MAKE)`, 见 ADR-0002 §7.5); **不设 `BRICKIE_GEN`** —— 那会盖掉"本机新编优先"的查找顺序。
+CI 里不想 `source` 就用 `eval "$(make -s env)"`(同一份片段)。
+
+> 工具链还没取件、工具还没编时, `setup.sh` 照样工作, 只是把缺失目录列出来并提示
+> `make prebuilt` / `make tools`(PATH 里放不存在的目录无害)。
 
 **工具段**只要宿主 `g++` + `python3`(≥3.11), **不需要交叉工具链**:
 
