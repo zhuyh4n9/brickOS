@@ -1,0 +1,37 @@
+# {{PLUGIN_NAME}}
+
+> 插件骨架, 由 `brickie new` 生成一次。之后**由人维护**。
+
+> Interface 插件在 LATE 初始化(晚于其依赖的 Service, `1-01` §6.2)。
+
+## 声明面(唯一真值)
+
+| 项 | 值 |
+|---|---|
+| 插件类别 `plugin_type` | `interface` |
+| `api_type` | `{{API_TYPE}}` |
+| 语言 `lang` | `c`(v0.1 只交付 c) |
+| 初始相位 `phase` | `{{PHASE}}`(由 plugin_type/subkind 推导, `1-01` §6.2) |
+| 初始版本 | `{{VERSION}}` = `COMPAT_GEN.MAJOR.MINOR.REVISE` = `0.1.0.0` |
+
+字段语义见 `docs/4-plugin/4-03-plugin-manifest.md`; v0.1 schema 见
+`docs/2-toolchain/brickie/brickie-v0.1.md` §8.1。
+
+## 接下来(v0.1 闭环)
+
+> 工具本身仍在开发中 —— 当前进度与各命令的排期见
+> `docs/2-toolchain/brickie/checklist.md` §5.2。
+
+```sh
+brickie check                       # 声明面完备性检查(组合期校验)
+brickie dep add {{PLUGIN_NAME}} <dep>       # 声明结构依赖
+brickie iface publish {{PLUGIN_NAME}}       # 发布接口面 → hash + 版本推进
+brickie gen                         # 从 plugin.toml 重建 build/gen/**; --check 只比对
+```
+
+`build/gen/{{PLUGIN_NAME}}/plugin_desc.c` 是**生成物**, 不要手改 —— 改 `plugin.toml`, 再重建。
+
+## 边界
+
+v0.1 的 `check` 是**声明面完备性检查器** —— 保证"这个组合在逻辑上自洽",
+**不**保证"编得过 / 跑得对"(无编译器、无符号表、无 QEMU)。

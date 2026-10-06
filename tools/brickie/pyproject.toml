@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "brickie"
+version = "0.1.0"
+description = "brickie — brickOS 组合期工具(host 侧, 零编译依赖的声明面闭环)"
+readme = "README.md"
+requires-python = ">=3.11"          # tomllib 进标准库
+license = { text = "WTFPL" }
+
+[project.scripts]
+brickie = "brickie.cli:main"
+
+[tool.setuptools]
+package-dir = { "" = "python" }
+packages = ["brickie"]

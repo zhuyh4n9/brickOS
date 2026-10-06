@@ -1,0 +1,13 @@
+# {{PLUGIN_NAME}} — conformance 用例骨架(人写)
+#
+# 由 `brickie new` 生成; **v0.1 不消费它**(无 test 命令, 排 v0.4, §0 边界纪律)。
+# 字段形状照 `6-01` §2 的用例表契约; 定稿前按需改。
+schema = 1
+
+[[case]]
+id       = "smoke-0001"
+pre      = "已启动到 MainLoop"
+steps    = ["调用 {{SYMPREFIX}}init, 检查返回值"]
+expect   = "返回 0"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]

@@ -41,7 +41,7 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 
 | 不做 | 理由 |
 |---|---|
-| **插件化(描述符 / manifest / `br`)** | 这正是 `br` 组合器与插件管理器的产出(`4-02`/`4-03`, `3-05`)。工具不在, 插件化只能手工假装。**Platform Entry 因此挂了 WORKAROUND, 见 §5** |
+| **插件化(描述符 / manifest / 组合器)** | 这正是组合器 brickie 与插件管理器的产出(`4-02`/`4-03`, `3-05`)。工具**只到「生成骨架」这一步**(v0.1 的 `new`; 见 `tools/brickie/README.md` 的进度表), **插件发现 / 描述符接线 / 组合期 `check` 都还没有** ⇒ 插件化目前仍是手工假装。**Platform Entry 因此挂了 WORKAROUND, 见 §5** |
 | 调度器 / 线程 / `br_sched_ops` | M1。没有调度器就没有"可让出的对象", 所以睡眠只能是忙等 |
 | 中断 / GICv3 / 中断框架 | M0。v0.1.0 全程关中断(DAIF 全屏蔽) |
 | MMU / 恒等映射 / region 表 / cache 维护 | MainLoop 不碰内存管理, 做了也无法验证 |
@@ -56,7 +56,22 @@ brickOS/
 ├── Makefile                     构建 / 运行 / 冒烟 / 门禁
 ├── README.md                    本文件
 ├── WORKAROUNDS.md               WORKAROUND 登记表(欠债清单)
-├── tools/check-workarounds.sh   源码标记 ↔ 登记表 一致性检查
+├── mk/
+│   └── host.mk                  宿主三元组 + 宿主产物目录(build/host/… 与 prebuilts/…)
+├── prebuilts/toolchain/                    外部工具链**下载缓存**(派生, 不进库; fetch-prebuilt.py)
+├── prebuilts/                   宿主工具**自举种子**(进库; 见下, 详见其 README)
+│   └── brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen}
+├── tools/
+│   ├── host-detect.sh           宿主 arch/os 探测(布局映射的唯一真值)
+│   ├── check-workarounds.sh     源码标记 ↔ 登记表 一致性检查
+│   ├── check-build.sh           构建接线门禁(宿主产物出树 / 自举种子进库)
+│   └── brickie/                 【组合期工具】brickie(原名 `br`; 详见其 README)
+│       ├── Makefile             宿主 g++ + python3, **不碰交叉工具链**
+│       ├── freeze.py            打包器: Python 包 + 模板 → 嵌入 ELF 的载荷
+│       ├── cxx/                 L2 生成器 + L5 入口 ELF 的源码(产物出树, 见下)
+│       ├── python/brickie/      L5 前端(子命令 / 输出 / 退出码 / 文件编排)
+│       ├── templates/           骨架模板(四类 × c)
+│       └── tests/               端到端用例
 ├── core/                        【Core】与平台无关的部分
 │   ├── include/br/core/
 │   │   ├── br_types.h           基础类型(不用 <stdint.h>)
@@ -84,20 +99,98 @@ brickOS/
 
 ## 4. 构建与运行
 
-**工具链是外部的**(内部工具链未就绪, 见 §5 的 `br-wa-toolchain-001`)。需要:
+构建是**两段式**, 而且**工具在前**:
+
+```
+① tools/    brickie(组合期工具)   宿主 g++ 编 C++ 生成器 + Python 前端
+                                        │  不碰交叉工具链(v0.1 零编译依赖纪律)
+                                        ▼
+② brickOS   aarch64 裸机镜像      外部交叉 gcc
+```
+
+顺序由 `Makefile` 里一条 order-only 依赖钉死(`$(OBJS): | tools`), 所以 `make -j`
+也不会倒过来; 同时"工具重新编过"不会触发镜像重链。
+这条纪律由 `make check-build` 把关 —— 顺序纪律坏起来通常是**静默**的(比如把 tools 段
+写成文件里第一条规则, `make` 就只编工具然后 exit 0, 镜像根本没编却不报错), 所以钉成门禁。
+
+**产物落点(参考 Android)**: 工具是**宿主**程序, 一律出树到
+`build/host/<host-arch>/<host-os>/` 下, 与镜像产物(`build/obj`、`build/brick.*`)
+分居 `build/` 两侧, 源码树里不留任何 `.o`/可执行文件:
+
+```
+build/host/<host-arch>/<host-os>/bin/brickie        # 单文件自包含 ELF(前端 + 模板 + brickie-gen)
+                              …/bin/brickie-gen     # L2 生成器(宿主可执行)
+                              …/lib/libbrickie-gen.a # 宿主静态库
+                              …/obj/cxx/*.o          # 中间产物
+```
+
+`<host-arch>` = 处理器架构(`x86-64` / `aarch64` / …), `<host-os>` = 操作系统
+(`linux` / `darwin` / `win`)。映射只在 `tools/host-detect.sh` 一处; `mk/host.mk`
+把它变成 make 变量, `python/brickie/hostinfo.py` 是它的镜像(由用例断言同口径)。
+查当前宿主:
+
+```bash
+make print-host-triple        # x86-64/linux
+make print-host-bin-dir       # …/build/host/x86-64/linux/bin
+make print-prebuilt-bin-dir   # …/prebuilts/seed/brickie/x86-64/linux/bin
+```
+
+**Python 前端 + 原生工具都在一个 ELF 里**: `brickie` 是**单文件自包含入口 ELF** ——
+由 `tools/brickie/cxx/launcher.cpp` 把 Python 包、模板与**原生工具**(`brickie-gen`)经
+`tools/brickie/freeze.py` 打成未压缩 tar 后嵌进二进制, 运行时解包到临时目录再用系统
+`python3` 解释, 并把 `BRICKIE_GEN` 指到解包出来的内嵌 `brickie-gen`。于是**只拷
+`brickie` 一个文件**就能跑: 不需要 `PYTHONPATH`、不需要源码树、不需要同目录的
+`brickie-gen`、不需要 `g++`; 且**零新增第三方依赖**(不用 PyInstaller/Nuitka)。
+详见 [tools/brickie/README.md](tools/brickie/README.md) 与 ADR `0004` §7。
+
+**自举种子(进版本库, `prebuilts/`)**: 除"本机刚编的" `build/host/**` 外, 同一套
+宿主三元组下还随源码提交预编译件:
+
+```
+prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie        # ★ 单文件自包含(内含 brickie-gen)
+                                           /brickie-gen    # L2 生成器(冗余副本, 供开发态直用)
+```
+
+它让**没有 `g++` 的全新 checkout** 也能直接跑 `brickie`(`brickie` 自带代码、模板与
+原生工具; 开发态的 Python 前端找不到 `build/` 也会退到种子), 也是将来
+**用 brickie 自举管理 brickie 自身编译**的"第一块砖"。改了工具源码后重新发布:
+
+```bash
+make tools-prebuilt          # 编工具 → 发布种子(cmp 相同则不写盘)
+make tools-prebuilt-check    # 只检查种子是否落后于源码
+```
+
+> ⚠ 别和 `prebuilts/toolchain/`(**单数**, 外部工具链的下载缓存, 派生、不进库)混淆;
+> 目录名只差一个 `s`, 但一个是缓存、一个是随源码提交的资产。详见
+> [prebuilts/README.md](prebuilts/README.md) 与设计侧 ADR `0004`。
+
+**工具段**只要宿主 `g++` + `python3`(≥3.11), **不需要交叉工具链**:
+
+```bash
+make tools              # 只编工具(没装交叉编译器的机器/CI 工具作业可用)
+make tools-test         # 工具自身用例: 生成器自检 + 端到端 94 条(含自包含入口 ELF)
+```
+
+**镜像段**的工具链是外部的(内部工具链未就绪, 见 §5 的 `br-wa-toolchain-001`)。需要:
 `aarch64-linux-gnu-gcc`(或带版本号的 `gcc-14`/`gcc-13`, Makefile 会自动探测)、
 `binutils-aarch64-linux-gnu`、`qemu-system-aarch64`。
 
 ```bash
-cd tangramOS
-make                    # 构建 build/brick.elf + .bin
+# 在仓库根执行(本分支根目录 = 原型树, 没有 brickOS/ 前缀)
+make                    # ①编工具 → ②构建 build/brick.elf + .bin
 make run                # 在 QEMU virt 上跑(Ctrl-A X 退出)
 make smoke              # 3 秒冒烟: 自动判定启动/延时判据, 红绿可进 CI
 make size               # 体积
 make disasm             # 反汇编
 make check-workarounds  # WORKAROUND 登记一致性
-make clean
+make check-build        # 构建接线门禁: 缺省目标/工具在前/工具段零交叉依赖/出树/种子
+make tools-prebuilt     # 发布自举种子到 prebuilts/seed/brickie/<arch>/<os>/bin/
+make clean              # 清掉①与②的产物(只清工具: make tools-clean; 不动 prebuilts/)
 ```
+
+> ⚠ **工具还没参与镜像构建**: brickie 目前只在①被编出来, ②仍是**手工组合**
+> (没有插件发现 / 描述符生成 / 组合期 `check`)。这正是 `br-wa-entry-001` 的欠债,
+> 接线动作见 §5 与 `WORKAROUNDS.md`。
 
 换工具链前缀只需一个变量(这是 `br-wa-toolchain-001` 的还债口):
 
@@ -140,7 +233,7 @@ v0.1.0 有三条欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**:
 | `br-wa-boot-001` | 启动链被压缩成一个死循环(无 plugin_manager / init 阶段 / 调度器) |
 | `br-wa-toolchain-001` | 工具链用外部 gcc |
 
-**`br-wa-entry-001` 的退出条件**(`br` 工具就绪后必须做的三件事):
+**`br-wa-entry-001` 的退出条件**(`brickie`, 原名 `br`, 就绪后必须做的三件事):
 
 1. `br` 能按布局约定发现并校验插件(`4-02`);
 2. `platform/` 收敛为插件 `platform/qemu-aarch64`(`BR_PLUGIN` 描述符 + 声明片段, `4-03`);

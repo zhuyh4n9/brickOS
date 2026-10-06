@@ -1,0 +1,27 @@
+/* {{PLUGIN_NAME}} — 实现骨架
+ *
+ * 人写文件: 由 `brickie new` 生成一次, 之后由人维护(brickie 不覆盖)。
+ * **描述符实例不在这里** —— 它在生成物 build/gen/{{PLUGIN_NAME}}/plugin_desc.c(§8.4)。
+ *
+ * Platform 插件在 EARLY 相声明内存 region 表(`br_mm_region_add`, `3-01` §7),
+ * 因此 early_init 是它最重要的回调。
+ */
+#include "{{SHORT}}/{{SHORT}}.h"
+
+/* EARLY 相: 不使用堆 / 无线程 / 关中断(`1-01` §6.2) */
+int {{SYMPREFIX}}early_init(void)
+{
+    return 0;
+}
+
+/* CORE / LATE 相: 堆可用, 调度器已锁定, 中断仍关 */
+int {{SYMPREFIX}}init(void)
+{
+    return 0;
+}
+
+/* 全局开中断后: 中断可用, 可创建线程 */
+int {{SYMPREFIX}}start(void)
+{
+    return 0;
+}

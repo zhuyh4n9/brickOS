@@ -1,0 +1,84 @@
+# prebuilts/toolchain — 锁定清单(**唯一真值**)
+#
+# 纪律(见 Design/docs/decisions/0002-prebuilt-toolchain.md):
+#   * `prebuilts/toolchain/` **不进版本库**(派生目录, 体积以 GB 计); 本文件是它的重建配方。
+#   * **没有 sha256 的条目不许存在** —— 取件脚本会拒绝。
+#   * 上游换了内容 ⇒ 取件失败并保留下载件供比对, **必须显式**改这里才能继续。
+#     不许"自动跟随最新"。
+#   * 重建:  python3 tools/fetch-prebuilt.py
+#     校验:  python3 tools/fetch-prebuilt.py --check
+#     换锁:  python3 tools/fetch-prebuilt.py --print-hash <URL>
+#
+# 为什么是 Python 脚本而不是 shell: 取件这一步**不该再引入一串宿主工具**。
+# 脚本只用 Python 3 标准库(urllib/hashlib/tarfile/lzma/compression.zstd/zipfile + 自带 ar 解析),
+# 不需要 curl / wget / tar / xz / zstd / ar / dpkg-deb / unzip。
+
+version = 1
+
+# ---------------------------------------------------------------- 目标编译器
+# 裸机 aarch64 专用工具链(gcc + binutils + sysroot)。用途: br-wa-toolchain-001 的还债口。
+#
+# 选型留痕(ADR-0002 §2): clang 21(LLVM-21.1.8)本可一份顶两用 —— 目标编译器 + libclang
+# (brickie v0.2 的接口依赖扫描要用), 但体积 1925 MB vs 92 MB(20×) ⇒ v0.1 取 Arm。
+# **待复议**: 若以后要求"宿主编译器也自洽", 宿主编译器只能另纳一件 —— clang 那条路正是为此存在。
+[[artifact]]
+id       = "arm-gnu-toolchain"
+version  = "15.2.rel1"
+kind     = "tar.xz"
+url      = "https://developer.arm.com/-/media/Files/downloads/gnu/15.2.rel1/binrel/arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-elf.tar.xz"
+filename = "arm-gnu-toolchain-15.2.rel1-x86_64-aarch64-none-elf.tar.xz"
+sha256   = "66f7ce7c1bf662f589a4caf440812375f3cd8000a033ccf0971127a0726d6921"
+into     = "arm-gnu-toolchain-15.2.rel1"
+strip    = 1
+# 校验值来源: 同目录的官方 `…tar.xz.sha256`(另有 `.sha256asc`), 即**上游给出的**值,
+# 不是本地首用信任(TOFU)。上游删除旧版本 ⇒ 取件会失败, 但绝不会静默取到别的东西。
+provenance = "官方 .sha256(GNU Arm Toolchain 15.2.rel1 binrel 目录)"
+license  = "GPL-3.0-or-later WITH GCC-exception-3.1 / GPL-3.0 / LGPL-3.0(组合发行)"
+why      = "目标编译器 + binutils: 裸机 aarch64 构建(br-wa-toolchain-001 的还债口)"
+
+# ---------------------------------------------------------------- 构建后端 make
+# 出处: Ubuntu `make` 4.4.1-3(源码包 make-dfsg)。
+# 为什么取自发行版包而不是 GNU 官方的源码 tarball: GNU **没有官方 Linux 预编译包**,
+# 而 make 的构建系统自身要 make ⇒ 存在自举环。取发行版包是唯一"真预编译"的路子。
+# 代价(ADR-0002 §5-2): 它**动态链接宿主 glibc**, 所以 prebuilt 是"钉住版本"而非"与环境无关"。
+[[artifact]]
+id       = "make"
+version  = "4.4.1-3"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/main/m/make-dfsg/make_4.4.1-3_amd64.deb"
+filename = "make_4.4.1-3_amd64.deb"
+sha256   = "a86f39d57a32b7c919c0ad721fc2f17ab533a42fda348c8d81a4eea1577a014f"
+into     = "make"
+strip    = 1
+provenance = "Ubuntu 26.04 (resolute) 归档; 本机 `apt-cache policy make` 的候选版本"
+license  = "GPL-3.0-or-later"
+why      = "BR-D4 倾向 A(生成物 + make)的后端; 也是 Makefile 递归 $(MAKE) 用的那一份"
+
+# ---------------------------------------------------------------- 构建后端 ninja
+# 出处: Ubuntu `ninja-build` 1.13.2-1(universe)。
+# v0.1 **只就位, 不接线**: BR-D4 把 ninja 列为备选 B(直出 ninja), "生成物形态不变, 只换后端"。
+# 放进 prebuilt 是为了让 S2(后端可换)那一步不必临时再想办法搞工具。
+[[artifact]]
+id       = "ninja"
+version  = "1.13.2-1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/universe/n/ninja-build/ninja-build_1.13.2-1_amd64.deb"
+filename = "ninja-build_1.13.2-1_amd64.deb"
+sha256   = "533239a464183f041f7c979f899fd8419e31ac82366540e57902a255de78f156"
+into     = "ninja"
+strip    = 1
+provenance = "Ubuntu 26.04 (resolute) universe 归档"
+license  = "Apache-2.0"
+why      = "BR-D4 备选 B(直出 ninja)预留 —— 只就位, 暂不接线"
+
+# ---------------------------------------------------------------- 落点(供 Makefile 读)
+# fetch-prebuilt.py 据本表生成 `prebuilts/toolchain/toolchain.mk`(路径由这里决定, 不让 Makefile 去猜
+# 发行包解出来的目录名)。Makefile 用 `-include prebuilts/toolchain/toolchain.mk`; 文件不存在 ⇒
+# 自动退回宿主外部工具链(过渡形态, 见 br-wa-toolchain-001)。
+#
+# ⚠ 未纳入: **宿主编译器**。Arm GNU Toolchain 只产目标代码, 编不了宿主程序 ——
+#   而 tools/brickie/cxx/(L2 生成器)是宿主 C++。见 ADR-0002 §5-1 与 ADR-0003 §5-2。
+[toolchain]
+make  = "make/bin/make"
+ninja = "ninja/bin/ninja"
+cross = "arm-gnu-toolchain-15.2.rel1/bin/aarch64-none-elf-"

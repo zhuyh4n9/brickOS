@@ -1,0 +1,13 @@
+# 构建产物(与仓库根的 build/ 同纪律: 状态目录不进版本库)
+#
+# 宿主工具**出树**构建: 正规落点是 <repo>/build/host/<host-arch>/<host-os>/{bin,lib,obj}
+# (见 ../../mk/host.mk), 由仓库根 .gitignore 的 `build/` 覆盖。
+#
+# 下面三条是**首刀遗留的源码树内产物**(迁移期兜底): 现在的规则不再产生它们,
+# 留着以防旧树 checkout 后混进来。
+cxx/*.o
+cxx/*.a
+cxx/brickie-gen
+__pycache__/
+*.pyc
+*.egg-info/

@@ -1,0 +1,69 @@
+# {{PLUGIN_NAME}} — 插件声明面(人写; **插件级唯一真值**, BRV-D4)
+#
+# 由 `brickie new` 生成一次, 之后**由人维护** —— brickie 不覆盖人写文件(§8.4)。
+# 字段语义: docs/4-plugin/4-03-plugin-manifest.md; v0.1 schema: brickie-v0.1 §8.1
+schema = 1
+
+[plugin]
+name        = "{{PLUGIN_NAME}}"
+plugin_type = "app"
+api_type    = "{{API_TYPE}}"
+lang        = "{{LANG}}"
+phase       = "{{PHASE}}"           # APP 在全部插件 start 之后进入(`1-01` §6.2)
+version     = "{{VERSION}}"        # COMPAT_GEN.MAJOR.MINOR.REVISE(§5.2)
+summary     = "{{SUMMARY}}"
+license     = "{{LICENSE}}"
+
+[compat]
+core       = "{{CORE_RANGE}}"      # range 固定 3 段, 缺段右补 0(§7.4)
+api_rev    = {{API_REV}}
+hash_scope = "decl"                # decl(v0.1) | sym(v0.x)(§6.6)
+truth      = "decl"                # decl | header(§6.6)
+abi_id     = ""                    # v0.1 占位; v0.6 由工具链指纹填充
+
+# ---- 接口依赖(v0.2 启用; v0.1 只校验 schema)----
+# [[compat.requires_iface]]
+# id         = "ability/vfs-core#file"   # <provider>#<unit>
+# api_iface  = "native"
+# compat_gen = 0                         # 必填, 精确匹配(§5.5)
+# range      = ">=1.2.0"                 # 只比较 MAJOR.MINOR.REVISE
+# mode       = "decl"
+
+# ---- 类型别名表(IFACE-IR 规则 4 的输入, §6.2)----
+# 别名 → 规范名; 防"同一类型两种写法"抖 hash。骨架为空, 有别名时再填。
+[iface.typedefs]
+
+# ---- 结构依赖(init / runtime / type; **不钉 compat_gen**)----
+# [[dep]]
+# name  = "platform/qemu-aarch64"
+# range = ">=0.1.0"
+# kind  = "init"
+# phase = "early"                  # 可选断言(§8.1); 与提供方自述冲突 ⇒ BRV-DEP-0010
+
+# ---- 导出面(每单元一条; 单元 = 冻结与版本的基本粒度, 依 F1)----
+[[export]]
+api_iface    = "{{API_TYPE}}"      # §3.5 不变量 1: 必须等于 [plugin].api_type
+form         = "api"               # api | skin | service(§8.4 的骨架取 api)
+name         = "{{EXPORT_UNIT}}"
+version      = "{{VERSION}}"       # 单元自身四段版本(按单元推进)
+compat_gen   = 0                   # 单元级冻结代; 0 = 尚未冻结(§5.3)
+freeze_state = "unfrozen"          # unfrozen | frozen | unfreezing(§5.3.1)
+hash         = ""                  # 由 `brickie iface publish` 填充(§6.2)
+status       = "experimental"      # experimental | frozen | deprecated
+# [[export.entries]]               # 符号级"意图"清单(§6.1)
+# kind   = "func"
+# name   = "{{SYMPREFIX}}do_something"
+# sig    = "int (void)"
+# status = "experimental"
+
+# ---- 特权面(§3.4; v0.1 只校验声明合法性)----
+# [privileged]
+# level = "P2"
+# [[privileged.memory]]
+# granularity = "page"
+# ops         = ["map", "protect", "flush", "invalidate"]
+# regions     = ["dma"]
+
+[build]                            # v0.1 只记录; v0.3 起被消费
+sources  = ["src/*.c"]
+includes = ["include"]

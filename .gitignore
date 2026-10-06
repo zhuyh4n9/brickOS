@@ -1,2 +1,15 @@
 # 构建产物(设计侧纪律: 状态目录不进版本库 —— 2-02 §BR-D5 / Q5)
+#
+# 全部产物都收敛在 build/ 下, 分两侧(参考 Android 的 out/host 与 out/target):
+#   build/obj, build/brick.elf|.bin|.map   镜像(交叉工具链)
+#   build/host/<host-arch>/<host-os>/**   宿主工具(brickie 入口 ELF + brickie-gen)
+#   build/gen/**                           brickie 生成的声明面产物
 build/
+
+# 外部工具链的**下载缓存**(由 tools/fetch-prebuilt.py 重建; 派生, 体积以 GB 计)
+# ⚠ 与 prebuilts/(**复数**)区分: 那个是随源码提交的**自举种子**, 必须进版本库。
+/prebuilts/toolchain/
+
+# Python 字节码(工具脚本直跑时会生成; 派生物, 不进库)
+__pycache__/
+*.pyc

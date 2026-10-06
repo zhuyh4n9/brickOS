@@ -1,0 +1,27 @@
+/* {{PLUGIN_NAME}} — 实现骨架
+ *
+ * 人写文件: 由 `brickie new` 生成一次, 之后由人维护(brickie 不覆盖)。
+ * **描述符实例不在这里** —— 它在生成物 build/gen/{{PLUGIN_NAME}}/plugin_desc.c(§8.4)。
+ *
+ * Interface 插件是严格叶子: 只被 APP 依赖; 可再导出 svc-posix 符号(`1-01` §7.3)。
+ * 再导出单元须声明 form="skin" + reexport_of(§3.5 不变量 3)。
+ */
+#include "{{SHORT}}/{{SHORT}}.h"
+
+/* EARLY 相: 不使用堆 / 无线程 / 关中断(`1-01` §6.2) */
+int {{SYMPREFIX}}early_init(void)
+{
+    return 0;
+}
+
+/* CORE / LATE 相: 堆可用, 调度器已锁定, 中断仍关 */
+int {{SYMPREFIX}}init(void)
+{
+    return 0;
+}
+
+/* 全局开中断后: 中断可用, 可创建线程 */
+int {{SYMPREFIX}}start(void)
+{
+    return 0;
+}
