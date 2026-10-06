@@ -128,3 +128,38 @@
 4. **三个 URL 的长期可用性未核对**(§5-4); 上游删旧版时取件会失败(不会静默取错 —— SHA256 拦得住)。
 5. **`prebuilts/toolchain/` 未纳入 `check-build` 门禁**: `prebuilt-check` 缺省「不算失败」(退回宿主工具链是合法过渡形态); 要求硬性自洽的 CI 作业需显式 `PREBUILT_STRICT=1`。**是否升为缺省硬门禁, 待定。**
 
+### 7.5 开发环境契约(`setup.sh` 与它设的环境变量)
+
+**落点**: `prototype-v0.1.0/setup.sh`(必须 `source`);CI 用 `eval "$(make -s env)"`(同一份片段)。
+
+**设什么** —— 只设**有真实消费者**的变量, 不设空转变:
+
+| 变量 | 消费者 | 含义 |
+|---|---|---|
+| `CROSS_COMPILE` | 顶层 `Makefile` | 交叉编译器前缀(prebuilts 侧的 `…/bin/aarch64-none-elf-`) |
+| `BRICKIE_REPO_ROOT` | `tools/brickie/python/brickie/native.py` | 仓库根(让种子 ELF 在别的 cwd 下也能定位源码树) |
+| `BRICKIE_TOOL_ROOT` | 同上 | `tools/brickie`(模板与原生件的根) |
+| `BRICKOS_ROOT` / `BRICKOS_HOST_TRIPLE` | 人读 / 脚本 | 仓库根与宿主三元组 |
+| `PATH` | — | 见下 |
+
+**PATH 前置顺序(左 = 优先)** 与砖具前端的查找顺序**对齐**:
+`build/host/<triple>/bin`(**本机新编优先**) → `prebuilts/seed/brickie/<triple>/bin` →
+`prebuilts/toolchain/<arm…>/bin` → `prebuilts/toolchain/ninja/bin`。
+
+**两条刻意的"不设"**:
+
+1. **默认不加 `prebuilts/toolchain/make/bin` 到 PATH** —— 它会**遮蔽宿主 `make`**。需要时
+   显式 `source setup.sh --with-make`。理由: 构建内部本来就用 prebuilts 那份
+   (`Makefile` 的 `MAKE := $(PREBUILT_MAKE)`, §2-6), 交互 shell 里再遮蔽宿主 make 只会让人困惑。
+2. **不设 `BRICKIE_GEN`** —— 它的语义是"**钉死**生成器"; 设了就会盖掉 native.py 的
+   "$`BRICKIE_GEN` → `build/host/…`(新编优先) → 种子"这条查找顺序, 让开发态永远用不到新编的。
+   要钉死请使用者**自己**显式 export。
+
+**路径真值不重算**(§7.3-1 的同一条纪律): `setup.sh` **不**自己 glob/拼路径, 而是
+`eval "$(tools/fetch-prebuilt.py --print-env)"` —— 由取件工具从**已进库的锁文件**导出
+(它只读锁文件, 不要求已取件), 因此全新 checkout 也能拿到正确路径。
+
+**必须 `source`**: 子进程改不了父 shell 的环境。直接 `./setup.sh` 会被**明确拒绝**(退出 2)
+并给出正确写法 —— 而不是静默无效。`--unset` 逐字节还原 `PATH` 并复原变量原值;
+重复 `source` 幂等(先剔除 PATH 中属于本仓的全部条目再整体前置)。
+
