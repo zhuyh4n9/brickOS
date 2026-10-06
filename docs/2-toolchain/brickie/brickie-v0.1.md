@@ -1,9 +1,9 @@
-# br-tools v0.1 详细设计(草案)
+# brickie v0.1 详细设计(草案)
 
-> 章节: **2-toolchain**(旁支子目录 `br-tools/`, 暂不占用章节编号 `2-03`)。状态: **草案(讨论稿)**——能力边界与倾向已列, 结论待拍板。
-> 定位: **prototype v1.0 核心交付产物之一**(与 manifest 格式、repo 骨架并列; 1-03 §5 第 4/5 项)。`br-tools` 的 **v0.1** = 原型 v1.0 的第一件工具交付。
+> 章节: **2-toolchain**(旁支子目录 `brickie/`, 暂不占用章节编号 `2-03`)。状态: **草案(讨论稿)**——能力边界与倾向已列, 结论待拍板。
+> 定位: **prototype v1.0 核心交付产物之一**(与 manifest 格式、repo 骨架并列; 1-03 §5 第 4/5 项)。`brickie` 的 **v0.1** = 原型 v1.0 的第一件工具交付。
 > 来源: `2-02`(BR-D1–BR-D8 倾向 / §5 命令面 / §7 演进路线); `2-01` §2 大纲; `4-02`(布局)/`4-03`(manifest)/`4-04`(依赖); `1-01` §6(插件模型)/§13(工作流); `1-02`(三态/golden/三层门禁); `3-05`(运行期管理面); `10-01`(接口插件); 需求方给出的 v0.1 功能清单与本轮硬约束(TOML / 两维分类(+`subkind` 派生) / 三语言 / manifest 字段集 / 导出面分类 ≡ `api_type`)。
-> 分工: 本篇 = **`br` 工具 v0.1 的可实现规格**(命令面 / TOML schema / 版本模型 / 接口发布机制 / 依赖分析规则 / 验收标准); `br` 的**全局**架构与选型 → `docs/2-toolchain/2-02-br-arch.md`; 工具链总纲 → `docs/2-toolchain/2-01-toolchain.md`; manifest 与依赖的**语义权威** → `4-03` / `4-04`(本篇给出 v0.1 的具体形态并回填其开放问题)。
+> 分工: 本篇 = **`brickie` 工具 v0.1 的可实现规格**(命令面 / TOML schema / 版本模型 / 接口发布机制 / 依赖分析规则 / 验收标准); `brickie` 的**全局**架构与选型 → `docs/2-toolchain/2-02-brickie-arch.md`; 工具链总纲 → `docs/2-toolchain/2-01-toolchain.md`; manifest 与依赖的**语义权威** → `4-03` / `4-04`(本篇给出 v0.1 的具体形态并回填其开放问题)。
 > 怎么用: 逐条拍板 **§4 的 BRV-D1–BRV-D11**(倾向已给; **D6 版本模型 / D10 导出面分类 / D11 冻结语义** 已由需求方规则给定), 消化 **§11 的 BRV-Q1–BRV-Q16**; 拍板后本篇转"成文", §13.2 的待对齐修订清单(现已 **A-1…A-26**)回灌各篇。
 > **本轮修订(v2)**: 版本模型改为 **`COMPAT_GEN.MAJOR.MINOR.REVISE`**(F 与 M 解耦、依赖精确钉代), 并新增**解冻/重新冻结**机制与 **append vs modify** 条目级判定 —— 依据需求方版本号规则 + 备忘 [`r1/05`](comment/v0.1-review/r1/05-version-model-frozen.md)(F1/F2/F3 已定)与 [`r1/06`](comment/v0.1-review/r1/06-frozen-semantics-terminology.md)(术语与解冻)。此修订**关闭 BRV-Q1**, 并解掉评审 `r1/01` P0-1/P0-2、`r1/03` P0-4(三者同源)。改动集中在 §5 全节、§6.1–§6.5、§7.4–§7.7、§8、§10、§12、§13.2。
 > 图: 本篇暂用 ASCII 图与表格(本机无 PlantUML/Graphviz, 待图源环境就绪后按 README 流程补 `plantUML/` + `pics/`)。
@@ -22,7 +22,7 @@
 | **IFACE-IR** | interface intermediate representation | 接口面规范化中间表示(接口发布与 hash 的输入) |
 | **api_iface** | — | 接口单元的分类标签(`native` \| `runtime_adapter`), 恒等于提供者的 `api_type`(§3.5) |
 | **init 依赖 / runtime 依赖** | — | 初始化顺序依赖(禁环)/ 运行期调用依赖(允许环, 注册表晚绑定; 1-01 §6.5) |
-| **JSON** | JavaScript Object Notation | 结构化数据交换格式(`br --json` 的机器可读输出) |
+| **JSON** | JavaScript Object Notation | 结构化数据交换格式(`brickie --json` 的机器可读输出) |
 | **M0–M5** | — | v1.0/v1.x 内部里程碑(1-03 §3; M5 = HSM 完整样例) |
 | **native / runtime_adapter / third_party** | — | 插件按 **API 遵守规范** 的三分类(§3.1) |
 | **app / interface / ability / platform** | — | 插件按 **架构层级** 的四分类(§3.2) |
@@ -31,28 +31,29 @@
 | **TOML** | Tom's Obvious Minimal Language | 配置文件格式(**本篇定稿: manifest 唯一表达格式**) |
 
 > **编号约定**: `BRV-D*` = 本篇决策; `BRV-Q*` = 本篇开放问题; `RV-*` = 风险(§12); `V-*` = 验收项(§10); `4-03 §3` = 他篇来源; 不带上限的 `§x` = 本篇。
+> **注**: `BRV-*` 前缀(决策号 `BRV-D*`/`BRV-Q*` 与错误码 `BRV-<域>-NNNN`)沿用工具旧名 `br`, 属**已分配标识符**(跨文档引用 + 错误码将进 CI), 本轮工具改名 `br` → `brickie` **不重编号** —— 见 `docs/decisions/0001-brickie-tool-naming.md` 的「明确不改的项」。
 
 ## 0. 一句话定位与 v0.1 边界
 
-`br-tools v0.1` = **纯 host 侧、零编译依赖的"声明面闭环"工具**: 从生成一个插件骨架开始, 到把它的接口发布出去、把依赖图算清楚、把版本号机器化地推进一步为止。它**不碰编译器、不碰符号表、不碰 QEMU**。
+`brickie v0.1` = **纯 host 侧、零编译依赖的"声明面闭环"工具**: 从生成一个插件骨架开始, 到把它的接口发布出去、把依赖图算清楚、把版本号机器化地推进一步为止。它**不碰编译器、不碰符号表、不碰 QEMU**。
 
 ```
 插件作者视角(v0.1 闭环, 全程无编译器):
 
-  br new ability service/crypto --api native --lang c
+  brickie new ability service/crypto --api native --lang c
         │  ① 骨架生成: plugin.toml(真值) + 实现骨架 + 生成器落 build/gen/
         ▼
-  br gen / br check [--profile dev|release]
+  brickie gen / brickie check [--profile dev|release]
         │  ② 依赖管理: init-DAG 无环 + compat_gen 精确匹配 + range(3段) + 相位一致 + 分类学禁则
         ▼
-  br iface publish service/crypto
+  brickie iface publish service/crypto
         │  ③ 接口发布: 接口面 → IFACE-IR 规范化 → hash → 变更集(append/modify)
         │     → 自动版本推进 → 影响报告
         ▼
-  br.lock + api/iface/**(版本文件: 面 + status + freeze_state + 四段版本) + CHANGELOG + dependents 索引
+  brickie.lock + api/iface/**(版本文件: 面 + status + freeze_state + 四段版本) + CHANGELOG + dependents 索引
 
   改/删已有 frozen 接口时, 中间多两步(§5.3):
-      br iface unfreeze <unit> --note <RFC>   →  改代码  →  br iface refreeze <unit>
+      brickie iface unfreeze <unit> --note <RFC>   →  改代码  →  brickie iface refreeze <unit>
                                                         ⇒ COMPAT_GEN+1
   仅新增接口时: 无 unfreeze, 只有 MINOR+1
 ```
@@ -61,10 +62,10 @@
 
 | # | 能力 | 落点 |
 |---|---|---|
-| 1 | 插件骨架代码生成 | §8.4(`br new` / `br init` / `br gen`) |
-| 2 | 插件依赖管理与分析 | §7(`br dep *` / `br check`) |
-| 3 | 版本管理 `COMPAT_GEN.MAJOR.MINOR.REVISE` | §5(`br ver *` / `br iface publish` / `unfreeze`·`refreeze`) |
-| 4 | 接口发布(变更标记 / 新增 / 自动版本+hash / 三态) | §6(`br iface *`) |
+| 1 | 插件骨架代码生成 | §8.4(`brickie new` / `brickie init` / `brickie gen`) |
+| 2 | 插件依赖管理与分析 | §7(`brickie dep *` / `brickie check`) |
+| 3 | 版本管理 `COMPAT_GEN.MAJOR.MINOR.REVISE` | §5(`brickie ver *` / `brickie iface publish` / `unfreeze`·`refreeze`) |
+| 4 | 接口发布(变更标记 / 新增 / 自动版本+hash / 三态) | §6(`brickie iface *`) |
 
 **v0.1 明确不做**(需求方定为 **v0.x 后续**):
 
@@ -109,7 +110,7 @@ C1 + C4 + C10 三条合起来决定: **v0.1 的交付重心是"求解器 + 版�
 | 5 | 资源预算(ΣRAM/栈) + IRQ/DMA 独占冲突 | ✅ 全量 | 纯声明计算 |
 | 6 | `abi_id` 一致性 | ✗ | 需要工具链指纹 ⇒ v0.6 |
 
-**由此得到 v0.1 的产品定义**: `br check` 是一个"**声明面完备性检查器**", 它能保证"这个组合在**逻辑上**自洽", 不保证"这个组合**编得过/跑得对**"。这句话要写进 CLI 的帮助文本与 README, 避免 v0.x 用户误信。
+**由此得到 v0.1 的产品定义**: `brickie check` 是一个"**声明面完备性检查器**", 它能保证"这个组合在**逻辑上**自洽", 不保证"这个组合**编得过/跑得对**"。这句话要写进 CLI 的帮助文本与 README, 避免 v0.x 用户误信。
 
 ## 3. 术语与两维分类学(第三列 `subkind` 为派生)
 
@@ -249,7 +250,7 @@ device_names = ["hsm0"]
 | YAML | 表达力强、锚点复用 | 缩进敏感、隐式类型陷阱(`no`→bool)、解析器生态在 Rust 侧偏弱 |
 | 自定义 DSL | 可为领域优化 | 自造解析器 + 编辑器支持 + 错误信息, 全部要自己养 |
 
-**倾向: TOML**, 并立三条纪律: (1) **禁止**用 TOML 的隐式特性表达语义(一律显式键); (2) `--json` 输出与 TOML 输入**同源**——同一内部模型的两个序列化, 关闭 `2-02` Q7; (3) schema 以 **JSON Schema** 单一形式描述(TOML 与 JSON 都能校验), 放 `br-tools/schema/`。
+**倾向: TOML**, 并立三条纪律: (1) **禁止**用 TOML 的隐式特性表达语义(一律显式键); (2) `--json` 输出与 TOML 输入**同源**——同一内部模型的两个序列化, 关闭 `2-02` Q7; (3) schema 以 **JSON Schema** 单一形式描述(TOML 与 JSON 都能校验), 放 `brickie/schema/`。
 
 ### BRV-D3 — 三语言分工与进程边界
 
@@ -262,9 +263,9 @@ device_names = ["hsm0"]
 **倾向 C**。进程边界:
 
 ```
-   br (Python3 包)                    ← L5 前端: 参数/输出/退出码/文件编排/schema 校验
-     ├── br-core (Rust 可执行)         ← L0/L1: 模型 + 求解 + 版本引擎 + IFACE-IR/hash
-     └── br-gen  (C++ 可执行)          ← L2: 骨架/描述符/头文件代码生成(模板渲染)
+   brickie (Python3 包)                    ← L5 前端: 参数/输出/退出码/文件编排/schema 校验
+     ├── brickie-core (Rust 可执行)         ← L0/L1: 模型 + 求解 + 版本引擎 + IFACE-IR/hash
+     └── brickie-gen  (C++ 可执行)          ← L2: 骨架/描述符/头文件代码生成(模板渲染)
                     └── 二者通过 JSON over stdio 交换"模型/诊断/变更集", 不交换文件句柄
 ```
 
@@ -277,20 +278,29 @@ device_names = ["hsm0"]
 | A 只有产品 manifest | 插件依赖写在产品 manifest 里 ⇒ 每个产品都要复述一遍插件自述 |
 | **B 两级: 插件自述 + 产品选择** | `plugin.toml`(插件级真值: 依赖/资源/导出/特权) + `product.toml`(产品级: 选谁/预算/产品参数) |
 
-**倾向 B**(继承 `2-02` BR-D2 与 `4-03` §3「两级」倾向)。**唯一真值原则**: 插件的 `dep`/`export`/`privileged` **只许**出现在 `plugin.toml`; `product.toml` 引用插件名并只声明"选择与预算", 不得重复插件自述字段——违反 ⇒ `br check` 红(`BRV-MF-0007`)。
+**倾向 B**(继承 `2-02` BR-D2 与 `4-03` §3「两级」倾向)。**唯一真值原则**: 插件的 `dep`/`export`/`privileged` **只许**出现在 `plugin.toml`; `product.toml` 引用插件名并只声明"选择与预算", 不得重复插件自述字段——违反 ⇒ `brickie check` 红(`BRV-MF-0007`)。
 
 ### BRV-D5 — 状态目录与"进不进版本库"
 
 | 产物 | 位置 | 进版本库? | 理由 |
 |---|---|---|---|
-| 生成物(描述符/头文件/注册表 C 代码) | `build/gen/**` | **否**(`.gitignore` 已有 `build/`) | 生成物纪律(C6); 可随时 `br gen` 重建 |
+| **工具自身的宿主可执行**(`brickie-core` / `brickie-gen` / **自包含入口 ELF `brickie`**) | `build/host/<host-arch>/<host-os>/bin/**` | **否**(`.gitignore` 的 `build/`) | 工具是**宿主**程序 ⇒ 出树, 参考 Android `out/host/...`; 源码树不留 `.o`/可执行(§9.2 的落点细化)。**入口 ELF** = L5 Python 前端 + 模板 + **原生工具**全部嵌入二进制(单文件自包含; ADR `0004` §7) |
+| 工具自身的宿主中间产物(对象/静态库) | `build/host/<host-arch>/<host-os>/{obj,lib}/**` | 否 | 同上; `host-arch` ∈ {`x86-64`,`aarch64`,…}, `host-os` ∈ {`linux`,`darwin`,`win`,…} |
+| **自举种子**(工具自身的**预编译**可执行) | `prebuilts/seed/brickie/<host-arch>/<host-os>/bin/**` | **是** | 让**没有编译器**的全新 checkout 也能起步, 并作为"brickie 自举编译 brickie"的初始砖(ADR **0004**); 体积可控, 随源码走。其中 `brickie` 是**单文件自包含**(内含 `brickie-gen` 等原生工具), **只拷它一个**即可运行 |
+| 生成物(描述符/头文件/注册表 C 代码) | `build/gen/**` | **否**(`.gitignore` 已有 `build/`) | 生成物纪律(C6); 可随时 `brickie gen` 重建 |
 | 反向依赖索引 / 求解缓存 | `build/index/**` | 否 | 可重建的派生物 |
-| 锁定文件(闭包与版本区间解) | `br.lock`(仓库根) | **是** | 复现性: 闭包解不是派生物, 是决策 |
+| 锁定文件(闭包与版本区间解) | `brickie.lock`(仓库根) | **是** | 复现性: 闭包解不是派生物, 是决策 |
 | 接口面快照(版本文件) | `api/iface/<provider>/<unit>.toml` | **是** | 接口发布的**记录**, 是 `COMPAT_GEN` 与 hash 推导的历史输入 |
 | 变更日志 | `api/iface/CHANGELOG.md` | **是** | 衍生物但需人读与评审 |
 | 决策记录 | `docs/decisions/NNNN-*.md` | 是 | `1-02` §2.2 |
 
-**倾向: 采纳**。同时关闭 `2-02` Q5(状态目录 = `build/`, 不放 `.br/`; 需要进版本库的那两件单独放根与 `api/`)。
+**倾向: 采纳**。同时关闭 `2-02` Q5(状态目录 = `build/`, 不放 `.brickie/`; 需要进版本库的那两件单独放根与 `api/`)。
+
+> **宿主三元组的分工**(与 Android 的 `out/host` / `out/target` 分家同构): `build/` 下**镜像类**产物(交叉工具链, 来自 `brickie build` 的编排)与**宿主类**产物(工具自身)分居两侧; 后者的一级路径由"宿主是谁"决定 ⇒ 同一份源码在 x86-64/linux 与 aarch64/darwin 上互不覆盖, 也不与镜像产物撞名。映射(如 `x86_64`→`x86-64`、`MINGW*`→`win`)只允许有**一处真值**(登记见 checklist §5.6 **G-6**)。
+>
+> **`build/host/**` 与 `prebuilts/**` 是两份宿主产物, 不可互相替代**: 前者是"本机/本次构建"的**派生品**(不进库), 后者是"随源码提交的自举**种子**"(进库); 前端查找顺序为 `$BRICKIE_GEN` → `build/host/<triple>/bin`(本机新编的优先) → `prebuilts/seed/brickie/<triple>/bin`(种子)。**种子里 `brickie` 单文件自包含**(Python 前端 + 模板 + `brickie-gen` 等原生工具都嵌在其内), 独立副本 `brickie-gen` 仅作开发态便利。发布/校验命令面 = `make tools-prebuilt` / `make tools-prebuilt-check`; 种子落后于源码即红(登记见 checklist §5.6 **G-7/G-8**, 决策记录 ADR [`0004`](../../decisions/0004-brickie-prebuilts-bootstrap.md))。
+>
+> ⚠ **目录名辨析**: `prebuilts/toolchain/`(**派生侧**)是外部工具链的**下载缓存**(`fetch-prebuilt.py` 重建, 派生、体积以 GB 计、**不进库**); `prebuilts/seed/`(**进库侧**)才是本节的**自举种子**(进库)。两侧现由**子目录**分开(不再靠两个只差一个 `s` 的顶层目录名), 见 ADR [`0005`](../decisions/0005-prebuilts-single-root.md)。
 
 ### BRV-D6 — 版本号模型 `COMPAT_GEN.MAJOR.MINOR.REVISE`(详见 §5)
 
@@ -317,13 +327,13 @@ device_names = ["hsm0"]
 |---|---|---|
 | A 声明文件永远是接口面真值 | v0.1–v0.x 一致, 无迁移 | 与 `1-02` §2.6.1(C3: 头文件声明真值 / 构建产物机器真值)冲突 |
 | B v0.1 声明 → v0.x 头文件/golden | 与既有治理对齐 | 需要显式迁移窗口与 `hash_scope` 字段 |
-| **C B + `truth` 字段显式声明** | 每个接口单元声明 `truth = "decl" \| "header"`, 让"谁是真值"成为**可读的、可校验的**元数据; v0.1 只允许 `decl`, v0.x 起允许 `header` 并强制 `br iface check` 双算一致 | 多一个字段 |
+| **C B + `truth` 字段显式声明** | 每个接口单元声明 `truth = "decl" \| "header"`, 让"谁是真值"成为**可读的、可校验的**元数据; v0.1 只允许 `decl`, v0.x 起允许 `header` 并强制 `brickie iface check` 双算一致 | 多一个字段 |
 
 **倾向 C**(详见 §6.6)。理由: 迁移不可避免(C10), 与其让它隐性发生, 不如把它变成一个字段与一条 CI 门禁。
 
 ### BRV-D8 — 诊断模型: 编号化 + 位置化 + 可机读
 
-**倾向: 采纳**(无备选争议)。每条诊断 = `{code, severity, target, file, span, message, hint}`; 编号 `BRV-<域>-NNNN`(域: `MF` manifest / `DEP` 依赖 / `VER` 版本 / `IFACE` 接口 / `TAX` 分类学 / `PRIV` 特权 / `GEN` 生成); `br check` 的**环报错**输出完整边路径(满足 C4 的 M0 验收), 且 `--json` 下是结构化边列表而非字符串。
+**倾向: 采纳**(无备选争议)。每条诊断 = `{code, severity, target, file, span, message, hint}`; 编号 `BRV-<域>-NNNN`(域: `MF` manifest / `DEP` 依赖 / `VER` 版本 / `IFACE` 接口 / `TAX` 分类学 / `PRIV` 特权 / `GEN` 生成); `brickie check` 的**环报错**输出完整边路径(满足 C4 的 M0 验收), 且 `--json` 下是结构化边列表而非字符串。
 
 **已分配编码表**(v0.1 全集; 首版 **`VER` 域一个码都没有**, 导致 V-7 无码可断 —— 见评审 `r1/03` P1-13):
 
@@ -394,7 +404,7 @@ device_names = ["hsm0"]
 
 **关键: `COMPAT_GEN` 与 `MAJOR` 正交**(首版让二者恒同步, 是三个 P0 的共同根因)。`COMPAT_GEN` 由**接口契约**驱动, `MAJOR` 由**产品演进**驱动 ⇒ 可同时出现 `F=3,M=1`(接口被破坏过三代但产品大版本没动)与 `F=1,M=2`(产品翻代但接口没动)。
 
-**推进规则**(`br iface publish` 判定; `MAJOR`/`MINOR`/`REVISE` 由 `br ver bump --rule` 或 `publish --set` 声明):
+**推进规则**(`brickie iface publish` 判定; `MAJOR`/`MINOR`/`REVISE` 由 `brickie ver bump --rule` 或 `publish --set` 声明):
 
 | 事件 | `COMPAT_GEN` | `MAJOR` | `MINOR` | `REVISE` | 依据 |
 |---|---|---|---|---|---|
@@ -419,8 +429,8 @@ device_names = ["hsm0"]
 >
 > | 意图 | 命令 | 结果 |
 > |---|---|---|
-> | 修了 bug / 改了实现或文档(面不变) | `br ver bump <unit> --rule revise` | `REVISE+1` |
-> | 无意图地重跑 publish(CI 重跑 / 手工重复) | `br iface publish <unit>` | **空操作**(不推进任何段、不写盘、退出 0) |
+> | 修了 bug / 改了实现或文档(面不变) | `brickie ver bump <unit> --rule revise` | `REVISE+1` |
+> | 无意图地重跑 publish(CI 重跑 / 手工重复) | `brickie iface publish <unit>` | **空操作**(不推进任何段、不写盘、退出 0) |
 >
 > 理由: v0.1 **无编译、无符号、无测试**(§0 边界)⇒ 工具**看不见**"实现变了但面没变"。若让 `publish` 自行判断, 只能退化为"每次都 `REVISE+1`"(首版正是如此, 导致每次 CI 重跑都烧掉一个版本号 —— 评审 `r1/01` P0-3 / `r1/03` P0-1)。因此 `REVISE` 必须是**人工显式意图**, 而不是工具的猜测。
 
@@ -455,16 +465,16 @@ device_names = ["hsm0"]
 
 | # | 规则 | 理由 |
 |---|---|---|
-| 1 | `br iface unfreeze <unit>` 需**最高门槛 RFC**(`--note <决策记录>`) | 解冻让**全部依赖方强制重新验证**, 影响面大于单次签名变更 ⇒ 纳入 `1-02` §2.2 已有的"最高门槛"行 |
+| 1 | `brickie iface unfreeze <unit>` 需**最高门槛 RFC**(`--note <决策记录>`) | 解冻让**全部依赖方强制重新验证**, 影响面大于单次签名变更 ⇒ 纳入 `1-02` §2.2 已有的"最高门槛"行 |
 | 2 | `refreeze` 时**确有"改/删已冻结条目"才 `COMPAT_GEN+1`**; 否则不 bump | 精确对齐需求方"**已有接口发生变动**"—— 空解冻不该让全体依赖方重钉 |
-| 3 | **`br check --profile release` 在任何单元处于 `unfreezing` 时失败**(`BRV-IFACE-0009`) | 防止 release 停在半谈判状态(与 §7.5 的 release 门禁同轴) |
+| 3 | **`brickie check --profile release` 在任何单元处于 `unfreezing` 时失败**(`BRV-IFACE-0009`) | 防止 release 停在半谈判状态(与 §7.5 的 release 门禁同轴) |
 
 命令面(并入 §6.5):
 
 | 命令 | 作用 |
 |---|---|
-| `br iface unfreeze <unit> --note <path>` | 进入解冻窗口(`freeze_state: frozen → unfreezing`) |
-| `br iface refreeze <unit> [--note <path>]` | 退出窗口; **按 §5.4 判定矩阵决定是否 `COMPAT_GEN+1`** |
+| `brickie iface unfreeze <unit> --note <path>` | 进入解冻窗口(`freeze_state: frozen → unfreezing`) |
+| `brickie iface refreeze <unit> [--note <path>]` | 退出窗口; **按 §5.4 判定矩阵决定是否 `COMPAT_GEN+1`** |
 
 ### 5.4 ⚠ append vs modify: 判定必须落在**条目内部结构**上
 
@@ -476,7 +486,7 @@ device_names = ["hsm0"]
 | `1-02` §4.1-2 | "内联访问器…其**布局变更按硬门禁处理**" |
 | `1-02` §4.1-4 / §2.4 | "**枚举 append-only** 进 golden"; "枚举只追加、**不重排**、不当位标志跨版本扩展" |
 
-因此 `br check` **不能只比"条目集合的差"**, 必须比**条目内部结构**, 按 kind 判定:
+因此 `brickie check` **不能只比"条目集合的差"**, 必须比**条目内部结构**, 按 kind 判定:
 
 | 条目 kind | 「追加」(免解冻) | 「修改」(**须解冻**) |
 |---|---|---|
@@ -577,7 +587,7 @@ mode       = "decl"                     # decl(v0.1 语义) | sym(v0.2 符号级
 
 ### 6.3 变更集(change set)与"标记接口变更状态 + 依赖的插件"
 
-`br iface publish` 对**旧快照 vs 新面**做 diff, 产出变更集, 并**必须**附上受影响者。**判定先分「追加 / 修改」**(§5.4), 再定治理后果:
+`brickie iface publish` 对**旧快照 vs 新面**做 diff, 产出变更集, 并**必须**附上受影响者。**判定先分「追加 / 修改」**(§5.4), 再定治理后果:
 
 | 类别 | 判定 | 是否须解冻 | 硬性要求 |
 |---|---|---|---|
@@ -594,7 +604,7 @@ mode       = "decl"                     # decl(v0.1 语义) | sym(v0.2 符号级
 **影响报告(dependents report)**——需求方要求的"标记接口变更状态, 依赖的插件":
 
 ```
-$ br iface publish ability/vfs-core --check --json
+$ brickie iface publish ability/vfs-core --check --json
 {
   "unit": "ability/vfs-core#file",
   "changes": [
@@ -616,7 +626,7 @@ $ br iface publish ability/vfs-core --check --json
 
 > **`compat_gen_changed` 替代首版的 `iface_changed` 布尔**: 后者与 `COMPAT_GEN` 是否变动、`hash` 是否变动构成三重冗余(§5.5 的判定表已完整确定三者关系) ⇒ 删除, 少一个真值。
 
-**反向依赖索引**: `build/index/dependents.json`(派生物, 由 `br dep index` 全树重建)。接口发布**只读**它, 缺失则先重建并提示——避免接口发布依赖陈旧索引。
+**反向依赖索引**: `build/index/dependents.json`(派生物, 由 `brickie dep index` 全树重建)。接口发布**只读**它, 缺失则先重建并提示——避免接口发布依赖陈旧索引。
 
 ### 6.4 三态 + 冻结瞬态在 v0.1 的落地
 
@@ -634,28 +644,28 @@ $ br iface publish ability/vfs-core --check --json
 | 编译期 `deprecated` 警告 | ✗ | 需生成头文件与编译 ⇒ v0.3 |
 
 > **⚠ `freeze` 的前置条件缺口(须显式声明)**: `1-02` §2.6.2 规定 `EXPERIMENTAL→FROZEN` 的前置是"**当期已交付调度器的 conformance 矩阵全绿**"(层 2), 且升格产物含"**golden 收录**"。而本篇把 test/conformance 排到 **v0.4**、golden 排到 **v0.6** ⇒ **v0.1 无法完成一次合法冻结**。
-> **v0.1 的处理(采纳评审 `r1/02` P0-2 的建议)**: `br iface freeze` 在 v0.1 **只能生成"待升格提案"**(写入 `build/gen/proposals/<unit>.toml` + 要求 `--note`), **不得落 `frozen` 快照、不得 bump `COMPAT_GEN`**; 真正的升格在 v0.4+(有矩阵)执行。这条是**显式例外声明**, 不是对 `1-02` §2.6.2 的静默偏离(回灌 A-26)。
+> **v0.1 的处理(采纳评审 `r1/02` P0-2 的建议)**: `brickie iface freeze` 在 v0.1 **只能生成"待升格提案"**(写入 `build/gen/proposals/<unit>.toml` + 要求 `--note`), **不得落 `frozen` 快照、不得 bump `COMPAT_GEN`**; 真正的升格在 v0.4+(有矩阵)执行。这条是**显式例外声明**, 不是对 `1-02` §2.6.2 的静默偏离(回灌 A-26)。
 
 ### 6.5 发布命令面与幂等
 
 | 命令 | 作用 | 副作用 |
 |---|---|---|
-| `br iface list [--json]` | 列出插件树内全部接口单元与状态 | 无 |
-| `br iface show <id>` | 展示接口面(条目 + `status` + `freeze_state` + 四段版本 + hash) | 无 |
-| `br iface diff <id> [--json]` | 旧快照 vs 当前声明的变更集(§6.3) | 无 |
-| `br iface publish <id> [--check] [--note <path>] [--set <ver>]` | 计算 → diff → 影响报告 → 版本推进 → 落盘 | 写快照/lock/CHANGELOG/`plugin.toml [compat]` |
-| `br iface status <id> [--check]` | 独立重算 hash 与快照比对(CI 门禁用; 防手编) | 无 |
-| `br iface freeze <id>[#entry]` | `status: *→frozen`(承诺升级); 须 `--note` | 写快照 + 要求 `--note` |
-| `br iface deprecate/undeprecate <id>[#entry]` | `status: frozen↔deprecated`; 须 `--note` | 同上 |
-| **`br iface unfreeze <unit> --note <path>`** | **进入解冻窗口**(`freeze_state: frozen→unfreezing`); 最高门槛门钩 | 写快照 |
-| **`br iface refreeze <unit> [--note <path>]`** | **退出窗口**; 按 §5.4 判定矩阵决定是否 `COMPAT_GEN+1` | 写快照 + 可能 bump `COMPAT_GEN` |
+| `brickie iface list [--json]` | 列出插件树内全部接口单元与状态 | 无 |
+| `brickie iface show <id>` | 展示接口面(条目 + `status` + `freeze_state` + 四段版本 + hash) | 无 |
+| `brickie iface diff <id> [--json]` | 旧快照 vs 当前声明的变更集(§6.3) | 无 |
+| `brickie iface publish <id> [--check] [--note <path>] [--set <ver>]` | 计算 → diff → 影响报告 → 版本推进 → 落盘 | 写快照/lock/CHANGELOG/`plugin.toml [compat]` |
+| `brickie iface status <id> [--check]` | 独立重算 hash 与快照比对(CI 门禁用; 防手编) | 无 |
+| `brickie iface freeze <id>[#entry]` | `status: *→frozen`(承诺升级); 须 `--note` | 写快照 + 要求 `--note` |
+| `brickie iface deprecate/undeprecate <id>[#entry]` | `status: frozen↔deprecated`; 须 `--note` | 同上 |
+| **`brickie iface unfreeze <unit> --note <path>`** | **进入解冻窗口**(`freeze_state: frozen→unfreezing`); 最高门槛门钩 | 写快照 |
+| **`brickie iface refreeze <unit> [--note <path>]`** | **退出窗口**; 按 §5.4 判定矩阵决定是否 `COMPAT_GEN+1` | 写快照 + 可能 bump `COMPAT_GEN` |
 
 **幂等纪律**(修正首版的自相矛盾——首版写"NONE ⇒ `d+1`"却又宣称重复 publish 无 diff, 每次调用都烧掉一个版本号):
 
 > **面内容幂等**: 若 `canonical(new surface) == snapshot.iface_hash` **且** 条目集合/`status`/`freeze_state` 全等 ⇒ `publish` 是**空操作**(不写任何文件、不推进任何段、退出 0; `--check` 逐字节一致)。
 
 要点:
-1. **`NONE` 不再 `REVISE+1`** —— 首版的 `NONE ⇒ d+1`(例"修 bug/改文档")在 v0.1 **不可观测**(无编译、无符号、无测试 ⇒ 工具看不见"实现变了但面没变")。`REVISE` 改为**人工声明**(`br ver bump --rule revise`)。
+1. **`NONE` 不再 `REVISE+1`** —— 首版的 `NONE ⇒ d+1`(例"修 bug/改文档")在 v0.1 **不可观测**(无编译、无符号、无测试 ⇒ 工具看不见"实现变了但面没变")。`REVISE` 改为**人工声明**(`brickie ver bump --rule revise`)。
 2. **diff 与 hash 一律忽略** `version` / `hash` / `status` / `freeze_state`(§6.2 规则 6) —— 否则 publish 自己写回的字段会成为下一轮的输入, 形成 `COMPAT_GEN+1` 的**无限升级环**(评审 `r1/03` P0-1)。
 3. **`--set` 必须 ≥ 当前版本**(单调性校验 `BRV-VER-0007`)。
 4. 重复 `--check` ⇒ 逐字节一致(继承 `docs/render-plantuml.sh` 的"按内容而非 mtime"纪律, `2-02` BR-D5)。
@@ -669,7 +679,7 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
         →  iface_hash = H(符号面)(hash_scope="sym"); 声明面 hash 保留为 decl_hash
 ```
 
-**迁移硬约束**: v0.1 的快照文件**必须**带 `hash_scope` 与 `truth` 字段; v0.2 起 `br iface check` 对 `truth="header"` 的单元执行 **双算一致**校验(decl_hash 与 sym_hash 的**条目集合差**必须为空), 不一致 ⇒ 红。这样"迁移"是一次可验收的开关, 而不是一次静默的真值偷换。
+**迁移硬约束**: v0.1 的快照文件**必须**带 `hash_scope` 与 `truth` 字段; v0.2 起 `brickie iface check` 对 `truth="header"` 的单元执行 **双算一致**校验(decl_hash 与 sym_hash 的**条目集合差**必须为空), 不一致 ⇒ 红。这样"迁移"是一次可验收的开关, 而不是一次静默的真值偷换。
 
 ## 7. 依赖管理与分析
 
@@ -745,8 +755,8 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
 
 - **适用范围**: **接口消费**(`requires_iface` / `[[export]].form="skin"` 的再导出边)。**不适用**于结构依赖(`init`/`runtime`/`type`)——依 F3 结构依赖不钉 `compat_gen`, 故不参与本判定。这条边界正是 **M0–M2 能继续工作**的原因(其依赖全是结构边)。
 - **为什么是 profile 开关而非强度分级**: 需求方口径是"**阶段**决定严格度", 而非"同一阶段内可调松紧" ⇒ 二者语义不同, profile 更干净。
-- **CLI 与 manifest**: `br check --profile dev|release`(默认 `dev`); product manifest 可声明默认值 `[product] stage`, **CLI 覆盖 manifest**。
-- **与镜像 profile 的关系(须写明, 否则会被误读为同一件事)**: 本 profile = **组合期检查严格度**(工具侧); 既有 `release 构建`(`1-01` §13 `br build --release`; `3-02` IR-15/INV-C 的 debug=panic / release=trace)= **镜像内断言行为**。二者**不同轴**, 但**建议耦合**: `br build --release` 应**强制**以 `--profile release` 完成检查, 否则会出现"release 镜像由 dev 级检查放行"的漏洞。
+- **CLI 与 manifest**: `brickie check --profile dev|release`(默认 `dev`); product manifest 可声明默认值 `[product] stage`, **CLI 覆盖 manifest**。
+- **与镜像 profile 的关系(须写明, 否则会被误读为同一件事)**: 本 profile = **组合期检查严格度**(工具侧); 既有 `release 构建`(`1-01` §13 `brickie build --release`; `3-02` IR-15/INV-C 的 debug=panic / release=trace)= **镜像内断言行为**。二者**不同轴**, 但**建议耦合**: `brickie build --release` 应**强制**以 `--profile release` 完成检查, 否则会出现"release 镜像由 dev 级检查放行"的漏洞。
 - **CI 落地**: dev 门禁全量跑; release 门禁**唯一多出的一条**就是 `--profile release` 的 `BRV-VER-0004`(加 §5.3.4 规则 3 的 `unfreezing` 阻断)。
 
 > **⚠ 由此照出一条必须补的排期空白**(评审发现的连带问题): "release 不允许依赖未冻结接口"把**冻结排期**变成 release 的**硬前置**, 而现行 `3-01` §15 冻结计划**只覆盖 core native 组**(`br-sched`/`mem`/`mm`/`irq`/`svc`)。**框架件四件**(`br-devcore` 等, `3-01` §0 行 44 有文件名)、**svc-posix POSIX 面**(`br-svcposix.txt`, §0 行 45)、**crypto/keyring ops**(仍为开放问题)均**有治理声明却无冻结批次** ⇒ 任何依赖它们的 release 会被 `BRV-VER-0004` **永久阻断且无排期可解**。已在 §13.2 记为 **A-18/A-19**。
@@ -761,7 +771,7 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
 ```
 
 - **求解顺序**: 产品 manifest 选择集 → init+runtime 边闭包 → **`compat_gen` 精确匹配** → `range` 交集(单版本) → 拓扑 + 环检测 → 相位单调 → 分类学/特权声明 → 预算合计 → **profile 判定(§7.5)**。
-- **求解器是纯函数**(无 IO), IO 全在 Python 粘合层与 Rust 的 `br-model` 加载器——满足 `2-02` §4 建议 1(可单测, 不依赖编译器与 QEMU)。`profile` 作为**入参**传入, 不影响纯度。
+- **求解器是纯函数**(无 IO), IO 全在 Python 粘合层与 Rust 的 `brickie-model` 加载器——满足 `2-02` §4 建议 1(可单测, 不依赖编译器与 QEMU)。`profile` 作为**入参**传入, 不影响纯度。
 - **报错可解释**: 环报完整边路径; **版本冲突报"谁钉了哪一代 `compat_gen` / 提供方在哪一代"**; 缺失报"依赖名 + 哪条边引入"。
 
 > **版本冲突从"不可构造"变为可构造**(关闭评审 `r1/03` P1-14): 首版单版本政策 + 一处 `plugin.toml` ⇒ 求解器**永远看不到第二个候选**, "冲突"实为"缺失"。现因 `compat_gen` **精确匹配**, 冲突有真实来源:
@@ -774,18 +784,18 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
 
 | 命令 | 作用 |
 |---|---|
-| `br dep add <plugin> <dep>[@range] [--kind init\|runtime\|type] [--frozen-gen N] [--phase late]` | 写 `plugin.toml` 并重算 |
-| `br dep rm <plugin> <dep>` | 同上 |
-| `br dep tree [--kind init\|runtime\|type\|all] [--json]` | 依赖树 |
-| `br dep graph --format dot\|mermaid\|json` | 图导出(复用 `--json` 的边模型) |
-| `br dep why <a> <b>` | 最短依赖路径解释 |
-| `br dep index` | 重建反向依赖索引 |
-| `br dep closure [--json]` | 产品闭包 + 拓扑序 + 预算合计 |
-| `br check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release] [--json]` | 组合期校验(v0.1 覆盖 §2 表 + §7.5 profile) |
-| `br ver show <plugin>` | 展示四段版本 + `compat_gen` 来源(哪个冻结事件) |
-| `br ver bump <plugin> --rule major\|minor\|revise` | **人工声明** `MAJOR`/`MINOR`/`REVISE`(§5.2: 工具看不见"重大/小/修 bug"这三类事件) |
+| `brickie dep add <plugin> <dep>[@range] [--kind init\|runtime\|type] [--frozen-gen N] [--phase late]` | 写 `plugin.toml` 并重算 |
+| `brickie dep rm <plugin> <dep>` | 同上 |
+| `brickie dep tree [--kind init\|runtime\|type\|all] [--json]` | 依赖树 |
+| `brickie dep graph --format dot\|mermaid\|json` | 图导出(复用 `--json` 的边模型) |
+| `brickie dep why <a> <b>` | 最短依赖路径解释 |
+| `brickie dep index` | 重建反向依赖索引 |
+| `brickie dep closure [--json]` | 产品闭包 + 拓扑序 + 预算合计 |
+| `brickie check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release] [--json]` | 组合期校验(v0.1 覆盖 §2 表 + §7.5 profile) |
+| `brickie ver show <plugin>` | 展示四段版本 + `compat_gen` 来源(哪个冻结事件) |
+| `brickie ver bump <plugin> --rule major\|minor\|revise` | **人工声明** `MAJOR`/`MINOR`/`REVISE`(§5.2: 工具看不见"重大/小/修 bug"这三类事件) |
 
-> `compat_gen` **不在** `br ver bump` 的可选 rule 里 —— 它只能由 `unfreeze`/`refreeze` 序列产生(§5.3), 拒绝手工任意指定; 这是"工具强制"与"人声明"的边界。
+> `compat_gen` **不在** `brickie ver bump` 的可选 rule 里 —— 它只能由 `unfreeze`/`refreeze` 序列产生(§5.3), 拒绝手工任意指定; 这是"工具强制"与"人声明"的边界。
 
 ## 8. 声明面 TOML schema(v0.1 定稿草案)
 
@@ -932,7 +942,7 @@ allow_edges = [                    # §7.3 的框架件白名单特例
 
 ### 8.4 骨架生成(能力 1)
 
-`br new` 生成物清单(`native` × 四类 × `c`):
+`brickie new` 生成物清单(`native` × 四类 × `c`):
 
 | 生成物 | 性质 | 说明 |
 |---|---|---|
@@ -948,7 +958,7 @@ allow_edges = [                    # §7.3 的框架件白名单特例
 - **`api_type` 模板**: v0.1 交付 `native`; `runtime_adapter` / `third_party` 的模板目录预留, 选择时报 `BRV-TAX-0014`(提示"v0.x 交付"), 但**校验**已识别这两类。
 - **导出面随 `api_type` 生成**: `native` 模板预置一个 `[[export]]`(`api_iface = "native"`, `form = "api"`); `runtime_adapter` 模板预置 `api_iface = "runtime_adapter"`; **`third_party` 模板不生成任何 `[[export]]`**(§3.5 不变量 2), 生成器对此做自检。
 - **不覆盖人写文件**: 已存在的 `plugin.toml`/`src/*` 一律不覆盖, 冲突 ⇒ `BRV-GEN-0002` + 退出码 1(除非 `--force`, 且 `--force` 只对**生成物**目录生效)。
-- **`br init <product>`**: 生成 `product.toml` + `app/<name>/` 骨架 + `br.lock` 初版。
+- **`brickie init <product>`**: 生成 `product.toml` + `app/<name>/` 骨架 + `brickie.lock` 初版。
 
 ## 9. 实现架构与工程形态
 
@@ -956,23 +966,25 @@ allow_edges = [                    # §7.3 的框架件白名单特例
 
 | 层 | 语言 | 模块 | 关键产物 |
 |---|---|---|---|
-| L5 前端 | **Python3** | `br` 包: 子命令/参数/输出格式/退出码/schema 校验/文件编排 | CLI 文本 + `--json` |
-| L0 领域模型 | **Rust** | `br-model`: `plugin.toml`/`product.toml` → 规范化模型 | 模型 JSON |
-| L1 求解器 | **Rust** | `br-solve`: 闭包/区间/拓扑/环/相位/分类学/预算 (纯函数) | 闭包或诊断 |
-| L1 版本与接口引擎 | **Rust** | `br-ver`: 四段版本推进; `br-iface`: IFACE-IR 规范化 + SHA-256 + 变更集 + 影响分析 | 变更集/新快照 |
-| L2 生成器 | **C++** | `br-gen`: 骨架/描述符/头文件代码生成 | C 源文件 |
-| 横切 | Rust + Python | 内容 hash 缓存、诊断模型、`br.lock` 读写 | — |
+| L5 前端 | **Python3** | `brickie` 包: 子命令/参数/输出格式/退出码/schema 校验/文件编排 | CLI 文本 + `--json` |
+| L0 领域模型 | **Rust** | `brickie-model`: `plugin.toml`/`product.toml` → 规范化模型 | 模型 JSON |
+| L1 求解器 | **Rust** | `brickie-solve`: 闭包/区间/拓扑/环/相位/分类学/预算 (纯函数) | 闭包或诊断 |
+| L1 版本与接口引擎 | **Rust** | `brickie-ver`: 四段版本推进; `brickie-iface`: IFACE-IR 规范化 + SHA-256 + 变更集 + 影响分析 | 变更集/新快照 |
+| L2 生成器 | **C++** | `brickie-gen`: 骨架/描述符/头文件代码生成 | C 源文件 |
+| 横切 | Rust + Python | 内容 hash 缓存、诊断模型、`brickie.lock` 读写 | — |
 
-**二进制与通信**: `br`(Python) 通过 `subprocess` 调用 `br-core`(Rust, 含 model/solve/ver/iface)与 `br-gen`(C++), 输入/输出 = **JSON over stdio**。Python 侧**禁止**实现任何业务规则(只做编排/校验/呈现), 由 CI 的"粘合层纯度检查"保证(`br-core --selftest` 能独立跑通全部用例)。
+**二进制与通信**: `brickie`(Python) 通过 `subprocess` 调用 `brickie-core`(Rust, 含 model/solve/ver/iface)与 `brickie-gen`(C++), 输入/输出 = **JSON over stdio**。Python 侧**禁止**实现任何业务规则(只做编排/校验/呈现), 由 CI 的"粘合层纯度检查"保证(`brickie-core --selftest` 能独立跑通全部用例)。
+
+> **发布形态(增补, 2026-10-07)**: 上表的 L5 = **Python3 语言**, 但**交付形态不必是"源码 + `python3 -m`"**。需求方要求"brickie 的 python 代码也编译为 elf"且"**brickie-gen 等工具均需要编译到 brickie elf 中**", 故 L5 的宿主产物为一个 **单文件自包含入口 ELF**: C++ 启动器 + 把 `python/brickie/**`、`templates/**` 与**原生子进程工具**(`brickie-gen`; 将来 `brickie-core` 等)作为数据嵌入的载荷, 运行时解包再由系统 `python3` 解释、执行嵌入工具(零新增第三方依赖, 不改变 L5/L2 的语言归属与"禁业务规则"纪律)。落点与语义见 ADR [`0004`](../../decisions/0004-brickie-prebuilts-bootstrap.md) §7。
 
 ### 9.2 仓库骨架(v0.1 交付的目录)
 
 ```
-br-tools/                       # 工具自身(与 brickOS 插件树同级或作为其 tools/)
-├── pyproject.toml              # Python 包(br)与入口点
-├── python/br/                  # L5 前端
-├── rust/                       # Cargo workspace: br-model / br-solve / br-ver / br-iface / br-core
-├── cxx/                        # CMake: libbrgen + br-gen 可执行
+brickie/                       # 工具自身(与 brickOS 插件树同级或作为其 tools/)
+├── pyproject.toml              # Python 包(brickie)与入口点
+├── python/brickie/                  # L5 前端
+├── rust/                       # Cargo workspace: brickie-model / brickie-solve / brickie-ver / brickie-iface / brickie-core
+├── cxx/                        # CMake: libbrickie-gen + brickie-gen 可执行
 ├── templates/                  # 骨架模板: <api_type>/<plugin_type>/<lang>/
 ├── schema/                     # plugin.schema.json / product.schema.json / lock.schema.json
 ├── tests/                      # 求解器属性用例(含"故意造环") + 版本矩阵用例 + 幂等用例
@@ -980,6 +992,10 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 ```
 
 > 与 `2-01` §2 第 4 项(repo 骨架)的关系: 本节只声明**工具自身**的骨架; **插件树/构建入口**的骨架仍归 `2-01`。
+>
+> **原生件的落点(出树, 参考 Android)**: 上表是**源码**骨架; `rust/` 与 `cxx/` 编出来的宿主可执行/静态库/对象一律**不落源码树**, 而是落 `build/host/<host-arch>/<host-os>/{bin,lib,obj}/`(见 BRV-D5)。于是"源码树里没有 `.o`/可执行文件"成为一条可门禁的纪律(实现侧对应 `make check-build` 的"宿主产物出树"检查项)。映射真值收敛到一个探测脚本(POSIX 原型为 `tools/host-detect.sh`), make、门禁、前端三处共享同一口径, 禁止各自重算。
+>
+> **另有一份"进库"的宿主产物 —— 自举种子**: `build/host/**` 是派生品, 而 `prebuilts/seed/brickie/<host-arch>/<host-os>/bin/<可执行>` 是**随源码提交**的预编译件, 用于(a)没有编译器的全新 checkout 直接起步, (b)将来自举编译的初始砖。它**不**改写本节的源码骨架(仍只声明源码), 只在仓库级新增 `prebuilts/` 一级目录; 发布/校验 = `make tools-prebuilt` / `make tools-prebuilt-check`。详见 BRV-D5 与 ADR [`0004`](../../decisions/0004-brickie-prebuilts-bootstrap.md)。
 
 ### 9.3 依赖纪律(v0.1 的"无第三方依赖"边界)
 
@@ -995,20 +1011,20 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 
 | # | 验收项 | 判据 |
 |---|---|---|
-| V-1 | 骨架生成 | `br new` 对 `native` × {app, interface, ability, platform} × `c` 各生成一套; 生成的插件立刻通过 `br check`(0 错误) |
-| V-2 | 生成物幂等 | 重复 `br gen` 无任何文件 diff; `--check` 逐字节一致 |
-| V-3 | 环检测 | 故意造环 ⇒ `br check` 报**完整环路径**(结构化边列表)且退出码 1(满足 `1-03` §3 M0) |
+| V-1 | 骨架生成 | `brickie new` 对 `native` × {app, interface, ability, platform} × `c` 各生成一套; 生成的插件立刻通过 `brickie check`(0 错误) |
+| V-2 | 生成物幂等 | 重复 `brickie gen` 无任何文件 diff; `--check` 逐字节一致 |
+| V-3 | 环检测 | 故意造环 ⇒ `brickie check` 报**完整环路径**(结构化边列表)且退出码 1(满足 `1-03` §3 M0) |
 | V-4 | **版本引擎(「事件 → 段」)** | §5.2 推进表**逐行**有单测: (a) 解冻+改已有接口+重新冻结 ⇒ **仅 `COMPAT_GEN+1`**; (b) **新增条目 ⇒ `COMPAT_GEN` 不动**; (c) 重大产品版本 ⇒ **仅 `MAJOR+1`**; (d) 小功能 ⇒ `MINOR+1`; (e) 修 bug ⇒ `REVISE+1`; (f) **空解冻 ⇒ 四段全不动**。其中 (a)(c) 必须验证 **`COMPAT_GEN` 与 `MAJOR` 互不牵连**(这正是首版 `a≡b` 缺陷的回归测试) |
-| V-5 | 接口发布 | `br iface publish` 产出快照+lock+CHANGELOG+影响报告; **面未变时为空操作**(不写盘、退出 0); `--check` 独立重算一致 |
+| V-5 | 接口发布 | `brickie iface publish` 产出快照+lock+CHANGELOG+影响报告; **面未变时为空操作**(不写盘、退出 0); `--check` 独立重算一致 |
 | V-6 | 影响报告 | 变更 frozen 条目时, 报告列出全部直接/传递依赖者, 并标出 `compat_gen`/`range` 失配者; 缺 `--note` ⇒ 退出码 1 |
 | V-7 | 依赖求解 | 单版本政策下闭包正确; **版本冲突可构造**: 依赖钉 `compat_gen=3` × 提供方 `COMPAT_GEN=4` ⇒ `BRV-VER-0001`; 同代 `range` 越界 ⇒ `BRV-VER-0002` |
 | V-8 | 分类学执法 | 三条硬禁则(§7.3)各有正/反用例; 相位单调违例有反用例 |
 | V-9 | 零编译依赖 | 在**未安装** cc/cargo/nm 的环境跑完整测试套件全绿; `--json` schema 稳定(快照测试) |
 | V-10 | 接口预留 | `requires_iface` 字段能被解析、校验 schema、并在文档中标注"v0.1 不扫描" |
-| V-11 | hash 语义可读 | 每份快照文件头与 `--json` 输出都带 `hash_scope`/`truth`; `br iface show` 明示"声明面 hash ≠ ABI 兼容证明" |
-| V-12 | 导出分类不变量 | `api_iface ≠ api_type`、`third_party` 声明 `[[export]]`、`form="skin"` 缺 `reexport_of`(或指向单元分类不符)三种违例各有反用例, 报错码分别为 `BRV-TAX-0016/0017/0018`; 且 `third_party` 插件在**无 export** 时能正常通过 `br check` |
+| V-11 | hash 语义可读 | 每份快照文件头与 `--json` 输出都带 `hash_scope`/`truth`; `brickie iface show` 明示"声明面 hash ≠ ABI 兼容证明" |
+| V-12 | 导出分类不变量 | `api_iface ≠ api_type`、`third_party` 声明 `[[export]]`、`form="skin"` 缺 `reexport_of`(或指向单元分类不符)三种违例各有反用例, 报错码分别为 `BRV-TAX-0016/0017/0018`; 且 `third_party` 插件在**无 export** 时能正常通过 `brickie check` |
 | **V-13** | **版本串与范围格式** | `compat_gen` 缺失 ⇒ `0003`; 4 段版本串 ⇒ `0005`; **4 段 `range` ⇒ `0006`**; `range` 缺段右补 0(`">=1.0"` ≡ `">=1.0.0"`); `--set` 低于当前版本 ⇒ `0007`(单调不回退) |
-| **V-14** | **profile 门禁** | **同一输入、两种 profile、两种结论**(各需快照测试): 含未冻结接口依赖的树, `br check --profile dev` ⇒ exit 0; `br check --profile release` ⇒ exit 1 + `BRV-VER-0004` |
+| **V-14** | **profile 门禁** | **同一输入、两种 profile、两种结论**(各需快照测试): 含未冻结接口依赖的树, `brickie check --profile dev` ⇒ exit 0; `brickie check --profile release` ⇒ exit 1 + `BRV-VER-0004` |
 | **V-15** | **append vs modify 判定**(§5.4) | 正例: 新增独立结构体 / 枚举**末尾**追加成员 / 填充预留槽位 ⇒ 报 `ADDED`/`EXTENDED`, **免解冻**。反例: **给已冻结结构体加字段** / 枚举**重排** / service ops 加槽 ⇒ 报 `CHANGED`, **未处于 `unfreezing` 时报红** |
 | **V-16** | **解冻窗口** | `unfreeze` 无 `--note` ⇒ 红; 窗口内 `--profile release` ⇒ `BRV-IFACE-0009`; **空解冻后 `refreeze` ⇒ 四段全不动**(§5.3.4 规则 2) |
 | **V-17** | hash 输入完整性 | `#define BR_MAX 16→4096` 与"已有 service ops 加槽"**必须各产生不同的 `iface_hash`**(首版的 `NONE` 是错的); 枚举重排必须被 hash 感知 |
@@ -1042,14 +1058,14 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | **RV-2** | 声明面唯一真值(C2)与接口面头文件真值(C3)是**两种真值**, 容易被混为一谈 | 明确切开"插件声明面"与"接口面", 并用 `truth`/`hash_scope` 字段显式化(§6.6) |
 | **RV-3** | v0.1 的 `iface_hash` 是**声明面 hash**, 可能被误读为"ABI 兼容证明" | 快照文件头强制声明 `hash_scope="decl"`; CLI 输出带 `NOT_ABI` 提示; V-11 验收 |
 | **RV-4** | 分类学改写波及 `1-01`/`4-01`/`4-02`/`4-04`/`3-05` 五处 | §13 待对齐清单一次性回灌; 保留 `subkind` 使旧信息不丢失 |
-| **RV-5** | 三语言 = 三套构建/CI/锁版本, 与 `2-02` BR-D3 的"无第三方依赖"纪律冲突 | 每语言最小依赖集 + `br --version --deps` 打印全环境指纹; BRV-Q8 复审 |
+| **RV-5** | 三语言 = 三套构建/CI/锁版本, 与 `2-02` BR-D3 的"无第三方依赖"纪律冲突 | 每语言最小依赖集 + `brickie --version --deps` 打印全环境指纹; BRV-Q8 复审 |
 | **RV-6** | 自动版本推进可能绕过 `1-02` §2.2 的 RFC/PR 门钩("工具替我 bump 了") | `--note` 硬门(BRV-Q12); `publish --check` 进 CI, 人工改动无法伪造 hash |
 | **RV-7** | 分类学禁则过严(如 `ability ↛ interface`)可能挡住合理的域标准适配 | 禁则以 `allow_edges` 白名单显式豁免(§7.3), 豁免必须写进 `product.toml` 从而可评审 |
 | **RV-8** | v0.1 无编译 ⇒ 生成物(描述符 C 代码)可能"生成了但编不过"直到 v0.3 | 生成器与 `1-01` §6.1 宏形态**同源**并要求形态先定稿(BRV-Q7); v0.1 附"生成物语法自检"(仅括号/宏配对级) |
-| **RV-9** | `third_party` 不抛接口(§3.5)⇒ 三方件的能力面没有接口单元, 既不入版本治理, 也无法从接口面反查"谁用了它" | 消费关系仍可从 `[[dep]]` 反查(反向依赖索引); v0.1 在 `br dep` 报告中单列"三方件消费方"; 若未来需要治理, 出口是"由 native 包装件持有接口单元"(BRV-Q13) |
+| **RV-9** | `third_party` 不抛接口(§3.5)⇒ 三方件的能力面没有接口单元, 既不入版本治理, 也无法从接口面反查"谁用了它" | 消费关系仍可从 `[[dep]]` 反查(反向依赖索引); v0.1 在 `brickie dep` 报告中单列"三方件消费方"; 若未来需要治理, 出口是"由 native 包装件持有接口单元"(BRV-Q13) |
 | **RV-10** | 导出分类不变量的严格性可能与既有 Interface 语义冲突: `iface-posix` 之类的 runtime_adapter **皮肤**是否需要占用 `[[export]]` | 由不变量 3 的 `reexport_of` 承接; 若 `1-01` §7.3 的"再导出不转移所有权"在符号层无法表达为单元引用, 则回退为 v0.2 的符号级校验(A-11) |
-| **RV-11** | **跨 `COMPAT_GEN` 比较的心智诱惑**: 使用者会自然地认为"代大 = 更新", 从而写出跨代版本序判断 | §5.5 **明令**跨代比较无意义(字典序仅限同代内); 依赖**必须**精确匹配 ⇒ 求解器结构上不可能跨代比较; `br ver show` 输出显式标注"代不参与比较" |
-| **RV-12** | **`COMPAT_GEN` 与 `MAJOR` 可能同时变动**, 使用者难以判断"是接口破了还是产品翻代了" | 发布报告给出**分段理由**(§6.3 `reasons`); `br ver show` 分别显示"上次解冻事件"与"产品代际"; V-4 要求二者互不牵连的回归测试 |
+| **RV-11** | **跨 `COMPAT_GEN` 比较的心智诱惑**: 使用者会自然地认为"代大 = 更新", 从而写出跨代版本序判断 | §5.5 **明令**跨代比较无意义(字典序仅限同代内); 依赖**必须**精确匹配 ⇒ 求解器结构上不可能跨代比较; `brickie ver show` 输出显式标注"代不参与比较" |
+| **RV-12** | **`COMPAT_GEN` 与 `MAJOR` 可能同时变动**, 使用者难以判断"是接口破了还是产品翻代了" | 发布报告给出**分段理由**(§6.3 `reasons`); `brickie ver show` 分别显示"上次解冻事件"与"产品代际"; V-4 要求二者互不牵连的回归测试 |
 | **RV-13** | **冻结排期成为 release 的硬前置**(§7.5 连带结论): 框架件/svc-posix/crypto 面若长期无冻结批次, 其 release 会被 `BRV-VER-0004` **永久阻断** | A-18/A-19 补齐排期; 过渡期可用 `[lint] frozen_deps = "allow"` **显式**放行(可评审的例外, 而非静默); `BRV-Q15` 需先定 |
 
 ## 13. 与既有文档的接口与待对齐修订清单
@@ -1078,7 +1094,7 @@ br-tools/                       # 工具自身(与 brickOS 插件树同级或作
 | A-5 | 版本区间语义 = 四段 + `^`/`~` 定义; 单版本政策 | `4-04` §2/§3 |
 | A-6 | 新增相位单调规则 | `4-04` §2(新条目) / `3-05` §2 第 4 项 |
 | A-7 | 新增特权接口(P0–P4)与 memory 粒度模型 | `3-01`(API 分组) / `3-04` / 新篇或 `4-01` |
-| A-8 | 状态目录定为 `build/`(生成物/索引), 新增 `br.lock` 与 `api/iface/**` | `2-02` §3 BR-D5 / Q5 |
+| A-8 | 状态目录定为 `build/`(生成物/索引), 新增 `brickie.lock` 与 `api/iface/**` | `2-02` §3 BR-D5 / Q5 |
 | A-9 | `--json` 与 manifest schema 同源(关闭 Q7) | `2-02` §8 |
 | A-10 | `br_dep_t.phase` 语义收窄为"相位断言"; 新增自身相位声明 `[plugin].phase` | `1-01` §6.1 / `4-04` §2 |
 | A-11 | 导出面分类规则(`export.api_iface ≡ api_type`; `third_party` 无导出面; `skin` 边豁免 api_type 禁则) | `1-01` §7.3(`api_syms`/再导出) / `10-01` §2 第 1 项 / `4-03` §2 / `11-01` |

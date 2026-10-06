@@ -123,7 +123,7 @@
 | `iface-min` | Interface | 极简别名层, 直通 native | core | M2 |
 | `app/hello` + conformance | APP | 启动链演示(M0: 直接主循环, 不依赖 iface)+ native API conformance 首版(M3, **用例目录: `docs/6-test/6-01-test.md`**) | —(M0)/iface(M3) | M0/M3 |
 
-注: 框架件、svc-posix 与 fs/tmpfs/fs/devfs 经**依赖闭包**自动进入组合(`br add` 无需显式列出; 挂载计划含 "/" 或 "/dev" 即拉入); sqlite(三方移植, 模式 A)在 M2 作为移植性验证件, 不属系统插件。
+注: 框架件、svc-posix 与 fs/tmpfs/fs/devfs 经**依赖闭包**自动进入组合(`brickie add` 无需显式列出; 挂载计划含 "/" 或 "/dev" 即拉入); sqlite(三方移植, 模式 A)在 M2 作为移植性验证件, 不属系统插件。
 
 ### v1.x "walk+" — 真实平台(选配)+ HSM 完整样例
 

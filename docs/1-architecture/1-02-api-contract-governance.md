@@ -176,7 +176,7 @@ CI 层 1: 构建产物 vs golden diff
   删/签名变/布局变 = 红; 新增 = 绿但强制同 PR 更新 golden
 ```
 
-- **PR 工作流**: 改头文件 → 本地 `br api-dump` 出 diff → 同 PR 提交 golden 变更 → CI 用**独立重生成**比对(防手编 golden 造假)
+- **PR 工作流**: 改头文件 → 本地 `brickie api-dump` 出 diff → 同 PR 提交 golden 变更 → CI 用**独立重生成**比对(防手编 golden 造假)
 - 记录粒度: 符号名 / 签名 / 结构布局(不透明体记 `# opaque`) / 枚举值(append-only: 只追加不重排, §4.1)
 - **分组 = 冻结批次单元**(3-01 §15): 每文件独立升格, 互不绑架
 

@@ -253,7 +253,7 @@ v1.x 软件后端**不承诺侧信道抗性**(无恒定时间保证, 无缓存/�
 
 - **guest 侧**: `io/virtio-hsm` 实现 cdev 会话(`docs/8-device/8-01-device.md` §3 的 `br_cdev_ops`)并注册设备名 `hsm0` → devfs 投影为 `/dev/hsm0`;
 - **host 侧对端**: QEMU `-device virtio-serial-device` + `-chardev socket` 接 host 脚本(`tools/hsm-peer`), **无需自研 QEMU 设备模型**——这是选择 virtio-serial 而非自造 virtio 设备的理由;
-- `br run` 需要把 chardev 参数透出(与 `docs/2-toolchain/2-01-toolchain.md` §3 "`br run` 的 QEMU 封装参数"开放问题合流, O-H4);
+- `brickie run` 需要把 chardev 参数透出(与 `docs/2-toolchain/2-01-toolchain.md` §3 "`brickie run` 的 QEMU 封装参数"开放问题合流, O-H4);
 - **对端形态的备选**(若 virtio-serial 在多实例/时序上不够): 自研最小 virtio-mmio 设备模型 / chardev 直桥 / 真安全核(M4+)——O-H4 记录三项取舍。
 
 ### 7.2 形态归属: 形态 A
@@ -278,15 +278,15 @@ v1.x 软件后端**不承诺侧信道抗性**(无恒定时间保证, 无缓存/�
 ### 9.1 命令(CLI 口径同主文档 §13)
 
 ```bash
-br init hsm --domain hsm
-br add platform/qemu-aarch64 sched/sched-coop \
+brickie init hsm --domain hsm
+brickie add platform/qemu-aarch64 sched/sched-coop \
        dev-core cdev-core bdev-core vfs-core fs/tmpfs fs/devfs fs/littlefs \
        io/virtio-blk io/virtio-hsm \
        service/crypto service/keyring service/hsm-host service/seclog \
-       iface/pkcs11 app/hsm        # 框架件/闭包由 br add 自动拉入
-br build
-br run qemu --hsm-peer=unix:/tmp/hsm.sock   # 参数形态待 2-01 §3 收口(O-H4)
-br test hsm                                  # host 平台 CI(含 ASan)
+       iface/pkcs11 app/hsm        # 框架件/闭包由 brickie add 自动拉入
+brickie build
+brickie run qemu --hsm-peer=unix:/tmp/hsm.sock   # 参数形态待 2-01 §3 收口(O-H4)
+brickie test hsm                                  # host 平台 CI(含 ASan)
 ```
 
 > manifest 示例**略**: 表达格式(YAML/TOML/DSL)仍在 `docs/4-plugin/4-03-plugin-manifest.md` §3 开放, 样例不预设格式; 其**语义输入**见本表 + §3.1 + §5.2(依赖 / 挂载计划 / 策略表 / 熵源开关 `TEST_ENTROPY`)。
@@ -323,7 +323,7 @@ br test hsm                                  # host 平台 CI(含 ASan)
 
 | # | 验收项 | 判据 |
 |---|---|---|
-| **A1** | 组合即产品 | 增量审计: HSM 组合相对 v1.0 插件库只新增 §3.1 的 6 件 + `app/hsm`; 无 core / 框架件改动(由组合器 `br check` 的插件清单与符号表 diff 机械给出; 范围边界纪律见 R-H3) |
+| **A1** | 组合即产品 | 增量审计: HSM 组合相对 v1.0 插件库只新增 §3.1 的 6 件 + `app/hsm`; 无 core / 框架件改动(由组合器 `brickie check` 的插件清单与符号表 diff 机械给出; 范围边界纪律见 R-H3) |
 | **A2** | 端到端命令 | host 脚本经 `/dev/hsm0` 走通 §4.2 命令全集(INFO/GEN/IMPORT/ACTIVATE/SUSPEND/RESUME/SIGN/VERIFY/CRYPT/DESTROY/AUDIT); 正例结果正确 |
 | **A3** | 策略生效 | 用途不符 / **越限调用** / 试导出 → 拒绝(`-EPERM`)且**必留审计**; 计数达上限本身 → 自动 `SUSPENDED` + 审计(§5.2) |
 | **A4** | 审计链 | `AUDIT` 摘要链自校验通过; 篡改记录 → 校验失败; QEMU 重启后链连续(littlefs 掉电安全) |

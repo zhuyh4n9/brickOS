@@ -59,7 +59,7 @@ typedef struct __attribute__((packed)) br_trace_evt {
 - 通道: UART 先行(console 复用); 后续 USB-CDC / ETH(各为 I/O / Service 插件)
 - 成帧: COBS + 16-bit CRC, 请求/响应带 echo id
 - 命令集: `GETINFO` / `MEMRD` / `MEMWR` / `TRACE_READ`(流式) / `PLUGIN_LIST` / `SELFTEST` / v2 起 `FILE_OP`(经 VFS)
-- 主机侧: `br dbg` 子命令, 可脚本化
+- 主机侧: `brickie dbg` 子命令, 可脚本化
 - 关键设计: **panic 通道独立** —— 致命态(IRQ 锁死)下走"最后一口气"路径: 轮询 UART、不依赖任何插件栈/调度器/堆, 只允许 GETINFO / MEMRD / TRACE_READ
 
 ## 3. mini ramdump (v2.0)

@@ -101,6 +101,6 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 
 | # | 问题 |
 |---|---|
-| — | 插件作者脚手架: `br new <kind>` 生成模板(manifest + 描述符 + conformance 骨架)[?]——落点: `4-02-plugin-layout.md` §2 第 6 项 |
+| — | 插件作者脚手架: `brickie new <kind>` 生成模板(manifest + 描述符 + conformance 骨架)[?]——落点: `4-02-plugin-layout.md` §2 第 6 项 |
 | — | conformance 用例编写指南(断言集形态、host 适配层) |
 | — | 每类插件的样例参考实现盘点(v1.0 已有: uart-pl011/virtio-blk/littlefs/trace) |

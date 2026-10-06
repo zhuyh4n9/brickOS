@@ -1,7 +1,7 @@
 # brickOS 架构讨论稿 v0.11
 
 > 状态: 讨论中的活文档。标注 **[?]** 为待定决策点。所有图为 PlantUML(plantuml 代码块; VSCode/IDEA 插件或 GitLab 原生渲染, CLI: `plantuml docs/*.md` 直出)。
-> v0.11: **OS 更名 brickOS → brickOS(D16 修订)**——原名与既有项目命名冲突; 隐喻由"七巧板"改为"积木"(有限小块搭出任意形状, 语义不变); 符号前缀 `br_` → `br_`、宏 `BR_` → `BR_`、CLI `br` → `br`、链接段 `.br_*` → `.br_*`、golden 组名 `br-*` → `br-*`, 文档与原型分支同步替换(**分支名与仓库名不动**)。
+> v0.11: **OS 更名 brickOS → brickOS(D16 修订)**——原名与既有项目命名冲突; 隐喻由"七巧板"改为"积木"(有限小块搭出任意形状, 语义不变); 符号前缀 `br_` → `br_`、宏 `BR_` → `BR_`、CLI `br`(工具名, 现为 `brickie`; 见 `docs/decisions/0001-brickie-tool-naming.md`)、链接段 `.br_*` → `.br_*`、golden 组名 `br-*` → `br-*`, 文档与原型分支同步替换(**分支名与仓库名不动**)。
 > v0.10: **D24–D26 HSM 完整样例入 v1.x(新增 M5)**——第二产品域纵向切片(`io/virtio-hsm` + `service/crypto`/`keyring`/`hsm-host`/`seclog` + `iface-pkcs11` 由 v2.0 前移 + `app/hsm`); **crypto 服务契约 v1.x 定稿**(D25: v2.0 只做后端与算法面扩展, 契约不变); **HSM 资产边界诚实声明 + §14.1 域支撑矩阵**(D26, 收口评审 P1/P2); §12 依赖链按 D25 精确到"ed25519 能力(v2)"; 设计基线 `docs/9-app/9-02-hsm-sample.md`。
 > v0.9a: 全部架构图 mermaid → **PlantUML**(布局可读性)。
 > v0.9: D22 设备 ops 统一预留——**所有设备类别 ops 预留 ioctl/suspend/resume**(poll/close 由 cdev-core 通用 br_file_ops 适配层提供, devfs 经钩子取得; 动机 = D14: ops 布局入 golden, 预留即免二进制破坏); D23 VFS ops 分层——**super(fs 级)/inode/file/dentry(预留)四层, Linux 型**; 路径走查(lookup 链)移入 vfs-core; inode v1 瞬态(无缓存, SD-3 不变); file_ops 增加 open(会话建立); D20 钩子演化为返回 {fops, fpriv}(`docs/7-storage/7-01-vfs.md` §2, `docs/8-device/8-01-device.md` §2/§3)。
@@ -104,7 +104,7 @@
 
 ⇒ 设计原则升格: **契约优先于实现** —— 一切接口按"将来要在别的内核上重新实现"的标准设计。详见 `docs/1-architecture/1-03-roadmap.md` §0。
 
-**命名(D16, v0.11 修订)**: OS 定名 **brickOS(积木——有限的小块, 搭出任意形状, 即 core + 插件组合的隐喻)**; 符号前缀 `br_` / 宏 `BR_` / CLI `br` / 链接段 `.br_*`, 已全局替换, 避开 Unikraft `uk_*` 的正面冲突(量产若基于 Unikraft 二次开发不再撞车)。**原名 brickOS(七巧板)因与既有项目命名冲突而弃用**; 正式启用前仍建议做一次商标与开源库检索。
+**命名(D16, v0.11 修订)**: OS 定名 **brickOS(积木——有限的小块, 搭出任意形状, 即 core + 插件组合的隐喻)**; 符号前缀 `br_` / 宏 `BR_` / CLI `brickie`(工具名, 与符号前缀**解耦**; ADR-0001) / 链接段 `.br_*`, 已全局替换, 避开 Unikraft `uk_*` 的正面冲突(量产若基于 Unikraft 二次开发不再撞车)。**原名 brickOS(七巧板)因与既有项目命名冲突而弃用**; 正式启用前仍建议做一次商标与开源库检索。
 
 ## 1. 决策记录(已定)
 
@@ -123,7 +123,7 @@
 | D13 | 接口叠加规则 | **已定**: 双层混合(模块级声明 + 符号级真值) | 见 `docs/1-architecture/1-02-api-contract-governance.md` |
 | D14 | 二进制插件分发 | **Day1 按二进制兼容设计** | 不透明句柄纪律 CI 强制; 布局入 golden 硬门禁; 描述符带 `abi_id`(§6.1) |
 | D15 | 冻结启动时机 | **M3(=v1.0 完整化)起分批冻结** | M0–M2 全部 API 留实验区 |
-| D16 | OS 命名 | **brickOS(积木)** | 符号前缀 `br_` / 宏 `BR_` / CLI `br` / 段名 `.br_*`; 避开 Unikraft `uk_*` 撞车; 原名 brickOS(七巧板)因命名冲突弃用(v0.11) |
+| D16 | OS 命名 | **brickOS(积木)** | 符号前缀 `br_` / 宏 `BR_` / CLI `brickie`(与符号前缀解耦; ADR-0001) / 段名 `.br_*`; 避开 Unikraft `uk_*` 撞车; 原名 brickOS(七巧板)因命名冲突弃用(v0.11) |
 | D17 | v1.0 可写 FS | **littlefs 入 v1.0** | DA 日志/仪表配置需要落盘; 与 EROFS(v2)分工: littlefs=数据, EROFS=代码/资产 |
 | D18 | POSIX 双角色拆分 | **POSIX 运行时服务化(svc-posix); 接口插件成为严格叶子** | POSIX 实现=普通服务(open/read/pthread/socket 唯一实现, fd 表唯一主人, 实现于 native+注册表); 三方中间件可声明依赖它; 铁律"服务不得依赖接口"退役, 由四条治理规则取代(§7.2); iface-posix 保留为薄皮肤(再导出 + stdio/errno 接线, §7.4); 移植双模式(§7.6) |
 | D19 | 框架件拆分 | **能力框架成为插件: dev-core / vfs-core / bdev-core** | file/open/VFS 契约 = **vfs-core**; 设备相关接口 = **dev-core**; bdev 类 = **bdev-core(依赖 dev-core)**; 具体文件系统(littlefs)依赖 **vfs-core**; 派生: ~~vfs-core→dev-core(设备路由+适配)~~ → **D21 修订**: 该依赖已撤销, 设备路由改经 devfs/cdev-core 侧(见 D21); svc-posix→vfs-core; 框架件 = 插件身份(可裁剪) + core 纪律(golden/门禁); core 收缩为 native API + 服务注册表(§4.5); 详见 `docs/8-device/8-01-device.md` §1 |
@@ -537,7 +537,7 @@ static int sqlite_port_init(void) {
 | 能力 | 机制 | 版本 |
 |---|---|---|
 | trace | 定长 16B 事件环形缓冲, ISR 可用, 编译期可整层移除(零开销) | **v1.0** |
-| debug bridge | COBS 帧协议(UART 先行), `br dbg` 主机工具; **panic 独立通道**(轮询, 不依赖插件栈) | v1.0(M3) 最小集 |
+| debug bridge | COBS 帧协议(UART 先行), `brickie dbg` 主机工具; **panic 独立通道**(轮询, 不依赖插件栈) | v1.0(M3) 最小集 |
 | mini ramdump | fault handler 注册 + 静态缓冲捕获 + LZ4 + host 离线分析 | **v2.0** |
 | ASan/memleak | **host 完整 ASan 白捡**(host 平台插件, CI 常开); target: TLSF 红区+金丝雀(v1.x)、per-plugin arena 泄漏记账(v2.0)、完整 ASan 为 vx 实验 | 分层 |
 
@@ -558,12 +558,12 @@ static int sqlite_port_init(void) {
 ## 13. 开发工作流
 
 ```
-br init myapp --domain dashboard
-br add platform/qemu-aarch64 sched/sched-coop iface/posix \
+brickie init myapp --domain dashboard
+brickie add platform/qemu-aarch64 sched/sched-coop iface/posix \
    io/uart-pl011 fs/littlefs service/trace
-br run qemu          # aarch64 virt, 秒级启动
-br test              # host 平台插件 + 接口直通, CI 无硬件单测(含完整 ASan)
-br build --release   # 产线镜像
+brickie run qemu          # aarch64 virt, 秒级启动
+brickie test              # host 平台插件 + 接口直通, CI 无硬件单测(含完整 ASan)
+brickie build --release   # 产线镜像
 ```
 
 版本路线图(v1.0 walk / v2.0 run / v3.0 compose / v4.0 migrate)与内部 M 里程碑: **`docs/1-architecture/1-03-roadmap.md`**。

@@ -13,8 +13,8 @@
 | | | [`1-02-api-contract-governance.md`](1-architecture/1-02-api-contract-governance.md) 契约治理(D12–D15 + §2.6 管理机制) | 成文 |
 | | | [`1-03-roadmap.md`](1-architecture/1-03-roadmap.md) 版本路线图 + DoD 清单 | 成文 |
 | 2 | **toolchain**(工具链) | [`2-01-toolchain.md`](2-toolchain/2-01-toolchain.md) 工具链总纲(CLI/manifest 工具实现/golden-CI) | 骨架 |
-| | | [`2-02-br-arch.md`](2-toolchain/2-02-br-arch.md) **br 工具架构设计**(备选方案/权衡/开放问题) | 讨论稿 |
-| | | [`br-tools/br-tool-v0.1.md`](2-toolchain/br-tools/br-tool-v0.1.md) **br-tools v0.1 详细设计**(原型 v1.0 核心交付: 骨架生成/依赖分析/版本模型/接口发布; **版本模型已定 `COMPAT_GEN.MAJOR.MINOR.REVISE` + 解冻机制**) | 草案(旁支, 暂不占章节编号) |
+| | | [`2-02-brickie-arch.md`](2-toolchain/2-02-brickie-arch.md) **brickie 工具架构设计**(备选方案/权衡/开放问题) | 讨论稿 |
+| | | [`brickie/brickie-v0.1.md`](2-toolchain/brickie/brickie-v0.1.md) **brickie v0.1 详细设计**(原型 v1.0 核心交付: 骨架生成/依赖分析/版本模型/接口发布; **版本模型已定 `COMPAT_GEN.MAJOR.MINOR.REVISE` + 解冻机制**) | 草案(旁支, 暂不占章节编号) |
 | 3 | **os core**(内核核心) | [`3-01-core-api-list.md`](3-os-core/3-01-core-api-list.md) native API 清单与详细设计(CA-1~10) | 成文 |
 | | | [`3-02-int.md`](3-os-core/3-02-int.md) 中断管理(IRQ 框架/PIC 抽象/生命周期/屏蔽三层/级联域/fault/IR-1~15) | 成文 |
 | | | [`3-03-sched.md`](3-os-core/3-03-sched.md) 调度框架(sched_class/br_sched_ops) | 骨架 |
@@ -38,6 +38,14 @@
 
 **引用写法**: 跨文档引用用**文件号**(如 `3-01 §13.4`、`docs/8-device/8-01-device.md`), 不要只写名字——章节调整后名字不变而号会变, 号是唯一身份。
 
+**决策记录(ADR)**: `docs/decisions/NNNN-*.md`(格式与阈值见 `1-02` §2.2)。现有:
+[`0001-brickie-tool-naming.md`](decisions/0001-brickie-tool-naming.md) —— 工具根名 `br` → `brickie`(**OS 符号前缀 `br_`/`BR_`/`.br_*` 不变**, 工具名与符号前缀解耦);
+[`0002-prebuilt-toolchain.md`](decisions/0002-prebuilt-toolchain.md) —— 自洽构建工具集 `prebuilts/toolchain/`(锁版本 + SHA256 + 一条命令重建; **派生侧**, 不进库);
+[`0003-build-ownership-makefile-retirement.md`](decisions/0003-build-ownership-makefile-retirement.md) —— 构建归属转移: 顶层 `Makefile` 只编 tool, 项目由 `brickie` 组织;
+[`0004-brickie-prebuilts-bootstrap.md`](decisions/0004-brickie-prebuilts-bootstrap.md) —— 宿主工具产物落点(出树 `build/host/<host-arch>/<host-os>/bin`)+ 自举种子进库(**进库侧** `prebuilts/seed/brickie/...`); **§7 增补**: L5 的 Python 前端也编译为 **ELF**(零依赖入口形态: 启动器 + 嵌入载荷, 与 `brickie-gen` 成对进种子);
+[`0005-prebuilts-single-root.md`](decisions/0005-prebuilts-single-root.md) —— **`prebuilts/` 收敛为单一顶层目录**(`seed/` 进库、`toolchain/` 派生; 取代 0002 §2-1 与 0004 §2 的"两个顶层目录不合并"条文)。
+> **目录结构现为单一顶层 `prebuilts/`**: `seed/`(进库, ADR-0004)与 `toolchain/`(派生, ADR-0002)由子目录分侧 —— 原先"两个顶层目录只差一个 `s`"的歧义已由 ADR-0005 消除。
+
 **为什么 storage 与 device 分立**: 原 `vfs + device` 一章混装两种读者视角——**面向文件**(VFS/挂载/具体 FS)与**面向设备**(注册表/子分类/驱动契约)。二者共用一条体系链(deviceXXX → 具体设备类 → dev-core → VFS), 但**不是同一条依赖链**: 设备框架可以在没有 VFS 的组合里独立成立(简易 OS), standalone 器件甚至连 dev-core 都不需要。所以拆成第 7 章 storage(VFS 与 FS 之上)与第 8 章 device(设备体系本身); `8-01` §1.2 把这条谱系显式写成**三种组合形态**(A 体系化接入 VFS / B 只用设备框架 / C standalone), 使"框架件可按组合裁剪"(D19)从口号变成可勾选的形态。bdev-core 是设备子分类、但其文档随块存储视角留在第 7 章(`7-02-bdev`), 设备章只引用不复制。
 
 **debug 与 test 分立**: 5-01-debug = 观测与诊断设施(trace/bridge/ramdump/ASan); 6-01-test = **验证体系**(层 2 语义用例目录 × 三调度器矩阵)——测试失败经 debug 设施上报(6-01 §2), 但两者职责正交: debug 回答"出了什么事", test 回答"行为是否还是契约"。
@@ -48,8 +56,8 @@
 
 **为什么 toolchain 是第 2 章**: 组合器把"插件组合"变成"可启动镜像", CI 门禁把契约变成执法——工具链是**契约的执行者**, 其形态决定其余各章的写法(manifest 格式、golden 划分、conformance 矩阵都落在工具侧)。放在第 2 章 = 读完架构先读工具链, 再进内核各子系统。
 
-**`2-toolchain/br-tools/` 旁支**: `br-tool-v0.1.md`(原型 v1.0 核心交付)是 `br` 工具的**版本切片详设**, 定位介于 `2-01`(总纲)与 `2-02`(全局架构讨论稿)之间——它把 `2-02` 的倾向在 v0.1 范围内落成可实现规格。为不打断 `<章节号>-<章节内序号>` 序列, 暂放旁支子目录、不占编号; 待 `2-02` 拍板成文后, 再决定是否升格为 `2-03` 并回灌 `4-03`/`4-04` 的开放问题(见该文 §13.2)。
+**`2-toolchain/brickie/` 旁支**: `brickie-v0.1.md`(原型 v1.0 核心交付)是 `brickie` 工具的**版本切片详设**, 定位介于 `2-01`(总纲)与 `2-02`(全局架构讨论稿)之间——它把 `2-02` 的倾向在 v0.1 范围内落成可实现规格。为不打断 `<章节号>-<章节内序号>` 序列, 暂放旁支子目录、不占编号; 待 `2-02` 拍板成文后, 再决定是否升格为 `2-03` 并回灌 `4-03`/`4-04` 的开放问题(见该文 §13.2)。
 
 **骨架文档的分工**: 主文档(`1-01`)保留全局决策与各子系统概要; 骨架文档是"拆出去深化"的落点——每篇声明范围、大纲、从主文档继承的决策, 待逐篇填实后主文档对应章节收缩为指针(与 7-01–7-03 + 8-01 的拆分模式相同)。
 
-**3-os-core 内的分界**: `3-05-plugin-mgr` = 插件体系运行期管理面(描述符/生命周期/init-DAG 执行); `3-06-service-mgmt` = 服务注册表语义与规则; `2-01-toolchain` = 组合器与 CI 的工具实现(manifest/依赖求解的工具侧); **manifest 与依赖的语义** → `4-03`、`4-04`; **br 工具自身的架构** → `2-02`。
+**3-os-core 内的分界**: `3-05-plugin-mgr` = 插件体系运行期管理面(描述符/生命周期/init-DAG 执行); `3-06-service-mgmt` = 服务注册表语义与规则; `2-01-toolchain` = 组合器与 CI 的工具实现(manifest/依赖求解的工具侧); **manifest 与依赖的语义** → `4-03`、`4-04`; **brickie 工具自身的架构** → `2-02`。
