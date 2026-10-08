@@ -16,6 +16,7 @@ stage   = "dev"                 # dev | release; CLI 覆盖(§7.5)
 # 拉进来(能力经 `[[dep]]` 声明, 产品只做选择 —— BRV-D4 唯一真值)。
 plugins = [
   "platform/qemu-aarch64",
+  "sched/coop",
   "service/dump",
 ]
 
@@ -28,11 +29,77 @@ stack_kib = 16
 
 [lint]
 frozen_deps = "inherit"         # inherit(跟随 [product].stage) | allow | deny
-# 显式豁免: **M0 引导例外**(app 直调 platform / app 直调调试服务; 1-03 §1 的 app/hello 行)。
-# 按设计 §7.3, app 只许依赖 interface; 而 Interface 插件(iface-min)属 M2、运行期插件
-# 管理器属 M0 —— 二者都还没落地, 所以 app 的调用点是"替身启动链"的一部分, 属
-# WORKAROUND(br-wa-boot-001) 的欠债。豁免必须**逐条列名**, 使"还有几条例外"一眼可见。
+# 显式豁免: **M0 引导例外**(1-03 §1 的 app/hello 行)。按设计 §7.3, app 只许依赖
+# interface; 而 Interface 插件(iface-min)属 M2 —— 它还没落地, 所以 app 直读平台身份
+# (`br_plat_name/isa/timer_ticks`, 只为那两行启动日志)仍是一条例外。
+#
+# ★ 本刀**收窄**了这张豁免表: 以前有两条(`app→platform` 与 `app→service/dump`),
+#   因为 v0.1 的 APP 既是"启动器"又是"自检驱动"。现在插件管理器接管了全部 init/start
+#   (ADR-0005), dump 的一致性套件搬进了 `service/dump` 自己的 LATE init ⇒ `app→dump`
+#   这条非法边**消失**了(删掉它 `brickie check` 依然 0 错误 —— 这就是证据)。
+#   剩下的 `app→platform` 属 WORKAROUND(br-wa-boot-001) 的欠债; 豁免必须逐条列名,
+#   使"还有几条例外"一眼可见。
 allow_edges = [
   ["app/hello", "platform/qemu-aarch64"],
-  ["app/hello", "service/dump"],
 ]
+
+[build]
+# ============================================================ 构建策略(brickie build)
+#
+# ★ 本表是**图片构建的唯一真值**(ADR-0004 / 设计 ADR-0003 的 S1–S3):
+#   顶层 Makefile 不再列任何 `core/src/**` / `platform/**` 字面路径 —— 那些由
+#   `[select]` 的闭包 + 各插件 `[build]` + platform 的 `[build.target]` 决定。
+#
+# 分工:
+#   目标事实(arch/交叉前缀/arch 标志/链接脚本/QEMU 型号) → platform 插件的 `[build.target]`
+#   产品策略(本表) → 编译/汇编/链接标志 + 产物落点 + 核心本体(非插件)的源集合
+#   插件自身的源集合 → 各自 plugin.toml 的 `[build]`
+#   工具候选序与解析 → `brickie-core`(contract §9 R-14: 生成物要把解析结果烧进去)
+#
+# WORKAROUND(br-wa-toolchain-001): 外部交叉工具链的**选型**(前缀/变体/链接脚本)写在
+#   platform 的 `[build.target]` 里, 本表只写产品策略 —— 内部工具链就绪时改声明面即可,
+#   构建规则不动。
+core_sources  = ["core/src/*.c", "core/src/*/*.c", "core/src/*/*.S"]
+core_includes = ["core/include"]
+# 生成物源集合(`brickie gen` 产出的描述符): 插件管理器经 `.br_plugins` 段枚举它们
+# (设计 3-05 §2.2)。`**` 与命名空间深度无关(不把"能不能发现生成物"绑死在"插件名恰好
+# 两段"); **闭包过滤是工具的责任** —— 不在 `[select]` 闭包里的插件的生成物会被跳过
+# (BRV-BLD-0013 info), 所以不会出现"描述符进镜像而它的 .c 没进 ⇒ 链接期未定义符号"。
+gen_sources   = ["build/gen/**/plugin_desc.c"]
+obj_dir       = "build/obj"
+
+# 交叉编译纪律(逐条都有理由, 不是"随手加的优化开关"):
+#   -ffreestanding / -fno-builtin  无宿主运行时假设; 不把循环偷偷换成 memcpy
+#   -fno-stack-protector           没有 libc 的 __stack_chk_fail
+#   -fno-omit-frame-pointer        ★ service/backtrace 的**编译期前提**: 栈回溯靠
+#                                  x29(fp) 链走查(5-01 §3), 而 -O2 默认会把 fp 当普通
+#                                  寄存器省掉 ⇒ 链断在第一帧。代价是每函数一次 stp/ldp。
+#   -ffunction-sections/-fdata-sections + -Wl,--gc-sections  裸机镜像要"没用到的不进镜像"
+#   -fno-pic/-fno-pie/-no-pie      裸机无重定位(恒等映射, 3-04)
+#   -fno-asynchronous-unwind-tables/-fno-unwind-tables  没有 .eh_frame 的读者
+cflags = [
+  "-std=c11", "-O2", "-g3",
+  "-Wall", "-Wextra", "-Werror", "-Wshadow", "-Wundef", "-Wpointer-arith",
+  "-Wstrict-prototypes", "-Wmissing-prototypes",
+  "-ffreestanding", "-fno-builtin", "-fno-common", "-fno-stack-protector",
+  "-ffunction-sections", "-fdata-sections",
+  "-fno-pic", "-fno-pie",
+  "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
+  "-fno-omit-frame-pointer",
+]
+# 汇编由 cpp 预处理(`__ASSEMBLER__` 由 GCC 自动定义), 于是 .S 也能
+# `#include <br/core/br_exc.h>` —— 异常帧偏移只有一处真值。
+asflags = ["-g3"]
+
+ldflags = [
+  "-nostdlib", "-nostartfiles", "-static", "-no-pie",
+  "-Wl,--build-id=none", "-Wl,--gc-sections", "-Wl,-z,max-page-size=4096",
+]
+# 链接脚本与 -Wl,-Map 由工具注入(前者来自 platform 的 `[build.target]`, 后者来自产物落点),
+# 不在这里重复 —— 一份事实一个可写处。
+
+[build.release]
+# `--profile release` **追加**的标志。当前为空: 原型的 dev 与 release 只差
+# **组合期检查严格度**(release 强制走 `brickie check --profile release`)。
+# 镜像内的断言轴(1-01 §13: debug=panic / release=trace)尚未落地 —— 见 ADR-0004 §4。
+cflags_extra = []

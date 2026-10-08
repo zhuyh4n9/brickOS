@@ -331,6 +331,9 @@ truth = "decl"
 ## 10. 规格缺口登记(需回灌设计/BRV-D8)
 
 > 前 16 条(R-1…R-16)是**首刀**登记; S-1…S-17 是**第二刀**(solver/check/iface)被迫落笔处。
+> **S-B1…S-B6** 是**第三刀**(构建族 `build.rs`, ADR-0004 / 设计 ADR-0003 的 S1–S4)。
+> ⚠ `BRV-D8` 编码表**没有 BUILD 族** ⇒ 本刀新开 `BRV-BLD-0001..0012`(逐条见
+> `docs/contract.md` §3), 需回灌设计编码表; 边界纪律的准确表述见 contract §9 R-13。
 
 | # | 缺口 | 本实现 | 建议 |
 |---|---|---|---|
@@ -369,6 +372,12 @@ truth = "decl"
 | **S-17** | `app`/`platform`/`scheduler` "每镜像恰 1"的数量约束在无 `product.toml` 的全树模式下无法判"哪个镜像" | 未执法(有 product 时闭包内可数, 但为避免误杀也未启用) | §3.2/R-1 明确无 product 时的数量语义 |
 | **S-19** | 解冻窗口内 `publish` 与 `refreeze` 的职责重叠: 若两者都按"相对 baseline 的硬变更"bump, 会双 bump; 若 `publish` 按声明面重建快照, 又会把 `unfreezing` 抹成 `frozen`(窗口丢失) | `publish` **保留有效冻结态**(声明 OR 快照)并把本次发布的面前推为**新基线**; `refreeze` 随后是"空解冻"(四段不动) | §5.3.3/§6.5 写清"谁记录变更、谁关窗口" |
 | **S-18** | 缺口代用的信息型诊断(如"代不参与比较"/"NOT_ABI"/"应改成什么")借用 `BRV-MF-0001`(error 域)但写 `info` | 严重度与码域不一致, 但机读消费方仍能按 severity 分类 | BRV-D8 补一个 info 型通用码 |
+| **S-B1** | 工具**候选序**(`<cross>gcc` → `<cross>gcc-16…-13` → `cc`; binutils 交叉版 → 宿主版)与**解析结果**该由谁给 | **全在 core**: `build.rs` 的 `resolve_tool`(先 `prebuilts/toolchain/bin/<名>`, 再 `context.path`/`PATH`), 结果进 `data.tools[i].{candidates,resolved}`; L5 只做最后一道可执行性校验(`runner.resolve_exe`, 不重选) | make / ninja 后端文件是**生成物**, 必须把解析结果**烧进去** —— 两处解析就会有两个"谁在编"的答案(contract §9 R-14) |
+| **S-B2** | 增量判定用"输入集合的内容戳"还是"argv 指纹 + 输入 mtime" | **argv 指纹(`sha256(kind, argv)`) + 输入 (size, mtime_ns)** 两条判据, 与 make / ninja 同族; 上游要重建时**显式**把下游标脏(计划在构建前算, 那时对象还是旧的); 缺 `.d` ⇒ 重编一次 | `.d` 是**构建的产物**(首编后才存在) ⇒ 内容戳口径自指, 头依赖会永远多编一轮(实测踩到)。见 contract §9 R-15 与 `make_plan` 的 doc 注 |
+| **S-B3** | `--backend direct|make|ninja` 与 BR-D4 的"后端 A / B + 逐字节一致"怎么对应 | `direct` = L5 按 core 的 `steps` 编排(默认); `make` / `ninja` = core 产 `build/gen/build.{mk,ninja}` 生成物 + 一条 `kind:"backend"` 步骤交给它; ninja 生成物里 **C 源与 `.S` 各一条 rule**(`cc` / `asm`, 两类源标志不同)且顶部钉 `builddir = build/gen/ninja`(否则 `.ninja_log`/`.ninja_deps` 落仓库根); 三后端跑的是**同一批 argv**, 产物逐字节一致(实测 `cmp`) | BR-D4 要"两条后端产同一镜像"正是判据; 生成物不读对方, `direct` 也不读生成物 —— 三条路互不依赖 |
+| **S-B4** | `tests/gates.toml` 的正则能用多少正则语法 | 只支持 `.` `*` `+` `?` `[...]`(`^` 取反 / `a-z` 区间)与 `\x` 转义; 出现 `( ) | ^ $ { }` ⇒ **`BRV-BLD-0012`**(退出码 2), **拒绝而不是静默不匹配** | 不引正则库(§9.3 最小依赖集); 一条"永不匹配"的 `require` 会变成**假绿**, 比报错危险得多 —— 所以宁可报形状错(contract §7.4) |
+| **S-B5** | 门禁日志的红绿判据(require / forbid / `PASS <tag> `)归 L5 还是 core | **core 的 `judge` 命令**: 入参 = 门禁名 + `context.log`(日志正文), 出参 = `{failed, checks[], diagnostics}`; L5 只把步骤日志正文回传并把 `failed>0` 折成红。全绿 ⇒ **无码 info**(不是缺陷) | 红绿只能一处真值: 文本输出、`--json`、CI 退出码必须同源(contract §9 R-16) |
+| **S-B6** | `build/gen/**` 里哪些是生成物、`--emit-backends` 的语义 | `build/gen/build.mk`(BR-D4 A)/`build/gen/build.ninja`(BR-D4 B)/`build/gen/build-state.json`(增量状态)首行都带 `brickie:generated`, 由 core 给 `files[]`、L5 落盘; `--emit-backends` = **只产两个后端文件、不执行**(可配 `--dry-run` 在无编译器环境里跑); 带 `--tag` 的构建把对象挪到 `<obj_dir>-<tag>` 且**不跑** `[build].post` | 生成物与手写物靠首行标记区分(§4); 状态文件是派生物, 损坏 ⇒ 当作"没有状态"全量重建, 不是错 |
 
 ## 11. 修改纪律
 

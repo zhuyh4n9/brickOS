@@ -1,0 +1,54 @@
+# fx/build/tests/gates.toml — 构建族夹具的门禁声明面。
+#
+# 四张表都各留一条, 让 `test --list` 的三个名字表 + `build_post` 都有内容;
+# 四条 gate 的分工是给 `judge` 用的**判例**: 缺 require / 命中 forbid / 缺 PASS tag
+# 三种红各一条, 外加一条全绿(g-ok)。用例直接把日志正文经 `context.log` 喂给
+# `brickie-core judge`, 不跑 QEMU、不调编译器。
+schema = 1
+
+[run]
+default_timeout_s = 2
+
+[host]
+cc      = "cc"
+bin_dir = "build/hosttest"
+
+[[hosttest]]
+name    = "ht-echo"
+sources = ["tests/host/echo_test.c"]
+
+[[hosttest]]
+name    = "ht-dep"
+depends = ["ht-echo"]
+sources = ["tests/host/echo_test.c"]
+
+[[gate]]
+name         = "g-route"
+timeout_s    = 2
+log          = "build/logs/route.log"
+require      = ["ROUTE ok"]
+
+[[gate]]
+name    = "g-forbid"
+log     = "build/logs/forbid.log"
+forbid  = ["BAD"]
+
+[[gate]]
+name         = "g-tag"
+log          = "build/logs/tag.log"
+require_tags = ["TC-1"]
+
+[[gate]]
+name         = "g-ok"
+log          = "build/logs/ok.log"
+require      = ["OK"]
+forbid       = ["BAD"]
+require_tags = ["TC-2"]
+
+[[script]]
+name    = "s-echo"
+argv    = ["bash", "tools/echo.sh"]
+require = ["echo ok"]
+
+[build]
+post = ["g-ok"]

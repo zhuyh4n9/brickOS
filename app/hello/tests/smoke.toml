@@ -1,0 +1,75 @@
+# app/hello — conformance 用例(人写)
+#
+# 字段形状照 `6-01` §2 的用例表契约: {id, pre, steps, expect, sched, platform}。
+# 运行期的真身是编进镜像、由 **APP 的 start()** 调用的两个一致性入口:
+#   `br_plugin_conformance()`(core 的插件管理器, `[PLGCONF]`)
+#   `br_service_conformance()`(core 的服务注册表, `[SVCCONF]`)
+# 逐用例 tag 与镜像日志一一对应, 由 `brickie test plugin-test`(QEMU)判红绿。
+#
+# 为什么这些用例记在 APP 名下: 两个入口的**调用点**在 APP 的 start(插件管理器的自证
+# 需要"段已经驱动完、且正处在最后一个 start 里"这个上下文); 管理器与注册表本身是 core
+# 的实现, 其声明面在 `core/include/br/core/br_plugin.h` / `br_svc.h`。
+schema = 1
+
+[[case]]
+id       = "TC-PLUG-001"
+pre      = "start.S 已调 br_irq_cpu_init; br_plugin_manager_run() 已扫过 .br_plugins; 生成物已编进镜像"
+steps    = ["br_plugin_count()", "读生成物计数符号 br_plugin_gen_total", "比对两者"]
+expect   = "段非空 且 条数 == 生成物数量(生成物计数符号在场)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-PLUG-002"
+pre      = "同上; 插件树里 service/dump 对四个 service 声明了 kind = \"init\" 的边"
+steps    = ["取拓扑序", "逐条检查: 每条 init 边的提供方位次 < 消费方位次"]
+expect   = "全部 init 边被拓扑序满足(违例时报出具体边)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-PLUG-003"
+pre      = "同上; 各插件 plugin.toml 的 phase 与类别一致(非 Service/Interface ⇒ core, Service/Interface ⇒ late)"
+steps    = [
+  "逐条检查 init 边: rank(提供方完成点) <= rank(消费方完成点)",
+  "检查 EARLY 相第一步是否为 platform 插件的 early_init",
+  "检查 APP 的 start 是否在所有非 APP 的 start 之后",
+]
+expect   = "相位单调成立; early 相第一步是 platform; APP 最后(且本用例正跑在 APP 的 start 里)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-PLUG-002b"
+pre      = "同上(负例, 用假边集, 不碰真段)"
+steps    = ["构造 3 节点环 a→b→c→a 跑拓扑排序", "构造 3 节点 DAG c→b→a 跑同一函数"]
+expect   = "环被检出且报出完整路径(3 节点 + 收尾闭合); 同一算法对无环图排得出序"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-SVC-001"
+pre      = "core 的服务注册表可用(发布/查找都发生在 init 相, 单线程)"
+steps    = ["br_service_publish(\"selftest.svc.a\", &ops)", "br_service_lookup 同一名字", "br_service_count/name_at 交叉核对"]
+expect   = "返回同一指针; count 增 1 且 name_at 能命中; lookup 记账 hits >= 1"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-SVC-002"
+pre      = "同上(TC-SVC-001 已发布 selftest.svc.a)"
+steps    = ["用同一名字 publish 第二个 ops 指针"]
+expect   = "返回 -EEXIST, 且 lookup 仍拿到**第一个**指针(不覆盖)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-SVC-003"
+pre      = "同上"
+steps    = ["lookup 一个未发布的名字", "publish(NULL, ops)", "publish(name, NULL)"]
+expect   = "查不到 ⇒ NULL; 空 name / 空 ops ⇒ -EINVAL"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+# 收尾口径: 用例自用的名字全部带 `selftest.` 前缀, 且用例结束前从表里移除
+# (br_service_conformance 的白盒动作) —— 不污染后续 dump 的注册表清单。

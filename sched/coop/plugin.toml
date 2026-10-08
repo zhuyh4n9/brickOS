@@ -1,0 +1,82 @@
+# sched/coop — 协作式调度器(plugin_type = ability, subkind = scheduler)
+#
+# 设计出处: `3-03-sched.md`(调度总纲: "语义在 core, 策略在插件")、
+#           `3-01-core-api-list.md` §5.1(br_sched_ops 注册点)/§6(任务与线程)、
+#           `3-02-int.md` §11.2/§11.3(IRQ ↔ 调度接缝; coop 的中断-调度语义)。
+# 逐条裁定与 ops 成文表: `docs/decisions/0006-scheduler-framework.md`。
+#
+# ★ 相位口径: `phase = "core"` 是**完成点**(第 ② 个, 由 subkind=scheduler 推导);
+#   但**注册**(`br_sched_register`)发生在 EARLY 相的 `coop_early_init()` 里 ——
+#   调度器必须在任何线程创建之前就位(3-01 §5.1 "EARLY 恰一次")。
+schema = 1
+
+[plugin]
+name        = "sched/coop"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "scheduler"
+sched_kind  = "coop"           # 裁定 R-5: 显式字段优先于"按名字推断"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "协作式调度器: FIFO 就绪队列 + 只在显式点换栈(yield/阻塞/退出/首次调度); 无抢占、无时间片"
+license     = "WTFPL"
+sched_class = "COOP_ONLY"      # 提供方自己; 组合期校验会跳过提供方(见 check 的组合校验)
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "就绪队列 head/tail/len + ops 表(每线程私有尾 8 B 的 ready_next 在 core 的 TCB 池里)"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+# ---- 类型别名表 ----
+[iface.typedefs]
+
+# ---- 结构依赖(init)----
+# 调度器本身不调 platform 的 API; 这条 init 边表达的是启动链的事实(3-01 §9):
+# platform 的 EARLY/PIC 就绪先于"调度器锁定的 CORE 相"。
+[[dep]]
+name  = "platform/qemu-aarch64"
+range = ">=0.1.0"
+kind  = "init"
+
+# ---- 导出面(单元 = 冻结与版本的基本粒度)----
+[[export]]
+name         = "coop"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = ""
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "coop_early_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "coop_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "coop_start"
+sig  = "int (void)"
+
+# ---- 特权面 ----
+# P3(core): 调度器做"**中断控制**"(3-01 §13.6 的 P3 行 —— 仅 ability.subkind=scheduler
+# 与 platform 可声明)。本插件经 core 的 `br_irq_lock/unlock` 用 L2 临界区保护就绪队列
+# (ISR 会在 tick 里唤醒线程 ⇒ 入队, 与线程侧的 pick_next 竞争)。
+[privileged]
+level = "P3"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

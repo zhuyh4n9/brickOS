@@ -1,7 +1,7 @@
 /*
  * brickOS prototype v0.1.0 — 链接脚本(aarch64 / QEMU virt)
  *
- * WORKAROUND(br-wa-entry-001): 设计侧链接脚本是 Platform 插件的产出物之一
+ * 已还清(ADR-0005): 设计侧链接脚本是 Platform 插件的产出物之一
  * (设计 4-02 §2 第 4 项「物理(二进制)布局映射」; 组合器生成链接脚本片段)。
  * v0.1.0 由本文件手工承担, 未经 `br` 生成 —— 见 WORKAROUNDS.md。
  *
@@ -56,6 +56,30 @@ SECTIONS
         __br_extable_start = .;
         KEEP(*(.br_extable))
         __br_extable_stop = .;
+    } :rodata
+
+    /*
+     * 插件描述符段(设计 1-01 §13.3 / 3-05 §2.2): 生成物
+     * `build/gen/<plugin>/plugin_desc.c` 里 `BR_PLUGIN_SECTION` 的对象落在这里,
+     * plugin_manager 经 `__br_plugins_start/__br_plugins_stop` 枚举。
+     *
+     * 三条都不是可选的:
+     *   - `KEEP`: 描述符没有 C 引用者(`static const` + `used`), `--gc-sections`
+     *     会把它当垃圾 —— 段必须显式保根;
+     *   - `ALIGN(8)`: `br_plugin_t` 含指针; `BR_PLUGIN_SECTION` 的 aligned(8) 只保证
+     *     **段内**对齐, 段起点的对齐要靠链接脚本(设计写 aligned(4) 对含指针结构不足);
+     *   - **普通赋值**(不是 PROVIDE): 这两个符号必须恒存在, 且不能在别处被定义 ——
+     *     与 `.br_extable` 同款; `PROVIDE` 的"有人定义就不覆盖"语义在这里是隐患。
+     *
+     * 与 `.br_extable` 的**唯一写法差别**: 这里给 `.br_plugins` 自己的输出段(而不是
+     * 折进 `.rodata`)。理由 = 可验证性: `objdump -h` 只列输出段, 折进去就"看不见段
+     * 是否存在/多大"; 而 3-05 §2.2 把 `.br_plugins` 当成一个有名有界的段 + 边界符号。
+     * 它仍属 `rodata` 的 PT_LOAD(R 权限, 不会把镜像变成 RWX 大段)。
+     */
+    .br_plugins : ALIGN(8) {
+        __br_plugins_start = .;
+        KEEP(*(.br_plugins))
+        __br_plugins_stop = .;
     } :rodata
     . = ALIGN(4096);
 

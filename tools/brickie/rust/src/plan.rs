@@ -47,6 +47,14 @@ impl Artifact {
     }
 }
 
+/// 一条 `[[dep]]` 的展开事实(描述符里的 `br_dep_t` 一条)。
+#[derive(Clone, Debug)]
+pub struct DepFact {
+    pub name: String,
+    pub kind: String,
+    pub phase: Option<String>,
+}
+
 /// 一个插件的"事实"(供变量展开), 与 model::Plugin 解耦以便 plan-new 用在建模之前。
 #[derive(Clone, Debug)]
 pub struct PluginFacts<'a> {
@@ -58,6 +66,141 @@ pub struct PluginFacts<'a> {
     pub phase: &'a str,
     pub sched_class: &'a str,
     pub version: &'a str,
+    /// `[compat].api_rev`(缺省 1)。
+    pub api_rev: i64,
+    /// `[compat].abi_id`(缺省空串)。
+    pub abi_id: String,
+    /// `[[res]]` 求和: RAM / 栈(KiB)。
+    pub res_ram_kib: i64,
+    pub res_stack_kib: i64,
+    /// 结构依赖逐条(描述符的 `.deps` 数组)。
+    pub deps: Vec<DepFact>,
+    /// 生成物数量(弱符号 `br_plugin_gen_total` 的值; 见 ADR-0005 §2.4)。
+    pub gen_total: u32,
+    /// 描述符的声明面锚头(相对插件 `include/` 根的路径)。
+    pub decl_include: String,
+    /// 有 `init` 钩子吗(由 `phase != "early"` 推导, 见 rules::derive_phase)。
+    pub has_init: bool,
+}
+
+/// `descriptor_include` 的回落值: 元契约头(任何组合里都存在)。
+pub const FALLBACK_DECL_INCLUDE: &str = "br/core/br_plugin.h";
+
+// ------------------------------------------------------------------ 语法面 → C 常量
+
+fn plugin_type_const(t: &str) -> &'static str {
+    match t {
+        "platform" => "BR_PLUGIN_TYPE_PLATFORM",
+        "app" => "BR_PLUGIN_TYPE_APP",
+        "interface" => "BR_PLUGIN_TYPE_INTERFACE",
+        _ => "BR_PLUGIN_TYPE_ABILITY",
+    }
+}
+
+fn subkind_const(s: Option<&str>) -> &'static str {
+    match s.unwrap_or("") {
+        "scheduler" => "BR_SUBKIND_SCHEDULER",
+        "framework" => "BR_SUBKIND_FRAMEWORK",
+        "io" => "BR_SUBKIND_IO",
+        "fs" => "BR_SUBKIND_FS",
+        "service" => "BR_SUBKIND_SERVICE",
+        _ => "BR_SUBKIND_NONE",
+    }
+}
+
+fn sched_class_const(c: &str) -> &'static str {
+    match c {
+        "COOP_ONLY" => "BR_SCHED_CLASS_COOP_ONLY",
+        "TT_SAFE" => "BR_SCHED_CLASS_TT_SAFE",
+        _ => "BR_SCHED_CLASS_SAFE_PREEMPT",
+    }
+}
+
+fn dep_kind_const(kind: &str) -> &'static str {
+    match kind {
+        "init" => "BR_DEP_INIT",
+        "type" => "BR_DEP_TYPE",
+        _ => "BR_DEP_RUNTIME",
+    }
+}
+
+/// `br_dep_t.phase`: 只有 `kind = "init"` 的断言有意义; 其余/缺省 = `BR_PHASE_NONE`
+/// (冻结头 `br_plugin.h`: "不约束完成点")。
+fn dep_phase_const(kind: &str, phase: Option<&str>) -> &'static str {
+    if kind != "init" {
+        return "BR_PHASE_NONE";
+    }
+    match phase {
+        Some("early") => "BR_PHASE_EARLY",
+        Some("core") => "BR_PHASE_CORE",
+        Some("late") => "BR_PHASE_LATE",
+        Some("app") => "BR_PHASE_APP",
+        _ => "BR_PHASE_NONE",
+    }
+}
+
+/// 依赖数组的 C 文本 + `.deps` 的取值表达式(无边 ⇒ `BR_NULL`)。
+fn deps_decl(tag: &str, deps: &[DepFact]) -> (String, String) {
+    if deps.is_empty() {
+        return (String::new(), "BR_NULL".to_string());
+    }
+    let sym = format!("_br_deps_{tag}");
+    let mut out = String::new();
+    out.push_str(&format!(
+        "static const br_dep_t {sym}[] __attribute__((used)) = {{\n"
+    ));
+    for d in deps {
+        out.push_str(&format!(
+            "    {{ .name = \"{}\", .kind = {}, .phase = {}, .compat_gen = 0u }},\n",
+            d.name,
+            dep_kind_const(&d.kind),
+            dep_phase_const(&d.kind, d.phase.as_deref())
+        ));
+    }
+    out.push_str("    { .name = BR_NULL, .kind = 0u, .phase = BR_PHASE_NONE, .compat_gen = 0u },\n};\n");
+    (out, sym)
+}
+
+/// 扫插件 `include/` 下的对外头, 选**声明面锚头**: 声明了该插件最多
+/// `[[export.entries]]` 符号的那个(同数 ⇒ 字典序第一个, 保证确定性); 一个头都没有
+/// (或读不到内容)⇒ 回落到元契约头。
+///
+/// 为什么不是"哪个头都行": 锚头进生成物, `gen --check` 会因它变化而报红 ——
+/// 规则必须确定性且与**声明面事实**挂钩, 而不是与目录遍历顺序挂钩。
+fn scan_decl_include(root: &std::path::Path, plugin: &str, symbols: &[String]) -> Option<String> {
+    let base = root.join(plugin).join("include");
+    let mut found: Vec<String> = Vec::new();
+    collect_headers(&base, &base, &mut found);
+    found.sort();
+    if found.is_empty() {
+        return None;
+    }
+    let mut best: Option<(usize, String)> = None;
+    for rel in &found {
+        let text = std::fs::read_to_string(base.join(rel)).unwrap_or_default();
+        let hits = symbols.iter().filter(|s| !s.is_empty() && text.contains(s.as_str())).count();
+        match &best {
+            Some((n, _)) if *n >= hits => {}
+            _ => best = Some((hits, rel.clone())),
+        }
+    }
+    best.map(|(_, rel)| rel)
+}
+
+fn collect_headers(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+    let Ok(rd) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            collect_headers(base, &p, out);
+        } else if p.extension().map(|x| x == "h").unwrap_or(false) {
+            if let Ok(rel) = p.strip_prefix(base) {
+                out.push(rel.to_string_lossy().replace('\\', "/"));
+            }
+        }
+    }
 }
 
 // ------------------------------------------------------------------ 名字形态工具
@@ -139,9 +282,42 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v.insert("header_guard".into(), guard.clone());
     v.insert("symbol_prefix".into(), sym.clone());
     v.insert("descriptor_symbol".into(), dsym.clone());
-    // 描述符里 `#include "{{descriptor_include}}"`: 插件对外头文件(裁定 #6 已定
-    // `br_plugin.h` 为框架头; 这里是被描述插件自己的头)。
-    v.insert("descriptor_include".into(), format!("{short}/{short}.h"));
+    // 描述符里 `#include "{{descriptor_include}}"`: 声明面锚头。规则(ADR-0005 §2.4):
+    // 插件 `include/` 下**恰有一个**对外头 ⇒ 用它; 否则回落元契约头(多头插件如 platform
+    // 无法机器判定"主头")。旧规则 `{short}/{short}.h` 指向的是**不存在**的路径。
+    v.insert("descriptor_include".into(), f.decl_include.clone());
+    // ---- 描述符实例化所需的字段(语法面 → C 常量/表达式) ----
+    v.insert("plugin_type_id".into(), plugin_type_const(f.plugin_type).into());
+    v.insert("subkind_id".into(), subkind_const(f.subkind).into());
+    v.insert("sched_class_id".into(), sched_class_const(f.sched_class).into());
+    v.insert("api_rev".into(), f.api_rev.to_string());
+    v.insert("abi_id".into(), f.abi_id.clone());
+    v.insert("res_ram_kib".into(), f.res_ram_kib.max(0).to_string());
+    v.insert("res_stack_kib".into(), f.res_stack_kib.max(0).to_string());
+    v.insert("gen_total".into(), f.gen_total.to_string());
+    // 钩子发射规则(ADR-0005 §2.4): early_init/start 对全部插件(§6.2 的表);
+    // init 仅在有 init 钩子(phase != "early")时发射, 否则 BR_PLUGIN_NO_HOOK。
+    v.insert(
+        "init_hook".into(),
+        if f.has_init {
+            format!("{sym}init")
+        } else {
+            "BR_PLUGIN_NO_HOOK".into()
+        },
+    );
+    v.insert("early_proto".into(), format!("int {sym}early_init(void);"));
+    v.insert(
+        "init_proto".into(),
+        if f.has_init {
+            format!("int {sym}init(void);")
+        } else {
+            String::new()
+        },
+    );
+    v.insert("start_proto".into(), format!("int {sym}start(void);"));
+    let (deps_array, deps_expr) = deps_decl(&dtag, &f.deps);
+    v.insert("deps_array".into(), deps_array);
+    v.insert("deps_expr".into(), deps_expr);
     v.insert("export_api_iface".into(), f.api_type.to_string());
     v.insert("export_form".into(), "api".into()); // §8.4 / 裁定 G-3
     v.insert("export_name".into(), short.clone());
@@ -181,7 +357,7 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v.insert("GUARD".into(), guard);
     v.insert("DESC_TAG".into(), dtag);
     v.insert("DESC_SYMBOL".into(), dsym);
-    v.insert("DESC_INCLUDE".into(), format!("{short}/{short}.h"));
+    v.insert("DESC_INCLUDE".into(), f.decl_include.clone());
     v.insert("EXPORT_UNIT".into(), short);
     v
 }
@@ -435,6 +611,19 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         phase,
         sched_class: "SAFE_PREEMPT",
         version: "0.1.0.0",
+        api_rev: 1,
+        abi_id: String::new(),
+        res_ram_kib: 0,
+        res_stack_kib: 0,
+        deps: Vec::new(),
+        // 骨架期: 生成物数量按"本插件一件"给; 入树后 `brickie gen` 会按插件树重算。
+        gen_total: 1,
+        // 骨架期: 计划自己会创建 `include/<short>/<short>.h`(要新建的工作区首个头)。
+        decl_include: format!(
+            "{short}/{short}.h",
+            short = rules::name_short(&name)
+        ),
+        has_init: true,
     };
     let vars = plugin_vars(&facts);
     let mut artifacts: Vec<Artifact> = plugin_paths(&facts)
@@ -522,6 +711,14 @@ pub fn plan_init(
         phase: "app",
         sched_class: "SAFE_PREEMPT",
         version: "0.1.0.0",
+        api_rev: 1,
+        abi_id: String::new(),
+        res_ram_kib: 0,
+        res_stack_kib: 0,
+        deps: Vec::new(),
+        gen_total: 1,
+        decl_include: format!("{short}/{short}.h", short = rules::name_short(&app)),
+        has_init: true,
     };
     let app_vars = plugin_vars(&app_facts);
     for (path, kind, template) in plugin_paths(&app_facts) {
@@ -580,13 +777,24 @@ pub fn gen_plan(
     let tree = crate::model::load_tree(root);
     let mut d = tree.diags.clone();
     let mut out = Vec::new();
+    // 生成物数量 = 插件树里的插件数(**不**随 `--plugin` 过滤变化): 每个生成物都带同一个值,
+    // 于是弱符号 `br_plugin_gen_total` 任取一条都一致(见 ADR-0005 §2.4)。
+    let gen_total = tree.plugins.len() as u32;
     for p in &tree.plugins {
         if let Some(name) = &only {
             if &p.name != name {
                 continue;
             }
         }
-        let facts = facts_of(p);
+        let mut facts = facts_of(p);
+        facts.gen_total = gen_total;
+        let symbols: Vec<String> = p
+            .exports
+            .iter()
+            .flat_map(|e| e.entries.iter().map(|x| x.name.clone()))
+            .collect();
+        facts.decl_include = scan_decl_include(root, &p.name, &symbols)
+            .unwrap_or_else(|| FALLBACK_DECL_INCLUDE.to_string());
         out.push(Artifact {
             path: format!("build/gen/{}/plugin_desc.c", p.name),
             kind: "generated".into(),
@@ -603,7 +811,11 @@ pub fn gen_plan(
 }
 
 /// 从模型插件构造 [`PluginFacts`]。
+///
+/// `gen_total` / `decl_include` 是**计划级**事实(要扫盘/数插件树), 由调用方填:
+/// `gen_plan` 用真值, `plan_new` / `plan_init` 用骨架期的预测值。
 pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
+    let (ram, stack) = p.res_totals();
     PluginFacts {
         name: &p.name,
         plugin_type: &p.plugin_type,
@@ -613,6 +825,22 @@ pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
         phase: &p.phase,
         sched_class: &p.sched_class,
         version: &p.version_raw,
+        api_rev: p.compat.api_rev.unwrap_or(1),
+        abi_id: p.compat.abi_id.clone().unwrap_or_default(),
+        res_ram_kib: ram,
+        res_stack_kib: stack,
+        deps: p
+            .deps
+            .iter()
+            .map(|d| DepFact {
+                name: d.name.clone(),
+                kind: d.kind.clone(),
+                phase: d.phase.clone(),
+            })
+            .collect(),
+        gen_total: 0,
+        decl_include: String::new(),
+        has_init: p.phase != "early",
     }
 }
 

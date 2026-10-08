@@ -5,14 +5,22 @@
 > 观测点(退出码 + 码 + 文本)。
 > 状态图例: ⬜未写 ｜ 🟡部分 ｜ ✅已覆盖(有可执行用例且实测全绿) ｜ ⏸不适用/待拍。
 >
-> **现状(实测)**: `bash tests/run.sh` = **通过 542 / 失败 0**(15s 级; 含 V-18 的 27 条)。
+> **现状(实测)**: `bash tests/run.sh` = **通过 631 / 失败 1**(15s 级; 含 V-18 的 27 条与
+> §V-B 构建族的 ~70 条)。唯一失败是 `new-json` **协议快照基线过期** —— 另一个子代理(F1)在
+> 途改了 `rust/src/plan.rs` + `templates/descriptor/**`, `brickie new --json` 的 `vars` 多了
+> 14 个键(`abi_id` / `api_rev` / `deps_array` / `deps_expr` / `early_proto` / `gen_total` /
+> `init_hook` / `init_proto` / `plugin_type_id` / `res_ram_kib` / `res_stack_kib` /
+> `sched_class_id` / `start_proto` / `subkind_id`), 没有删除任何键。
+> **处置(分工裁定)**: 快照基线由**主 agent 在集成阶段**统一重生成
+> (`make -C tools/brickie test-snap` + 逐键 review diff)—— 工具侧改动冻结后基线才可信。
+> **与 §V-B / 构建族无关**(V-B 全绿)。
 > 二进制解析口径与 `python/brickie/native.py` 一致: `build/host/<triple>/bin` 优先,
 > 退到 `prebuilts/seed/brickie/<triple>/bin`; 用例显式注入 `BRICKIE_CORE`/`BRICKIE_GEN`。
 > 快照基线在 `tests/snap/*.json`(N-4), 用 `make test-snap` 重生成。
 
 ## 0. 环境与夹具(fixtures)
 
-夹具在 `tests/fx/<name>/`(**40 个**, 静态 TOML 树); 每条用例 `cp -r` 到 `mktemp -d`
+夹具在 `tests/fx/<name>/`(**42 个**, 静态 TOML 树); 每条用例 `cp -r` 到 `mktemp -d`
 的私有工作区再跑。`fx/quad`(V-1 的四类同树)不落静态夹具 —— 由用例即时用 4 次
 `brickie new` 构造, 这样"生成器 + 校验器"是同一批产物, 不会各自漂移。
 
@@ -43,6 +51,8 @@
 | `fx/truth/` | 单单元(用例 sed 改 `hash_scope`/`truth`) | V-11② |
 | `fx/ver-badstr/` `fx/ver-badrange/` `fx/ver-pad/` | 版本串/range 形态 | V-13 |
 | `fx/showcase/` | platform+sched+service+interface+app+product 全绿组合 | 命令面全覆盖 + 快照 |
+| `fx/build/` | 最小**可构建**树(app/hello → iface/hello-api → service/echo → sched/coop → platform/qemu-aarch64; 各插件有真实 `src/*.c`(+ 一个 `.S`), platform 带 `[build.target]`/`[build.target.qemu]`, product 带 `[build]`/`[build.release]`; 另含 `tests/gates.toml` 四条 gate + 两条 hosttest + 一条 script) | V-B 全部(`build --dry-run` / `--emit-backends` / `test --list` / `clean`; judge 直接调 core) |
+| `fx/gates-regex/` | 只含一份 `tests/gates.toml`, 其 `require` 用了子集外的 `(A|B)` | V-B⑦(`BRV-BLD-0012`) |
 
 ## 1. 逐条验收
 
@@ -67,6 +77,15 @@
 | V-17 | `BR_MAX 16→4096` 与 ops 加槽**必须**不同 hash; 枚举重排被 hash 感知 | `V-17` 段(fx/iface-*) | 三组 `declaration_hash` 均不同; 声明顺序不影响 hash; 同输入两次 publish 逐字节相同 | ✅ |
 | V-18 | 粘合层纯度三条 | `tests/purity.sh`(run.sh 调) | (a) `--selftest` 在 `PATH=/nonexistent` 下 `ok 432 cases`; (b) 3 个夹具的"桩替换"诊断序列/数量/码集合与真实 core 完全一致; (c) 7 条禁止模式零命中 + 4 条正向对照 | ✅ |
 | V-19 | 四条: ① P3/P4 或 `map` ⇒ `PRIV-0001` ② `P2` 声明 `map` ⇒ 红 ③ 预算超限红+差值 ④ IRQ/DMA 冲突红+双方 | `V-19` 段(fx/priv-*, budget, res-conflict) | ①② `PRIV-0001`; ③ 差值 188 KiB / 6 KiB; ④ 2 条诊断点名 `service/irq-a` 与 `service/irq-b`; 另两条正交表正例绿 | ✅ |
+| V-B① | `build --dry-run --json` 的计划形状: 组件/源/步骤数、`data.steps[i]`/`data.units[i]`/`data.tools[i]` 的键集合、`[build.target]` 的 arch 标志与链接脚本进 argv、工具**候选序**(裁定 R-14) | `V-B` 段(fx/build) | exit 0; `unit_count=6` / `source_count=7` / `steps_total=9`; argv 含 `-mstrict-align` 与 `-Wl,-T,platform/qemu-aarch64/src/link.ld`; `cc` 候选 `[<cross>gcc, gcc-16…, cc]`; `fail_code=BRV-BLD-0011` / `tool_code=BRV-BLD-0005` | ✅ |
+| V-B② | `product.toml` 缺 `[build]` ⇒ 声明面错 | `V-B` 段(fx/build, 去掉 `[build]` 起) | exit 2 + `BRV-BLD-0001` | ✅ |
+| V-B③ | 没有插件声明 `[build.target]` ⇒ 无从得知目标事实 | `V-B` 段(fx/build, 去掉 `[build.target]`) | exit 2 + `BRV-BLD-0003` | ✅ |
+| V-B④ | `[build].sources` 的字面路径不存在 ⇒ 报错(通配不匹配不算) | `V-B` 段(fx/build, 追加 `src/nope.c`) | exit 2 + `BRV-BLD-0007` + span `build.sources` | ✅ |
+| V-B⑤ | `test --list --json` 三个名字表 + `build_post` + `file`/`present` | `V-B` 段(fx/build) | gates 4 / hosttests 2 / scripts 1 / build_post `[g-ok]` / `file=tests/gates.toml` | ✅ |
+| V-B⑥ | `judge` 的判据经 core 信封: require 缺一条 / forbid 命中 / 缺 PASS tag 三种红, 全绿**无码 info**(裁定 R-16) | `V-B` 段(直接调 `$CORE` 的 `judge`, `context.log` = 日志正文) | 三红各 exit 1 + `BRV-BLD-0009` + span `gate[0].{require,forbid,require_tags}`; 全绿 exit 0 + `code:null`/`severity:info`; 未知门禁 exit 2 + `BRV-BLD-0008` | ✅ |
+| V-B⑦ | 门禁正则超出 core 子集 ⇒ **拒绝而不是静默不匹配** | `V-B` 段(fx/gates-regex) | `test --list` exit 2 + `BRV-BLD-0012` + span `gate.require[0]` | ✅ |
+| V-B⑧ | `clean --json` 的 `paths` 表(声明面给出的派生路径; 删除由 L5 带 root 守卫做) | `V-B` 段(fx/build) | exit 0; `paths` 13 条含 `build/obj`/`build/brick.{elf,bin}`/`build/gen`/`build/hosttest`; 夹具无产物 ⇒ `written=0` | ✅ |
+| V-B⑨ | `--emit-backends` 产出 BR-D4 的 A/B 两份生成物, 且**不执行** | `V-B` 段(fx/build) | `build/gen/build.mk` 与 `build.ninja` 就位、带 `brickie:generated`; make 侧有 `$(ELF): $(OBJS)` + `-Wl,-T,…link.ld`; ninja 侧 `cc`/`asm` **两条** rule + `builddir = build/gen/ninja` + `.S` 走 asm; 不落 `build-state.json` | ✅ |
 
 ## 2. 反向验收(防跑偏)
 
@@ -94,6 +113,8 @@
 | 8 | V-15: 弃用周期"两个 minor 无使用" | v0.1 只做**声明面零使用**硬门, 符号面计数需 v0.2 ⇒ 未覆盖 | 裁定 S-16 |
 | 9 | V-19: 资源/预算/调度冲突的专属码 | 借 `BRV-MF-0001`, 消息点名双方/差值 | 裁定 R-9 |
 | 10 | V-7: 拓扑序"提供方在前" | 用例断言**不变量**"每条 init 边的提供方在前"(无 init 边的节点位次不受约束), 而非固定列表 | §7.6 / solver 实现 |
+| 11 | §10 的 V-1…V-19 里**没有**构建族 | 新增 §V-B(ADR-0004 / 设计 ADR-0003 的 S1–S4), 码用新开的 `BRV-BLD-0001..0012`; 用例只跑 `--dry-run`/`--emit-backends`/`judge`, **不调编译器** | contract §3/§5.4/§7.4 + §9 R-13…R-17; 边界纪律只约束**组合期**命令(R-13) |
+| 12 | **路径口径**(V-B① 第一次把它写成判据时踩的坑) | 计划/`data` 里的**一切路径相对 root**(`platform/qemu-aarch64/src/start.S`、`…/src/link.ld`); 声明面 `[build].sources`/`includes`/`linker_script` 的路径**相对插件根**, 由 core 展开后才进 `data`。判据按 `data` 的形状写, 别按 `plugin.toml` 里那一行写 | contract §5.4 的"路径口径"注; V-B① 因此断言完整相对 root 路径, 并另钉"汇编走 asflags(无 `-std=c11`)" |
 
 ## 4. 实测发现的实现缺陷
 

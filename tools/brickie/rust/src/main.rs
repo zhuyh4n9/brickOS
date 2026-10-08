@@ -23,6 +23,7 @@ mod rules;
 mod selftest;
 mod solver;
 mod version;
+mod build;
 
 use std::io::Read;
 use std::path::PathBuf;
@@ -141,6 +142,8 @@ fn dispatch(req: &Request) -> Response {
         "closure" | "dep-tree" | "dep-graph" | "dep-why" | "dep-index" => solver::run(req),
         "ver-show" | "ver-bump" => iface::run(req),
         c if c.starts_with("iface-") => iface::run(req),
+        // ---- 构建族(ADR-0004 / 设计 ADR-0003 的 S1–S3) ----
+        "build" | "clean" | "run" | "size" | "disasm" | "test" | "judge" => build::run(req),
         other => {
             let mut d = diag::Diags::new();
             d.usage(

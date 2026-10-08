@@ -41,3 +41,20 @@ steps    = ["基线 br_heap_usage(&u0,&total)", "分配 10 块 × 100 B", "br_he
 expect   = "全部 10 块分配成功; u1 >= u0 + 1000; u2 == u0(记账匹配, 严格回到基线)"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]
+
+# ---- 插件生命周期钩子(v0.2 起由 core 的 plugin_manager 按相位驱动)----
+#
+# 名字 = `symbol_prefix(short)` + 相 ⇒ `memleak_early_init` / `memleak_init` /
+# `memleak_start`(生成物引用)。钩子是组合期契约, 不进 [[export]]。
+# ★ EARLY 相刻意无动作: 本插件"看堆", 而堆(三池)要到 platform 的 early_init 才被认领。
+[[case]]
+id       = "ml-late-init"
+pre      = "plugin_manager 已扫 .br_plugins 段并完成拓扑排序; EARLY 相已过"
+steps    = [
+    "EARLY 相: memleak_early_init()(不碰堆)",
+    "LATE 相(Service 类别 ⇒ ② 完成点): memleak_init() → br_memleak_init()",
+    "START 相: memleak_start()(本插件无动作)",
+]
+expect   = "三步都返回 0; 日志出现 [PLUGIN] phase=early/late/start name=service/memleak rc=0"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

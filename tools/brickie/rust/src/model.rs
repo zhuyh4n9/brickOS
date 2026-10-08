@@ -139,11 +139,54 @@ pub struct PrivilegedDecl {
     pub resources: PrivilegedResources,
 }
 
-/// `[build]`(v0.1 只记录)。
+/// `[build]`(`brickie build` 消费它 —— ADR-0004 / 设计 ADR-0003 的 S1–S3)。
 #[derive(Clone, Debug, Default)]
 pub struct BuildDecl {
+    /// 相对插件根的通配(`src/*.c`; 展开规则见 `build.rs`)。
     pub sources: Vec<String>,
+    /// 相对插件根的 include 目录。
     pub includes: Vec<String>,
+    /// 额外的 `-D<name>`(可选; 产品级 `[build]` 里也有同名键)。
+    pub defines: Vec<String>,
+}
+
+/// platform 插件的 `[build.target]`: **目标事实**(arch / 交叉前缀 / 链接脚本 / QEMU 型号)。
+///
+/// 归属理由: "每镜像恰一个 platform"(§8.3 ④), 而 arch 与链接脚本本来就是"平台是什么"
+/// 的一部分 —— 放进 `product.toml` 会让同一件事有两个可写处。
+#[derive(Clone, Debug, Default)]
+pub struct BuildTarget {
+    pub arch: String,
+    /// 交叉前缀(`aarch64-linux-gnu-`)或带路径的前缀。
+    pub cross: String,
+    /// `-march=…` / `-mstrict-align` 这类**由目标决定**的标志。
+    pub arch_flags: Vec<String>,
+    /// 相对**插件根**的链接脚本路径。
+    pub linker_script: String,
+    pub qemu_binary: String,
+    pub qemu_machine: String,
+    pub qemu_cpu: String,
+    pub qemu_memory: String,
+    pub qemu_extra: Vec<String>,
+}
+
+/// `product.toml [build]`: **产品级构建策略**(标志表 + 产物落点 + 核心本体源集合)。
+#[derive(Clone, Debug, Default)]
+pub struct ProductBuild {
+    /// 核心本体(**不是插件**)的源集合, 相对仓库根。
+    pub core_sources: Vec<String>,
+    /// 核心本体的 include 目录, 相对仓库根。
+    pub core_includes: Vec<String>,
+    /// 生成物源集合(`build/gen/**`, 由 `brickie gen` 产出), 相对仓库根。
+    pub gen_sources: Vec<String>,
+    pub cflags: Vec<String>,
+    pub asflags: Vec<String>,
+    pub ldflags: Vec<String>,
+    /// `--profile release` 时**追加**的标志(缺省 = 与 dev 相同)。
+    pub release_cflags_extra: Vec<String>,
+    pub release_asflags_extra: Vec<String>,
+    pub release_ldflags_extra: Vec<String>,
+    pub obj_dir: Option<String>,
 }
 
 /// 一个插件的规范化模型。
@@ -174,6 +217,8 @@ pub struct Plugin {
     pub exports: Vec<Export>,
     pub privileged: Option<PrivilegedDecl>,
     pub build: Option<BuildDecl>,
+    /// `[build.target]`(仅 platform 插件; `brickie build` 的目标事实)。
+    pub build_target: Option<BuildTarget>,
 }
 
 impl Plugin {
@@ -353,6 +398,8 @@ pub struct Product {
     pub budget_stack_kib: Option<i64>,
     pub lint_frozen_deps: String,
     pub allow_edges: Vec<(String, String)>,
+    /// `[build]`: 产品级构建策略(ADR-0004; `brickie build` 消费)。
+    pub build: Option<ProductBuild>,
 }
 
 impl Product {
@@ -383,6 +430,20 @@ impl Product {
             "select": self.select,
             "budget": {"ram_kib": self.budget_ram_kib, "stack_kib": self.budget_stack_kib},
             "lint": {"frozen_deps": self.lint_frozen_deps, "allow_edges": edges},
+            "build": self.build.as_ref().map(|b| json!({
+                "core_sources": b.core_sources,
+                "core_includes": b.core_includes,
+                "gen_sources": b.gen_sources,
+                "cflags": b.cflags,
+                "asflags": b.asflags,
+                "ldflags": b.ldflags,
+                "release": {
+                    "cflags_extra": b.release_cflags_extra,
+                    "asflags_extra": b.release_asflags_extra,
+                    "ldflags_extra": b.release_ldflags_extra,
+                },
+                "obj_dir": b.obj_dir,
+            })),
         })
     }
 }
@@ -1167,7 +1228,47 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         p.build = Some(BuildDecl {
             sources: str_array(bt, "sources", &p.name, &file, "build", d),
             includes: str_array(bt, "includes", &p.name, &file, "build", d),
+            defines: str_array(bt, "defines", &p.name, &file, "build", d),
         });
+        // `[build.target]`: 目标事实。只允许 platform 声明(§8.3 ④ 的"每镜像恰一个")。
+        if let Some(tt) = opt_table(bt, "target") {
+            if p.plugin_type != "platform" {
+                d.shape(
+                    "BRV-MF-0001",
+                    &p.name,
+                    &file,
+                    "build.target",
+                    format!(
+                        "`[build.target]` 只允许 `plugin_type = \"platform\"` 声明, 本插件是 `{}`",
+                        p.plugin_type
+                    ),
+                    "目标事实属于「平台是什么」; 每镜像恰一个 platform(§8.3 ④)",
+                );
+            }
+            let qemu = opt_table(tt, "qemu");
+            p.build_target = Some(BuildTarget {
+                arch: opt_str(tt, "arch", &p.name, &file, "build.target", d).unwrap_or_default(),
+                cross: opt_str(tt, "cross", &p.name, &file, "build.target", d).unwrap_or_default(),
+                arch_flags: str_array(tt, "arch_flags", &p.name, &file, "build.target", d),
+                linker_script: opt_str(tt, "linker_script", &p.name, &file, "build.target", d)
+                    .unwrap_or_default(),
+                qemu_binary: qemu
+                    .and_then(|q| opt_str(q, "binary", &p.name, &file, "build.target.qemu", d))
+                    .unwrap_or_default(),
+                qemu_machine: qemu
+                    .and_then(|q| opt_str(q, "machine", &p.name, &file, "build.target.qemu", d))
+                    .unwrap_or_default(),
+                qemu_cpu: qemu
+                    .and_then(|q| opt_str(q, "cpu", &p.name, &file, "build.target.qemu", d))
+                    .unwrap_or_default(),
+                qemu_memory: qemu
+                    .and_then(|q| opt_str(q, "memory", &p.name, &file, "build.target.qemu", d))
+                    .unwrap_or_default(),
+                qemu_extra: qemu
+                    .map(|q| str_array(q, "extra", &p.name, &file, "build.target.qemu", d))
+                    .unwrap_or_default(),
+            });
+        }
     }
 
     Some(p)
@@ -1496,6 +1597,29 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
                 }
             }
         }
+    }
+
+    // ---- [build](产品级构建策略: `brickie build` 消费) ----
+    if let Some(b) = opt_table(top, "build") {
+        let rel = opt_table(b, "release");
+        prod.build = Some(ProductBuild {
+            core_sources: str_array(b, "core_sources", &file, &file, "build", d),
+            core_includes: str_array(b, "core_includes", &file, &file, "build", d),
+            gen_sources: str_array(b, "gen_sources", &file, &file, "build", d),
+            cflags: str_array(b, "cflags", &file, &file, "build", d),
+            asflags: str_array(b, "asflags", &file, &file, "build", d),
+            ldflags: str_array(b, "ldflags", &file, &file, "build", d),
+            release_cflags_extra: rel
+                .map(|r| str_array(r, "cflags_extra", &file, &file, "build.release", d))
+                .unwrap_or_default(),
+            release_asflags_extra: rel
+                .map(|r| str_array(r, "asflags_extra", &file, &file, "build.release", d))
+                .unwrap_or_default(),
+            release_ldflags_extra: rel
+                .map(|r| str_array(r, "ldflags_extra", &file, &file, "build.release", d))
+                .unwrap_or_default(),
+            obj_dir: opt_str(b, "obj_dir", &file, &file, "build", d),
+        });
     }
 
     (true, Some(prod))

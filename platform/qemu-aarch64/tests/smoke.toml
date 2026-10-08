@@ -48,3 +48,41 @@ steps    = ["br_plat_irq_conformance()"]
 expect   = "返回 0(全部 TC-IRQ-* / GIC-* 项 PASS); 日志出现 SUMMARY fail=0"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]
+
+# ---- 插件生命周期(设计 1-01 §9 / 3-05 §2; v0.2 起调用点由插件管理器驱动)----
+#
+# ★ 与 v0.1 的差别(正是 WORKAROUND br-wa-entry-001 第 ③ 条的还债点): 这三条钩子
+#   **不再**由 start.S 直调, 而是 core 的 `br_plugin_manager_run()` 按相位调用:
+#     EARLY 相第一步 = qemu_aarch64_early_init(显式按 plugin_type 取, 不靠拓扑序);
+#     CORE 相       = qemu_aarch64_init;
+#     START 相      = qemu_aarch64_start(全局开中断之后, APP 的 start 之前)。
+#   证据形态 = 日志里的 `[PLUGIN] phase=… name=platform/qemu-aarch64 rc=0` 逐相三行。
+
+[[case]]
+id       = "plat-0008"
+pre      = "start.S 已把 CPU 交给 br_plugin_manager_run()(BSS 已清零、br_irq_cpu_init 已跑)"
+steps    = ["管理器扫 .br_plugins 段", "取第一个 plugin_type = platform 的描述符", "调它的 early_init"]
+expect   = "qemu_aarch64_early_init() 是 EARLY 相第一步 ⇒ console/PIC/绑定表/region 表/页表/MMU 就位; 日志可观测"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "plat-0006"
+pre      = "EARLY 相已过(early_init 返回 0); CORE 相轮到 platform(非 Service/Interface ⇒ CORE)"
+steps    = ["qemu_aarch64_init()", "核对日志 [PLUGIN] phase=core name=platform/qemu-aarch64 rc=0"]
+expect   = "返回 0(平台自身无额外 init —— 设备都在 EARLY 相就位)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "plat-0007"
+pre      = "LATE 相已过、全局中断已开、START 相轮到 platform"
+steps    = [
+  "qemu_aarch64_start(): 先 br_plat_irq_conformance() + br_plat_mem_conformance()",
+  "再 br_plat_irq_start(): 注册 timer PPI 的 ISR + 使能 + 装 100 ms 期限 + 全局开中断",
+  "核对 [PLUGIN] phase=start name=platform/qemu-aarch64 rc=0",
+]
+expect   = "返回 0; `int: conformance ALL PASS` 与 `[MEMCONF] SUMMARY fail=0` 都在; irq_ticks 随后开始增长"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+

@@ -65,7 +65,7 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 
 | 不做 | 理由 |
 |---|---|
-| **插件化(描述符 / manifest / 组合器)** | 这正是组合器 brickie 与插件管理器的产出(`4-02`/`4-03`, `3-05`)。**声明期**已由 brickie v0.1 接管(插件发现 / 校验 / 描述符生成 / 接口发布 / 版本治理; 见 [`tools/brickie/README.md`](tools/brickie/README.md)), 但**运行期**的插件管理器与描述符段(`.br_plugins`)仍未落地 ⇒ `platform/qemu-aarch64` 与 `app/hello` 虽已是插件, 调用点仍由 Makefile 直接编进镜像。**Platform Entry 因此仍挂 WORKAROUND, 见 §5** |
+| **插件化(描述符 / manifest / 组合器)** | 这正是组合器 brickie 与插件管理器的产出(`4-02`/`4-03`, `3-05`)。**声明期 + 编译编排**已由 brickie v0.1 接管(插件发现 / 校验 / 描述符生成 / 接口发布 / 版本治理 / `brickie build`; 见 [`tools/brickie/README.md`](tools/brickie/README.md)), 但**运行期**的插件管理器与描述符段(`.br_plugins`)仍未落地 ⇒ `platform/qemu-aarch64` 与 `app/hello` 虽已是插件且源集合由声明面给出, 启动链的**调用点**仍是 APP 直调。**Platform Entry 因此仍挂 WORKAROUND, 见 §5** |
 | 调度器 / 线程 / `br_sched_ops` | M1。没有调度器就没有"可让出的对象", 所以睡眠只能是忙等 |
 | **中断的 Stage 2**(分发到 bh/线程、亲和性/均衡/IPI、`CAP_NEST` 嵌套、PM save/restore) | 设计 `3-02 §1.1` 的分期: Stage 1(无调度器世界)已落地, Stage 2 的前提是**调度器与 bh** —— 它们是 M1 |
 | `br_fault_handler_register`(fault handler 链) | 设计 `3-02 §10.5`: 分槽/分类/extable/panic 属 Stage 1(已做), **注册 API 归 v2** |
@@ -83,7 +83,7 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 
 ```
 brickOS/
-├── Makefile                     构建 / 运行 / 冒烟 / 门禁
+├── Makefile                     只编工具 + 镜像侧的过渡别名(真身 = brickie build)
 ├── README.md                    本文件
 ├── WORKAROUNDS.md               WORKAROUND 登记表(欠债清单)
 ├── product.toml                 产品声明: app 选择 / 插件选择 / 预算 / M0 引导例外豁免
@@ -118,17 +118,25 @@ brickOS/
 │   │   ├── br_console.h         早期 console 契约(接口在 core, 实现在 platform)
 │   │   ├── br_log.h             日志契约
 │   │   ├── br_time.h            时钟/延时契约
-│   │   ├── br_main.h            core 入口契约(实现随 APP 走)
 │   │   ├── br_irq.h             【中断】native API(9 件)+ 域 API + 绑定表 + 状态字
 │   │   ├── br_pic.h             【中断】PIC 填表契约(core ↔ ISA 方言, 非 native 面)
 │   │   ├── br_exc.h             异常帧布局(asm 桩 ↔ fault 路径的同一处真值)
 │   │   ├── br_fault.h           fault 分类 / extable 宏 / panic 两入口
 │   │   ├── br_trace.h           最小 trace 环(ISR-safe 留痕)
 │   │   ├── br_mem.h             【内存】native 11 件 + 观测契约(堆遍历/自检)+ 归属记账
-│   │   └── br_mm.h              【内存】region 表/属性 + MMU 派发 + 平台侧 br_mm_ops_t
+│   │   ├── br_mm.h              【内存】region 表/属性 + MMU 派发 + 平台侧 br_mm_ops_t
+│   │   ├── br_plugin.h          【插件】元契约(描述符/依赖边/相位)+ 插件管理器入口
+│   │   ├── br_svc.h             【插件】服务注册表(publish/lookup + 观测)
+│   │   ├── br_sched.h           【调度】线程/任务 + br_sched_ops 注册点 + idle
+│   │   ├── br_sync.h            【调度】mutex / sem / cond / spinlock
+│   │   └── (br_main.h 已删: 入口由插件描述符的 start 钩子承担)
 │   └── src/
 │       ├── log.c                格式化 + 等级过滤
-│       ├── time.c               时钟换算 + 忙等延时
+│       ├── time.c               时钟换算 + 忙等延时 + br_deadline_from_now
+│       ├── plugin/              插件管理器(扫段/拓扑/相位驱动/失败停机)
+│       ├── svc/                 服务注册表
+│       ├── sched/               调度框架(TCB/切换 asm/超时表/idle)+ 等待链原语
+│       ├── sync/                同步原语(mutex/sem/cond/spinlock + 一致性套件)
 │       ├── panic.c              br_panic_bare / br_panic(无锁/无堆/无调度器)
 │       ├── trace.c              16 B 定长事件的环形缓冲
 │       ├── string.c             ★ 编译器支持例程(memcpy/memmove/memset/memcmp)
@@ -198,23 +206,32 @@ GICv3 寄存器序列在 **`gicv3.c` + `vectors.S`**(设计归 ISA 共享库, �
 
 ## 4. 构建与运行
 
-构建是**两段式**, 而且**工具与组合期校验在前**:
+构建的**入口是 `brickie build`**(ADR-0003 的 S1/S4 + ADR-0004), 顶层 `Makefile` 只编工具:
 
 ```
-① tools/    brickie(组合期工具)   宿主 g++ 编 C++ 渲染器 + Python 前端; cargo 编 Rust 核心
-                                         │  合并进同一个自包含入口 ELF
-                                         ▼
-⓪ 声明面    brickie check          用入口 ELF 校验 product.toml / 插件树(dev profile)
-                                         │  不碰交叉工具链(v0.1 零编译依赖纪律)
-                                         │  (Makefile 里标"⓪", 实际排在①之后 —— 校验要用刚编的入口 ELF)
-                                         ▼
-② brickOS   aarch64 裸机镜像      外部交叉 gcc
+① tools/    工具段(顶层 `make`, 缺省目标)  宿主 g++ 编 C++ 渲染器 + Python 前端;
+                                            cargo 编 Rust 核心 → 合并进同一个自包含入口 ELF
+                                                          │  不碰交叉工具链(组合期零编译依赖)
+                                                          ▼
+② 声明面    product.toml [build] + 各插件 plugin.toml [build] + platform 的 [build.target]
+            + tests/gates.toml(门禁)  ── 这是**镜像的唯一真值**
+                                                          │
+                                                          ▼
+③ 镜像       `brickie build`(入口 ELF): 组合期 check → gen 生成物 → 编译/链接
+            → `[build].post` 门禁; 步骤计划由 brickie-core 给, L5 只执行
 ```
 
-顺序由 `Makefile` 里一条 order-only 依赖钉死(`$(OBJS): | tools brickie-check`), 所以
-`make -j` 也不会倒过来; 同时"工具/声明面变新"不会触发镜像重链。
-这条纪律由 `make check-build` 把关 —— 顺序纪律坏起来通常是**静默**的(比如把 tools 段
-写成文件里第一条规则, `make` 就只编工具然后 exit 0, 镜像根本没编却不报错), 所以钉成门禁。
+**`make` 是"编工具", `make all` 是"编镜像"的过渡别名**: 顶层 Makefile 里
+`all` / `run` / `smoke` / `irq-test` / `mem-test` / `string-test` / `dbg-test` /
+`check-string` / `check-headers` / `size` / `disasm` / `clean-brickos` 都只是**薄委派**
+(调 `$(BRICKIE) build|run|test …|size|disasm|clean`), 真身在 `brickie build` 与
+`tests/gates.toml`。源码集合 / 编译标志 / 链接规则**不再**出现在顶层 Makefile 里 ——
+它们由声明面决定(见 [docs/decisions/0004-brickie-build-and-make-retirement.md](docs/decisions/0004-brickie-build-and-make-retirement.md))。
+
+这条"工具只编工具 / 镜像只委派 / 声明面是唯一真值"的纪律由 `make check-build` 把关 ——
+接线坏起来通常是**静默**的(比如把镜像源码或标志又写回 Makefile, 构建就有了第二处真值),
+所以钉成六条能真报红的机械判据(缺省目标=工具 / 无字面源码与标志 / 委派点齐全 /
+工具段零交叉依赖 / 宿主产物出树 / 自举种子三件齐)。
 
 **产物落点(参考 Android)**: 工具是**宿主**程序, 一律出树到
 `build/host/<host-arch>/<host-os>/` 下, 与镜像产物(`build/obj`、`build/brick.*`)
@@ -299,54 +316,69 @@ CI 里不想 `source` 就用 `eval "$(make -s env)"`(同一份片段)。
 ```bash
 make tools              # 只编工具 L5/L2(没装交叉编译器的机器/CI 工具作业可用)
 make tools-core         # 只编 L0/L1 的 brickie-core(cargo; 出树到同一 bin 目录)
-make tools-test         # 工具自身用例: 渲染器自检 + 端到端 542 项(含 V-1…V-19 与自包含入口 ELF)
+make tools-test         # 工具自身用例: 渲染器自检 + 端到端回归(含 V-1…V-19 / §V-B 构建族)
 ```
 
 **镜像段**的工具链是外部的(内部工具链未就绪, 见 §5 的 `br-wa-toolchain-001`)。需要:
-`aarch64-linux-gnu-gcc`(或带版本号的 `gcc-16`/`gcc-15`/`gcc-14`/`gcc-13`, Makefile 会自动探测)、
-`binutils-aarch64-linux-gnu`、`qemu-system-aarch64`。
+`aarch64-linux-gnu-gcc`(或带版本号的 `gcc-16`/`gcc-15`/`gcc-14`/`gcc-13`; **候选序与探测在
+`brickie-core`**, 不在 Makefile)、`binutils-aarch64-linux-gnu`、`qemu-system-aarch64`。
+
+**目标表**(`make <目标>`; 镜像侧的每个名字都是**薄委派**, 真身在右侧):
+
+| 目标 | 做什么 | 真身(委派到) |
+|---|---|---|
+| `make`(缺省) | **只编工具**(不碰交叉工具链) | `make -C tools/brickie cxx` |
+| `make all` | 编工具 → 编镜像 + `[build].post` 门禁 | `brickie build` |
+| `make tools` / `tools-core` / `tools-test` / `tools-clean` | 工具段(L5/L2 / Rust 核心 / 用例 / 清理) | `tools/brickie/Makefile` |
+| `make brickie-check` / `brickie-check-release` / `brickie-compose` | 组合期校验(dev/release)/ 重建生成物 | `brickie check` / `check --profile release` / `gen` |
+| `make run` | QEMU 上跑(Ctrl-A X 退出) | `brickie run` |
+| `make smoke` / `irq-test` / `dbg-test` | QEMU 门禁(冒烟 / 中断逐用例 / 内存+调试) | `brickie test <名>` |
+| `make mem-test` / `string-test` | **宿主侧**用例(不需交叉/QEMU) | `brickie test <名> --no-build` |
+| `make check-string` / `check-headers` | 支持例程自递归 / 对外头文件自洽 | `brickie test check-string` / `test check-headers --no-build` |
+| `make size` / `disasm` | 体积 / 反汇编 | `brickie size` / `brickie disasm` |
+| `make clean-brickos` / `clean` | 清镜像派生物 / 连工具一起清 | `brickie clean` / `+ tools-clean` |
+| `make check-workarounds` / `check-build` | WORKAROUND 登记 / 构建接线门禁 | `tools/check-*.sh` |
+| `make tools-prebuilt` / `tools-prebuilt-check` | 发布 / 检查三件自举种子 | `tools/brickie` Makefile |
+| `make print-host-triple` / `print-host-bin-dir` / `print-prebuilt-bin-dir` / `print-cross-compile` / `env` | 查询口(宿主三元组 / 落点 / 种子 / 交叉前缀 / 环境片段) | `mk/host.mk` / `setup.sh` |
 
 ```bash
 # 在仓库根执行(本分支根目录 = 原型树, 没有 brickOS/ 前缀)
-make                    # ①编工具 → ⓪brickie check(dev) → ②构建 build/brick.elf + .bin
-make brickie-check      # 只用 brickie 校验声明面(dev; 不编镜像)
-make brickie-check-release  # 发布级门禁(brickie check --profile release)
-make brickie-compose    # 用 brickie gen 重建 build/gen/** 生成物(不编译)
-make run                # 在 QEMU virt 上跑(Ctrl-A X 退出)
-make smoke              # 3 秒冒烟: 自动判定启动/延时/心跳/三套一致性摘要, 红绿可进 CI
-make irq-test           # 中断子系统**逐用例**门禁: 67 项(TC-IRQ-*/GIC-*)必须全 PASS
-make mem-test           # **宿主侧**内存语义门禁(不需交叉工具链/QEMU): TLSF/页位图/region 压测
-make dbg-test           # 内存映射 + 调试插件门禁: [MEMCONF] 与 [DBGCONF] 摘要 fail=0 且用例不缺
-make size               # 体积
-make disasm             # 反汇编
+make                    # 只编工具(缺省目标)
+make all                # 编工具 → brickie build(镜像 + 构建后门禁)
+# 也可以直调工具(推荐; 这就是"真身")
+build/host/<triple>/bin/brickie build [--backend make|ninja] [--dry-run] [-j N]
+build/host/<triple>/bin/brickie test [<门禁名>|--list]
+build/host/<triple>/bin/brickie check --profile release
 make check-workarounds  # WORKAROUND 登记一致性
-make check-build        # 构建接线门禁: 缺省目标/工具在前/工具段零交叉依赖/出树/种子三件
+make check-build        # 构建接线门禁: 缺省目标=工具/无字面源码/委派/零交叉依赖/出树/种子
 make tools-prebuilt     # 发布三件自举种子到 prebuilts/seed/brickie/<arch>/<os>/bin/
-make clean              # 清掉①与②的产物(只清工具: make tools-clean; 不动 prebuilts/)
+make clean              # 清掉工具与镜像两侧的派生物(只清工具: make tools-clean)
 ```
 
-**三条与内存/中断相关的构建/运行纪律**(都不是"可选优化"):
+**三条与内存/中断相关的构建/运行纪律**(都不是"可选优化"; 现在都写在**声明面**上):
 
-| 项 | 值 | 为什么 |
+| 项(声明位置) | 值 | 为什么 |
 |---|---|---|
-| `ARCHFLAGS += -mstrict-align` | 交叉 gcc 必须带 | 它**曾经是硬要求**: MMU 未开 ⇒ 全部访存按 Device-nGnRnE ⇒ 非对齐访问必取 Alignment fault(实测: `stur xzr,[sp,#36]` 给 12 字节局部结构清零 ⇒ 开机 data abort)。**现在 MMU 已开**(4 KiB 恒等映射, RAM 是 Normal 属性、`SCTLR.SA/SA0` 显式清零), 非对齐访问不再 fault ⇒ 本项退化为**防御性旋钮**(Device 区的非对齐访问仍会 fault, 留着它把"编译器的内存模型"与"MMIO 的真实约束"钉在一起) |
-| `CFLAGS += -fno-omit-frame-pointer` | 必须 | **`service/backtrace` 的编译期前提**: 栈回溯靠 `x29` 帧链(设计 `5-01 §3` 的"各线程栈"捕获), `-O2` 默认把 fp 当普通寄存器省掉 ⇒ 链断在第一帧。代价是每函数多一对 `stp/ldp` |
-| `QEMUFLAGS = -M virt,gic-version=3` | 必须显式钉住 | QEMU virt 的**缺省是 GICv2**(`-M virt,dumpdtb` 的 compatible = `arm,cortex-a15-gic`)。镜像里是 GICv3 驱动, 配错型号的症状是 `mrs icc_sre_el1` 未定义指令 ⇒ panic, 或"PIC 初始化完毕却收不到中断" |
+| `[build.target].arch_flags`(platform 插件) | `-mstrict-align` 必须带 | 它**曾经是硬要求**: MMU 未开 ⇒ 全部访存按 Device-nGnRnE ⇒ 非对齐访问必取 Alignment fault(实测: `stur xzr,[sp,#36]` 给 12 字节局部结构清零 ⇒ 开机 data abort)。**现在 MMU 已开**(4 KiB 恒等映射, RAM 是 Normal 属性、`SCTLR.SA/SA0` 显式清零), 非对齐访问不再 fault ⇒ 本项退化为**防御性旋钮**(Device 区的非对齐访问仍会 fault, 留着它把"编译器的内存模型"与"MMIO 的真实约束"钉在一起) |
+| `product.toml [build].cflags` | `-fno-omit-frame-pointer` 必须 | **`service/backtrace` 的编译期前提**: 栈回溯靠 `x29` 帧链(设计 `5-01 §3` 的"各线程栈"捕获), `-O2` 默认把 fp 当普通寄存器省掉 ⇒ 链断在第一帧。代价是每函数多一对 `stp/ldp` |
+| `[build.target.qemu].machine`(platform 插件) | `virt,gic-version=3` 必须显式钉住 | QEMU virt 的**缺省是 GICv2**(`-M virt,dumpdtb` 的 compatible = `arm,cortex-a15-gic`)。镜像里是 GICv3 驱动, 配错型号的症状是 `mrs icc_sre_el1` 未定义指令 ⇒ panic, 或"PIC 初始化完毕却收不到中断" |
 
-> ⚠ **工具只接管了镜像的"声明面", 还没接管"调用点"**: `make` 现在只多做一件事 ——
-> 编译镜像前先跑 `brickie check`(dev)校验声明面; 描述符生成要显式 `make brickie-compose`。
-> 镜像本身仍由 Makefile **手工组合** —— `.br_plugins` 段枚举驱动的启动链(插件管理器)
-> 属 M0 运行期, 仍未落地。这正是 `br-wa-entry-001` 剩下的第 ③ 条欠债, 见 §5 与
-> `WORKAROUNDS.md`。
+> ⚠ **工具接管了镜像的"声明面"与"编译编排", 但还没接管"调用点"**: `brickie build`
+> 现在真的按声明面组合镜像(哪些源、用什么标志、链哪个脚本都由 `product.toml` /
+> 插件 `[build]` / `[build.target]` 决定)。但**启动链本身**仍是压缩的替身 ——
+> `.br_plugins` 段枚举驱动的调用点(插件管理器)属 M0 运行期, 仍未落地。这正是
+> `br-wa-entry-001` 剩下的那条欠债(直编那半条已注销), 见 §5 与 `WORKAROUNDS.md`。
 >
-> ⚠ 由于这条 order-only 依赖, **声明面校验不过时缺省 `make` 会止步在 ⓪**(组合期
-> 校验红 ⇒ 退出码 1, 镜像不编)。这是**有意**的: 声明面自洽是镜像构建的前置。只编工具用
-> `make tools` / `make tools-core`; 只想看结论用 `make brickie-check`。
+> ⚠ 声明面不自洽时 `brickie build` 会**在组合期止步**(红 / 退出码非 0), 镜像不编。
+> 这是**有意**的: 声明面自洽是镜像构建的前置。只编工具用 `make tools` / `make tools-core`;
+> 只想看结论用 `make brickie-check`。
 
-换工具链前缀只需一个变量(这是 `br-wa-toolchain-001` 的还债口):
+换交叉工具链前缀改**声明面**(这是 `br-wa-toolchain-001` 的还债口), 构建规则不动:
 
 ```bash
-make CROSS_COMPILE=aarch64-none-elf-
+# platform/qemu-aarch64/plugin.toml 的 [build.target].cross
+# 候选序与解析在 brickie-core(contract §9 R-14); 查询口仍可用:
+make print-cross-compile
 ```
 
 实际输出(QEMU virt, `-cpu cortex-a53`, `gic-version=3`; 逐用例的 67/35/31 行已省略):
@@ -413,11 +445,11 @@ v0.1.0 有**七条**欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**
 
 | id | 一句话 |
 |---|---|
-| `br-wa-entry-001` | **Platform 的插件化只完成了一半**: `plugin.toml` + 描述符已就位, 但 `start.S` 的调用点仍由 Makefile 直接编进镜像 |
-| `br-wa-boot-001` | 启动链仍被压缩成一个死循环(无 plugin_manager / 阶段机 / 调度器); 中断框架挂接的三处(core.init 的 TPIDR_EL1、"全部 init 之后开中断"、timer PPI 的 ISR 注册)都靠替身; **新增**: 五个调试服务插件的 init 与调用也靠 APP/直编(`allow_edges` 里的两条 M0 引导例外) |
+| `br-wa-entry-001` | **Platform 的插件化只完成了一半**: `plugin.toml` + 描述符已就位, 源集合也已改由插件的 `[build].sources` 声明(`brickie build` 消费), 但启动链的**调用点**仍是 APP 直调, 不是 `.br_plugins` 段枚举驱动 |
+| `br-wa-boot-001` | 启动链仍被压缩成一个死循环(无 plugin_manager / 阶段机 / 调度器); 中断框架挂接的三处(core.init 的 TPIDR_EL1、"全部 init 之后开中断"、timer PPI 的 ISR 注册)都靠替身; **新增**: 五个调试服务插件的 init 与调用也靠 APP 直调(`allow_edges` 里的两条 M0 引导例外) |
 | `br-wa-isa-001` | **ISA 共享库这一层还没有独立存在**: GICv3 方言、异常向量桩、**4 KiB 页表构造(`mmu.c`)** 暂居 platform 插件目录(靠文件边界分层); 异常帧布局因 extable fixup 暂放 core |
-| `br-wa-toolchain-001` | 工具链用外部 gcc |
-| `br-wa-mem-001` | **三池比例写死在 platform 的 region 表里**(heap 1 MiB / contig 256 KiB / page 1 MiB / DMA 256 KiB / 保留 16 KiB), 未经 manifest 的 `[budget]`/`[[res]]` 生成 —— 设计 `3-04 §2` 的"比例 = manifest 预算"还没有生成链路 |
+| `br-wa-toolchain-001` | 工具链用外部 gcc; 目标事实写在声明面(`product.toml` + platform 的 `[build.target]`), **工具候选序与解析在 `brickie-core`**(裁定 R-14) |
+| `br-wa-mem-001` | **三池比例写死在 platform 的 region 表里**(heap 1 MiB / contig 256 KiB / page 1 MiB / DMA 256 KiB / 保留 16 KiB), 未经 manifest 的 `[budget]`/`[[res]]` 生成 —— 编译编排**已落地**(`brickie build`), 仍欠的是 `budget → region` 的**生成链路** |
 | `br-wa-debug-001` | **memleak 的"归属标签" ≠ v2 的 per-plugin arena 记账**: 能报"谁没还、在哪分配的", 没有预算上限/强制归属/OOM 策略 |
 | `br-wa-debug-002` | **dump/trace 直写早期 console**, 未经 `5-01 §2` 的 debug bridge(COBS + CRC16 成帧 + `MEMRD`/`TRACE_READ` 命令面, M3) |
 
@@ -428,17 +460,20 @@ v0.1.0 有**七条**欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**
 2. ~~`platform/` 收敛为插件 `platform/qemu-aarch64`(`BR_PLUGIN` 描述符 + 声明片段, `4-03`)~~
    ⇒ **已还**(`platform/qemu-aarch64/plugin.toml` + 生成物
    `build/gen/platform/qemu-aarch64/plugin_desc.c`);
-3. **仍欠**: `start.S` 的调用点从"Makefile 直编"改为 `.br_plugins` 段枚举驱动
-   (`3-05 §2.2` 的 `__br_plugins_start/__br_plugins_stop`) —— 依赖插件管理器(M0 运行期)。
+3. ~~`start.S` 的调用点从"Makefile 直编"改为声明面驱动~~ ⇒ **直编那半条已注销**
+   (源集合改由 `platform/qemu-aarch64/plugin.toml` 的 `[build].sources` 声明、
+   `brickie build` 消费 —— ADR-0003 的 S1/S4); **仍欠**: 启动链的调用点从"APP 直调"
+   改为 `.br_plugins` 段枚举驱动(`3-05 §2.2` 的 `__br_plugins_start/__br_plugins_stop`)
+   —— 依赖插件管理器(M0 运行期)。
 
-代码里的标记形如 `WORKAROUND(br-wa-entry-001)`, 与登记表由 `make check-workarounds` 绑死:
+代码里的标记形如 `WORKAROUND(br-wa-boot-001)`, 与登记表由 `make check-workarounds` 绑死:
 **任一侧多/少即报红** —— 欠债最怕的不是欠着, 是没人知道欠着。
 
 ## 6. 代码 ↔ 设计对应
 
 | 本原型 | 设计出处(`brickOS-Design` 分支) | 形态差异 |
 |---|---|---|
-| `start.S` 的 reset/BSS | `1-01 §9` 启动序列 | 设计是 Platform **插件**的汇编; 此处直编(`br-wa-entry-001`) |
+| `start.S` 的 reset/BSS | `1-01 §9` 启动序列 | 设计是 Platform **插件**的汇编; 此处随插件 `[build].sources` 编进镜像, 调用点仍是 APP 直调(`br-wa-entry-001`) |
 | `br_plat_early_init()` | `1-01 §9` 的 `platform.early_init`; `1-01 §8` 三层模式 | console + GICv3 PIC 注册 + 绑定表(§14.3 步 1–3)+ **region 表声明 + `br_mem_init()` 三池 + 4 KiB 恒等映射页表/开 MMU** |
 | `br_console_*` | `1-01 §8` console 双形态; `3-01 §10` 平台侧接口表 | 形态一致(轮询早期 console) |
 | `br_clock_now()` / `br_time_t` | `3-01 §4`(br-sched 组); `3-01 §14` CA-1(us) | 只实现读数; 超时表/唤醒属 M1 |

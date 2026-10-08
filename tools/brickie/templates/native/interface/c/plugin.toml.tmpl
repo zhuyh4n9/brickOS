@@ -64,6 +64,6 @@ status       = "experimental"      # experimental | frozen | deprecated
 # ops         = ["map", "protect", "flush", "invalidate"]
 # regions     = ["dma"]
 
-[build]                            # v0.1 只记录; v0.3 起被消费
+[build]                            # ★ `brickie build` 消费它(ADR-0004): 源集合 + 包含路径
 sources  = ["src/*.c"]
 includes = ["include"]

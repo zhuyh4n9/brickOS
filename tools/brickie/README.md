@@ -20,16 +20,24 @@ JSON 信封、诊断模型、文件归属、逐命令的 `args` 与 `data`/`sche
 
 ## 1. 现状(v0.1 命令面)
 
-**L5(Python 前端)已全量交付**: `python/brickie/` 有 **23 条叶子命令 + 2 条全局开关**
+**L5(Python 前端)已全量交付**: `python/brickie/` 有 **29 条叶子命令 + 2 条全局开关**
 的完整 argparse 命令面, 编排 / 落盘 / 呈现 / 形状校验 / 退出码汇总逐条落地。按用途分
-**三条命令族**(外加 2 条全局开关):
+**两条族 + 2 条全局开关**(构建族是 ADR-0004 长出来的第二族):
 
 | 族 | 命令 | 作用 |
 |---|---|---|
 | **骨架** | `new <ptype> <name>` · `init <product>` · `gen [--check]` | 生成插件/产品骨架; 重建 `build/gen/**` 生成物 |
 | **依赖与校验** | `dep {add,rm,tree,graph,why,index,closure}` · `check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release]` | 闭包/树/图/路径/反向索引 + 四域完备性 |
 | **版本与接口** | `ver {show,bump}` · `iface {list,show,diff,status,publish,freeze,deprecate,undeprecate,unfreeze,refreeze}` | 四段版本 + 单元快照 / 冻结窗口治理 |
+| **构建族(第二族)** | `build [--profile\|--jobs\|--backend\|--tag\|--dry-run\|--force\|--emit-backends\|--no-post]` · `clean [--all]` · `run` · `size` · `disasm` · `test [<name>\|--list]` | 声明面驱动的构建编排 + 执行 + 门禁(build/clean/run/size/disasm/test; core 侧另有 `judge` 只服 L5 内部调用) |
 | **全局开关** | `--version [--deps]` · `--json`(另有 `--root DIR`) | 指纹 / 机器可读输出 / 换根 |
+
+> **v0.1「边界纪律」的适用面(裁定 R-13, contract §9)**: `brickie-v0.1.md` §0 写
+> "v0.1 任何命令**不得要求 cc/cargo/nm 在场**" —— 这句只约束**组合期**命令
+> (骨架 / 依赖与校验 / 版本与接口三族), 也就是"声明面完备性检查器"那一半。
+> **构建族是显式第二族**: 它按同一个声明面组合镜像并驱动交叉工具链,
+> "要求工具链在场"是它的**职责**, 不是纪律的例外条款。CI 的组合期作业仍然零编译依赖
+> (`make tools` / `brickie check` 不碰交叉工具链)。
 
 **实现状态**(前端 = L5 的参数解析/编排/呈现; 原生侧 = 真正做判定的进程):
 
@@ -42,16 +50,20 @@ JSON 信封、诊断模型、文件归属、逐命令的 `args` 与 `data`/`sche
 | `ver show` / `ver bump` | ✅ | `core ver-show` / `ver-bump` ✅ | 版本载体 = **单元快照**; 人写的 `plugin.toml` 只读(裁定 R-3) |
 | `iface *`(10 条) | ✅ | `core iface-*` ✅ | IFACE-IR + sha256 + 变更集 + 影响报告 + 冻结窗口(含 `unfreezing` 瞬态) |
 | `--version [--deps]` | ✅ | `core version` ✅ | core 缺席时 `--version` 降级打印前端版本 |
+| `build` / `clean` / `run` / `size` / `disasm` / `test` | ✅ | `core build/clean/run/size/disasm/test/judge` ✅ | **第二族**(ADR-0004 / 设计 ADR-0003 的 S1–S4): 声明面驱动构建 + L5 执行器(`runner.py`, 并发/超时/日志/进度); 工具解析 / 增量 / 门禁判据全在 core(裁定 R-14/R-15/R-16) |
 
 > **判定在哪一侧**: 全部**判定**与 BRV 码都在 `rust/`(L0/L1); L5 只做参数解析、编排、
 > 落盘、形状校验、呈现与退出码汇总(V-18c 的静态检查会抓越界)。原生侧的领域自检:
-> `brickie-core --selftest` —— **432 cases**(`make core` 后跑 `build/host/<triple>/bin/brickie-core --selftest`),
+> `brickie-core --selftest` —— **485 cases**(`make core` 后跑 `build/host/<triple>/bin/brickie-core --selftest`),
 > 它**不需要 Python 解释器参与**(V-18a)。端到端回归见 `tests/run.sh`, 施工图 =
-> `tests/ACCEPTANCE.md` 的 V-1…V-19 矩阵。
+> `tests/ACCEPTANCE.md` 的 V-1…V-19 矩阵 + 构建族 §V-B。
 
 **明确不做**(设计 checklist §5.4; 这些名字**一条都不在** `--help` 里, 反向验收会抓):
-`build` / `test` / `run` / `api-dump` / `verify` / `iface check` / `dbg` / `pack`,
-以及旧名 `add` / `show` / `env`。
+`api-dump` / `verify` / `iface check` / `dbg` / `pack`, 以及旧名 `add` / `show` / `env`。
+
+> `build` / `test` / `run` 原在 §5.4 的"明确不做"名单里 —— 它们是 ADR-0004(设计
+> ADR-0003 的 S1–S4)**后来交付**的第二族, 所以从禁名名单里移除; 反向验收(`N-1`/`N-2`)
+> 已按新名单更新。
 
 ## 2. 目录结构(对照 §9.2)
 
@@ -60,16 +72,16 @@ tools/brickie/
 ├── Makefile              工具自身的构建入口(委派 cxx/ 与 cargo; 不重复编译规则)
 ├── pyproject.toml        Python 包(brickie)与入口点
 ├── freeze.py             打包器: python/** + templates/** + schema/** → 未压缩 tar → C 数组
-├── python/brickie/       L5 前端(命令面 / 编排 / 落盘 / 呈现 / 形状校验)
-├── rust/                 brickie-core: L0 模型 + L1 求解/版本/接口引擎(唯一判定处)
+├── python/brickie/       L5 前端(命令面 / 编排 / 落盘 / 呈现 / 形状校验)+ runner.py(构建族执行器)
+├── rust/                 brickie-core: L0 模型 + L1 求解/版本/接口引擎 + 构建规划器(唯一判定处)
 ├── cxx/                  L2 渲染器(main/render)+ L5 入口 ELF(launcher)
 ├── templates/            骨架/描述符/产品模板(数据, 不是代码)
 │   ├── native/<plugin_type>/<lang>/     骨架: plugin.toml / src.c / include.h / smoke.toml / README.md
 │   ├── descriptor/<api_type>/<lang>/    描述符(与 plugin_type 正交)
 │   └── product/<lang>/                  产品骨架
-├── schema/*.schema.json  声明面**单条记录形状**的机器可读描述(plugin/product/lock/index, 4 份)
+├── schema/*.schema.json  声明面**单条记录形状**的机器可读描述(plugin/product/lock/index/gates, 5 份)
 ├── docs/contract.md      ★ 跨语言接口契约(唯一权威; 见 §3)
-└── tests/                run.sh(端到端)+ ACCEPTANCE.md(V-1…V-19 验收矩阵)
+└── tests/                run.sh(端到端)+ ACCEPTANCE.md(V-1…V-19 验收矩阵 + §V-B 构建族)
 ```
 
 **产物出树**(参考 Android 的 `out/host/...`; 由仓库根 `mk/host.mk` + `tools/host-detect.sh`
@@ -126,17 +138,22 @@ prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie        ← ★ 单文�
 
 **协议与裁定一律查 [`docs/contract.md`](docs/contract.md)**, 不在别处另立一份:
 
-- §1 三个宿主可执行 · §2 信封与协议版本(`BRV-PROTO-0001/0002`) · §3 诊断 ·
-  §4 文件归属(§9.1.1 写路径纪律) · §5 `brickie-core` 命令与 `args`/`data` 字段表 ·
-  §6 `brickie-gen` 命令 · §7 声明面 schema · §8 L5 边界 · §9 实现期裁定 R-1…R-12。
+- §1 三个宿主可执行 · §2 信封与协议版本(`BRV-PROTO-0001/0002`) · §3 诊断(含构建族码
+  `BRV-BLD-0001..0012`) · §4 文件归属(§9.1.1 写路径纪律) · §5 `brickie-core` 命令与
+  `args`/`data` 字段表(**§5.4 = 构建族七条** `data.steps[i]` / `data.tools[i]`) ·
+  §6 `brickie-gen` 命令 · §7 声明面 schema(**§7.4 = `tests/gates.toml` 形状**) ·
+  §8 L5 边界 · §9 实现期裁定 R-1…R-16。
 
-**两条最容易被写错、所以单独点名的纪律**:
+**三条最容易被写错、所以单独点名的纪律**:
 
 1. **写路径**: `plugin.toml` / `product.toml` 是**只读输入**, 永不被改写; 机器只写
    `api/iface/**`、`brickie.lock`、`build/index/**`、`build/gen/**`(contract §4)。
 2. **`dep add` / `dep rm` 不落盘**(裁定 **R-2**): 设计 §7.7 说"写 `plugin.toml`", 但
    §9.1.1 规则 1 说永不改写人写文件 —— 取后者。命令只**打印**可直接粘贴的 TOML 片段
    (`data.snippet`)。
+3. **构建族里 L5 只执行、不判定**(裁定 **R-14/R-15/R-16**): 用哪个编译器、要不要重编、
+   日志算红还是绿, 全部由 core 给; `runner.py` 只做"校验可执行 / 并发 / 超时 / 收日志 /
+   呈现进度"。连编译失败用的码都是 core 随步骤给的(`steps[i].fail_code`)。
 
 ## 4. 构建与测试
 
@@ -146,9 +163,18 @@ make                 # = make cxx: 两个宿主 ELF(brickie-gen L2 + brickie L5 
 make core            # cargo 编 L0/L1 的 brickie-core → build/host/<triple>/bin/brickie-core
 make selftest        # brickie-gen --selftest: JSON 往返 / 渲染 / 路径与模式 / 载荷确定性
 make launcher-smoke  # 入口 ELF 自检: 嵌入载荷能不能起来(brickie --version)
-make test            # 渲染器 selftest + tests/run.sh 端到端(= 542 项: V-1…V-19 / 命令面全覆盖 / 纯度 / 快照)
+make test            # 渲染器 selftest + tests/run.sh 端到端(V-1…V-19 + §V-B 构建族 / 命令面全覆盖 / 纯度 / 快照)
 make prebuilt        # 发布**三件**种子 {brickie,brickie-gen,brickie-core}(cmp 相同则不写盘)
 make prebuilt-check  # 三件是否落后于源码(不改盘)
+```
+
+工具自身的构建入口**只编工具**; 镜像由 brickie 编(ADR-0004 / 设计 ADR-0003 的 S1–S4):
+
+```sh
+build/host/<triple>/bin/brickie build            # 镜像入口: 组合期 check → gen → 编译 → 链接 → [build].post
+build/host/<triple>/bin/brickie build --dry-run  # 只打印计划(不需要编译器; 用例 V-B 用它)
+build/host/<triple>/bin/brickie test             # 跑 tests/gates.toml 的全部门禁
+build/host/<triple>/bin/brickie clean --all      # 清镜像侧派生物(不动 build/host 的工具)
 ```
 
 - **cargo 出树**: `CARGO_HOME` / `CARGO_TARGET_DIR` 缺省指向
@@ -159,8 +185,14 @@ make prebuilt-check  # 三件是否落后于源码(不改盘)
   当**必需件** —— 缺 core ⇒ FAIL(自举种子必须三件齐), `prebuilt-check` 同样查三件。
 - **仓库根委派**: `make tools`(只编 L5/L2)、`make tools-core`(只编 Rust 核心)、
   `make tools-test`(工具用例)、`make brickie-check` / `brickie-check-release` /
-  `make brickie-compose`(用入口 ELF 校验 / 重建生成物)。镜像的每个目标文件都挂在
-  `$(OBJS): | tools brickie-check` 上 —— **组合期校验先于镜像编译**。
+  `make brickie-compose`(用入口 ELF 校验 / 重建生成物)。
+  **镜像侧已交给 brickie**(ADR-0004 / 设计 ADR-0003 的 S1–S4): 顶层 `make` 只编工具;
+  `make all` / `run` / `smoke` / `irq-test` / `mem-test` / `string-test` / `dbg-test` /
+  `check-string` / `size` / `disasm` / `clean-brickos` 都是**薄委派**(调
+  `$(BRICKIE) build|run|test …|size|disasm|clean`), 真身在 `brickie build` 与
+  `tests/gates.toml`。镜像的源码集合 / 标志 / 规则**不再**出现在顶层 Makefile 里 ——
+  由 `product.toml [build]` + 各插件 `[build]` + platform 的 `[build.target]` 决定,
+  `make check-build` 的第 ② 条不变量会抓任何回退。
   声明面红 ⇒ **`make` 在 ⓪ 止步**(退出码 1), 镜像不编 —— 这是纪律本身, 不是意外;
   只编工具用 `make tools` / `make tools-core`。
 
@@ -182,9 +214,9 @@ BRICKIE_CORE=/path/to/brickie-core BRICKIE_GEN=/path/to/brickie-gen python3 -m b
 | 码 | 含义 | v0.1 |
 |---|---|---|
 | 0 | 成功 | ✅ |
-| 1 | 校验红(环 / 冲突 / 预算 / 版本 / 分类学 / 特权) | ✅ |
-| 2 | 用法或环境错(参数非法 / schema 不符 / 路径不存在 / 模板不可用 / 原生件缺失或协议不符 / 命令尚未实现) | ✅ |
-| 3 | 编译或运行失败 | ✗(v0.3+; v0.1 任何命令都不编译) |
+| 1 | 校验红(环 / 冲突 / 预算 / 版本 / 分类学 / 特权); **构建族**里步骤失败 / 门禁判红也折进这一档 | ✅ |
+| 2 | 用法或环境错(参数非法 / schema 不符 / 路径不存在 / 模板不可用 / 原生件缺失或协议不符 / 命令尚未实现 / 构建族找不到编译器或 QEMU) | ✅ |
+| 3 | 编译或运行失败 | ✗ **仍不用**: 构建族把"编译失败"折进 1(`BRV-BLD-0011`), 环境错折进 2(`BRV-BLD-0005`) —— 与 BRV-D9 的"三档"一致, 不新增第四档 |
 
 **严重度不决定退出码**: `severity ∈ {error,warning,info}` 只描述"这条信息有多重",
 退出码由"命令有没有完成"决定。两个已登记的判例: `BRV-TAX-0014`(所选模板 v0.1 未交付)
@@ -204,6 +236,7 @@ BRICKIE_CORE=/path/to/brickie-core BRICKIE_GEN=/path/to/brickie-gen python3 -m b
 | `BRV-TAX-0015` | error | `--subkind` 与按 namespace 的推导冲突(§8.4) |
 | `BRV-GEN-0002` | error | 生成目标已存在且非生成物目录, 或目标是**人写文件**(§8.4) |
 | `BRV-MF-0001` | error | 声明面必填字段缺失 / 字段形状不符 schema(形状门, 退出码 2) |
+| `BRV-BLD-0001..0012` | error(全绿判据是**无码 info**) | 构建族: 缺 `[build]` / 空 sources / 缺 `[build.target]` / 目标二义 / 工具缺失(退出码 2) / 单元缺 `[build]` / 字面源不存在 / 门禁名未知 / 门禁判红 / `[build]` 形状 / 步骤失败 / 正则超子集。逐条见 contract §3 |
 
 ## 6. 与设计文档的已知偏差 / 缺口(需要回灌)
 
@@ -221,6 +254,9 @@ BRICKIE_CORE=/path/to/brickie-core BRICKIE_GEN=/path/to/brickie-gen python3 -m b
 | D-10 | 接口状态机的 `--note` **语义未裁定**(路径还是正文) | 前端按 CLI 口径把 `--note` 的值当**路径原样**传给 core(正文读取与校验归 core) | 与"参数即路径"的 CLI 一致性; 若核心改为收正文, 在 `cli.py` 的 `iface` args 一处加 `note_text`(单点切换) |
 | D-11 | BRV-D8 **未给下列缺陷分配专属码**: 生成物与重算不一致 / 渲染缺变量 / 依赖方向硬禁则 / 预算与独占冲突 / 重复 `[[dep]]` … | 按"就近"兜底: 形状与声明面错误用 `BRV-MF-0001`(消息里点名双方/差值), 其余用 **`code: null` 的用法错**(`exit_code 2`); **不自造码** | 编码表是设计资产, 自造码会让"码 → 规格"的映射失真; 缺口已由 L5/Rust 两侧分别登记, 待补码后逐一收口 |
 | D-12 | `[[dep]].phase` 的断言语义**自相矛盾**(§7.2 写 `rank(assertion) ≤ rank(provider)`, §8.1 写"提供方不晚于断言") | v0.1 **不执法**这一条(只做单记录形状与允许集校验), 等规格二选一后写死 | 两种读法结论相反, 先选一种会把另一半判例判错; 已登记缺口并在 `rust/README.md` 的缺口表可见 |
+| D-13 | §0: "v0.1 **任何命令**不得要求 cc/cargo/nm 在场"; §7.1 注: `plugin.toml [build]` "v0.1 只记录, v0.3 起被消费" | **构建族是显式第二族**, 提前消费 `[build]`/`[build.target]`(ADR-0004 / 设计 ADR-0003 的 S1–S4); 边界纪律按"只约束**组合期**命令"读(裁定 **R-13**) | 需求方要求 `brickie build` 接管镜像入口; 两族职责不同, 一句话管两族会自相矛盾。已回灌 contract §9 R-13 + `rust/README` S-B* |
+| D-14 | BRV-D8 **没有 BUILD 族** | 新开 `BRV-BLD-0001..0012`(逐条见 contract §3), 未自造形状之外的语义 | 门禁判据 / 工具解析 / 增量都需要可分辨的失败原因; 编码表待回灌(与 D-11 同向) |
+| D-15 | §9.2 把工具自身的构建入口(`cxx/ Makefile`)与镜像构建混在仓库根 Makefile 的"两段式"叙事里 | 顶层 `Makefile` **只编工具**; 镜像目标降级为**薄委派别名**(`make all|run|smoke|…` → `$(BRICKIE) build|run|test|…`), 真身在 `brickie build` + `tests/gates.toml`; 源码集合 / 标志 / 规则从 Makefile 移除, 由 `make check-build` 第 ② 条门禁钉死 | ADR-0003 的 S1+S4(构建归属转移 + Makefile 退役的缩减期); 迁移期保留别名是为了不打断现有 CI/习惯 |
 
 > 以上各条都**不是**"顺手多做一点", 而是 v0.1 命令面无法回避的落笔处; 每条都在生成物
 > 的文件头或契约里对读者可见, 并已登记进 checklist, 等规格拍板后改模板/引擎即可。

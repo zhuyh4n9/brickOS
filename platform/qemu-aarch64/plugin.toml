@@ -2,7 +2,7 @@
 #
 # 由 `brickie new platform platform/qemu-aarch64` 生成骨架后填入真实内容;
 # 之后由人维护 —— brickie 不覆盖人写文件(§8.4)。
-# 本件还清了 WORKAROUND(br-wa-entry-001) 的第 ② 条: "本目录收敛为插件
+# 本件还清了 `br-wa-entry-001`(该台账条目已注销)的第 ② 条: "本目录收敛为插件
 # platform/qemu-aarch64(带 BR_PLUGIN 描述符 + manifest)"。
 #
 # 本件现在声明**两个接口单元**:
@@ -223,3 +223,30 @@ device_names = ["pl011", "gicv3"]
 [build]
 sources  = ["src/*.c", "src/*.S"]
 includes = ["include"]
+
+# ---------------------------------------------------------------- 目标事实(brickie build)
+# `brickie build` 从**唯一一个** platform 插件的本表取目标事实(每镜像恰一个 platform,
+# §8.3 ④)。放进 product.toml 会让同一件事有两个可写处 —— 所以归 platform。
+[build.target]
+arch = "aarch64"
+# WORKAROUND(br-wa-toolchain-001): 外部交叉编译器。工具解析顺序 =
+#   prebuilts/toolchain/bin/<name> → PATH 上的 <name>(含 gcc-16/-15/-14/-13 变体)
+cross = "aarch64-linux-gnu-"
+
+# ⚠ -mstrict-align 在 **MMU 未开时是硬要求, 不是优化选项**: MMU 关着 ⇒ 全部访存按
+#   Device-nGnRnE 处理 ⇒ 非对齐访问会取 Alignment fault(ESR.EC=0x25/DFSC=0x21)。
+#   而编译器按 Normal memory 的假设可以对 4 字节对齐的地址生成 8 字节 `stur` —— 实测踩到过。
+#   -mgeneral-regs-only: 内核不碰 FP/SIMD(设计侧 aarch64 目标的纪律)。
+arch_flags = ["-march=armv8-a", "-mgeneral-regs-only", "-mstrict-align"]
+
+# 链接脚本(相对**本插件根**)
+linker_script = "src/link.ld"
+
+# QEMU 型号: `gic-version=3` 是**显式**的 —— QEMU virt 的缺省是 GICv2, 而本插件声明的是
+# GICv3, 不钉住的话驱动会写 GICv2 的地址, 表现为"PIC 初始化后收不到任何中断"。
+[build.target.qemu]
+binary  = "qemu-system-aarch64"
+machine = "virt,gic-version=3"
+cpu     = "cortex-a53"
+memory  = "128M"
+extra   = ["-nographic"]

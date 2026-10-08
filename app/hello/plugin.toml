@@ -1,9 +1,11 @@
-# app/hello — M0 启动链演示(plugin_type = app; 唯一业务逻辑)
+# app/hello — 启动链演示(plugin_type = app; 唯一业务逻辑)
 #
 # 设计出处: 1-03 §1 的 v1.0 插件清单 —— "app/hello + conformance | APP |
 # 启动链演示(M0: 直接主循环, 不依赖 iface —— **M0 引导例外**, 此时 Interface
-# 插件尚未交付)"。本件实现的是 `br_core_main`(WORKAROUND br-wa-boot-001 的
-# 临时形态), 它的归宿是把 MainLoop 拆成 `app.start()`。
+# 插件尚未交付)"。本件实现三个生命周期钩子 `hello_early_init/init/start`
+# (钩子是组合期契约, **不**进 [[export]], 所以不参与接口 hash)。
+# `br_core_main` 已拆掉(其内容落到 platform.start / service/dump 的 LATE init /
+# hello_start 的 MainLoop) —— 见 docs/decisions/0005-plugin-manager.md §2.6。
 schema = 1
 
 [plugin]
@@ -11,9 +13,9 @@ name        = "app/hello"
 plugin_type = "app"
 api_type    = "native"          # 纯消费者: 只表示"代码面向 native API 编码"
 lang        = "c"
-phase       = "app"             # ② 完成点在 APP 相(无 init 钩子, 只有主循环)
+phase       = "app"             # ② 完成点在 APP 相(init 钩子在 CORE 类相, start 在最后)
 version     = "0.1.0.0"
-summary     = "M0 MainLoop: 延时 + 日志(启动链演示)"
+summary     = "MainLoop: 延时 + 日志 + 启动期自检(启动链演示)"
 license     = "WTFPL"
 
 [[res]]
@@ -31,7 +33,12 @@ truth      = "decl"
 abi_id     = ""
 
 # ---- 结构依赖 ----
-# ⚠ **M0 引导例外**: app 直调 platform(设计 §7.3 的表里 app ✗ platform)。
+# 只剩一条: app → platform 的**运行期读**(平台身份 br_plat_name/br_plat_isa、
+# 心跳计数 br_plat_timer_ticks)。APP 不再直调任何一致性用例、也不再直调调试服务:
+#   - 中断/内存一致性用例 → platform 的 start();
+#   - 调试域一致性用例与启动快照 → service/dump 的 LATE init。
+# ⇒ 原先的 `app → service/dump` 那条 M0 豁免已可从 `product.toml [lint].allow_edges`
+# 删掉(仍需保留 app → platform 那条 —— 见 README 与本插件 README 的说明)。
 # 该边由 `product.toml [lint].allow_edges` 显式豁免 ⇒ 可评审的例外, 不是静默放行。
 # Interface 插件交付后(1-03 的 M2: iface-min), 本边应改为 app → iface → platform。
 [[dep]]
@@ -39,12 +46,6 @@ name   = "platform/qemu-aarch64"
 range  = ">=0.1.0"
 kind   = "runtime"
 symbol = "br_plat_name"
-
-[[dep]]
-name   = "service/dump"
-range  = ">=0.1.0"
-kind   = "runtime"
-symbol = "br_dump_all"
 
 [build]
 sources  = ["src/*.c"]

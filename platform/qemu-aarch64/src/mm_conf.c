@@ -705,7 +705,7 @@ static void conf_tc_mm_003(void)
 }
 
 /* =====================================================================
- * 入口(由 `br_core_main` 调用; 见 br_plat.h)
+ * 入口(由 platform 的 `qemu_aarch64_start()` 在 START 相调用; 见 br_plat.h)
  * ===================================================================== */
 int br_plat_mem_conformance(void)
 {

@@ -516,6 +516,105 @@ def _render_version(data: dict, extra: dict) -> list[str]:
     return lines
 
 
+def _render_build(data: dict, extra: dict) -> list[str]:
+    """`brickie build` 的人读呈现: 目标事实 / 单元 / 步骤统计 / 工具 / 产物。"""
+    ok = bool(extra.get("ok", True))
+    profile = _fmt(data.get("profile"))
+    backend = _fmt(data.get("backend"))
+    lines = [f"构建{'完成' if ok else '失败'}(profile={profile}, backend={backend})"]
+
+    target = _as_dict(data.get("target"))
+    outputs = _as_dict(data.get("outputs"))
+    lines.append(f"  目标: {_fmt(target.get('arch'))} / 交叉前缀 {_fmt(target.get('cross'))}"
+                 f"  (来自 {_fmt(target.get('owner'))})")
+    if target.get("linker_script"):
+        lines.append(f"  链接脚本: {_fmt(target.get('linker_script'))}")
+    lines.append(f"  产物: {_fmt(outputs.get('elf'))} + {_fmt(outputs.get('bin'))}"
+                 f"  (对象 {_fmt(outputs.get('obj_dir'))})")
+
+    units = [u for u in _as_list(data.get("units")) if isinstance(u, dict)]
+    lines.append(f"  单元: {len(units)} 个 / 源文件 {_fmt(data.get('source_count'))} 个")
+    for unit in units:
+        lines.append(f"    {_fmt(unit.get('name'))}: {_fmt(unit.get('sources'))} 个源"
+                     + (f"  defines={unit.get('defines')}" if unit.get("defines") else ""))
+
+    total = data.get("steps_total")
+    todo = data.get("steps_todo")
+    upto = data.get("up_to_date")
+    lines.append(f"  步骤: 共 {_fmt(total)} / 本次要跑 {_fmt(todo)} / 已是最新 {_fmt(upto)}")
+
+    results = [r for r in _as_list(extra.get("results")) if isinstance(r, dict)]
+    for res in results[:24]:
+        state = "ok  " if res.get("ok") else "FAIL"
+        lines.append(f"    {state} {_fmt(res.get('label'))}")
+    if len(results) > 24:
+        lines.append(f"    …(另有 {len(results) - 24} 条步骤结果, --json 里全有)")
+
+    stale = _as_list(data.get("stale_outputs"))
+    if stale:
+        lines.append(f"  过期产物: {len(stale)} 个(状态文件里已不在计划内的对象)")
+    if extra.get("post"):
+        lines.append(f"  构建后门禁: {', '.join(str(p) for p in extra['post'])}")
+    lines.append(f"  计划指纹: {_short_hash(_fmt(data.get('plan_hash')))}")
+    return _footer(extra, lines)
+
+
+def _render_clean(data: dict, extra: dict) -> list[str]:
+    removed = _as_list(extra.get("removed"))
+    lines = [f"清理完成: 删掉 {len(removed)} 个路径(镜像侧; 不动 build/host 的工具)"]
+    for path in removed:
+        lines.append(f"  删除 {_fmt(path)}")
+    if not removed:
+        lines.append("  (没有需要删的东西)")
+    for path in _as_list(data.get("paths")):
+        if path not in removed:
+            lines.append(f"  跳过 {_fmt(path)}(不存在)")
+    return _footer(extra, lines)
+
+
+def _render_test(data: dict, extra: dict) -> list[str]:
+    if extra.get("list"):
+        lines = [f"门禁声明面: {_fmt(data.get('file'))}"
+                 + ("" if data.get("present") else "  (文件不存在)")]
+        for key, label in (("hosttests", "宿主用例"), ("gates", "QEMU 门禁"), ("scripts", "脚本门禁")):
+            names = [str(x) for x in _as_list(data.get(key))]
+            lines.append(f"  {label}({len(names)}): {', '.join(names) if names else '(空)'}")
+        post = [str(x) for x in _as_list(data.get("build_post"))]
+        lines.append(f"  构建后自动跑: {', '.join(post) if post else '(无)'}")
+        return lines
+    ok = bool(extra.get("ok", True))
+    lines = [f"门禁{'全绿' if ok else '红'}: {_fmt(data.get('name')) or '(全部)'}"]
+    gates = _as_dict(data.get("gates"))
+    if gates:
+        for key, label in (("hosttests", "宿主用例"), ("gates", "QEMU 门禁"), ("scripts", "脚本门禁")):
+            names = [str(x) for x in _as_list(gates.get(key))]
+            if names:
+                lines.append(f"  {label}: {', '.join(names)}")
+    results = [r for r in _as_list(extra.get("results")) if isinstance(r, dict)]
+    for res in results:
+        state = "ok  " if res.get("ok") else "FAIL"
+        judged = ""
+        if res.get("judged"):
+            judged = f"  [判据: {res.get('judge_failed', 0)} 条不满足]" if res.get("judge_failed") else "  [判据通过]"
+        lines.append(f"    {state} {_fmt(res.get('label'))}{judged}")
+    if not results:
+        lines.append("  (没有步骤 —— 门禁名单为空?)")
+    return _footer(extra, lines)
+
+
+def _render_size(data: dict, extra: dict) -> list[str]:
+    # 体积表已由执行器直接打到 stdout(那是 `size` 的真实输出) —— 这里不再重复。
+    return []
+
+
+def _render_disasm(data: dict, extra: dict) -> list[str]:
+    return []
+
+
+def _render_run(data: dict, extra: dict) -> list[str]:
+    return []
+
+
 def _render_generic(data: dict, extra: dict) -> list[str]:
     """未定型 ``data`` 的兜底呈现: 标量逐行, 复合结构缩进 JSON。
 
@@ -553,6 +652,12 @@ _RENDERERS = {
     "iface status": _render_iface_status,
     "iface publish": _render_iface_publish,
     "version": _render_version,
+    "build": _render_build,
+    "clean": _render_clean,
+    "test": _render_test,
+    "size": _render_size,
+    "disasm": _render_disasm,
+    "run": _render_run,
 }
 
 

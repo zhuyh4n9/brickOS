@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "tests/gates.toml — v0.1 门禁声明面(BRV-D2: 单条记录形状)",
+  "description": "形状对齐 contract §7.4。只表达**单条记录形状**(字段名/类型); 正则子集(支持 `. * + ? [...] \\x`, 不支持 `( ) | ^ $ { }`)、门禁名唯一性、`[build].post` 里的名字是否存在、日志判红绿等**判定**一律由 brickie-core 报 `BRV-BLD-0008..0012`(裁定 R-16: 判据在 core, L5 只执行)。本文件**不**参与 L5 的形状门(不登记进 schema.py 的 SCHEMA_FILES)—— 门禁判据属于 core, 不是 L5 的允许职责。",
+  "type": "object",
+  "required": ["schema"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "default_timeout_s": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "host": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "cc": {
+          "type": "string"
+        },
+        "cflags": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "bin_dir": {
+          "type": "string"
+        }
+      }
+    },
+    "hosttest": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "sources"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string"},
+          "sources": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "includes": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "defines": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "depends": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "timeout_s": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      }
+    },
+    "gate": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string"},
+          "timeout_s": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "log": {"type": "string"},
+          "require": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "forbid": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "require_tags": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "expect": {
+            "type": "string",
+            "enum": ["timeout"]
+          }
+        }
+      }
+    },
+    "script": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "argv"],
+        "additionalProperties": true,
+        "properties": {
+          "name": {"type": "string"},
+          "argv": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "require": {
+            "type": "array",
+            "items": {"type": "string"}
+          },
+          "forbid": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "post": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    }
+  }
+}

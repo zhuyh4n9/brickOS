@@ -1,28 +1,28 @@
-# brickOS prototype v0.1.0 — 构建入口
+# brickOS prototype v0.1.0 — 顶层构建入口(**只编工具** + 镜像侧的过渡别名)
 #
-# 目标: aarch64 裸机 ELF, 跑在 QEMU virt 上。
+# ================================================================ 构建归属(ADR-0003 的 S1/S4)
+# **镜像的入口是 `brickie build`**, 不是这个文件。
 #
-# ---------------------------------------------------------------- 两段式构建
-# **工具先于镜像**(见 §工具):
-#   ① tools/   brickie(组合期工具): 宿主 g++ 编 C++ 生成器 + Python 前端。
-#              它**不碰交叉工具链** —— brickie-v0.1 §0 的边界纪律: v0.1 任何命令
-#              不得要求 cc/cargo/nm 在场。所以 `make tools` 在没装交叉编译器的
-#              机器上也必须能跑通(CI 的工具作业正是这样用的)。
-#   ② brickOS  用外部交叉 gcc 编 aarch64 裸机镜像。
-#   顺序由 `$(OBJS): | tools` 这条 order-only 依赖钉死 ⇒ `make -j` 也不会倒过来;
-#   order-only 同时保证"工具重新编过"不会触发镜像重链。
+#   ① 工具段(本文件唯一的真身): `make` / `make tools` 用**宿主 g++/cargo** 编组合期工具
+#      `{brickie, brickie-gen, brickie-core}`, 出树到 build/host/<host-arch>/<host-os>/bin。
+#      它**不碰交叉工具链** —— 组合期命令的零编译依赖纪律(contract §9 R-13)。
+#   ② 镜像段: 源码集合 / 编译标志 / 链接规则**全部**搬进了声明面 ——
+#      product.toml [build] + 各插件 plugin.toml [build] + platform 的 [build.target]
+#      + tests/gates.toml 的门禁; 由 `brickie build` 消费。
 #
-#   ⚠ 当前镜像是**手工组合**的(br-wa-entry-001): brickie 只在①被编出来,
-#     **还没有**参与②(插件发现 / 描述符生成 / 组合期 check 都没接线)。
-#     本文件只是先把"工具是镜像的前置"这条纪律立起来;
-#     真正的接线是 br-wa-entry-001 的还债动作(见 WORKAROUNDS.md)。
+# 本文件里的 `all` / `run` / `smoke` / `irq-test` / `mem-test` / `string-test` / `dbg-test` /
+# `check-string` / `check-headers` / `size` / `disasm` / `clean-brickos` 因此都降级成
+# **薄委派别名**(调 $(BRICKIE) 的对应命令)—— 这是设计 ADR-0003 缩减期的**过渡形态**,
+# 真身在 `brickie build` 与 `tests/gates.toml`; 别名只保证"老的肌肉记忆还能用"。
+# `make check-build` 的第 ② 条不变量会抓任何"字面源码/标志回潮"。
 #
-# 工具链: **外部 gcc**
-#   WORKAROUND(br-wa-toolchain-001): 内部工具链就绪前借用宿主交叉编译器。
-#   退出条件 = 只改 CROSS_COMPILE(见 WORKAROUNDS.md), 构建规则本身不动。
+# 工具链: **外部 gcc**(WORKAROUND br-wa-toolchain-001)。它的选型(交叉前缀 / 变体 / 链接
+# 脚本 / QEMU 型号)现在由 product.toml + platform 插件声明面表达, 工具**候选序与解析在
+# core**(contract §9 R-14 / R-17)。本文件只保留 `print-cross-compile` 这一个查询口。
 #
 # 用法:
-#   make                    ⓪组合期校验 → ①编工具 → ②构建 build/brick.elf + .bin
+#   make                    只编工具(= make tools; 不编镜像)
+#   make all                编工具 → 委派 `brickie build`(镜像 + [build].post 门禁)
 #   make tools              只编 L5/L2(不需要交叉编译器, 也不需要 cargo)
 #   make tools-core         只编 L0/L1 的 Rust 核心(brickie-core; 需要 cargo)
 #   make tools-test         跑工具自身用例(生成器自检 + 端到端)
@@ -31,17 +31,23 @@
 #   make brickie-compose    重建 build/gen/** 生成物(不编译)
 #   source setup.sh         配置开发环境(PATH + 环境变量; 见 ADR-0002 §7.5)
 #   make env                打印同样的 shell 片段(CI: eval "$(make -s env)")
-#   make run                在 QEMU 上跑(Ctrl-A X 退出)
-#   make smoke              3 秒冒烟: 自动判定启动与延时是否正常
-#   make irq-test           中断子系统逐用例门禁(TC-IRQ-*, target-only)
-#   make size / disasm      体积 / 反汇编
+#   make run                在 QEMU 上跑(Ctrl-A X 退出; 委派 brickie run)
+#   make smoke              3 秒冒烟(brickie test smoke)
+#   make irq-test           中断子系统逐用例门禁(brickie test irq-test)
+#   make mem-test           宿主侧内存语义门禁(brickie test mem-test --no-build)
+#   make string-test        宿主侧编译器支持例程用例(brickie test string-test --no-build)
+#   make dbg-test           内存映射 + 调试插件门禁(brickie test dbg-test)
+#   make check-string       编译器支持例程自递归门禁(brickie test check-string)
+#   make check-headers      对外头文件自洽门禁(brickie test check-headers --no-build)
+#   make size / disasm      体积 / 反汇编(brickie size / disasm)
 #   make check-workarounds  WORKAROUND 登记表与源码标记是否一致
-#   make check-build        构建接线门禁: 缺省目标/工具在前/工具段零交叉依赖
+#   make check-build        构建接线门禁(缺省目标=工具 / 无字面源码 / 委派 / 出树 / 种子)
 #   make tools-prebuilt     把工具发布为自举种子 prebuilts/seed/brickie/<arch>/<os>/bin/
 #   make tools-prebuilt-check  检查种子是否落后于源码
 #   make print-host-triple  打印宿主三元组(host-arch/host-os)
 #   make print-host-bin-dir 打印宿主工具 bin 目录(build/host/<arch>/<os>/bin)
-#   make clean              清掉①与②的产物(不动 prebuilts/ 种子)
+#   make print-cross-compile 打印交叉前缀(仅供查询 / 门禁; 构建不再读它)
+#   make clean              清掉①与②的产物(只清工具: make tools-clean; 不动 prebuilts/)
 
 # ---------------------------------------------------------------- prebuilt(可选)
 # prebuilts/toolchain/ 是**派生目录**(不进版本库, 配方见 prebuilts/toolchain.lock.toml), 由 `make prebuilt` 取件。
@@ -53,15 +59,9 @@
 
 PREBUILT ?= prebuilts/toolchain
 
-# ---------------------------------------------------------------- 工具链探测
+# ---------------------------------------------------------------- 工具链探测(仅查询)
 # 优先 prebuilt(自洽、可复现), 否则退回宿主外部交叉工具链(br-wa-toolchain-001 的过渡形态)。
-ifeq ($(strip $(PREBUILT_CROSS)),)
-  PREBUILT_CROSS_GCC :=
-else
-  PREBUILT_CROSS_GCC := $(wildcard $(PREBUILT_CROSS)gcc)
-endif
-
-ifneq ($(PREBUILT_CROSS_GCC),)
+ifneq ($(strip $(PREBUILT_CROSS)),)
   CROSS_COMPILE ?= $(PREBUILT_CROSS)
   TOOLCHAIN_SOURCE := prebuilts/toolchain/  ($(PREBUILT_CROSS))
 else
@@ -74,45 +74,12 @@ ifneq ($(wildcard $(PREBUILT_MAKE)),)
   MAKE := $(PREBUILT_MAKE)
 endif
 
-# 无版本号优先; 退化到带版本号的驱动名(Ubuntu 只装 gcc-N 时没有软链)
-CC_CANDIDATES := $(CROSS_COMPILE)gcc $(CROSS_COMPILE)gcc-16 $(CROSS_COMPILE)gcc-15 $(CROSS_COMPILE)gcc-14 $(CROSS_COMPILE)gcc-13
-CC := $(firstword $(foreach c,$(CC_CANDIDATES),$(if $(shell command -v $(c) 2>/dev/null),$(c))))
-
-binutils_probe = $(firstword $(foreach c,$(CROSS_COMPILE)$(1),$(if $(shell command -v $(c) 2>/dev/null),$(c))))
-OBJCOPY := $(call binutils_probe,objcopy)
-OBJDUMP := $(call binutils_probe,objdump)
-SIZE    := $(call binutils_probe,size)
-
-# 缺失的交叉工具链**不在解析期** $(error) —— 那会让 `make tools` / `make tools-test`
-# 在纯宿主环境(以及只要工具的 CI 作业)里也直接死掉, 与上面那条边界纪律相抵。
-# 改为在真正用得到它的规则里守卫, 报错信息与退出码保持一致(2 = 环境错)。
-# 单行定义: 多行 define 在 recipe 里的续行行为依赖 make 的分行规则, 不值得踩。
-define require_cross
-@if [ -z "$(strip $(CC))" ]; then echo "FAIL: 找不到交叉编译器 \"$(CROSS_COMPILE)gcc\"。" >&2; echo "      取 prebuilt: make prebuilt   |   只构建工具: make tools(不需要交叉编译器)" >&2; exit 2; fi
-endef
-
-define require_binutils
-@if [ -z "$(strip $($(1)))" ]; then echo "FAIL: 找不到 $(1)(aarch64 binutils)。取 prebuilt: make prebuilt" >&2; exit 2; fi
-endef
-
-define require_qemu
-@if ! command -v $(QEMU) >/dev/null 2>&1; then echo "FAIL: 找不到 $(QEMU);装 qemu-system-arm(⚠ 未纳入 prebuilt)" >&2; exit 2; fi
-endef
-
-QEMU ?= qemu-system-aarch64
-
 # ------------------------------------------------------------------ 目录/产物
 BUILD_DIR := build
-OBJ_DIR   := $(BUILD_DIR)/obj
-ELF       := $(BUILD_DIR)/brick.elf
-BIN       := $(BUILD_DIR)/brick.bin
-MAP       := $(BUILD_DIR)/brick.map
-LDSCRIPT  := platform/qemu-aarch64/src/link.ld
 
 # 宿主工具产物(出树): build/host/<host-arch>/<host-os>/{bin,lib,obj}
 # 由 mk/host.mk 经 tools/host-detect.sh 探测宿主; 与镜像产物(build/obj, build/brick.*)
 # 分居 build/ 两侧, 互不覆盖 —— 参考 Android 的 out/host 与 out/target 分家。
-# HOST_BUILD_ROOT 显式给绝对路径, 避免受调用目录影响(即使从别处 make -f 也一致)。
 #
 # 另有 `prebuilts/`(进版本库): 自举种子 prebuilts/seed/brickie/<host-arch>/<host-os>/bin/,
 # 由 `make tools-prebuilt` 发布 —— 让没有 g++ 的全新 checkout 也能直接把 brickie 跑起来,
@@ -121,72 +88,16 @@ LDSCRIPT  := platform/qemu-aarch64/src/link.ld
 HOST_BUILD_ROOT := $(abspath $(BUILD_DIR))
 include mk/host.mk
 
-# ------------------------------------------------------------------- 源文件
-# 插件树就是镜像的源码树(**顶层目录 = namespace**, brickie-v0.1 §8.3 ④):
-#   platform/qemu-aarch64/   Platform 插件(每镜像恰 1; 含 start.S/link.ld/console/timer)
-#   app/hello/               镜像唯一的 APP(§3.2): M0 的 MainLoop
-#   core/                    内核本体(**不是插件**; 被 [compat].core 引用)
-CORE_SRCS := $(wildcard core/src/*.c) $(wildcard core/src/*/*.c)
-PLAT_SRCS := $(wildcard platform/qemu-aarch64/src/*.c)
-APP_SRCS  := $(wildcard app/hello/src/*.c)
-# 调试/观测服务插件(service/<name>/): 目录名 = 插件名(§8.3 ④), 顶层目录 = namespace。
-# 声明面由各自 plugin.toml 治理(唯一真值), 这里只做**编译编排** —— v0.1 没有
-# 描述符段驱动的自动编排(见 WORKAROUND br-wa-entry-001), 故显式列源集合。
-SVC_SRCS  := $(wildcard service/*/src/*.c)
-ASM_SRCS  := $(wildcard platform/qemu-aarch64/src/*.S)
-
-SRCS := $(CORE_SRCS) $(PLAT_SRCS) $(APP_SRCS) $(SVC_SRCS) $(ASM_SRCS)
-OBJS := $(addprefix $(OBJ_DIR)/,$(patsubst %.c,%.o,$(patsubst %.S,%.o,$(SRCS))))
-
-# --------------------------------------------------------------------- 选项
-# 每个插件的 include/ 都进搜索路径(插件对外头文件在 include/, 布局见 §8.3 ④)
-SVC_INCLUDES := $(addprefix -I,$(wildcard service/*/include))
-INCLUDES := -Icore/include -Iplatform/qemu-aarch64/include -Iapp/hello/include $(SVC_INCLUDES)
-
-# -ffreestanding: 无宿主运行时假设; -fno-builtin: 不把循环偷偷换成 memcpy
-# -mgeneral-regs-only: 内核不碰 FP/SIMD(设计侧 aarch64 目标的纪律)
-# -mstrict-align: ★ **MMU 未开时是硬要求, 不是优化选项**。MMU 关着 ⇒ 全部访存按
-#   Device-nGnRnE 处理 ⇒ **非对齐访问会取 Alignment fault**(ESR.EC=0x25/DFSC=0x21)。
-#   而编译器按"Normal memory"的假设可以对 4 字节对齐的地址生成 8 字节 `stur`(例如
-#   给 `{u8;u32;u32}` 这样的 12 字节局部结构清零)—— 实测就踩到了:
-#   `stur xzr, [sp, #36]` ⇒ data abort。开了 MMU(恒等映射 + Normal 属性)之后才可以
-#   去掉本项; 在那之前它把"编译器假设的内存模型"和"真实的 MMU-off 环境"对齐。
-ARCHFLAGS := -march=armv8-a -mgeneral-regs-only -mstrict-align
-
-WARNFLAGS := -Wall -Wextra -Werror -Wshadow -Wundef -Wpointer-arith \
-             -Wstrict-prototypes -Wmissing-prototypes
-
-CFLAGS := -std=c11 $(ARCHFLAGS) -O2 -g3 $(WARNFLAGS) \
-          -ffreestanding -fno-builtin -fno-common -fno-stack-protector \
-          -ffunction-sections -fdata-sections \
-          -fno-pic -fno-pie -fno-asynchronous-unwind-tables \
-          -fno-unwind-tables -fno-omit-frame-pointer $(INCLUDES)
-# ★ `-fno-omit-frame-pointer` 不是性能选项, 是 **service/backtrace 的编译期前提**:
-#   栈回溯靠 x29(fp) 链走查(5-01 §3 的"各线程栈"捕获), 而 -O2 默认会把 fp 当普通
-#   寄存器省掉 ⇒ 链断在第一帧。代价是每函数多一次 stp/ldp, 换"崩溃时能走栈"。
-
-# 汇编也要能 `#include <br/core/br_exc.h>`(异常帧偏移的**唯一真值**):
-# .S 由 cpp 预处理, `__ASSEMBLER__` 由 GCC 自动定义, 该头里 C 专属部分被它挡住。
-# 不给 -I 的话汇编侧只能"镜像"一份偏移常量 —— 那就又有了第二处真值。
-ASFLAGS := $(ARCHFLAGS) -g3 $(INCLUDES)
-
-LDFLAGS := -nostdlib -nostartfiles -static -no-pie \
-           -Wl,-T,$(LDSCRIPT) \
-           -Wl,-Map,$(MAP) \
-           -Wl,--build-id=none \
-           -Wl,--gc-sections \
-           -Wl,-z,max-page-size=4096
-
 # ------------------------------------------------------------------- 目标
-# 显式钉住缺省目标: 下面 §工具 那段里的 `tools:` 是文件里**第一条**显式规则,
-# 不写这一行, `make` 会去建 `tools` 然后就此结束 —— 镜像根本不编(踩过一次:
-# exit 0、build/host/<arch>/<os>/bin/brickie-gen 在, 但 build/ 下没有镜像)。
-.DEFAULT_GOAL := all
+# ⚠ 缺省目标 = **工具**(不是镜像): 迁移期 `make` 不再顺带编镜像, 免得"只想编工具"
+#   的环境被交叉工具链卡住;"编镜像"显式走 `make all`(委派 `brickie build`)。
+.DEFAULT_GOAL := tools
 
 .PHONY: all prebuilt prebuilt-check prebuilt-clean \
         tools tools-core tools-test tools-clean tools-prebuilt tools-prebuilt-check \
         brickie-check brickie-check-release brickie-compose \
-        run smoke irq-test mem-test string-test dbg-test check-string size disasm check-workarounds check-build \
+        run smoke irq-test mem-test string-test dbg-test check-string check-headers \
+        size disasm check-workarounds check-build \
         clean clean-brickos help print-host-triple print-host-bin-dir \
         print-prebuilt-bin-dir print-cross-compile env
 
@@ -194,10 +105,9 @@ LDFLAGS := -nostdlib -nostartfiles -static -no-pie \
 # 锁版本 + SHA256 校验的外部工具链**下载缓存**(配方 = prebuilts/toolchain.lock.toml), 见 ADR-0002。
 #
 # ⚠ 目标名 `prebuilt` 与目录 `prebuilts/toolchain/` **同名** —— 全靠上面 .PHONY 压住。
-#   漏了它, make 会认为"目录已存在 ⇒ 无需做任何事", 取件变成**静默空操作**:
-#   `make prebuilt` 打印 "对'prebuilt'无需做任何事" 然后 exit 0, 一件都没下(踩过)。
+#   漏了它, make 会认为"目录已存在 ⇒ 无需做任何事", 取件变成**静默空操作**(踩过)。
 #
-# ⚠ 与 prebuilts/(**进库侧**, 自举种子, 进版本库)不是一回事: 那是 `tools-prebuilt` 的目标。
+# ⚠ 与 prebuilts/(**进库侧**, 自举种子)不是一回事: 那是 `tools-prebuilt` 的目标。
 #   两个目录名只差一个 s, 语义相反 —— 见 ADR-0004 开头的命名辨析。
 prebuilt:
 	@echo "== ⓪ prebuilt: 取件(锁版本 + SHA256 校验) =="
@@ -219,13 +129,12 @@ prebuilt-clean:
 	  *) echo "拒绝: PREBUILT=$(PREBUILT) 不是 prebuilts/toolchain 目录, 不删"; exit 2;; esac
 	rm -rf $(PREBUILT)
 
-# ============================================================== ① 工具段
+# ============================================================== ① 工具段(本文件唯一的真身)
 # brickie 自身(组合期工具)。它有自己的构建入口与用例集 —— 这里只做**委派**,
 # 不重复它的规则(mk 的单一真值: tools/brickie/Makefile)。
 #
 # 为什么是递归 make 而不是把对象文件列进来: 工具与镜像用**不同的编译器与选项**
-# (宿主 g++ / -std=c++20 vs 交叉 gcc / -std=c11), 混在一个 Makefile 里必然要
-# 分叉变量名, 得不偿失。
+# (宿主 g++ vs 交叉 gcc), 而且镜像已经搬去 brickie 那边, 混在一个 Makefile 里没有意义。
 TOOLS_DIR := tools/brickie
 
 tools:
@@ -258,11 +167,11 @@ tools-prebuilt-check: tools
 
 # ------------------------------------------------ 组合期声明面(用 brickie 管)
 # 声明面(schema/依赖/导出面/特权/预算)由 brickie 校验与治理; 生成物由 brickie gen
-# 重建(`build/gen/**`), **不参与编译** —— 编译编排是 v0.3 的能力(brickie-v0.1 §0)。
+# 重建(`build/gen/**`)。
 #
 # 入口用**入口 ELF**: 它自带 Python 前端与两个原生工具(brickie-core/brickie-gen),
 # 所以这里不需要 PYTHONPATH/源码树; 找不到 core 时会退回自举种子(见 native.py 的
-# 查找顺序)。`make check-build` 的第 6 条不变量会核对种子三件齐。
+# 查找顺序)。`make check-build` 的第 ⑥ 条不变量会核对种子三件齐。
 BRICKIE      := $(HOST_BIN_DIR)/brickie
 COMPOSE_ROOT := $(abspath .)
 
@@ -279,194 +188,67 @@ brickie-compose: tools
 	@echo "== 生成物重建: brickie gen → build/gen/**(不编译)=="
 	@$(BRICKIE) gen --root $(COMPOSE_ROOT)
 
-# 顺序铁律: 镜像的每个目标文件都排在工具**与组合期校验**之后
-# (order-only ⇒ 工具/声明面变新不触发重链, 但每次都会先校验)。
-# 挂在 $(OBJS) 上而不是 $(ELF) 上, 是为了让 `make -j` 也不会编译与建工具并行。
-$(OBJS): | tools brickie-check
+# ============================================================== ② 镜像段(过渡别名)
+# 下面是 ADR-0003 **缩减期的过渡别名**: 真身在 brickie(build.rs)+ tests/gates.toml。
+# 每个别名只做三件事: 先确保工具在(order-only) → 调对应命令 → 不自己写任何规则。
+# 一旦 CI/习惯都改直调 `brickie`, 这些别名可以整段删掉(设计 ADR-0003 的 S4 终点)。
+#
+# 为什么 order-only(`| tools`): 工具变新不该触发"重建镜像"的错觉 —— 判据在 brickie
+# 的 argv 指纹与时间戳(contract §9 R-15), 不在这里。
+all: | tools
+	@echo "== ② 镜像: 委派 brickie build(ADR-0003 缩减期的过渡别名) =="
+	@$(BRICKIE) build --root $(COMPOSE_ROOT)
 
-# ============================================================== ② 镜像段
-all: $(ELF) $(BIN) check-string
-	@echo "OK: $(ELF)  ($(CC))"
+run: | tools
+	@echo "== ② QEMU 运行: 委派 brickie run(Ctrl-A X 退出) =="
+	@$(BRICKIE) run --root $(COMPOSE_ROOT)
 
-# ------------------------------------- 编译器支持例程的**自递归**门禁(core/src/string.c)
-# 为什么值得一条门禁: `core/src/string.c` 里那对定长 8 的 `__builtin_memcpy` 曾被
-# GCC 降成对 **memcpy 自己**的 libcall ⇒ 无限递归 ⇒ 栈无界增长压穿 64 KiB 启动栈、
-# 异常帧落进 .bss 的页表 ⇒ 表现为"开机即翻译 fault, 且原始 fault 现场丢失"。
-# 这类错误"编得过、宿主也跑得对"(宿主链的是 libc), **只有反汇编看得见** ——
-# 所以钉成机械判据: 四个例程内部**不得有对自身的 bl**。
-# (判据只禁自递归, 不禁 memmove→memcpy 这类正当调用。)
-check-string: $(OBJ_DIR)/core/src/string.o
-	$(call require_binutils,OBJDUMP)
-	@bad=0; \
-	for f in memcpy memmove memset memcmp; do \
-	    n=$$($(OBJDUMP) -d --no-show-raw-insn $< \
-	         | awk -v f="<$$f>:" 'index($$0,f){inb=1;next} /^[0-9a-f]+ </{inb=0} inb' \
-	         | grep -c "bl.*<$$f>"); \
-	    if [ "$$n" != "0" ]; then echo "FAIL: $$f 内部有 $$n 条对自身的 bl(自递归 libcall)"; bad=1; fi; \
-	done; \
-	if [ $$bad -ne 0 ]; then \
-	    echo "--- memcpy 反汇编 ---"; $(OBJDUMP) -d --no-show-raw-insn $< | sed -n '/<memcpy>:/,/^$$/p'; exit 1; \
-	fi; \
-	echo "ok   编译器支持例程无自递归(memcpy/memmove/memset/memcmp 内部 0 条自调用 bl)"
+smoke: | tools
+	@echo "== ② 冒烟门禁: 委派 brickie test smoke =="
+	@$(BRICKIE) test smoke --root $(COMPOSE_ROOT)
 
-$(ELF): $(OBJS) $(LDSCRIPT)
-	$(require_cross)
-	@mkdir -p $(dir $@)
-	$(CC) $(LDFLAGS) $(OBJS) -o $@
+irq-test: | tools
+	@echo "== ② 中断逐用例门禁: 委派 brickie test irq-test =="
+	@$(BRICKIE) test irq-test --root $(COMPOSE_ROOT)
 
-$(BIN): $(ELF)
-	$(call require_binutils,OBJCOPY)
-	$(OBJCOPY) -O binary $< $@
+# 宿主侧门禁用 --no-build: 它们只需要宿主 C 编译器, 与交叉工具链/QEMU 无关。
+mem-test: | tools
+	@echo "== ② 宿主内存语义门禁: 委派 brickie test mem-test --no-build =="
+	@$(BRICKIE) test mem-test --no-build --root $(COMPOSE_ROOT)
 
-$(OBJ_DIR)/%.o: %.c
-	$(require_cross)
-	@mkdir -p $(dir $@)
-	$(CC) $(CFLAGS) -c $< -o $@
+string-test: | tools
+	@echo "== ② 宿主支持例程用例: 委派 brickie test string-test --no-build =="
+	@$(BRICKIE) test string-test --no-build --root $(COMPOSE_ROOT)
 
-$(OBJ_DIR)/%.o: %.S
-	$(require_cross)
-	@mkdir -p $(dir $@)
-	$(CC) $(ASFLAGS) -c $< -o $@
+dbg-test: | tools
+	@echo "== ② 内存映射 + 调试插件门禁: 委派 brickie test dbg-test =="
+	@$(BRICKIE) test dbg-test --root $(COMPOSE_ROOT)
 
-# ---------------------------------------------------------------- 运行/验证
-# ★ `gic-version=3` 是**显式**的: QEMU virt 的缺省是 GICv2(见 `-M virt,dumpdtb`
-#   的 compatible = "arm,cortex-a15-gic")。本原型的 platform 插件声明的是
-#   **GICv3**(设计 1-03 §1 的 platform/qemu-aarch64 行), 所以机器型号必须钉住 ——
-#   否则镜像里的 GICv3 驱动会写 GICv2 的地址, 表现为"PIC 初始化后收不到任何中断"。
-QEMUFLAGS ?= -M virt,gic-version=3 -cpu cortex-a53 -m 128M -nographic
+# check-string 判的是**编译产物**里的自递归(需要镜像已编) ⇒ 不带 --no-build。
+check-string: | tools
+	@echo "== ② 支持例程自递归门禁: 委派 brickie test check-string =="
+	@$(BRICKIE) test check-string --root $(COMPOSE_ROOT)
 
-run: all
-	$(require_qemu)
-	$(QEMU) $(QEMUFLAGS) -kernel $(ELF)
+# check-headers 只做 `-fsyntax-only`(脚本自己找交叉或宿主 C 编译器) ⇒ --no-build。
+check-headers: | tools
+	@echo "== ② 头文件自洽门禁: 委派 brickie test check-headers --no-build =="
+	@$(BRICKIE) test check-headers --no-build --root $(COMPOSE_ROOT)
 
-# 冒烟: 限时跑, 然后把"启动成功"与"延时判据"当断言查 —— 让人眼看的日志
-# 变成 CI 能判的红绿(grep 的判据就是 main.c 里自己打的那两行)。
-SMOKE_SECONDS ?= 3
-smoke: all
-	$(require_qemu)
-	@set +e; \
-	timeout $(SMOKE_SECONDS) $(QEMU) $(QEMUFLAGS) -kernel $(ELF) > $(BUILD_DIR)/smoke.log 2>&1; \
-	rc=$$?; \
-	if [ $$rc -ne 124 ]; then echo "FAIL: QEMU 未按期运行(rc=$$rc)"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	if ! grep -q "core MainLoop" $(BUILD_DIR)/smoke.log; then echo "FAIL: 未见 MainLoop 启动横幅"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	if ! grep -q "tick=2 " $(BUILD_DIR)/smoke.log; then echo "FAIL: MainLoop 未跑到第 2 拍"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	if grep -q "EARLY" $(BUILD_DIR)/smoke.log; then echo "FAIL: 出现早醒(delay < 请求值)"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	if grep -q "FATAL" $(BUILD_DIR)/smoke.log; then echo "FAIL: 触发未处理异常"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	if grep -q "\[PANIC\]" $(BUILD_DIR)/smoke.log; then echo "FAIL: 触发 panic"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	if ! grep -q "int: conformance ALL PASS" $(BUILD_DIR)/smoke.log; then echo "FAIL: 中断一致性用例未全绿"; grep "IRQCONF" $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	if ! grep -q "\[MEMCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/smoke.log; then echo "FAIL: 内存映射一致性用例未全绿"; grep "MEMCONF" $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	if ! grep -q "\[DBGCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/smoke.log; then echo "FAIL: 调试插件一致性用例未全绿"; grep "DBGCONF" $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	if ! grep -q "irq_ticks=[1-9]" $(BUILD_DIR)/smoke.log; then echo "FAIL: timer PPI 中断未送达(irq_ticks 恒 0)"; tail -20 $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	echo "PASS: 启动 + MainLoop + 延时判据 + 中断心跳 + 三套一致性用例(IRQ/MEM/DBG)全绿"; \
-	grep -c "^\[" $(BUILD_DIR)/smoke.log | sed 's/^/日志行数: /'
+size: | tools
+	@echo "== ② 体积: 委派 brickie size =="
+	@$(BRICKIE) size --root $(COMPOSE_ROOT)
 
-# 中断子系统**逐用例**门禁(设计 6-01 §3.7 的 TC-IRQ-*; target-only)。
-# 与 smoke 的分工: smoke 只看"启动/延时/心跳"; irq-test 要求**每个列出的用例**
-# 都打出了 PASS —— 用例少了(被裁掉/没跑)也算红。
-IRQ_SECONDS ?= 6
-IRQ_REQUIRED := GIC-EOIMODE GIC-PRIBITS GIC-LINES GIC-TIMERID \
-                TC-IRQ-001 TC-IRQ-002 TC-IRQ-003 TC-IRQ-004 TC-IRQ-008 \
-                TC-IRQ-010 TC-IRQ-012 TC-IRQ-013 TC-IRQ-014 TC-IRQ-016 \
-                TC-IRQ-018 TC-IRQ-019 TC-IRQ-021 TC-IRQ-022 TC-IRQ-101 \
-                TC-IRQ-102 TC-IRQ-STATS
-
-irq-test: all
-	$(require_qemu)
-	@set +e; \
-	timeout $(IRQ_SECONDS) $(QEMU) $(QEMUFLAGS) -kernel $(ELF) > $(BUILD_DIR)/irq.log 2>&1; \
-	rc=$$?; \
-	if [ $$rc -ne 124 ]; then echo "FAIL: QEMU 未按期运行(rc=$$rc)"; tail -30 $(BUILD_DIR)/irq.log; exit 1; fi; \
-	if grep -q "\[IRQCONF\] FAIL" $(BUILD_DIR)/irq.log; then echo "FAIL: 有一致性用例未通过"; grep "\[IRQCONF\]" $(BUILD_DIR)/irq.log; exit 1; fi; \
-	if grep -q "\[PANIC\]" $(BUILD_DIR)/irq.log; then echo "FAIL: 触发 panic"; grep "\[PANIC\]" $(BUILD_DIR)/irq.log; exit 1; fi; \
-	if ! grep -q "\[IRQCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/irq.log; then echo "FAIL: 未见全绿摘要"; grep "IRQCONF" $(BUILD_DIR)/irq.log; exit 1; fi; \
-	for tc in $(IRQ_REQUIRED); do \
-	    if ! grep -q "PASS $$tc " $(BUILD_DIR)/irq.log; then echo "FAIL: 缺用例 PASS: $$tc"; grep "IRQCONF" $(BUILD_DIR)/irq.log; exit 1; fi; \
-	done; \
-	if ! grep -q "irq_ticks=[1-9]" $(BUILD_DIR)/irq.log; then echo "FAIL: timer PPI 中断未送达(irq_ticks 恒 0)"; tail -20 $(BUILD_DIR)/irq.log; exit 1; fi; \
-	echo "PASS: 中断子系统逐用例全绿(+ timer PPI 心跳)"; \
-	grep "\[IRQCONF\] SUMMARY" $(BUILD_DIR)/irq.log; \
-	grep -c "\[IRQCONF\] PASS" $(BUILD_DIR)/irq.log | sed 's/^/PASS 项数: /'
-
-# 内存子系统 + 调试插件门禁(target-only): 要求 [MEMCONF] 与 [DBGCONF] 两个摘要
-# 同时 fail=0, 且列出的用例 tag **一个不缺**(裁掉用例也算红 —— 与 irq-test 同一纪律)。
-MEMDBG_SECONDS ?= 8
-MEMCONF_REQUIRED := MM-ACTIVE MM-IDENT MM-POOLS MM-REGION MM-RO MM-NXDESC MM-UNMAP \
-                    TC-MEM-001 TC-MEM-002 TC-MEM-003 TC-MEM-004 TC-MEM-005 \
-                    TC-MEM-006 TC-MEM-007 TC-MM-001 TC-MM-002 TC-MM-003
-DBGCONF_REQUIRED := DBG-INIT TC-DBG-001 TC-DBG-002 TC-DBG-003 TC-DBG-010 TC-DBG-011 \
-                    TC-DBG-020 TC-DBG-021 TC-DBG-030 TC-DBG-031 TC-DBG-032 \
-                    TC-DBG-040 TC-DBG-041 TC-DBG-042 TC-DBG-043 TC-DBG-100
-
-dbg-test: all
-	$(require_qemu)
-	@set +e; \
-	timeout $(MEMDBG_SECONDS) $(QEMU) $(QEMUFLAGS) -kernel $(ELF) > $(BUILD_DIR)/dbg.log 2>&1; \
-	rc=$$?; \
-	if [ $$rc -ne 124 ]; then echo "FAIL: QEMU 未按期运行(rc=$$rc)"; tail -40 $(BUILD_DIR)/dbg.log; exit 1; fi; \
-	if grep -qE "\[(MEMCONF|DBGCONF)\] FAIL" $(BUILD_DIR)/dbg.log; then echo "FAIL: 有失败用例"; grep -E "\[(MEMCONF|DBGCONF)\]" $(BUILD_DIR)/dbg.log; exit 1; fi; \
-	if grep -q "\[PANIC\]" $(BUILD_DIR)/dbg.log; then echo "FAIL: 触发 panic"; grep "\[PANIC\]" $(BUILD_DIR)/dbg.log; exit 1; fi; \
-	if ! grep -q "\[MEMCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/dbg.log; then echo "FAIL: 未见 MEMCONF 全绿摘要"; grep "MEMCONF" $(BUILD_DIR)/dbg.log; exit 1; fi; \
-	if ! grep -q "\[DBGCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/dbg.log; then echo "FAIL: 未见 DBGCONF 全绿摘要"; grep "DBGCONF" $(BUILD_DIR)/dbg.log; exit 1; fi; \
-	for tc in $(MEMCONF_REQUIRED); do \
-	    if ! grep -q "PASS $$tc " $(BUILD_DIR)/dbg.log; then echo "FAIL: 缺用例 PASS: $$tc"; grep "MEMCONF" $(BUILD_DIR)/dbg.log; exit 1; fi; \
-	done; \
-	for tc in $(DBGCONF_REQUIRED); do \
-	    if ! grep -q "PASS $$tc " $(BUILD_DIR)/dbg.log; then echo "FAIL: 缺用例 PASS: $$tc"; grep "DBGCONF" $(BUILD_DIR)/dbg.log; exit 1; fi; \
-	done; \
-	if ! grep -q "irq_ticks=[1-9]" $(BUILD_DIR)/dbg.log; then echo "FAIL: timer PPI 中断未送达"; tail -20 $(BUILD_DIR)/dbg.log; exit 1; fi; \
-	echo "PASS: 内存映射 + 调试插件逐用例全绿(MEMCONF + DBGCONF)"; \
-	grep "\[MEMCONF\] SUMMARY" $(BUILD_DIR)/dbg.log; \
-	grep "\[DBGCONF\] SUMMARY" $(BUILD_DIR)/dbg.log; \
-	grep -c "\[MEMCONF\] PASS" $(BUILD_DIR)/dbg.log | sed 's/^/MEMCONF PASS 项数: /'; \
-	grep -c "\[DBGCONF\] PASS" $(BUILD_DIR)/dbg.log | sed 's/^/DBGCONF PASS 项数: /'
-
-# ---------------------------------------------- 宿主侧内存语义门禁(不需交叉/QEMU)
-# 把 core 的内存实现(tlsf/mem/page/mm)编成**宿主可执行**, 跑随机化压测 + 不变量断言。
-# 为什么值得单独一条: TLSF 的合并/分裂/碎片、页位图的 run 分配、region 表的重叠判定
-# 是**算法性质**, 在 host 上几秒钟能跑上百万次操作 —— 而同一批性质在 QEMU 上要靠几条
-# 用例撞运气。这就是设计 1-03 说的 "host 平台插件: CI 秒级 + 完整 ASan 白捡"
-# (完整 ASan 归 host 平台插件, 这里先用 -O2 + 断言 + 参考模型对拍)。
-HOSTCC ?= cc
-HOSTTEST_DIR := $(BUILD_DIR)/hosttest
-MEMTEST_BIN  := $(HOSTTEST_DIR)/mem_test
-STRINGTEST_BIN := $(HOSTTEST_DIR)/string_test
-MEMTEST_SRCS := core/src/mem/tlsf.c core/src/mem/mem.c core/src/mem/page.c \
-                core/src/mm/mm.c tests/host/mem_test.c tests/host/host_stubs.c
-STRINGTEST_SRCS := core/src/string.c tests/host/string_test.c
-HOSTTEST_FLAGS := -std=c11 -O2 -g -DBR_HOSTTEST=1 \
-                  -Wall -Wextra -Werror -Wshadow -Wundef -Wpointer-arith \
-                  -Wstrict-prototypes -Wmissing-prototypes \
-                  -Icore/include -Icore/src -Icore/src/mem -Icore/src/mm -Itests/host
-
-# 编译器支持例程的**语义**门禁(与 `check-string` 的分工: 那条看反汇编有没有自递归,
-# 这条看"搬对了没有、越界了没有")。自递归在宿主上会立刻爆栈 ⇒ 本用例也是那个 bug 的
-# 回归判据(ADR-0003 §5.2)。宿主链 libc, 但被测的是**我们自己的**实现, 所以有效。
-string-test:
-	@echo "== 宿主侧编译器支持例程用例(memcpy/memmove/memset/memcmp)=="
-	@mkdir -p $(HOSTTEST_DIR)
-	$(HOSTCC) $(HOSTTEST_FLAGS) $(STRINGTEST_SRCS) -o $(STRINGTEST_BIN)
-	@$(STRINGTEST_BIN)
-
-mem-test: string-test
-	@echo "== 宿主侧内存语义门禁(不需要交叉工具链/QEMU; HOSTCC=$(HOSTCC)) =="
-	@mkdir -p $(HOSTTEST_DIR)
-	$(HOSTCC) $(HOSTTEST_FLAGS) $(MEMTEST_SRCS) -o $(MEMTEST_BIN)
-	@$(MEMTEST_BIN)
-
-size: all
-	$(call require_binutils,SIZE)
-	$(SIZE) -A -x $(ELF)
-	@$(SIZE) $(ELF)
-disasm: all
-	$(call require_binutils,OBJDUMP)
-	$(OBJDUMP) -d $(ELF) | head -120
+disasm: | tools
+	@echo "== ② 反汇编: 委派 brickie disasm =="
+	@$(BRICKIE) disasm --root $(COMPOSE_ROOT)
 
 # ------------------------------------------------------- WORKAROUND / 构建门禁
 check-workarounds:
 	@bash tools/check-workarounds.sh
 
-# 构建接线门禁: 缺省目标是不是镜像 / 工具是不是排在镜像前(含 -j) /
-# 工具段有没有被交叉工具链污染。理由见脚本头部 —— 顺序纪律坏了通常是**静默**的。
+# 构建接线门禁: 缺省目标是不是工具 / Makefile 里还有没有字面源码与标志 /
+# 镜像目标是不是委派 / 工具段有没有被交叉工具链污染 / 出树与种子。
+# 理由见脚本头部 —— 接线坏了通常是**静默**的。
 check-build:
 	@bash tools/check-build.sh
 
@@ -482,6 +264,8 @@ print-host-bin-dir:
 print-prebuilt-bin-dir:
 	@echo $(PREBUILT_BRICKIE_BIN_DIR)
 
+# 交叉前缀的**只读**查询口(门禁与 setup.sh 用)。镜像怎么编已经不读它 ——
+# 目标事实在 platform 插件的 [build.target](contract §7.1)。
 print-cross-compile:
 	@echo $(CROSS_COMPILE)
 
@@ -493,27 +277,28 @@ env:
 	@bash setup.sh --print
 
 # ------------------------------------------------------------------- 清理
-# `clean` 清掉本文件构建的**全部**产物(①工具 + ②镜像); 只清工具用 tools-clean。
+# `clean` 清掉工具与镜像**两侧**的派生物; 只清工具用 tools-clean。
 #
-# 两者分开清: 宿主工具在 build/host/(出树输出), 镜像在 build/{obj,brick.*}。
-# 注意 clean-brickos **不**动 build/host —— 只清镜像侧, 免得"清镜像"顺手把
-# 工具删了(那会让下一次 make 又重编一遍宿主工具)。
+# 两者分开清: 宿主工具在 build/host/(出树输出), 镜像侧由 `brickie clean` 按声明面
+# 清(它**不**动 build/host —— 免得"清镜像"顺手把工具删了)。
 clean: clean-brickos tools-clean
 
-clean-brickos:
-	rm -rf $(OBJ_DIR) $(ELF) $(BIN) $(MAP) $(BUILD_DIR)/smoke.log $(BUILD_DIR)/irq.log $(BUILD_DIR)/dbg.log $(HOSTTEST_DIR)
+clean-brickos: | tools
+	@echo "== ② 清镜像派生物: 委派 brickie clean =="
+	@$(BRICKIE) clean --root $(COMPOSE_ROOT)
 
 help:
-	@echo "目标: all(缺省) prebuilt prebuilt-check prebuilt-clean"
-	@echo "      tools tools-test tools-prebuilt tools-prebuilt-check run smoke irq-test"
-	@echo "      mem-test(宿主内存语义) dbg-test(内存映射 + 调试插件) check-string(自递归门禁)"
-	@echo "      check-workarounds check-build clean tools-clean"
+	@echo "目标: tools(缺省) all(委派 brickie build) prebuilt prebuilt-check prebuilt-clean"
+	@echo "      tools-core tools-test tools-prebuilt tools-prebuilt-check tools-clean"
+	@echo "      brickie-check brickie-check-release brickie-compose"
+	@echo "      run smoke irq-test mem-test string-test dbg-test check-string check-headers"
+	@echo "      size disasm check-workarounds check-build clean"
 	@echo "      print-host-triple print-host-bin-dir print-prebuilt-bin-dir print-cross-compile env"
-	@echo "变量: CROSS_COMPILE=$(CROSS_COMPILE)  CC=$(CC)"
-	@echo "      QEMU=$(QEMU)  QEMUFLAGS=$(QEMUFLAGS)"
+	@echo "变量: CROSS_COMPILE=$(CROSS_COMPILE)(仅查询口)"
 	@echo "      HOST_TRIPLE=$(HOST_TRIPLE)  HOST_BIN_DIR=$(HOST_BIN_DIR)"
 	@echo "      PREBUILT_BRICKIE_BIN_DIR=$(PREBUILT_BRICKIE_BIN_DIR)"
-	@echo "顺序: all = ①tools(宿主 g++) → ②brickOS(交叉 gcc); 只做①用 make tools"
+	@echo "归属: 镜像入口 = brickie build(声明面: product.toml [build] + 插件 [build] + [build.target]);"
+	@echo "      本文件只编工具, 镜像目标都是**过渡别名**(ADR-0003 的 S1/S4)"
 	@echo "布局: 工具 → build/host/<host-arch>/<host-os>/bin(参考 Android out/host/...); 镜像 → build/"
 	@echo "种子: tools-prebuilt → prebuilts/seed/brickie/<host-arch>/<host-os>/bin(进版本库, 自举用)"
 	@echo "工具链来源: $(TOOLCHAIN_SOURCE)"

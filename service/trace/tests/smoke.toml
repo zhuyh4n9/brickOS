@@ -50,3 +50,19 @@ steps    = [
 expect   = "[DBGCONF] PASS TC-DBG-003 ..."
 sched    = ["coop"]
 platform = ["host", "qemu-aarch64"]
+
+# ---- 插件生命周期钩子(v0.2 起由 core 的 plugin_manager 按相位驱动)----
+#
+# 名字 = `symbol_prefix(short)` + 相 ⇒ `trace_early_init` / `trace_init` / `trace_start`
+# (生成物 `build/gen/service/trace/plugin_desc.c` 引用)。钩子是组合期契约, 不进 [[export]]。
+[[case]]
+id       = "trace-late-init"
+pre      = "plugin_manager 已扫 .br_plugins 段并完成 Kahn 拓扑排序; EARLY 相已过"
+steps    = [
+    "EARLY 相: trace_early_init()(本插件无动作)",
+    "LATE 相(Service 类别 ⇒ ② 完成点): trace_init() → br_trace_svc_init()",
+    "START 相(全局开中断后): trace_start()(本插件无动作)",
+]
+expect   = "三步都返回 0; 日志出现 [PLUGIN] phase=early/late/start name=service/trace rc=0"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

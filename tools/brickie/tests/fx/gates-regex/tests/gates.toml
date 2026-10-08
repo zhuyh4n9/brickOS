@@ -1,0 +1,9 @@
+# fx/gates-regex — 门禁正则**超子集**的夹具(contract §7.4 / 裁定 S-B4)。
+#
+# `(A|B)` 里的分组与交替不在 core 的正则子集内 ⇒ `BRV-BLD-0012`(退出码 2)。
+# 判据是"**拒绝**而不是静默不匹配": 一条永不匹配的 require 会变成假绿, 比报错危险。
+schema = 1
+
+[[gate]]
+name    = "g-alt"
+require = ["(A|B)"]

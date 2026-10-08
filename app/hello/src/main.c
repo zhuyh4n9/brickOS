@@ -1,119 +1,91 @@
 /*
- * brickOS prototype v0.1.0 — APP 入口(M0): MainLoop(中断驱动的心跳 + 延时 + 日志)
+ * brickOS prototype v0.2.0 — APP 插件 `app/hello`: MainLoop(中断驱动的心跳 + 延时 + 日志)
  *
- * 调用者: Platform 插件(platform/qemu-aarch64/src/start.S), 在
- * br_plat_early_init() 之后。这是 v0.1.0 全镜像里唯一的一条跨层边:
- * Platform -> APP(app → platform 是 `§7.3` 的**M0 引导例外**, 已显式登记在
- * product.toml 的 [lint].allow_edges; 见 app/hello/README.md)。
+ * 调用者: **core 的插件管理器**(`br_plugin_manager_run()`)。本文件实现三个生命周期钩子
+ * (名字 = `symbol_prefix(short)` + 相, 由 `build/gen/app/hello/plugin_desc.c` 引用):
  *
- * 声明在 core 头文件 br/core/br_main.h(M0 入口契约), 实现随 APP 走 —— 按设计
- * 1-03 §1 的 "app/hello: 启动链演示(M0: 直接主循环, 不依赖 iface —— M0 引导例外)"。
+ *   hello_early_init()  EARLY 相: 无动作(此相不使用堆/无线程/关中断, console 刚由
+ *                       platform 的 early_init 建好; APP 在这里没有可做的事)。
+ *   hello_init()        CORE 相(类别决定的 ② 完成点: 非 Service/Interface ⇒ CORE, 1-01 §9)。
+ *   hello_start()       START 相(全局开中断之后, 且**排在最后** —— 管理器显式把 APP 的
+ *                       start 放到所有非 APP 的 start 之后): 启动期自检调用序列 + MainLoop。
  *
- * ======================= WORKAROUND(br-wa-boot-001) =======================
- * 设计侧这里是一整条启动链(1-01 §9 / §6.2 阶段表):
+ * 启动链(设计 1-01 §9 / 3-05 §2, WORKAROUND br-wa-boot-001 的还债形态):
+ *   start.S(reset/BSS) → br_irq_cpu_init → plugin_manager:
+ *     EARLY(platform 先) → CORE → LATE → 全局开中断 → START(APP 最后)
+ *       → [本文件] 一致性用例(main 线程) + **创建 APP 线程** → return 0
+ *         → 管理器 `br_sched_run()` 首次调度 ⇒ APP 线程接管 MainLoop
  *
- *   core.init(TPIDR_EL1/中断框架等, 无线程)
- *     -> plugin_manager 扫 .br_plugins 段 + 拓扑排序(环 = 硬错误)
- *       -> EARLY(调度插件注册 br_sched_ops, core 锁定)
- *         -> CORE(非服务插件 init)
- *           -> LATE(Service -> Interface 依序 init)
- *             -> 全局开中断 -> 各插件 start()
- *               -> app.start() 创建 APP 线程
- *                 -> br_sched_run() 首次调度, idle 进 WFI
+ * `br_core_main`(M0 的旧入口)与 `core/include/br/core/br_main.h` 已**拆掉**:
+ * 它的内容(日志/自检/主循环)分别落到 platform.start、service/dump 的 LATE init、
+ * 本文件的 `hello_start()`。裁定与理由见 `docs/decisions/0005-plugin-manager.md` §2.6。
  *
- * v0.1.0 仍**没有**堆/注册表/插件描述符/调度器, 所以 EARLY/CORE/LATE 无从挂起。
- * 中断子系统(3-02 的 Stage 1)现在**已经在**:
- *   - `core.init` 的 TPIDR_EL1 这一步  -> `br_irq_cpu_init()`(start.S 调, 见其声明)
- *   - PIC/绑定表/能力协商               -> `br_plat_early_init()` 内的平台步骤 1–3
- *   - "全部插件 init 之后开中断"         -> 一致性用例入口里显式 `br_irq_cpu_enable()`
- *   - "core 在 core.init 注册 timer PPI 的 ISR" -> **本文件**(APP 是 v0.1 唯一有
- *     init/thread 上下文的角色)注册 + 使能, 设计 3-02 §11.1 的"路径四"(timer PPI)
- *   - `app.start()`                    -> `br_core_main()` 的死循环(仍未拆)
- * 也就是说: **中断框架这一半已经落地, 启动链这一半仍然欠着**。
- * ==========================================================================
+ * WORKAROUND(br-wa-boot-001): ① **已还清**(APP 线程 + `br_task_sleep`);
+ * 仍欠的 ②(日志/trace 直写 console, 未经服务注册表)的标记在 `core/src/log.c`。
+ * 本文件另有一条标记在 `hello_mainloop()` 上方(说明"谁占住 CPU"已归调度器)。
  */
-#include <br/core/br_main.h>
+#include <hello/hello.h>
+
 #include <br/core/br_log.h>
+#include <br/core/br_plugin.h>
+#include <br/core/br_sched.h>
+#include <br/core/br_svc.h>
+#include <br/core/br_sync.h>
 #include <br/core/br_time.h>
 #include <br/core/br_version.h>
 
 #include <br/platform/br_plat.h>
-#include <br/board_irq.h>
-#include <br/debug/br_dump.h>
 
 /* MainLoop 周期。选 1s 是因为它同时是"人能看清的节奏"与"计时误差能被
  * 日志一眼量化"的长度。 */
 #define BR_MAINLOOP_PERIOD_MS   1000u
 
 /*
- * 中断心跳的**开跑**交给 platform(`br_plat_irq_start()`: 注册 timer PPI 的 ISR +
- * 使能 + 装弹 + 全局开中断)。
- *
- * ★ 为什么 APP 不自己 `br_irq_register`(P-IRQ-17): 设计 3-01 §13.6 的特权分级把
- *   "中断控制"归 **P3**(仅调度类 ability 与 platform 可声明), APP 是 **P0**。
- *   在 P0 的位置上做 P3 的事是一处**声明面与实现不一致**, 而 `brickie check` 的
- *   priv 域(声明合法性)看不到源码、不会报红 ⇒ 只能靠**放置**避免。
- *   ⇒ APP 只读平台的心跳计数, 始终是纯 P0 消费者。
+ * EARLY 相: 无动作。
+ * APP 在 EARLY 相没有"注册"要做(设计 1-01 §6.2: EARLY = 不用堆/无线程/关中断,
+ * 是 platform 与调度插件的相); 这里必须有定义, 因为生成物对**全部插件**都发射
+ * `early_init`(§6.2 的表: EARLY 相覆盖全部插件)。
  */
-static void mainloop_irq_setup(void)
+int hello_early_init(void)
 {
-    const int r = br_plat_irq_start();
-    if (r != 0) {
-        br_log_error("int: platform irq start failed: %d", r);
-        return;
-    }
-    br_log_info("int: timer PPI armed by platform (virq=%u INTID=%u, 100 ms)",
-                (br_u32)BR_IRQ_TIMER, 30u);
+    return 0;
 }
 
-BR_NORETURN void br_core_main(void)
+/*
+ * CORE 相: APP 的准备。
+ * 日志等级在 core 的日志设施就绪之后统一放开 —— 之后各相(含 LATE 的 service init)
+ * 的 DEBUG 行才不会丢。其余初始化(时钟/日志起点)由插件管理器的头部代做。
+ */
+int hello_init(void)
 {
-    br_clock_init();          /* 日志时间戳依赖它, 必须最先 */
-    br_log_init();
     br_log_set_level(BR_LOG_DEBUG);
+    br_log_info("app: init (CORE 相; MainLoop 在 start 相)");
+    return 0;
+}
 
-    br_log_info("%s %s -- core MainLoop (interrupt heartbeat + delay + logging)",
-                BR_PROTOTYPE_NAME, BR_VERSION_STRING);
-    br_log_info("platform: %s (%s)", br_plat_name(), br_plat_isa());
-    br_log_info("clock: %lu Hz (arch timer), %lu ticks/ms (exact integer conversion)",
-                br_clock_freq_hz(), br_clock_ticks_per_ms());
-    br_log_info("entry chain: start.S -> br_irq_cpu_init -> br_plat_early_init -> br_core_main");
+/*
+ * APP 线程的栈(原型无动态分配 —— 栈由调用方给)。
+ * 8 KiB: MainLoop 的调用链很浅, 但日志格式化要占几百字节; BR_STACK_MIN = 2 KiB 是硬下界。
+ */
+#define BR_APP_STACK_BYTES  8192u
+static br_u8 s_app_stack[BR_APP_STACK_BYTES] BR_ALIGN(16);
 
-    /*
-     * 中断子系统一致性用例(设计 6-01 §3.7 的 TC-IRQ-*, target-only)。
-     * 放在 MainLoop 之前: 它是启动期的自检, 红了就该在第一时间看见。
-     * 入口内部会执行"全局开中断"(设计 §14.3 的最后一步)。
-     */
-    const int conf_fail = br_plat_irq_conformance();
-    br_log_info("int: conformance %s (failures=%d)",
-                (conf_fail == 0) ? "ALL PASS" : "HAS FAILURES", conf_fail);
-
-    /*
-     * 内存映射子系统一致性用例(设计 6-01 §3.5/§3.6 的 `TC-MEM-*` 与 `TC-MM-*`)。
-     * 放在 MainLoop 之前同上: 启动期自检。此时 MMU 已由 platform early_init 打开
-     * (恒等映射 + region 属性), 所以用例里的"真正未映射地址"才取翻译 fault。
-     */
-    const int mem_fail = br_plat_mem_conformance();
-    br_log_info("mem: conformance %s (failures=%d)",
-                (mem_fail == 0) ? "ALL PASS" : "HAS FAILURES", mem_fail);
-
-    /*
-     * 调试域一致性用例(设计 5-01 §3 的捕获集: region 表/堆账/泄漏/trace/回溯)。
-     * ★ 这条 app → service/dump 的边是 `product.toml [lint].allow_edges` 里的第二条
-     *   **M0 引导例外**(设计 §7.3 的表里 app ✗ ability; Interface 层 `iface-min` 属 M2,
-     *   运行期插件管理器属 M0)⇒ 属 WORKAROUND(br-wa-boot-001) 的欠债, 不是静默放行。
-     *   APP 只认识 dump 一个面: 其余四个调试插件的 LATE 相 init 与 selftest 由
-     *   `br_dump_conformance()` 按声明面依赖序代调(它们都是 dump 的 `[[dep]]`)。
-     */
-    const int dbg_fail = br_dump_conformance();
-    br_log_info("dbg: conformance %s (failures=%d)",
-                (dbg_fail == 0) ? "ALL PASS" : "HAS FAILURES", dbg_fail);
-
-    /* 启动现场一份(三套门禁截取证据的地方; 行数口径见 br_dump.h) */
-    const br_u32 dump_lines = br_dump_all();
-    br_log_info("dbg: boot snapshot lines=%lu", (br_u64)dump_lines);
-
-    mainloop_irq_setup();
+/*
+ * APP 线程体 = 原 MainLoop(**不返回**)。
+ *
+ * ★ 为什么是线程而不是在 start 相的函数体里直接循环: 设计 `1-01` §9 的启动序列是
+ *   `app.start() 创建 APP 线程 → (全部 start 完毕) → br_sched_run() 首次调度`;
+ *   coop 只在显式点换栈 ⇒ "谁占住 CPU"必须由调度器决定, 而不是由 start 相决定。
+ *   这一段就是 WORKAROUND(br-wa-boot-001) 的"主循环托底"还债点。
+ *
+ * ⚠ 循环里的"睡眠"现在是 `br_task_sleep`(真阻塞切换): 唤醒精度 = **周期 tick 的
+ *   100 ms**(平台 timer 周期; tickless 的"比较器按最近期限装弹"尚未做, 见 ADR-0006 §5)
+ *   ⇒ 每拍实际约 1.00–1.10 s, 3 秒的 smoke 门禁里 `tick=2` 仍稳(实测 ~2.48 s)。
+ *   这是 WORKAROUND(br-wa-boot-001) ① 的还债点(M1 的调度器接过 CPU 占用)。
+ */
+static void hello_mainloop(void *arg)
+{
+    (void)arg;
 
     br_u64 tick = 0;
 
@@ -121,13 +93,15 @@ BR_NORETURN void br_core_main(void)
         tick++;
 
         const br_time_t t_before = br_clock_now();
-        br_delay_ms(BR_MAINLOOP_PERIOD_MS);
+        (void)br_task_sleep(BR_MAINLOOP_PERIOD_MS * BR_US_PER_MS);
         const br_time_t measured = br_clock_now() - t_before;
 
         /*
          * 自带判据的自检: 延时的唯一可验证性质就是"实际不短于请求"
          * (设计 3-01 §2.1: 到期唤醒不早醒, 晚到无上界)。
          * 把判据写进日志, 而不是靠人眼看节奏 —— QEMU 下这是能自动 grep 的。
+         * ⚠ 这条日志里的 "EARLY" 是 smoke 门禁的判据之一(延时短于请求); 插件管理器
+         *   的相名因此取小写, 免得误触(见 plugin_mgr.c 的文件头注)。
          */
         const br_bool delay_ok = (measured >= BR_MAINLOOP_PERIOD_MS * BR_US_PER_MS);
 
@@ -138,16 +112,68 @@ BR_NORETURN void br_core_main(void)
                     (br_u64)(BR_MAINLOOP_PERIOD_MS * BR_US_PER_MS),
                     delay_ok ? "ok" : "EARLY",
                     (br_u64)br_plat_timer_ticks());
-
-        /*
-         * 第 2 拍再取一次 trace: 此时 timer PPI 已经跑了 ~20 次, 环里是**中断上下文**
-         * 落下的事件(IRQ_ENTER/EXIT)—— 这是"trace 在 ISR 里可用"(5-01 §1 + CA-3 白名单)
-         * 在真机上的活证据, 也是调试服务在稳定态可用的证明(启动那一刻的现场已由
-         * `br_dump_all()` 取过)。
-         */
-        if (tick == 2u) {
-            const br_u32 drained = br_dump_trace(0u);
-            br_log_info("dbg: steady-state trace drained=%lu", (br_u64)drained);
-        }
     }
+}
+
+/*
+ * START 相: 启动期自检 + MainLoop(**不返回**)。
+ *
+ * 自检的分工(设计 6-01 的用例组):
+ *   - `[PLGCONF]` 插件管理器(本镜像的 `.br_plugins` / init-DAG / 相位);
+ *   - `[SVCCONF]` 服务注册表(core 公地);
+ *   - `[TASKCONF]` / `[SYNCCONF]` 调度框架与同步原语(F2/F3 的实现; 调用点先接线)。
+ * 中断(`[IRQCONF]`)/内存(`[MEMCONF]`)/调试域(`[DBGCONF]`)三套**已按相位归位**:
+ * 前两者在 platform 的 start, 后者在 service/dump 的 LATE init —— APP 不再直调它们
+ * (这正是 `product.toml [lint].allow_edges` 里 app → service/dump 那条豁免可以删掉的依据)。
+ *
+ * ★ 为什么 APP 不自己碰中断控制(P-IRQ-17): 设计 3-01 §13.6 的特权分级把"中断控制"
+ *   归 P3(仅调度类 ability 与 platform 可声明), APP 是 P0 ⇒ 只能**读**平台的心跳计数。
+ *
+ * ★ 本函数现在**返回 0**: 它创建 APP 线程(体 = 上面的 `hello_mainloop`), 然后回到
+ *   插件管理器; 由管理器在全部 start 之后调 `br_sched_run()` 做首次调度。
+ *   (自检跑在"main 线程"里 —— `br_sched_register()` 在 EARLY 相就把调用者所在的启动
+ *    上下文物质化成了 main, 见 ADR-0006 §1 的 I1 ⇒ create/join 在调度循环之前可用。)
+ */
+int hello_start(void)
+{
+    br_log_info("%s %s -- core MainLoop (interrupt heartbeat + delay + logging)",
+                BR_PROTOTYPE_NAME, BR_VERSION_STRING);
+    br_log_info("platform: %s (%s)", br_plat_name(), br_plat_isa());
+    br_log_info("clock: %lu Hz (arch timer), %lu ticks/ms (exact integer conversion)",
+                br_clock_freq_hz(), br_clock_ticks_per_ms());
+    br_log_info("entry chain: start.S -> br_irq_cpu_init -> br_plugin_manager_run "
+                "(EARLY/CORE/LATE -> irq on -> START) -> app thread -> br_sched_run");
+
+    /* 插件管理器一致性用例(TC-PLUG-*): 段条数/拓扑序/相位单调/环检测负例。 */
+    br_plugin_conformance();
+
+    /* 服务注册表一致性用例(TC-SVC-*)。 */
+    br_service_conformance();
+
+    /*
+     * 调度框架与同步原语的一致性用例。这两个入口必须由 APP 的 start 调用
+     * (与其余 conformance 同一位置、同一形态); 它们的实现分别属 F2/F3 ——
+     * 调用点先接线, 实现后补。此刻 timer 已在 platform 的 start 里 armed,
+     * 所以里面的真超时用例(20 ms / 不早醒)有节拍可用。
+     */
+    br_sched_conformance();
+    br_sync_conformance();
+
+    /* 创建 APP 线程: 此后 CPU 的占用由调度器决定(coop: 只在显式点换栈)。 */
+    const br_task_attr_t attr = {
+        .name       = "app",
+        .stack      = (void *)(s_app_stack + BR_APP_STACK_BYTES),   /* 栈顶(高地址) */
+        .stack_size = BR_APP_STACK_BYTES,
+        .prio       = 0u,
+        .flags      = 0u,
+    };
+    br_thread_t *app = BR_NULL;
+    const int rc = br_task_create(&app, &attr, hello_mainloop, BR_NULL);
+    if (rc != 0) {
+        br_log_error("app: br_task_create(APP 线程) 失败 rc=%d", rc);
+        return rc;
+    }
+    br_log_info("app: APP 线程已创建(name=%s state=%u); 交给 br_sched_run() 首次调度",
+                br_task_name(app), (unsigned)br_task_state(app));
+    return 0;
 }

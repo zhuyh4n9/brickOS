@@ -11,6 +11,7 @@ use std::path::{Path, PathBuf};
 
 use serde_json::{json, Map, Value};
 
+use crate::build;
 use crate::diag::Diags;
 use crate::model;
 use crate::plan;
@@ -2091,6 +2092,7 @@ pub fn run() -> i32 {
     dep_command_cases(&mut h);
     ver_command_cases(&mut h);
     gate_cases(&mut h);
+    build_cases(&mut h);
 
     if h.failures.is_empty() {
         println!("ok {} cases", h.passed);
@@ -2106,4 +2108,419 @@ pub fn run() -> i32 {
         );
         1
     }
+}
+
+// ================================================================== 构建族(ADR-0004)
+
+/// 极简请求(带 context)。
+/// `Diags` 里有没有某条码(与 `has_code` 的 Response 版分工: 计划类命令回 Diags)。
+fn diags_code(d: &Diags, code: &str) -> bool {
+    d.items().iter().any(|x| x.code.as_deref() == Some(code))
+}
+
+fn mk_req_ctx(command: &str, root: &Path, args: Value, context: Value) -> Request {
+    let mut r = mk_req(command, root, args);
+    r.context = ctx(context);
+    r
+}
+
+/// 一个最小可构建的合成树: product.toml + platform(带 [build.target]) + ability + app。
+///
+/// 真源文件也写出来(通配要匹配得到) —— 这样"计划"是**真的**从声明面算出来的,
+/// 而不是靠 mock。工具解析用 `context.path = ""` 关掉, 于是用例在任何机器上都可复现。
+fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
+    write(root, "core/src/core.c", "int core_fn(void){return 0;}\n");
+    write(root, "platform/fake/src/plat.c", "int plat_fn(void){return 0;}\n");
+    write(root, "platform/fake/src/start.S", "nop\n");
+    write(root, "platform/fake/src/link.ld", "SECTIONS { }\n");
+    write(root, "app/m/src/main.c", "int app_fn(void){return 0;}\n");
+    write(
+        root,
+        "product.toml",
+        &format!(
+            "schema = 1\n\
+             [product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\ncore = \">=0.1.0\"\nstage = \"dev\"\n\
+             [select]\nplugins = [\"platform/fake\"]\n\
+             [build]\ncore_sources = [\"core/src/*.c\"]\ncore_includes = [\"core/include\"]\n\
+             cflags = [\"-std=c11\", \"-O2\"]\nasflags = [\"-g3\"]\nldflags = [\"-nostdlib\"]\n{extra_build}"
+        ),
+    );
+    write(
+        root,
+        "platform/fake/plugin.toml",
+        &format!(
+            "schema = 1\n[plugin]\nname = \"platform/fake\"\nplugin_type = \"platform\"\napi_type = \"native\"\n\
+             lang = \"c\"\nphase = \"early\"\nversion = \"1.0.0.0\"\n\
+             [build]\nsources = [\"src/*.c\", \"src/*.S\"]\nincludes = [\"include\"]\n{target}"
+        ),
+    );
+    write(
+        root,
+        "app/m/plugin.toml",
+        "schema = 1\n[plugin]\nname = \"app/m\"\nplugin_type = \"app\"\napi_type = \"native\"\n\
+         lang = \"c\"\nphase = \"app\"\nversion = \"1.0.0.0\"\n\
+         [build]\nsources = [\"src/*.c\"]\nincludes = [\"include\"]\n",
+    );
+}
+
+const TARGET_OK: &str = "[build.target]\narch = \"aarch64\"\ncross = \"aarch64-linux-gnu-\"\n\
+     arch_flags = [\"-march=armv8-a\", \"-mstrict-align\"]\nlinker_script = \"src/link.ld\"\n\
+     [build.target.qemu]\nbinary = \"qemu-system-aarch64\"\nmachine = \"virt,gic-version=3\"\n\
+     cpu = \"cortex-a53\"\nmemory = \"128M\"\nextra = [\"-nographic\"]\n";
+
+fn build_cases(h: &mut Harness) {
+    // ---- 纯函数: 通配 ----
+    h.check(build::selftest_glob("*.c", "a.c"), "glob_match: *.c 匹配 a.c");
+    h.check(!build::selftest_glob("*.c", "a.h"), "glob_match: *.c 不匹配 a.h");
+    h.check(build::selftest_glob("a?c", "abc"), "glob_match: a?c 匹配 abc");
+    h.check(
+        build::selftest_glob("*_test.c", "mem_test.c"),
+        "glob_match: *_test.c 匹配 mem_test.c",
+    );
+    h.check(!build::selftest_glob("*_test.c", "test_mem.c"), "glob_match: 前缀不同不匹配");
+
+    // ---- 纯函数: 正则子集 ----
+    h.check(
+        build::selftest_regex("pass=[0-9]* fail=0 ", "x pass=35 fail=0 y"),
+        "regex: [0-9]* 命中",
+    );
+    h.check(
+        !build::selftest_regex("pass=[0-9]+ fail=0 ", "pass= fail=0 "),
+        "regex: + 要求至少一次",
+    );
+    h.check(
+        build::selftest_regex(r"\[PANIC\]", "x [PANIC] y"),
+        "regex: \\[ 是字面方括号",
+    );
+    h.check(
+        !build::selftest_regex(r"\[PANIC\]", "x PANIC y"),
+        "regex: 转义后不再匹配裸词",
+    );
+    h.check(
+        build::selftest_regex("irq_ticks=[1-9]", "irq_ticks=7"),
+        "regex: 字符类区间命中",
+    );
+    h.check(
+        !build::selftest_regex("irq_ticks=[1-9]", "irq_ticks=0"),
+        "regex: 区间外不命中",
+    );
+    h.check(
+        build::selftest_regex("[^0-9]x", "ax"),
+        "regex: 字符类取反命中",
+    );
+    h.check(
+        build::selftest_regex_unsupported("(a|b)").is_some(),
+        "regex: 分组/交替被**拒绝**(不静默不匹配)",
+    );
+    h.check(
+        build::selftest_regex_unsupported("^a$").is_some(),
+        "regex: 锚点被拒绝",
+    );
+    h.check(
+        build::selftest_regex_unsupported(r"\[A\] pass=[0-9]*").is_none(),
+        "regex: gates.toml 里用到的形态都在子集内",
+    );
+
+    // ---- 计划: 正常树 ----
+    let root = tmpdir("build-ok");
+    write_build_tree(&root, "", TARGET_OK);
+    let req = mk_req_ctx(
+        "build",
+        &root,
+        json!({"dry_run": true}),
+        json!({"path": ""}),
+    );
+    let (d, data) = build::selftest_plan(&root, &req);
+    h.exit_is(&d, 0, "build: 合成树计划无诊断");
+    h.j(&data["unit_count"], json!(3), "build: 单元数 = core + platform + app");
+    h.j(&data["source_count"], json!(4), "build: 源文件数 = core 1 + plat 2 + app 1");
+    let steps = data["steps"].as_array().cloned().unwrap_or_default();
+    h.j(&json!(steps.len()), json!(6), "build: 步骤数 = 4 编译 + 链接 + objcopy");
+    let all: Vec<String> = steps
+        .iter()
+        .map(|s| {
+            s["argv"]
+                .as_array()
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|x| x.as_str())
+                        .collect::<Vec<_>>()
+                        .join(" ")
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+    h.check(
+        all.iter().any(|s| s.contains("-march=armv8-a") && s.contains("-mstrict-align")),
+        "build: arch_flags 进了编译命令(来自 platform 的 [build.target])",
+    );
+    h.check(
+        all.iter().any(|s| s.contains("-Wl,-T,platform/fake/src/link.ld")),
+        "build: 链接脚本来自 platform 且路径按插件根解析",
+    );
+    h.check(
+        all.iter().any(|s| s.contains("-MF build/obj/core/src/core.o.d")),
+        "build: 编译带 -MMD/-MF(头依赖的唯一来源)",
+    );
+    h.check(
+        all.iter().any(|s| s.contains("-nostdlib") && s.contains("build/brick.elf")),
+        "build: 链接命令含产品 ldflags 与产物落点",
+    );
+    h.check(
+        data["target"]["owner"] == json!("platform/fake"),
+        "build: 目标事实的 owner = 唯一的 platform",
+    );
+    h.check(
+        data["outputs"]["obj_dir"] == json!("build/obj"),
+        "build: 对象落点缺省 = build/obj",
+    );
+    h.check(
+        data["tools"]
+            .as_array()
+            .map(|a| a.iter().any(|t| t["name"] == json!("cc")
+                && t["candidates"]
+                    .as_array()
+                    .map(|c| c.iter().any(|x| x.as_str() == Some("aarch64-linux-gnu-gcc-16")))
+                    .unwrap_or(false)))
+            .unwrap_or(false),
+        "build: cc 的候选序里含带版本号的变体(Ubuntu 只装 gcc-16 的情况)",
+    );
+    h.check(
+        data["state_content"]
+            .as_str()
+            .map(|s| s.contains("[[jobs]]") && s.contains("argv_hash"))
+            .unwrap_or(false),
+        "build: 增量状态是 core 产出的 TOML(含 argv 指纹与输入表)",
+    );
+    h.check(
+        data["plan_hash"].as_str().map(|s| s.starts_with("sha256:")).unwrap_or(false),
+        "build: 计划指纹是 sha256:…",
+    );
+
+    // ---- 计划: 缺 [build] ----
+    let root2 = tmpdir("build-nobuild");
+    write_build_tree(&root2, "", TARGET_OK);
+    write(
+        &root2,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\napp = \"app/m\"\n",
+    );
+    let (d2, _) = build::selftest_plan(&root2, &mk_req_ctx("build", &root2, json!({}), json!({"path": ""})));
+    h.check(diags_code(&d2, build::CODE_NO_BUILD), "build: 缺 [build] ⇒ BRV-BLD-0001");
+    h.exit_is(&d2, 2, "build: 缺 [build] 是形状错(退出码 2)");
+
+    // ---- 计划: 缺 [build.target] ----
+    let root3 = tmpdir("build-notarget");
+    write_build_tree(&root3, "", "");
+    let (d3, _) = build::selftest_plan(&root3, &mk_req_ctx("build", &root3, json!({}), json!({"path": ""})));
+    h.check(diags_code(&d3, build::CODE_NO_TARGET), "build: 无 [build.target] ⇒ BRV-BLD-0003");
+
+    // ---- 计划: 两个 platform 都声明 target ----
+    let root4 = tmpdir("build-ambiguous");
+    write_build_tree(&root4, "", TARGET_OK);
+    write(
+        &root4,
+        "platform/other/plugin.toml",
+        "schema = 1\n[plugin]\nname = \"platform/other\"\nplugin_type = \"platform\"\n\
+         api_type = \"native\"\nlang = \"c\"\nphase = \"early\"\nversion = \"1.0.0.0\"\n\
+         [build]\nsources = [\"src/*.c\"]\n[build.target]\narch = \"aarch64\"\n",
+    );
+    let (d4, _) = build::selftest_plan(&root4, &mk_req_ctx("build", &root4, json!({}), json!({"path": ""})));
+    h.check(
+        diags_code(&d4, build::CODE_TARGET_AMBIGUOUS),
+        "build: 两个 [build.target] ⇒ BRV-BLD-0004(谁是真值不明)",
+    );
+
+    // ---- 计划: 字面源路径不存在 ----
+    let root5 = tmpdir("build-missing-src");
+    write_build_tree(&root5, "", TARGET_OK);
+    write(
+        &root5,
+        "app/m/plugin.toml",
+        "schema = 1\n[plugin]\nname = \"app/m\"\nplugin_type = \"app\"\napi_type = \"native\"\n\
+         lang = \"c\"\nphase = \"app\"\nversion = \"1.0.0.0\"\n\
+         [build]\nsources = [\"src/nope.c\"]\n",
+    );
+    let (d5, _) = build::selftest_plan(&root5, &mk_req_ctx("build", &root5, json!({}), json!({"path": ""})));
+    h.check(
+        diags_code(&d5, build::CODE_MISSING_SOURCE),
+        "build: 字面源路径不存在 ⇒ BRV-BLD-0007",
+    );
+
+    // ---- `**` 通配 + `gen_sources` 的闭包过滤(踩到过: 非闭包插件的描述符被编进镜像,
+    //      而它的 .c 不编 ⇒ 链接期未定义符号) ----
+    let root8 = tmpdir("build-gen-src");
+    write_build_tree(
+        &root8,
+        "gen_sources = [\"build/gen/**/plugin_desc.c\"]\n",
+        TARGET_OK,
+    );
+    // 闭包内插件(app/m)的生成物 + **不在闭包内**的插件(service/out)的生成物
+    write(&root8, "build/gen/app/m/plugin_desc.c", "int app_desc;\n");
+    write(&root8, "build/gen/service/out/plugin_desc.c", "int out_desc;\n");
+    write(
+        &root8,
+        "service/out/plugin.toml",
+        "schema = 1\n[plugin]\nname = \"service/out\"\nplugin_type = \"ability\"\n\
+         api_type = \"native\"\nsubkind = \"service\"\nlang = \"c\"\nphase = \"late\"\n\
+         version = \"1.0.0.0\"\n[build]\nsources = [\"src/*.c\"]\n",
+    );
+    let (d9, data9) = build::selftest_plan(
+        &root8,
+        &mk_req_ctx("build", &root8, json!({}), json!({"path": ""})),
+    );
+    h.exit_is(&d9, 0, "gen_sources: 跳过非闭包生成物只是 info(不改退出码)");
+    h.check(
+        diags_code(&d9, build::CODE_GEN_NOT_SELECTED),
+        "gen_sources: 非闭包插件的生成物被跳过且**留痕**(BRV-BLD-0013)",
+    );
+    let gen_srcs: Vec<String> = data9["units"]
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter(|u| u["name"] == json!("build/gen"))
+                .flat_map(|u| {
+                    u["sources_list"]
+                        .as_array()
+                        .map(|s| {
+                            s.iter()
+                                .filter_map(|x| x.as_str().map(str::to_string))
+                                .collect::<Vec<_>>()
+                        })
+                        .unwrap_or_default()
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    h.check(
+        gen_srcs.iter().any(|s| s == "build/gen/app/m/plugin_desc.c"),
+        "gen_sources: `**` 匹配到闭包内插件的生成物",
+    );
+    h.check(
+        !gen_srcs.iter().any(|s| s.contains("service/out")),
+        "gen_sources: 非闭包插件的生成物**不进**镜像",
+    );
+
+    // ---- 门禁: 声明面与判据 ----
+    let root6 = tmpdir("build-gates");
+    write_build_tree(&root6, "", TARGET_OK);
+    write(
+        &root6,
+        "tests/gates.toml",
+        "schema = 1\n[run]\ndefault_timeout_s = 3\n\
+         [host]\ncc = \"cc\"\ncflags = [\"-O2\"]\n\
+         [[hosttest]]\nname = \"t1\"\nsources = [\"a.c\"]\n\
+         [[gate]]\nname = \"g1\"\ntimeout_s = 3\nlog = \"build/logs/g1.log\"\n\
+         require = [\"banner\", \"pass=[0-9]* fail=0 \"]\nforbid = [\"\\\\[PANIC\\\\]\"]\n\
+         require_tags = [\"TC-X-001\"]\n\
+         [[script]]\nname = \"s1\"\nargv = [\"bash\", \"tools/x.sh\"]\n\
+         [build]\npost = [\"s1\"]\n",
+    );
+    let list = build::run(&mk_req("test", &root6, json!({"list": true})));
+    h.j(&list.data["gates"], json!(["g1"]), "gates: gate 名字表");
+    h.j(&list.data["hosttests"], json!(["t1"]), "gates: 宿主用例名字表");
+    h.j(&list.data["scripts"], json!(["s1"]), "gates: 脚本门禁名字表");
+    h.j(&list.data["build_post"], json!(["s1"]), "gates: [build].post 进了数据");
+
+    // 判据: 全绿
+    let good = "banner\nPASS TC-X-001 ok\npass=3 fail=0 \n";
+    let r_good = build::run(&mk_req_ctx(
+        "judge",
+        &root6,
+        json!({"name": "g1"}),
+        json!({"log": good}),
+    ));
+    h.exit_is(&Diags::new(), 0, "judge: 基线退出码 0");
+    h.check(r_good.exit_code == 0, "judge: require/forbid/tag 全满足 ⇒ 退出码 0");
+    h.check(
+        r_good.data["failed"] == json!(0),
+        "judge: failed 计数为 0",
+    );
+
+    // 判据: 缺 require + 命中 forbid + 缺用例 tag
+    let bad = "banner only\n[PANIC] boom\n";
+    let r_bad = build::run(&mk_req_ctx(
+        "judge",
+        &root6,
+        json!({"name": "g1"}),
+        json!({"log": bad}),
+    ));
+    h.check(r_bad.exit_code == 1, "judge: 有失败 ⇒ 退出码 1(校验红)");
+    h.j(&r_bad.data["failed"], json!(3), "judge: 三类判据各失败一次");
+    let codes: Vec<String> = r_bad
+        .diagnostics
+        .as_array()
+        .map(|a| {
+            a.iter()
+                .filter_map(|d| d.get("code").and_then(Value::as_str).map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    h.check(
+        codes.iter().all(|c| c == build::CODE_GATE_FAILED),
+        "judge: 失败诊断统一带 BRV-BLD-0009",
+    );
+
+    // 判据: 未知门禁名
+    let r_unknown = build::run(&mk_req_ctx(
+        "judge",
+        &root6,
+        json!({"name": "nope"}),
+        json!({"log": ""}),
+    ));
+    h.check(
+        has_code(&r_unknown, build::CODE_GATE_UNKNOWN),
+        "judge: 未知门禁 ⇒ BRV-BLD-0008",
+    );
+    h.check(r_unknown.exit_code == 2, "judge: 未知门禁 ⇒ 用法错(退出码 2)");
+
+    // 判据: 正则超出子集 ⇒ 形状错(不静默不匹配)
+    let root7 = tmpdir("build-badregex");
+    write_build_tree(&root7, "", TARGET_OK);
+    write(
+        &root7,
+        "tests/gates.toml",
+        "schema = 1\n[[gate]]\nname = \"g\"\nrequire = [\"(a|b)\"]\n",
+    );
+    let bad_re = build::run(&mk_req("test", &root7, json!({"name": "g"})));
+    h.check(
+        has_code(&bad_re, build::CODE_GATE_SHAPE),
+        "gates: 正则超子集 ⇒ BRV-BLD-0012",
+    );
+    h.check(bad_re.exit_code == 2, "gates: 正则超子集是形状错(退出码 2)");
+
+    // ---- 后端文件(生成物): 关键行都得在 ----
+    let (d8, data8) = build::selftest_plan(&root, &mk_req_ctx("build", &root, json!({}), json!({"path": ""})));
+    h.exit_is(&d8, 0, "build: 后端渲染用树无诊断");
+    let mk = build::selftest_render_backend(&root, &req, "make");
+    let nj = build::selftest_render_backend(&root, &req, "ninja");
+    h.check(
+        mk.contains("brickie:generated") && mk.contains(".DEFAULT_GOAL := all") && mk.contains("-include $(DEPS)"),
+        "backend/make: 生成物标记 + 缺省目标 + 头依赖 include",
+    );
+    h.check(
+        nj.contains("rule cc") && nj.contains("depfile = $out.d") && nj.contains("deps = gcc"),
+        "backend/ninja: rule/depfile/deps 三件齐",
+    );
+    h.check(
+        nj.contains("cc = "),
+        "backend/ninja: 编译器变量必须先定义($cc 否则展开为空 —— 踩过)",
+    );
+    h.check(
+        nj.contains("builddir = build/gen/ninja"),
+        "backend/ninja: ninja 状态文件钉到 build/ 下(否则落到仓库根 —— 踩过)",
+    );
+    h.check(
+        nj.contains("rule asm") && nj.contains("rule cc") && nj.contains(": asm "),
+        "backend/ninja: C 与 .S 各一条 rule(用 C 的模板编汇编是错的)",
+    );
+    h.check(
+        mk.contains("build/obj/core/src/core.o") && nj.contains("build/obj/app/m/src/main.o"),
+        "backend: 两个后端都列出对象",
+    );
+    h.check(
+        data8["steps_total"] == json!(6),
+        "build: 后端渲染不改计划(仍 6 步)",
+    );
+    let _ = fs::remove_dir_all(&root7);
 }

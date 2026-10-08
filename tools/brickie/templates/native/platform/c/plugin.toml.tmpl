@@ -64,6 +64,27 @@ status       = "experimental"      # experimental | frozen | deprecated
 # ops         = ["map", "protect", "flush", "invalidate"]
 # regions     = ["dma"]
 
-[build]                            # v0.1 只记录; v0.3 起被消费
+[build]                            # ★ `brickie build` 消费它(ADR-0004): 源集合 + 包含路径
 sources  = ["src/*.c"]
 includes = ["include"]
+
+# ------------------------------------------------------------------ 目标事实(必填!)
+# `brickie build` 从**唯一一个** platform 插件的本表取 arch / 交叉前缀 / arch 标志 /
+# 链接脚本 / QEMU 型号(每镜像恰一个 platform, §8.3 ④)。
+#
+# ⚠ **不填它 ⇒ `brickie build` 直接报 `BRV-BLD-0003`**(退出码 2)—— 这是刻意的:
+#   模板**不能替你知道** SoC 的事实(arch 是什么、链接脚本在哪、QEMU 用哪个机器型号);
+#   猜一个值只会把错误推到"镜像跑不起来"那一步。把下面的注释按你的板子填实。
+#
+# [build.target]
+# arch          = "aarch64"                  # 目标架构(呈现/诊断用)
+# cross         = "aarch64-linux-gnu-"       # 交叉前缀; 工具候选序由 core 定(contract §9 R-14)
+# arch_flags    = ["-march=armv8-a", "-mgeneral-regs-only", "-mstrict-align"]
+# linker_script = "src/link.ld"              # 相对**本插件根**
+#
+# [build.target.qemu]
+# binary  = "qemu-system-aarch64"
+# machine = "virt,gic-version=3"             # ⚠ 机器型号要钉住(GICv2/GICv3 差别会静默地收不到中断)
+# cpu     = "cortex-a53"
+# memory  = "128M"
+# extra   = ["-nographic"]

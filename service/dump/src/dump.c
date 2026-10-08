@@ -508,3 +508,53 @@ int br_dump_conformance(void)
 
     return total_fails;
 }
+
+/* =====================================================================
+ * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物
+ * `build/gen/service/dump/plugin_desc.c` 引用; 设计 1-01 §9 / 3-05 §2)
+ * 自带原型满足 -Wmissing-prototypes(钩子名由生成器推导, 不进对外头与 [[export]])。
+ *
+ * ★ LATE init 里跑调试域一致性用例 + 启动快照: 这一处**替代**了 v0.1 里
+ *   APP 曾直调 `br_dump_conformance()` 的位置 —— v0.2.0 起本套件由**插件管理器**在
+ *   dump 的 LATE `init` 里驱动(ADR-0005), 于是 `app/hello → service/dump` 那条 M0 豁免
+ *   **已从 `product.toml [lint].allow_edges` 删掉**(删掉后 `brickie check` 仍 0 错误 = 证据)。
+ *   plugin.toml 的四条 `kind = "init"` 边保证 LATE 相里 trace/backtrace/hexdump/memleak
+ *   的 init 已经返回(拓扑序 + 相位单调由 plugin_manager 执法)。
+ * ===================================================================== */
+int dump_early_init(void);
+int dump_init(void);
+int dump_start(void);
+
+/* EARLY 相: 无动作(不用堆/无线程/关中断; dump 自己要读堆, 必须等 LATE)。 */
+int dump_early_init(void)
+{
+    return 0;
+}
+
+/* LATE 相(Service 类别 ⇒ ② 完成点): 自身 init → 调试域一致性用例 → 启动快照。 */
+int dump_init(void)
+{
+    const int rc = br_dump_init();
+    if (rc != 0) {
+        return rc;   /* 首败即停机由 plugin_manager 执行(裁定 G6) */
+    }
+
+    const int conf_fail = br_dump_conformance();
+    br_log_info("dbg: conformance %s (failures=%d)",
+                (conf_fail == 0) ? "ALL PASS" : "HAS FAILURES", conf_fail);
+
+    /* 启动现场一份(三套门禁截取证据的地方; 行数口径见 br_dump.h) */
+    const br_u32 dump_lines = br_dump_all();
+    br_log_info("dbg: boot snapshot lines=%lu", (br_u64)dump_lines);
+
+    /* 一致性用例的失败**不**作为 init 的失败返回: 它由门禁([DBGCONF] FAIL)判红,
+     * init 的返回值只表达"本插件的初始化成不成"(见 ADR-0005 §2.5)。 */
+    return 0;
+}
+
+/* START 相: 本服务没有需要"中断可用/可建线程"之后才做的事。 */
+int dump_start(void)
+{
+    return 0;
+}
+

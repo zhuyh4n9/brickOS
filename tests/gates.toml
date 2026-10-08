@@ -1,0 +1,252 @@
+# tests/gates.toml — 门禁声明面(人写; `brickie test` / `brickie build` 消费)
+#
+# 为什么门禁要有声明面:
+#   门禁的"红绿判据"以前住在顶层 `Makefile` 的 recipe 里(grep 一串模式 + 一个用例名单)。
+#   那是**第二处真值**: 同一个判据在 Makefile、CI、文档里各写一遍就会漂。搬到这里之后,
+#   `brickie test` 只按本文件编排, 判据由 brickie-core 应用 —— 于是 `--json`、文本输出与
+#   CI 的退出码全从同一份 `data` 来。
+#
+# 三张表(与 `6-01-test.md` 的用例表是不同层次的东西: 那是**用例内容**, 这是**怎么跑**):
+#   [[hosttest]]  宿主可执行用例(不碰交叉工具链/QEMU): 编 → 跑 → 退出码即判据
+#   [[gate]]      QEMU 门禁: 限时跑镜像 → 日志按 require/forbid 正则判 + 用例 tag 点名
+#   [[script]]    脚本门禁: 跑一个脚本 → 退出码 + 可选 stdout 正则
+#
+# ⚠ 正则子集(如实声明, 免得写出"永不匹配"的假绿): 支持 `.` `*` `+` `?` `[...]`(`^` 取反、
+#   `a-z` 区间)与 `\x` 转义; **不支持**分组/交替/锚点(`( ) | ^ $ { }`)—— 写了它们
+#   core 会**报形状错**(BRV-BLD-0012)而不是静默不匹配。
+#   所以"三种 CONF 的 FAIL"写成三条 forbid, 而不是一条交替正则。
+schema = 1
+
+# ------------------------------------------------------------------ QEMU 运行
+[run]
+default_timeout_s = 5
+
+# ------------------------------------------------------------------ 宿主用例
+[host]
+cc = "cc"
+bin_dir = "build/hosttest"
+cflags = [
+  "-std=c11", "-O2", "-g", "-DBR_HOSTTEST=1",
+  "-Wall", "-Wextra", "-Werror", "-Wshadow", "-Wundef", "-Wpointer-arith",
+  "-Wstrict-prototypes", "-Wmissing-prototypes",
+]
+
+[[hosttest]]
+name     = "sync-test"
+# 同步原语的主判据: 被测 = sync.c(+ time.c 的 br_deadline_from_now + string.c),
+# 桩 = sync_test.c 里的 ucontext 假调度器(真跑阻塞/唤醒/超时) + host_stubs.c。
+sources  = [
+  "core/src/sync/sync.c", "core/src/time.c", "core/src/string.c",
+  "tests/host/sync_test.c", "tests/host/host_stubs.c",
+]
+includes = [
+  "core/include", "core/src", "core/src/sched", "tests/host",
+  "platform/qemu-aarch64/include",
+]
+
+[[hosttest]]
+name     = "string-test"
+sources  = ["core/src/string.c", "tests/host/string_test.c"]
+includes = ["core/include", "core/src", "tests/host"]
+
+[[hosttest]]
+name     = "mem-test"
+# 与旧 Makefile 的 `mem-test: string-test` 同义: 内存语义门禁跑之前先跑支持例程用例。
+depends  = ["string-test"]
+sources  = [
+  "core/src/mem/tlsf.c", "core/src/mem/mem.c", "core/src/mem/page.c",
+  "core/src/mm/mm.c", "tests/host/mem_test.c", "tests/host/host_stubs.c",
+]
+includes = ["core/include", "core/src", "core/src/mem", "core/src/mm", "tests/host"]
+
+# sched-test(宿主): 调度框架 + coop 的语义门禁。
+# 切换层 `core/src/sched/switch.S` **只在 aarch64 编**(宿主是 x86-64)⇒ 用例自备
+# ucontext 版的 `br_sched_switch_to()` 与时钟/L2/日志/panic 桩; 见 tests/host/sched_test.c
+# 文件头的"层次切分"。判据两类: 宿主专用的 FIFO/block-wake/超时/sleep_until/idle,
+# 加上 core 的 `br_sched_conformance()`(TC-TASK-* / TC-TIME-* 真的 create/join/yield/sleep)。
+[[hosttest]]
+name     = "sched-test"
+# 与内存语义门禁同样的支持例程前置(编译器可能把整块清零降低成 memset)。
+depends  = ["string-test"]
+sources  = [
+  "core/src/sched/sched_core.c", "core/src/string.c",
+  "sched/coop/src/coop.c", "tests/host/sched_test.c",
+]
+includes = ["core/include", "core/src", "core/src/sched", "sched/coop/include", "tests/host"]
+
+# ⚠ **同名是刻意的**: `sync-test` / `sched-test` 在 `[[hosttest]]` 与 `[[gate]]` 里各有一条。
+#   同一个名字指的是"同一套用例的两种跑法" —— 宿主侧(秒级、能用 ucontext 造真阻塞)与
+#   目标侧(真地址空间、真中断、真 tick)。于是 `brickie test sync-test` 会**两条都跑**,
+#   这正是我们要的: 宿主红与目标红是两种不同的信息, 少一个都不算验证过。
+#   (判据仍各自独立: 宿主的判据是退出码, 目标的判据是 require/forbid/require_tags。)
+
+# ------------------------------------------------------------------ QEMU 门禁
+# smoke: 只看"启动 / MainLoop / 延时判据 / 中断心跳 / 三套一致性用例摘要"。
+[[gate]]
+name      = "smoke"
+timeout_s = 3
+log       = "build/logs/smoke.log"
+require   = [
+  "core MainLoop",
+  "tick=2 ",
+  "int: conformance ALL PASS",
+  "\\[MEMCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "\\[DBGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+  # 延时自检的判据行("... us: ok"): 它证明"不早醒"这条性质**被测过且通过**,
+  # 而不只是"没出现失败字样"。
+  "us: ok\\)",
+]
+forbid    = [
+  # ⚠ 这里**不能**写裸词 "EARLY": 插件管理器的启动横幅里有 `(EARLY/CORE/LATE -> …)`,
+  # 会误伤(实测踩到)。判据要精确到"延时自检报早醒"那一行: `... us: EARLY)`
+  # —— 门禁模式必须钉在**判据本身**上, 而不是判据可能用到的词上。
+  "us: EARLY\\)",
+  "FATAL",
+  "\\[PANIC\\]",
+  "\\[IRQCONF\\] FAIL",
+  "\\[MEMCONF\\] FAIL",
+  "\\[DBGCONF\\] FAIL",
+]
+
+# irq-test: **逐用例**门禁(裁掉用例也算红 —— 与 smoke 的分工就在这里)。
+[[gate]]
+name      = "irq-test"
+timeout_s = 6
+log       = "build/logs/irq.log"
+require   = [
+  "\\[IRQCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[IRQCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+require_tags = [
+  "GIC-EOIMODE", "GIC-PRIBITS", "GIC-LINES", "GIC-TIMERID",
+  "TC-IRQ-001", "TC-IRQ-002", "TC-IRQ-003", "TC-IRQ-004", "TC-IRQ-008",
+  "TC-IRQ-010", "TC-IRQ-012", "TC-IRQ-013", "TC-IRQ-014", "TC-IRQ-016",
+  "TC-IRQ-018", "TC-IRQ-019", "TC-IRQ-021", "TC-IRQ-022", "TC-IRQ-101",
+  "TC-IRQ-102", "TC-IRQ-STATS",
+]
+
+# dbg-test: 内存映射 + 调试插件两个摘要同时全绿, 且用例 tag 一个不缺。
+[[gate]]
+name      = "dbg-test"
+timeout_s = 8
+log       = "build/logs/dbg.log"
+require   = [
+  "\\[MEMCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "\\[DBGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[MEMCONF\\] FAIL",
+  "\\[DBGCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+require_tags = [
+  "MM-ACTIVE", "MM-IDENT", "MM-POOLS", "MM-REGION", "MM-RO", "MM-NXDESC", "MM-UNMAP",
+  "TC-MEM-001", "TC-MEM-002", "TC-MEM-003", "TC-MEM-004", "TC-MEM-005",
+  "TC-MEM-006", "TC-MEM-007", "TC-MM-001", "TC-MM-002", "TC-MM-003",
+  "DBG-INIT",
+  "TC-DBG-001", "TC-DBG-002", "TC-DBG-003", "TC-DBG-010", "TC-DBG-011",
+  "TC-DBG-020", "TC-DBG-021", "TC-DBG-030", "TC-DBG-031", "TC-DBG-032",
+  "TC-DBG-040", "TC-DBG-041", "TC-DBG-042", "TC-DBG-043", "TC-DBG-100",
+]
+
+# ------------------------------------------------------------------ 脚本门禁
+# 这三条是"机械判据"(反汇编扫描 / 登记表 ↔ 源码标记一致性 / 构建接线), 逻辑本身
+# 就是脚本 —— 由 brickie 编排(而不是由 Makefile 编排)才是本表的重点。
+[[script]]
+name    = "check-string"
+argv    = ["bash", "tools/check-string.sh", "build/obj/core/src/string.o"]
+require = ["ok   编译器支持例程无自递归"]
+
+[[script]]
+name    = "check-headers"
+argv    = ["bash", "tools/check-headers.sh"]
+require = ["ok   [0-9]* 个对外头"]
+
+[[script]]
+name = "check-workarounds"
+argv = ["bash", "tools/check-workarounds.sh"]
+
+[[script]]
+name = "check-build"
+argv = ["bash", "tools/check-build.sh"]
+
+# sync-test: 同步原语的端到端门禁(线程 + 阻塞 + 超时, 在 QEMU 上)。
+# 依赖 F2 的调度框架与 F1 把 br_sync_conformance() 接到 APP 的 start 里;
+# 框架未注册时 sync.c 只打 SKIP + 部分 tag ⇒ 本门禁**如实判红**(不放宽判据)。
+[[gate]]
+name      = "sync-test"
+timeout_s = 8
+log       = "build/logs/sync.log"
+require   = [
+  "\\[SYNCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[SYNCCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+require_tags = [
+  "TC-SYNC-001", "TC-SYNC-002", "TC-SYNC-003", "TC-SYNC-004", "TC-SYNC-005",
+  "TC-SYNC-006", "TC-SYNC-007", "TC-SYNC-008", "TC-SYNC-009",
+  "TC-TIME-001", "TC-TIME-002", "TC-TIME-003",
+]
+
+# plugin-test: 插件管理器 + 服务注册表的端到端门禁(在 QEMU 上)。
+# 判据 = `[PLGCONF]`(段条数/拓扑序/相位单调/环检测负例)与 `[SVCCONF]`(注册表)两族摘要
+# 全绿, 且 `irq_ticks` 非 0(证明 START 相之后的 timer 心跳真的在跑 —— 即"插件管理器确实
+# 驱动了 platform 的 start, 而不是把它省掉")。
+# 注意: 相名与 tag 正则都在本文件的正则子集内(无分组/交替/锚点); `[PLGCONF] FAIL` 与
+# `[PANIC]` 是禁止模式 —— 首败即停机会打 [PANIC], 与本门禁的红一致。
+[[gate]]
+name      = "plugin-test"
+timeout_s = 8
+log       = "build/logs/plugin.log"
+require   = [
+  "\\[PLGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "\\[SVCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[PLGCONF\\] FAIL",
+  "\\[SVCCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+require_tags = [
+  "TC-PLUG-001", "TC-PLUG-002", "TC-PLUG-003", "TC-PLUG-002b",
+  "TC-SVC-001", "TC-SVC-002", "TC-SVC-003",
+]
+
+# sched-test(QEMU): 调度框架 + coop 的端到端门禁。
+# 依赖 F1 把 APP 的 start() 改成"创建 APP 线程"(于是插件管理器在全部 start 之后
+# 进 `br_sched_run()`)并把 `br_sched_conformance()` 接在 APP 线程里; 未接线时镜像里
+# 没有 `[TASKCONF]` 输出 ⇒ 本门禁**如实判红**(不放宽判据)。
+# `irq_ticks=[1-9]` 是"START 相之后的 timer 心跳真的在跑"的证据, 也保证超时扫描有 tick 源。
+[[gate]]
+name      = "sched-test"
+timeout_s = 8
+log       = "build/logs/sched.log"
+require   = [
+  "\\[TASKCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[TASKCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+require_tags = [
+  "TC-TASK-001", "TC-TASK-002", "TC-TASK-003", "TC-TASK-004", "TC-TASK-005",
+  "TC-TASK-006", "TC-TASK-007", "TC-TASK-101",
+  "TC-TIME-001", "TC-TIME-002", "TC-TIME-003",
+]
+
+# ------------------------------------------------------------------ 构建后门禁
+[build]
+# `brickie build` 成功后**自动**跑的短名单(与旧 Makefile 的 `all: … check-string` 同义)。
+# 放在脚本门禁里而不是编进编译流程, 是因为它是**判据**而不是构建步骤。
+post = ["check-string", "check-headers"]

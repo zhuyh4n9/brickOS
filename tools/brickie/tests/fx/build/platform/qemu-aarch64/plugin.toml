@@ -1,0 +1,53 @@
+schema = 1
+
+[plugin]
+name        = "platform/qemu-aarch64"
+plugin_type = "platform"
+api_type    = "native"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+
+[[export]]
+name         = "qemu-aarch64"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = ""
+status       = "experimental"
+
+[[res]]
+kind = "ram"
+used_kib = 8192
+[[res]]
+kind = "stack"
+used_kib = 64
+
+
+[build]
+sources  = ["src/*.c", "src/*.S"]
+includes = ["include"]
+
+# 目标事实(contract §7.1): `brickie build` 从**唯一一个** platform 插件的本表取
+# arch / 交叉前缀 / arch 标志 / 链接脚本。用例断言这些进了编译与链接 argv。
+[build.target]
+arch          = "aarch64"
+cross         = "aarch64-linux-gnu-"
+arch_flags    = ["-march=armv8-a", "-mgeneral-regs-only", "-mstrict-align"]
+linker_script = "src/link.ld"
+
+[build.target.qemu]
+binary  = "qemu-system-aarch64"
+machine = "virt,gic-version=3"
+cpu     = "cortex-a53"
+memory  = "128M"
+extra   = ["-nographic"]
+

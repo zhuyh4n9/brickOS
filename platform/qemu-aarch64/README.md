@@ -1,9 +1,10 @@
 # platform/qemu-aarch64
 
-> **它曾经不是插件**: 以前由 Makefile 直接把这一组文件编进镜像, 没有 manifest、没有
-> 描述符、没有组合期校验 —— 欠债登记为 `WORKAROUND(br-wa-entry-001)`。本目录收敛为
+> **它曾经不是插件**: 以前由顶层 Makefile 直接把这一组文件编进镜像, 没有 manifest、没有
+> 描述符、没有组合期校验 —— 该欠债登记为 `br-wa-entry-001`, **已随插件管理器落地注销**。本目录收敛为
 > 插件后, 该 workaround 的 ① ② 两条已还清(见 `docs/decisions/0001-platform-plugin-manifest.md`),
-> **③ 仍欠**: `start.S` 的调用点还应由 `.br_plugins` 段的枚举驱动(属 M0 运行期)。
+> 源集合也从"Makefile 字面列举"改成"插件自己的 `[build].sources`"(ADR-0003 的 S1/S4);
+> **③ 仍欠**: 启动链的**调用点**还应由 `.br_plugins` 段的枚举驱动(属 M0 运行期)。
 
 QEMU virt(aarch64)平台插件: reset 汇编 + 异常向量桩 + 链接脚本 + PL011 早期 console +
 arch timer + **GICv3 中断控制器 + 板级 IRQ 绑定表 + 目标侧一致性用例** +
@@ -90,7 +91,7 @@ make dbg-test     # 逐用例要求 PASS([MEMCONF] TC-MEM-*/TC-MM-* + [DBGCONF] 
 
 - v0.1 的 `brickie check` 只管**声明面**完备性: 不保证"编得过 / 跑得对"。上面
   `make smoke` / `make irq-test` / `make dbg-test` 才是行为判据, 它们真跑 QEMU。
-- **QEMU 机器型号必须钉 `gic-version=3`**(根 Makefile 的 `QEMUFLAGS`): QEMU virt 的
+- **QEMU 机器型号必须钉 `gic-version=3`**(本插件 `[build.target.qemu].machine`): QEMU virt 的
   缺省是 GICv2。镜像里的驱动写的是 GICv3 的 MMIO 与系统寄存器, 配错机器型号的症状是
   "PIC 初始化完毕却永远收不到中断"。
 - **开 MMU 之后 `-mstrict-align` 仍是防御性旋钮**(不是硬要求了): RAM 是 Normal 属性且

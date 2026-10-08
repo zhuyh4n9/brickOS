@@ -506,3 +506,31 @@ int br_memleak_selftest(void)
                 s_ml_pass, s_ml_fail, s_ml_pass + s_ml_fail);
     return (int)s_ml_fail;
 }
+
+/* =====================================================================
+ * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物
+ * `build/gen/service/memleak/plugin_desc.c` 引用; 设计 1-01 §9 / 3-05 §2)
+ * 自带原型满足 -Wmissing-prototypes(钩子名由生成器推导, 不进对外头与 [[export]])。
+ * ===================================================================== */
+int memleak_early_init(void);
+int memleak_init(void);
+int memleak_start(void);
+
+/* EARLY 相: 无动作(不用堆/无线程/关中断 —— 本插件虽然"看堆", 但此刻堆还没认领)。 */
+int memleak_early_init(void)
+{
+    return 0;
+}
+
+/* LATE 相(Service 类别 ⇒ ② 完成点): 现有 init 的转调。 */
+int memleak_init(void)
+{
+    return br_memleak_init();
+}
+
+/* START 相: 本服务没有需要"中断可用/可建线程"之后才做的事。 */
+int memleak_start(void)
+{
+    return 0;
+}
+

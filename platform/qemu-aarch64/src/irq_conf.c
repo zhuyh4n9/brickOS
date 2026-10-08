@@ -622,7 +622,7 @@ static void conf_stats(void)
 }
 
 /* =====================================================================
- * 入口(由 `br_core_main` 调用; 见 br_plat.h)
+ * 入口(由 platform 的 `qemu_aarch64_start()` 在 START 相调用 —— 那时全局中断已开; 见 br_plat.h)
  * ===================================================================== */
 int br_plat_irq_conformance(void)
 {

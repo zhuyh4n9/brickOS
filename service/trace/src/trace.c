@@ -421,3 +421,34 @@ int br_trace_svc_selftest(void)
 
     return (int)fails;
 }
+
+/* =====================================================================
+ * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物
+ * `build/gen/service/trace/plugin_desc.c` 引用; 设计 1-01 §9 / 3-05 §2)
+ *
+ * 自带原型满足 -Wmissing-prototypes: 钩子名由**生成器**推导(不是本插件的对外 API),
+ * 所以不写进 `include/br/debug/br_trace_svc.h`、也不进 plugin.toml 的 [[export]]
+ * (那会改接口 hash)。
+ * ===================================================================== */
+int trace_early_init(void);
+int trace_init(void);
+int trace_start(void);
+
+/* EARLY 相: 无动作(不用堆/无线程/关中断; 这里没有要注册的东西)。 */
+int trace_early_init(void)
+{
+    return 0;
+}
+
+/* LATE 相(Service 类别 ⇒ ② 完成点): 现有 init 的转调。 */
+int trace_init(void)
+{
+    return br_trace_svc_init();
+}
+
+/* START 相: 本服务没有需要"中断可用/可建线程"之后才做的事。 */
+int trace_start(void)
+{
+    return 0;
+}
+

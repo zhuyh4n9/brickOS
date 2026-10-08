@@ -15,6 +15,9 @@
 #include <br/board_irq.h>
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
+/* 定时器 ISR → 调度侧的 tick 驱动点(3-02 §11.1 的"路径四": timer PPI → 超时队列)。 */
+#include <br/core/br_sched.h>
+#include <br/core/br_time.h>
 #include <br/platform/br_gicv3.h>
 #include <br/platform/br_plat.h>
 
@@ -201,6 +204,7 @@ static void br_plat_timer_isr(void *arg)
 {
     (void)arg;
     s_timer_ticks++;
+    br_sched_on_tick(br_clock_now());
     br_timer_rearm(BR_BOARD_TIMER_PERIOD_US);
 }
 

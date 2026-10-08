@@ -95,9 +95,9 @@
 
 - **`service/dump`**: `br_dump_leaks()` → `br_memleak_report()`(以及
   `br_dump_conformance()` → `br_memleak_selftest()`)。`product.toml [select].plugins`
-  只选了 `service/dump`, memleak 作为它的 `[[dep]]` 被**同镜像编译**(`make` 的
-  `SVC_SRCS := $(wildcard service/*/src/*.c)` 编全部 service 源码), 但**不是**被显式
-  选中的插件 —— 运行期插件管理器到位后应由 dump 的依赖闭包带入。
+  只选了 `service/dump`, memleak 作为它的 `[[dep]]` 被**同镜像编译**(源集合由本插件
+  `plugin.toml` 的 `[build].sources` 声明、`brickie build` 按依赖闭包消费), 但**不是**
+  被显式选中的插件 —— 运行期插件管理器到位后应由 dump 的依赖闭包带入。
 - **APP 不直调 memleak**(`app/hello/plugin.toml` 没有这条 dep); 它经 dump 的编排间接覆盖。
 - v0.1 **没有运行期插件管理器**: 谁在何时调用 `br_memleak_init()` 是人工编排的,
   即 `WORKAROUND(br-wa-boot-001)` 的欠债(见 `WORKAROUNDS.md`)。
@@ -105,8 +105,8 @@
 ## 验证
 
 ```sh
-make build/obj/service/memleak/src/memleak.o   # 对象级交叉编译(零警告; 不链接)
-make dbg-test                                  # 运行期门禁(需 core 堆实现就位)
+build/host/<triple>/bin/brickie build   # 全镜像交叉编译(含本插件; 零警告)
+make dbg-test                           # 运行期门禁(需 core 堆实现就位)
 ```
 
 用例(编进镜像, 逐项 `[DBGCONF] PASS/FAIL`), 每例收尾都把堆恢复干净:

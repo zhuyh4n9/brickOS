@@ -6,7 +6,7 @@
  * §8 三层模式: 每个 SoC 一个 platform 插件, 提供 reset 汇编、早期 console、时钟、
  * region 表、中断控制器实现)。
  *
- * 还债进度(`WORKAROUND(br-wa-entry-001)`):
+ * 还债进度(`已还清(ADR-0005)`; 该台账条目已随插件管理器落地注销):
  *   ① `brickie` 已能发现/校验插件布局(设计 4-02)并生成描述符(4-03) —— **已还**;
  *   ② 本目录已收敛为插件 `platform/qemu-aarch64`(manifest = `plugin.toml`,
  *      `BR_PLUGIN` 描述符 = 生成物 `build/gen/platform/qemu-aarch64/plugin_desc.c`)

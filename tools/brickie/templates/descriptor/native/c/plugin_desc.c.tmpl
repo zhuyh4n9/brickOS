@@ -2,33 +2,51 @@
  * 重新生成: brickie gen
  * 来源: {{name}}/plugin.toml(唯一真值) + `1-01` §6.1 元契约
  *
- * 本文件按以下**尚未定稿**的假设生成(裁定项 = checklist W-2 / A-3 / A-14 / W-6):
- *   1. 描述符实例形态 = `static const` + `.br_plugins` 段收集
- *      依据 `3-01` §13.3 + CA-10「插件导出面近零」;
- *      **备选**是 `1-01` §6.1 的**非 static** 形态(每插件导出一个强符号)。
- *   2. `ver` 为**四段** {COMPAT_GEN, MAJOR, MINOR, REVISE}(A-14 / BRV-Q7 的目标形态);
- *      现行 `1-01` §6.1 仍写 `ver[3]` ⇒ 直接编译会不兼容, 这是 A-3/A-14 的欠账。
- *   3. 未写 `.sched_class` 与 `.res`: **v0.1 schema 无对应字段**(W-6), 取 C 零初始化。
- *   4. `#include "br_plugin.h"` 的头文件名**未在任何设计文档中定稿**(`3-05` §2 待成文)。
- *
- * v0.1 不编译本文件(V-9: 零编译依赖) —— 它是**声明面产物**, 不是可编译单元。
+ * 本文件**是编译单元**(v0.2 起由 `product.toml [build].gen_sources` 编进镜像)。
+ * 生成规则(逐条与 docs/decisions/0005-plugin-manager.md §2.4 对应):
+ *   1. 描述符实例 = `BR_PLUGIN_SECTION`(static const + `.br_plugins` 段 + aligned(8));
+ *      宏与字段的唯一真值在 `br/core/br_plugin.h`(对齐从设计的 aligned(4) 抬到 8 ——
+ *      结构体含指针, 见该头文件开头的偏离登记);
+ *   2. `plugin_type` / `subkind` / `sched_class` 由 plugin.toml 的字符串映射成 BR_* 常量;
+ *      `phase_self` 原样带出(**仅呈现/诊断** —— init 落在哪一相由**类别**决定, `1-01` §9);
+ *   3. `deps` = `[[dep]]` 逐条(全部 kind 都带出, 不只 init —— 声明面产物要忠实),
+ *      以 `.name = BR_NULL` 结尾; plugin_manager 只取 `kind == BR_DEP_INIT` 建边;
+ *   4. 钩子发射规则: `early_init` / `start` 对**全部插件**(`1-01` §6.2 的表: 这两相覆盖
+ *      全部插件); `init` 仅在 `phase != "early"` 时发射, 否则 `BR_PLUGIN_NO_HOOK`;
+ *   5. `descriptor_include`: 插件 `include/` 下**恰有一个**对外头时用它(声明面锚点),
+ *      否则回落到元契约头(多头插件无法机器判定"主头")。
  */
-#include "br_plugin.h"
-
+#include <br/core/br_plugin.h>
 #include "{{descriptor_include}}"
 
-/* 段收集: 插件无需导出任何符号;
- * plugin_manager 经链接器边界符号 __br_plugins_start/__br_plugins_stop 枚举。 */
-#define BR_PLUGIN_SECTION __attribute__((used, section(".br_plugins"), aligned(4)))
+/* 生命周期钩子的原型(生成物自证): 名字 = symbol_prefix + 相, 定义在各插件源码里。
+ * 为什么不靠插件对外头声明它们: 钩子名是**生成器**按 `symbol_prefix` 推导的; 插件头
+ * 只声明该插件自己的 API 面(`-Wmissing-prototypes` 由各 .c 自带原型满足)。 */
+{{early_proto}}
+{{init_proto}}
+{{start_proto}}
+
+{{deps_array}}
+/*
+ * 生成物数量: 每个 `plugin_desc.c` 给一条**同值的弱定义** ⇒ 链接器任取一条。
+ * plugin_manager 的一致性用例用它断言"段里的条数 == 生成物数量"(TC-PLUG-001)。
+ * 弱 = 没把生成物编进镜像时, core 仍能单独链接(那时该断言会红 —— 这正是要的)。
+ */
+__attribute__((weak)) const br_u32 br_plugin_gen_total = {{gen_total}}u;
 
 static const br_plugin_t BR_PLUGIN_SECTION {{descriptor_symbol}} = {
-    .name       = "{{name}}",
-    .ver        = { 0, 1, 0, 0 },   /* {{version}} = COMPAT_GEN.MAJOR.MINOR.REVISE; 骨架初值 */
-    .api_rev    = 1,
-    .deps       = 0,        /* 骨架无结构依赖; brickie dep add 写入 plugin.toml 后重算 */
-    .abi_id     = "",
-    .api_syms   = 0,        /* 仅 Interface 插件占有符号族(`1-01` §7.3); 骨架未声明 */
-    .early_init = {{symbol_prefix}}early_init,
-    .init       = {{symbol_prefix}}init,
-    .start      = {{symbol_prefix}}start,
+    .name        = "{{name}}",
+    .plugin_type = {{plugin_type_id}},
+    .subkind     = {{subkind_id}},
+    .phase_self  = "{{phase}}",
+    .ver         = { {{COMPAT_GEN}}, {{MAJOR}}, {{MINOR}}, {{REVISE}} },
+    .api_rev     = {{api_rev}},
+    .sched_class = {{sched_class_id}},
+    .deps        = {{deps_expr}},
+    .abi_id      = "{{abi_id}}",
+    .api_syms    = BR_NULL,
+    .res         = { {{res_ram_kib}}u, {{res_stack_kib}}u },
+    .early_init  = {{symbol_prefix}}early_init,
+    .init        = {{init_hook}},
+    .start       = {{symbol_prefix}}start,
 };

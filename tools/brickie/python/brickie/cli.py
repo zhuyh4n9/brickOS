@@ -16,25 +16,28 @@
       → 落盘(幂等; --check 时只比对 ⇒ 不一致退出码 1)
       → 呈现(文本与 --json 同源)
 
-## 命令面(23 叶子 + 2 全局开关)
+## 命令面(29 叶子 + 2 全局开关, 两条族)
 
-``new`` / ``init`` / ``gen`` / ``dep {add,rm,tree,graph,why,index,closure}`` / ``check`` /
-``ver {show,bump}`` / ``iface {list,show,diff,status,publish,freeze,deprecate,undeprecate,
-unfreeze,refreeze}`` / ``--version [--deps]`` / ``--json``。
+**组合期族**(23 叶子): ``new`` / ``init`` / ``gen`` / ``dep {add,rm,tree,graph,why,index,closure}`` /
+``check`` / ``ver {show,bump}`` / ``iface {list,show,diff,status,publish,freeze,deprecate,
+undeprecate,unfreeze,refreeze}`` / ``--version [--deps]`` / ``--json``。
 
-**checklist §5.4 明确不做的命令一条都不在这里**(未交付的命令不得出现在 ``--help`` 里,
-§5.5 的反向验收)。
+**构建族**(6 叶子, ADR-0004): ``build`` / ``clean`` / ``run`` / ``size`` / ``disasm`` / ``test``。
+
+checklist §5.4 明确**不做**的命令一条都不在这里(未交付的命令不得出现在 ``--help`` 里,
+§5.5 的反向验收); ``build``/``test``/``run`` 已由 ADR-0004 交付, 故从禁名名单移除。
 """
 
 from __future__ import annotations
 
 import argparse
+import shutil
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 
 from . import PROTOCOL, __version__
-from . import native, present, schema, writer
+from . import native, present, runner, schema, writer
 from .native import NativeError
 
 # argparse 的用法错与 BRV-D9 的退出码 2 是同一档
@@ -43,9 +46,14 @@ _EXIT_RED = 1        # 校验红(环 / 冲突 / 版本 / 分类学 / 特权 / --
 _EXIT_USAGE = 2      # 用法或环境错(参数非法 / 形状不符 / 路径不存在 / 原生件缺失)
 
 _EPILOG = """\
-v0.1 的边界: 本工具是**声明面完备性检查器** —— 保证组合在逻辑上自洽,
-不保证"编得过 / 跑得对"; 任何命令都不会要求 cc / cargo / nm 在场(brickie-v0.1 §0)。
-判定与错误码一律来自 brickie-core; 本前端只做参数解析 / 编排 / 落盘 / 呈现。
+v0.1 的边界: 组合期命令(check / dep / iface / gen / new)是**声明面完备性检查器** ——
+保证组合在逻辑上自洽, 不保证"编得过 / 跑得对"; 这一族**不要求** cc / cargo / nm 在场
+(brickie-v0.1 §0 的边界纪律, 也是 CI 零编译依赖作业的前提)。
+
+构建族(build / run / test / size / disasm / clean)是**后来长出来的第二族**(ADR-0004):
+它按**同一个声明面**组合镜像并驱动交叉工具链 —— "要求编译器在场"是它的职责, 不是
+纪律的例外条款。判定与错误码一律来自 brickie-core; 本前端只做参数解析 / 编排 /
+落盘 / 执行 / 呈现。
 """
 
 
@@ -131,6 +139,49 @@ def build_parser() -> argparse.ArgumentParser:
                 "重建生成物(描述符 + 头文件); --check 逐字节比对不写盘。")
     gen.add_argument("--check", action="store_true",
                      help="只比对不写盘; 与重算不一致 ⇒ 退出码 1")
+
+    # ---------------------------------------------------------- build 族(ADR-0004)
+    # 边界纪律的一处**显式偏离**: v0.1 的"任何命令不得要求 cc/cargo/nm 在场"指的是
+    # **组合期**命令(见 contract §9 的 R-13); build 族就是"要求交叉编译器在场"的那一族。
+    build = _leaf(sub, "build", "构建镜像(声明面驱动; 替代 make 的组合段)",
+                  "构建 aarch64 镜像: 组合期 check → 生成物 → 编译/链接 → 构建后门禁。")
+    build.add_argument("--profile", default=None, metavar="<profile>",
+                       help="dev | release(缺省 = product.toml 的 [product].stage)")
+    build.add_argument("--jobs", "-j", type=int, default=0, metavar="N",
+                       help="并发步骤数(0 = CPU 数)")
+    build.add_argument("--backend", default="direct", metavar="<backend>",
+                       help="direct(默认, brickie 自己编排) | make | ninja(BR-D4 的 A/B)")
+    build.add_argument("--tag", default=None, metavar="<tag>",
+                       help="产物后缀(后端对比门禁用: build/brick-<tag>.elf)")
+    build.add_argument("--dry-run", action="store_true", help="只打印计划, 不执行")
+    build.add_argument("--force", action="store_true", help="忽略增量状态, 全量重建")
+    build.add_argument("--emit-backends", action="store_true",
+                       help="只产出 build/gen/{build.mk,build.ninja}, 不执行")
+    build.add_argument("--no-post", action="store_true",
+                       help="跳过 tests/gates.toml 的 [build].post 门禁")
+
+    clean = _leaf(sub, "clean", "清掉镜像产物(不动 build/host 的工具)")
+    clean.add_argument("--all", action="store_true",
+                       help="连 build/gen 与 build/index 一起清")
+
+    run = _leaf(sub, "run", "在 QEMU 上跑镜像(Ctrl-A X 退出)")
+    run.add_argument("--no-build", action="store_true", help="不先构建, 直接跑现有镜像")
+    run.add_argument("--timeout-s", type=int, default=0, metavar="N",
+                     help="限时跑(0 = 不限时, 交互式)")
+
+    size = _leaf(sub, "size", "段体积(size -A -x)")
+    size.add_argument("--no-build", action="store_true")
+
+    disasm = _leaf(sub, "disasm", "反汇编前 N 行")
+    disasm.add_argument("--head", type=int, default=120, metavar="N")
+    disasm.add_argument("--no-build", action="store_true")
+
+    test = _leaf(sub, "test", "跑门禁(宿主用例 + QEMU 日志判据 + 脚本门禁)",
+                 "跑 tests/gates.toml 声明的门禁; 不给名字 = 全跑。")
+    test.add_argument("name", nargs="?", default=None, metavar="[name]")
+    test.add_argument("--list", action="store_true", help="列出全部门禁名")
+    test.add_argument("--jobs", "-j", type=int, default=0, metavar="N")
+    test.add_argument("--no-build", action="store_true", help="不先构建, 直接跑门禁")
 
     # ---------------------------------------------------------- dep 族
     dep = sub.add_parser("dep", help="依赖管理与分析(§7.7)",
@@ -572,6 +623,344 @@ def _cmd_gen(ns: argparse.Namespace) -> Result:
     return Result("gen", exit_code, diagnostics, response["data"], written, extra)
 
 
+
+# ------------------------------------------------------------------ build 族(ADR-0004)
+
+
+def _out(ns: argparse.Namespace):
+    """人读进度的落点: ``--json`` 时一律走 stderr(否则 stdout 不是合法 JSON)。"""
+    return sys.stderr if getattr(ns, "json", False) else sys.stdout
+
+
+def _note(message: str, hint: str = "", *, severity: str = "error",
+          code: str | None = None) -> dict:
+    """L5 侧的编排级诊断(不是业务判定): 步骤失败 / 环境错。"""
+    return {
+        "code": code, "severity": severity, "target": "", "file": "", "span": "",
+        "message": message, "hint": hint,
+    }
+
+
+def _judge_callback(root: Path):
+    """把 core 的 ``judge`` 命令包成执行器要的回调(判据仍在 core)。"""
+    def judge(name: str, text: str) -> dict:
+        response = native.call_core(
+            native.make_request("judge", root, {"name": name}, {"log": text})
+        )
+        return {
+            "failed": (response.get("data") or {}).get("failed", 0),
+            "diagnostics": response.get("diagnostics") or [],
+            "exit_code": response.get("exit_code", 0),
+        }
+    return judge
+
+
+def _compose(root: Path, profile: str | None) -> tuple[list[dict], int, dict]:
+    """组合期三段: ``check`` → ``gen-plan`` → 渲染并落盘生成物。
+
+    这是 ``brickie build`` 的**前半段**(设计 ADR-0003 的 S3 判据: "``brickie build``
+    覆盖 check + 生成 + 编译")。退出码非 0 ⇒ 调用方必须停下 —— 声明面不自洽时编出来的
+    镜像没有意义。
+    """
+    diagnostics: list[dict] = []
+    check_args: dict = {}
+    if profile:
+        check_args["profile"] = profile
+    check = _call_core("check", root, check_args)
+    diagnostics += check["diagnostics"]
+    if check["exit_code"] != _EXIT_OK:
+        return diagnostics, check["exit_code"], check["data"]
+
+    plan = _call_core("gen-plan", root, {})
+    diagnostics += plan["diagnostics"]
+    if plan["exit_code"] != _EXIT_OK:
+        return diagnostics, plan["exit_code"], plan["data"]
+    artifacts = _plan_artifacts(plan)
+    if artifacts:
+        files, gen_diagnostics, gen_exit, kinds = _collect_files(root, plan["data"], artifacts)
+        diagnostics += gen_diagnostics
+        if gen_exit != _EXIT_OK:
+            return diagnostics, gen_exit, plan["data"]
+        outcome = writer.write_files(root, files, kinds=kinds)
+        diagnostics += _human_skip_diagnostics(outcome.skipped_human)
+    return diagnostics, _EXIT_OK, check["data"]
+
+
+def _persist(root: Path, files: list[dict]) -> tuple[list[str], list[dict]]:
+    """落 core 给的机器文件(后端文件 / 增量状态), 幂等。"""
+    if not files:
+        return [], []
+    kinds = {f["path"]: str(f.get("kind") or "machine") for f in files if isinstance(f.get("path"), str)}
+    outcome = writer.write_files(root, files, kinds=kinds)
+    return outcome.written, _human_skip_diagnostics(outcome.skipped_human)
+
+
+def _post_gate_names(root: Path) -> list[str]:
+    """``tests/gates.toml [build].post`` —— 构建成功后自动跑的门禁名。"""
+    response = _call_core("test", root, {"list": True})
+    return list((response.get("data") or {}).get("build_post") or [])
+
+
+def _cmd_build(ns: argparse.Namespace) -> Result:
+    root = _root_of(ns)
+    gate = _shape_gate(root, ("plugin", "product"))
+    if _has_error(gate):
+        return Result("build", _EXIT_USAGE, gate, {}, [], {"args": {"build": True}})
+
+    profile = _enum(ns.profile, ("dev", "release"), "--profile") if ns.profile else None
+    diagnostics, exit_code, check_data = _compose(root, profile)
+    if exit_code != _EXIT_OK:
+        return Result("build", exit_code, gate + diagnostics, check_data, [])
+
+    args: dict = {"backend": ns.backend, "jobs": int(ns.jobs or 0)}
+    if profile:
+        args["profile"] = profile
+    if ns.tag:
+        args["tag"] = ns.tag
+    if ns.dry_run:
+        args["dry_run"] = True
+    if ns.force:
+        args["force"] = True
+    if ns.emit_backends:
+        args["emit_backends"] = True
+
+    response = _call_core("build", root, args)
+    diagnostics += response["diagnostics"]
+    data = response["data"]
+    if response["exit_code"] != _EXIT_OK:
+        return Result("build", response["exit_code"], gate + diagnostics, data, [])
+
+    written, write_diagnostics = _persist(root, response["files"])
+    diagnostics += write_diagnostics
+
+    steps = list(data.get("steps") or [])
+    if ns.dry_run or ns.emit_backends:
+        results, ok = runner.run_steps(root, steps, jobs=ns.jobs, dry_run=True, out=_out(ns))
+    else:
+        results, ok = runner.run_steps(
+            root, steps, jobs=ns.jobs, judge=_judge_callback(root), out=_out(ns)
+        )
+
+    # 构建后门禁(短名单; 缺省跑 `[build].post` 声明的那些)
+    post: list[str] = []
+    # 带 `--tag` 的是**诊断性构建**(后端对比 / 双份产物): 门禁的 argv 里写的是默认
+    # 落点(`build/obj/...`), 对带 tag 的构建不成立 —— 所以 tag 构建不跑构建后门禁。
+    if ok and not ns.dry_run and not ns.emit_backends and not ns.no_post and not ns.tag:
+        post = _post_gate_names(root)
+        for name in post:
+            gate_result = _run_test(root, name, jobs=ns.jobs, diagnostics=diagnostics, out=_out(ns))
+            diagnostics = gate_result["diagnostics"]
+            if gate_result["exit_code"] != _EXIT_OK:
+                ok = False
+                break
+
+    exit_code = _EXIT_OK if ok else _EXIT_RED
+    extra = {
+        "args": {"build": True, "backend": ns.backend, "profile": profile or data.get("profile")},
+        "results": [_result_summary(r) for r in results],
+        "post": post,
+        "written": written,
+    }
+    if not ok:
+        diagnostics.append(_note(
+            "构建失败: 有步骤未通过(见上面的步骤输出)",
+            "先看第一个 FAIL 的步骤输出; 退出码 1 = 校验/构建红, 2 = 用法或环境错",
+        ))
+    return Result("build", exit_code, gate + diagnostics, data, written, extra)
+
+
+def _result_summary(result) -> dict:
+    return {
+        "label": result.label,
+        "kind": result.kind,
+        "ok": result.ok,
+        "rc": result.rc,
+        "timed_out": result.timed_out,
+        "judged": result.judged,
+        "judge_failed": result.judge_failed,
+        "log": result.log,
+    }
+
+
+def _run_test(root: Path, name: str | None, *, jobs: int, diagnostics: list[dict],
+              out=None) -> dict:
+    """跑一组(或一个)门禁; 返回 ``{diagnostics, exit_code, data, results}``。"""
+    args: dict = {"jobs": int(jobs or 0)}
+    if name:
+        args["name"] = name
+    response = _call_core("test", root, args)
+    diagnostics = diagnostics + response["diagnostics"]
+    data = response["data"]
+    if response["exit_code"] != _EXIT_OK:
+        return {"diagnostics": diagnostics, "exit_code": response["exit_code"], "data": data, "results": []}
+    steps = list(data.get("steps") or [])
+    if not steps:
+        return {"diagnostics": diagnostics, "exit_code": _EXIT_OK, "data": data, "results": []}
+    results, ok = runner.run_steps(root, steps, jobs=jobs, judge=_judge_callback(root), out=out)
+    for step, result in zip(steps, results):
+        diagnostics += result.diagnostics
+        if not result.ok and not result.judged:
+            diagnostics.append(_note(
+                f"门禁步骤失败: {result.label}",
+                f"退出码 {result.rc}" + ("(超时)" if result.timed_out else ""),
+                code=step.get("fail_code"),
+            ))
+    return {
+        "diagnostics": diagnostics,
+        "exit_code": _EXIT_OK if ok else _EXIT_RED,
+        "data": data,
+        "results": results,
+    }
+
+
+def _cmd_test(ns: argparse.Namespace) -> Result:
+    root = _root_of(ns)
+    if ns.list:
+        response = _call_core("test", root, {"list": True})
+        return Result("test", response["exit_code"], response["diagnostics"], response["data"], [],
+                      {"list": True})
+
+    diagnostics: list[dict] = []
+    gate = _shape_gate(root, ("plugin", "product"))
+    if _has_error(gate):
+        return Result("test", _EXIT_USAGE, gate, {}, [])
+
+    if not ns.no_build:
+        compose_diagnostics, exit_code, _ = _compose(root, None)
+        diagnostics += compose_diagnostics
+        if exit_code != _EXIT_OK:
+            return Result("test", exit_code, diagnostics, {}, [])
+        build = _call_core("build", root, {"jobs": int(ns.jobs or 0)})
+        diagnostics += build["diagnostics"]
+        if build["exit_code"] != _EXIT_OK:
+            return Result("test", build["exit_code"], diagnostics, build["data"], [])
+        written, write_diagnostics = _persist(root, build["files"])
+        diagnostics += write_diagnostics
+        _, built = runner.run_steps(
+            root, list(build["data"].get("steps") or []), jobs=ns.jobs,
+            judge=_judge_callback(root), out=_out(ns),
+        )
+        if not built:
+            diagnostics.append(_note("门禁前置的构建未通过", "先修 `brickie build`"))
+            return Result("test", _EXIT_RED, diagnostics, build["data"], [])
+
+    outcome = _run_test(root, ns.name, jobs=ns.jobs, diagnostics=diagnostics, out=_out(ns))
+    extra = {"results": [_result_summary(r) for r in outcome["results"]]}
+    return Result("test", outcome["exit_code"], outcome["diagnostics"], outcome["data"], [], extra)
+
+
+def _cmd_run(ns: argparse.Namespace) -> Result:
+    root = _root_of(ns)
+    if not ns.no_build:
+        built = _build_for_tools(ns)
+        if built.exit_code != _EXIT_OK:
+            built.command = "run"
+            return built
+    args: dict = {}
+    if ns.timeout_s:
+        args["timeout_s"] = int(ns.timeout_s)
+    response = _call_core("run", root, args)
+    data = response["data"]
+    steps = list(data.get("steps") or [])
+    if steps and not ns.json:
+        print(f"QEMU: {' '.join(steps[0]['argv'])}")
+        print("      (Ctrl-A X 退出)")
+    results, ok = runner.run_steps(root, steps, jobs=1, out=_out(ns))
+    return Result(
+        "run", _EXIT_OK if ok else _EXIT_RED, response["diagnostics"], data, [],
+        {"results": [_result_summary(r) for r in results]},
+    )
+
+
+def _cmd_size(ns: argparse.Namespace) -> Result:
+    return _tool_command(ns, "size")
+
+
+def _cmd_disasm(ns: argparse.Namespace) -> Result:
+    root = _root_of(ns)
+    if not ns.no_build:
+        built = _build_for_tools(ns)
+        if built.exit_code != _EXIT_OK:
+            built.command = "disasm"
+            return built
+    response = _call_core("disasm", root, {"head": int(ns.head or 120)})
+    steps = list((response.get("data") or {}).get("steps") or [])
+    results, ok = runner.run_steps(root, steps, jobs=1, out=_out(ns))
+    return Result(
+        "disasm", _EXIT_OK if ok else _EXIT_RED, response["diagnostics"], response["data"], [],
+        {"results": [_result_summary(r) for r in results]},
+    )
+
+
+def _tool_command(ns: argparse.Namespace, which: str) -> Result:
+    root = _root_of(ns)
+    if not ns.no_build:
+        built = _build_for_tools(ns)
+        if built.exit_code != _EXIT_OK:
+            built.command = which
+            return built
+    response = _call_core(which, root, {})
+    steps = list((response.get("data") or {}).get("steps") or [])
+    results, ok = runner.run_steps(root, steps, jobs=1, out=_out(ns))
+    return Result(
+        which, _EXIT_OK if ok else _EXIT_RED, response["diagnostics"], response["data"], [],
+        {"results": [_result_summary(r) for r in results]},
+    )
+
+
+def _build_for_tools(ns: argparse.Namespace) -> Result:
+    """``run`` / ``size`` / ``disasm`` 的"先构建"复用 ``build`` 的流水线。"""
+    root = _root_of(ns)
+    diagnostics, exit_code, _ = _compose(root, None)
+    if exit_code != _EXIT_OK:
+        return Result("build", exit_code, diagnostics, {}, [])
+    response = _call_core("build", root, {"jobs": int(getattr(ns, "jobs", 0) or 0)})
+    diagnostics += response["diagnostics"]
+    if response["exit_code"] != _EXIT_OK:
+        return Result("build", response["exit_code"], diagnostics, response["data"], [])
+    written, write_diagnostics = _persist(root, response["files"])
+    diagnostics += write_diagnostics
+    results, ok = runner.run_steps(
+        root, list((response.get("data") or {}).get("steps") or []),
+        jobs=int(getattr(ns, "jobs", 0) or 0), judge=_judge_callback(root), out=_out(ns),
+    )
+    if not ok:
+        diagnostics.append(_note("构建未通过: run/size/disasm 被挡住", "先修 `brickie build`"))
+    return Result(
+        "build", _EXIT_OK if ok else _EXIT_RED, diagnostics, response["data"], written,
+        {"args": {"build": True, "quiet": True}},
+    )
+
+
+def _cmd_clean(ns: argparse.Namespace) -> Result:
+    root = _root_of(ns)
+    response = _call_core("clean", root, {"all": bool(ns.all)})
+    diagnostics = list(response["diagnostics"])
+    if response["exit_code"] != _EXIT_OK:
+        return Result("clean", response["exit_code"], diagnostics, response["data"], [])
+
+    removed: list[str] = []
+    for rel in (response.get("data") or {}).get("paths") or []:
+        target = (root / str(rel)).resolve()
+        root_resolved = root.resolve()
+        # 守卫: 只删 root 之内的相对路径, 且不删 root 本身(路径来自声明面, 仍要防手抖)。
+        if target == root_resolved or root_resolved not in target.parents:
+            diagnostics.append(_note(
+                f"拒绝删除 root 之外的路径: {rel}",
+                "`clean` 只清声明面给出的、落在仓库内的派生路径",
+            ))
+            continue
+        if target.is_dir():
+            shutil.rmtree(target, ignore_errors=True)
+        elif target.exists():
+            target.unlink()
+        else:
+            continue
+        removed.append(str(rel))
+    return Result("clean", _EXIT_OK, diagnostics, response["data"], removed,
+                  {"removed": removed})
+
+
 def _cmd_check(ns: argparse.Namespace) -> Result:
     root = _root_of(ns)
     profile = _enum(ns.profile, ("dev", "release"), "--profile")
@@ -701,6 +1090,18 @@ def _dispatch(ns: argparse.Namespace) -> Result:
         return _cmd_gen(ns)
     if ns.command == "check":
         return _cmd_check(ns)
+    if ns.command == "build":
+        return _cmd_build(ns)
+    if ns.command == "clean":
+        return _cmd_clean(ns)
+    if ns.command == "run":
+        return _cmd_run(ns)
+    if ns.command == "size":
+        return _cmd_size(ns)
+    if ns.command == "disasm":
+        return _cmd_disasm(ns)
+    if ns.command == "test":
+        return _cmd_test(ns)
     group = getattr(ns, "group_cmd", None)
     if ns.command == "dep":
         return _cmd_dep(ns, group)

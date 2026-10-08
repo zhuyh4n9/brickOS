@@ -334,3 +334,31 @@ int br_bt_selftest(void)
 
     return (int)fails;
 }
+
+/* =====================================================================
+ * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物
+ * `build/gen/service/backtrace/plugin_desc.c` 引用; 设计 1-01 §9 / 3-05 §2)
+ * 自带原型满足 -Wmissing-prototypes(钩子名由生成器推导, 不进对外头与 [[export]])。
+ * ===================================================================== */
+int backtrace_early_init(void);
+int backtrace_init(void);
+int backtrace_start(void);
+
+/* EARLY 相: 无动作(栈边界由 platform 在它的 early_init 里设置, 本插件不碰)。 */
+int backtrace_early_init(void)
+{
+    return 0;
+}
+
+/* LATE 相(Service 类别 ⇒ ② 完成点): 现有 init 的转调。 */
+int backtrace_init(void)
+{
+    return br_bt_init();
+}
+
+/* START 相: 本服务没有需要"中断可用/可建线程"之后才做的事。 */
+int backtrace_start(void)
+{
+    return 0;
+}
+

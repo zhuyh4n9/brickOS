@@ -41,3 +41,25 @@ steps    = ["br_dump_all()", "br_bt_last_count()", "br_mm_region_count()", "br_m
 expect   = "dump_all 累计行数 >= 8(首末标题 + region + heap + leaks + trace + bt); 且子段观测交叉成立(region_count > 0, bt_last_count > 0, heap_check == 0)"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]
+
+# ---- 插件生命周期钩子(v0.2 起由 core 的 plugin_manager 按相位驱动)----
+#
+# 名字 = `symbol_prefix(short)` + 相 ⇒ `dump_early_init` / `dump_init` / `dump_start`
+# (生成物 `build/gen/service/dump/plugin_desc.c` 引用)。钩子是组合期契约, 不进 [[export]]。
+#
+# ★ `dump_init` 的位置 = **LATE 相**, 而且 plugin.toml 对 trace/backtrace/hexdump/memleak
+#   各有一条 `kind = "init"` 的边(phase = "late")⇒ plugin_manager 的拓扑序保证它们的
+#   init 先返回(没有这四条边, LATE 相顺序会退化成字典序, dump 会排到最前)。
+# ★ 它同时是 v0.1 里 `br_core_main` 直调 `br_dump_conformance()` 的**替代调用点** ——
+#   APP 不再需要 app → service/dump 的依赖边。
+[[case]]
+id       = "dump-late-init"
+pre      = "plugin_manager 已扫 .br_plugins 段并完成拓扑排序; trace/backtrace/hexdump/memleak 的 LATE init 已返回"
+steps    = [
+    "EARLY 相: dump_early_init()(不碰堆/不读 region)",
+    "LATE 相: dump_init() → br_dump_init() → br_dump_conformance() → br_dump_all() 取启动快照",
+    "START 相: dump_start()(本插件无动作)",
+]
+expect   = "返回 0; 日志出现 [DBGCONF] SUMMARY fail=0、`dbg: boot snapshot lines=` 与 [PLUGIN] phase=late name=service/dump rc=0"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

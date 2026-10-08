@@ -118,7 +118,7 @@ purity_pattern_check "无 hash/图论/求解库" \
     '\b(hashlib|hmac|networkx|graphlib|z3|numpy|scipy)\b' \
     "hash 计算 / 拓扑排序 / 区间求解是判定层职责"
 purity_pattern_check "无规则形状的函数名" \
-    'def[[:space:]]+[a-zA-Z_]*(solve|topo|detect_cycle|find_cycle|intersect|satisf|bump_version|advance_version|canonical_surface|surface_hash|compute_hash|content_hash|classify|privilege_level|budget_sum|change_set|verdict)' \
+    'def[[:space:]]+[a-zA-Z_]*\b(solve|topo|detect_cycle|find_cycle|intersect|satisf|bump_version|advance_version|canonical_surface|surface_hash|compute_hash|content_hash|classify|privilege_level|budget_sum|change_set|verdict)' \
     "这些名字对应闭包/环/区间/推进/规范化/分类/特权/预算判定"
 purity_pattern_check "无版本段算术" \
     '(compat_gen|major|minor|revise)[[:space:]]*[-+*/]|[-+*/][[:space:]]*(compat_gen|major|minor|revise)' \

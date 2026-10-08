@@ -34,3 +34,21 @@ steps    = [
 expect   = "[DBGCONF] PASS TC-DBG-011 ..."
 sched    = ["coop"]
 platform = ["host", "qemu-aarch64"]
+
+# ---- 插件生命周期钩子(v0.2 起由 core 的 plugin_manager 按相位驱动)----
+#
+# 名字 = `symbol_prefix(short)` + 相 ⇒ `backtrace_early_init` / `backtrace_init` /
+# `backtrace_start`(生成物引用)。钩子是组合期契约, 不进 [[export]]。
+# ★ 栈边界由 platform 在**它的** early_init 里设置; 本插件的 EARLY 钩子刻意什么都不做
+#   (LATE 的 init 也不清边界 —— 否则会把那次设置抹掉, 见 br_bt.c 的 init 注释)。
+[[case]]
+id       = "bt-late-init"
+pre      = "plugin_manager 已扫 .br_plugins 段并完成拓扑排序; EARLY 相已过"
+steps    = [
+    "EARLY 相: backtrace_early_init()(不碰栈边界)",
+    "LATE 相(Service 类别 ⇒ ② 完成点): backtrace_init() → br_bt_init()",
+    "START 相: backtrace_start()(本插件无动作)",
+]
+expect   = "三步都返回 0; 日志出现 [PLUGIN] phase=early/late/start name=service/backtrace rc=0"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

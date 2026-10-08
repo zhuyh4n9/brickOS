@@ -21,3 +21,43 @@ stack_kib = 16
 [lint]
 frozen_deps = "inherit"       # inherit | allow | deny
 allow_edges = []
+
+[build]
+# ============================================================ 构建策略(`brickie build`)
+#
+# ★ **没有它, `brickie build` 直接报 `BRV-BLD-0001`。** 镜像的源码集合与标志由**声明面**
+#   算出来(ADR-0004 / 设计 ADR-0003 的 S1–S3), 不再是手写 Makefile 里的字面量:
+#     · 每个插件的源/包含        → 各自 plugin.toml 的 `[build]`
+#     · 目标事实(arch/交叉前缀/链接脚本) → platform 插件的 `[build.target]`
+#     · 本表                     → 产品级策略(标志 + 产物落点 + 核心本体的源集合)
+#   下面这份缺省是"AArch64 裸机 ELF, 不用 libc"的最小可用集 —— 每一条都有理由:
+#     -ffreestanding / -fno-builtin   无宿主运行时假设; 不把循环偷偷换成 memcpy
+#     -fno-stack-protector            没有 libc 的 __stack_chk_fail
+#     -fno-omit-frame-pointer         栈回溯(service/backtrace)的**编译期前提**: -O2 会把 fp 省掉
+#     -fno-pic / -fno-pie             裸机无重定位
+#     -ffunction-sections/-fdata-sections + -Wl,--gc-sections   没用到的不进镜像
+core_sources  = ["core/src/*.c", "core/src/*/*.c"]   # 核心本体(**不是插件**)
+core_includes = ["core/include"]
+gen_sources   = []                                    # `brickie gen` 的生成物(描述符等)要不要进镜像
+obj_dir       = "build/obj"
+
+cflags = [
+  "-std=c11", "-O2", "-g3",
+  "-Wall", "-Wextra", "-Werror", "-Wshadow", "-Wundef", "-Wpointer-arith",
+  "-Wstrict-prototypes", "-Wmissing-prototypes",
+  "-ffreestanding", "-fno-builtin", "-fno-common", "-fno-stack-protector",
+  "-ffunction-sections", "-fdata-sections",
+  "-fno-pic", "-fno-pie",
+  "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
+  "-fno-omit-frame-pointer",
+]
+asflags = ["-g3"]
+ldflags = [
+  "-nostdlib", "-nostartfiles", "-static", "-no-pie",
+  "-Wl,--build-id=none", "-Wl,--gc-sections", "-Wl,-z,max-page-size=4096",
+]
+# 链接脚本(`-Wl,-T`)与 `-Wl,-Map` 由工具注入(前者来自 platform 的 `[build.target]`),
+# 不在这里重复 —— 一份事实一个可写处。
+
+# [build.release]                 # `--profile release` 时**追加**的标志(可选)
+# cflags_extra = ["-DNDEBUG"]

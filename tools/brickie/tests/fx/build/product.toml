@@ -1,0 +1,38 @@
+# fx/build — **构建族夹具**(最小可构建树; 用例只跑 `build --dry-run` / `--emit-backends`,
+# 不调用任何编译器)。
+#
+# 形态: app/hello → iface/hello-api → service/echo → sched/coop → platform/qemu-aarch64
+# (与 fx/showcase 同拓扑, 只是把 hsm/crypto 改成 hello/echo 并补上真实源文件与 [build.target])。
+schema = 1
+
+[product]
+name    = "fx-build"
+version = "0.1.0.0"
+app     = "app/hello"
+core    = ">=1.0.0"
+stage   = "dev"
+
+[select]
+plugins = ["app/hello"]
+
+[budget]
+ram_kib   = 512
+stack_kib = 16
+
+[lint]
+frozen_deps = "inherit"
+allow_edges = []
+
+# 产品级构建策略(contract §7.2): 本夹具的 cflags 故意很短 —— 用例只断言"标志进了 argv",
+# 不复制真产品的交叉编译纪律(那是 product.toml 的事)。
+[build]
+core_sources  = ["core/src/*.c"]
+core_includes = ["core/include"]
+gen_sources   = []
+obj_dir       = "build/obj"
+cflags  = ["-std=c11", "-O0", "-DFX_BUILD=1"]
+asflags = ["-g3"]
+ldflags = ["-nostdlib", "-no-pie"]
+
+[build.release]
+cflags_extra = ["-DNDEBUG"]

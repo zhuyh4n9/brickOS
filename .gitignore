@@ -1,10 +1,19 @@
 # 构建产物(设计侧纪律: 状态目录不进版本库 —— 2-02 §BR-D5 / Q5)
 #
-# 全部产物都收敛在 build/ 下, 分两侧(参考 Android 的 out/host 与 out/target):
+# 全部产物都收敛在**仓库根**的 build/ 下, 分两侧(参考 Android 的 out/host 与 out/target):
 #   build/obj, build/brick.elf|.bin|.map   镜像(交叉工具链)
 #   build/host/<host-arch>/<host-os>/**   宿主工具(brickie 入口 ELF + brickie-gen)
 #   build/gen/**                           brickie 生成的声明面产物
-build/
+#
+# ⚠ 只忽略**根**的 build/, 不忽略任意深度的 `build/`(所以是 `/build/` 而不是 `build/`)。
+#   理由是一次真实的坑: 用例夹具 `tools/brickie/tests/fx/build/`(V-B 构建族的输入树)被
+#   无锚点的 `build/` 规则**静默吃掉**, 本地一切正常、`git status` 也看不出异常 ——
+#   但 clone 出来的仓库里没有它, `tools-test` 立刻红。凡"按名字忽略"的规则都要先问一句:
+#   会不会有**别的正当目录**也叫这个名字?
+/build/
+
+# 工具自身的 C++ 中间产物(以前被无锚点的 `build/` 顺带忽略, 现在显式列出)
+/tools/brickie/cxx/build/
 
 # 外部工具链的**下载缓存**(由 tools/fetch-prebuilt.py 重建; 派生, 体积以 GB 计)
 # ⚠ 与 prebuilts/(**复数**)区分: 那个是随源码提交的**自举种子**, 必须进版本库。

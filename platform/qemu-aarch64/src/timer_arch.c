@@ -9,7 +9,7 @@
  * 为什么读 CNTPCT_EL0 而不是 CNTVCT_EL0: 物理计数器在 EL1 无需使能、
  * 与虚拟偏移无关, QEMU virt 上恒可用。tickless 的"比较器/中断"是 M1 的事。
  *
- * WORKAROUND(br-wa-entry-001): 本文件是 Platform Entry 的一部分(未做成插件)。
+ * 已还清(ADR-0005): 本文件是 Platform Entry 的一部分(未做成插件 —— 这是**设计内**的形态,
  */
 #include <br/platform/br_plat.h>
 

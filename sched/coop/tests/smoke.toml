@@ -1,0 +1,115 @@
+# sched/coop — conformance 用例(人写)
+#
+# 与 `br_sched_conformance()` 打印的 `[TASKCONF] PASS/FAIL <id>` **一一对应**:
+# v0.1 的红绿由 in-image 自检打 tag(宿主的 sched-test 是同一批用例的第二条腿);
+# 本文件是同一批用例的声明面形状(照 `6-01` §2 的字段契约: {id, pre, steps, expect,
+# sched, platform})。设计出处: `3-03-sched.md`、`3-01` §2/§5.1、`6-01` §3.1/§3.3。
+#
+# 共同前置: 调度器已注册(coop_early_init 已在 EARLY 相跑过), 当前线程非空
+# (`br_task_self() != BR_NULL`)。用例收尾都把 TCB 池恢复干净(join 回收每一个测试线程)。
+schema = 1
+
+[[case]]
+id       = "TC-TASK-001"
+pre      = "coop 已注册(main 线程已物质化)"
+steps    = ["br_task_create(&t, attr, entry, NULL)", "读 br_task_state(t)", "br_task_join(t)"]
+expect   = "create 返回 0; state == READY; join 回收"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-002"
+pre      = "TC-TASK-001 已跑过"
+steps    = ["create 一个 entry 里调 br_task_exit(42) 的线程", "br_task_join(t, &code)"]
+expect   = "join 返回 0 且 code == 42(退出码真的传出来)"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-003"
+pre      = "TC-TASK-002 已跑过"
+steps    = [
+    "create 两个 worker: 各自循环 4 次 { 追加自己的字母; br_task_yield(); }",
+    "join(workerA): 本线程阻塞 ⇒ 调度器交替跑两个 worker",
+    "断言追加序列逐字节 == \"ABABABAB\"",
+    "join(workerB); 断言两者的 exit_code == 0",
+]
+expect   = "序列严格交替 (ABABABAB): yield 是 coop 的强制切换点"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-004"
+pre      = "TC-TASK-003 已跑过"
+steps    = ["create 一个 entry 正常返回的线程", "br_task_yield() 让它跑完", "断言 br_task_state(t) == ZOMBIE", "br_task_join(t, &code)"]
+expect   = "exit 后 state == ZOMBIE; join 拿回 0 并回收 TCB(trampoline 路径)"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-005"
+pre      = "TC-TASK-004 已跑过"
+steps    = [
+    "create(NULL out) / create(attr=NULL) / create(stack=NULL) / create(stack_size < BR_STACK_MIN) / create(entry=NULL)",
+    "join(NULL) / join(self)",
+]
+expect   = "七次调用全部 -EINVAL; 失败时 out 不被写成非空"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-006"
+pre      = "TC-TASK-005 已跑过; 池里没有别的测试线程"
+steps    = ["循环 create 直到失败, 记录返回码", "把成功创建的线程逐个 join 回收"]
+expect   = "失败码 == -ENOMEM(TCB 池上限是硬上界, 不存在「再等等」)"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-007"
+pre      = "TC-TASK-006 已跑过"
+steps    = [
+    "create 一个线程, entry 里把局部数组首地址记到全局探针",
+    "join 它",
+    "断言 探针 ∈ [stack_top - stack_size, stack_top)",
+]
+expect   = "局部变量地址落在该线程自己的栈区间内(栈真的被用上了, 不是摆设)"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TIME-001"
+pre      = "TC-TASK-007 已跑过; 定时器已 armed(目标)或宿主 idle 钩子已安装"
+steps    = ["create 一个线程: t0 = br_clock_now(); br_task_sleep(2000us); 记 br_clock_now()-t0", "join 它"]
+expect   = "返回 0 且实测间隔 >= 2000 us(不早醒; 晚到无上界 —— 目标上就是 tick 周期 100 ms)"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TIME-002"
+pre      = "TC-TIME-001 已跑过"
+steps    = ["t0 = br_clock_now()", "br_task_sleep(0)"]
+expect   = "返回 0 且耗时 0(不切栈、不进超时表)"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TIME-003"
+pre      = "TC-TIME-002 已跑过"
+steps    = ["br_task_sleep(BR_TIMEOUT_INF)"]
+expect   = "== -EINVAL(裁定 G13: 相对睡眠没有「无限」的语义)"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-101"
+pre      = "TC-TIME-003 已跑过(域特有: coop 与 preempt 的分界)"
+steps    = [
+    "create busy(忙循环 200000 次不 yield, 期间采样 victim 的计数器)",
+    "create victim(计数器 +1 后返回)",
+    "join(busy): busy 先跑; 忙循环里 victim 计数必须为 0",
+    "busy 主动 yield 之后 victim 才跑; busy 醒来再采样",
+]
+expect   = "忙循环期间 victim 计数 == 0; yield 之后 == 1(无抢占是设计内行为)"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]

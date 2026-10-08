@@ -36,3 +36,19 @@ steps    = [
 expect   = "[DBGCONF] PASS TC-DBG-021 ..."
 sched    = ["coop"]
 platform = ["host", "qemu-aarch64"]
+
+# ---- 插件生命周期钩子(v0.2 起由 core 的 plugin_manager 按相位驱动)----
+#
+# 名字 = `symbol_prefix(short)` + 相 ⇒ `hexdump_early_init` / `hexdump_init` /
+# `hexdump_start`(生成物引用)。钩子是组合期契约, 不进 [[export]]。
+[[case]]
+id       = "hd-late-init"
+pre      = "plugin_manager 已扫 .br_plugins 段并完成拓扑排序; EARLY 相已过"
+steps    = [
+    "EARLY 相: hexdump_early_init()(本插件无状态、无注册)",
+    "LATE 相(Service 类别 ⇒ ② 完成点): hexdump_init() → br_hexdump_init()",
+    "START 相: hexdump_start()(本插件无动作)",
+]
+expect   = "三步都返回 0; 日志出现 [PLUGIN] phase=early/late/start name=service/hexdump rc=0"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

@@ -68,6 +68,38 @@ range  = ">=0.1.0"
 kind   = "runtime"
 symbol = "br_memleak_report"
 
+# ---- 结构依赖(init: 初始化顺序边)----
+# 同一提供方可以有两条不同 kind 的边(`brickie check` 合法); 语义分工:
+#   kind=init    管**顺序** —— plugin_manager 的拓扑排序 + 相位单调校验;
+#   kind=runtime 管**符号** —— 真实调用面(上面那四条)。
+# ★ 为什么必须有这 4 条: 没有 init 边 ⇒ 运行期拓扑排序里 dump 与四个服务之间**无约束**,
+#   LATE 相的顺序退化成字典序 ⇒ dump 会排在 trace/backtrace/hexdump/memleak **之前**。
+#   而 dump 的 LATE init 要跑调试域一致性用例(转调它们的 selftest / 呈现面)⇒
+#   "编得过、跑不对"。phase="late" 是完成点断言(与提供方自述一致: rank(late) <= rank(late))。
+[[dep]]
+name   = "service/trace"
+range  = ">=0.1.0"
+kind   = "init"
+phase  = "late"
+
+[[dep]]
+name   = "service/backtrace"
+range  = ">=0.1.0"
+kind   = "init"
+phase  = "late"
+
+[[dep]]
+name   = "service/hexdump"
+range  = ">=0.1.0"
+kind   = "init"
+phase  = "late"
+
+[[dep]]
+name   = "service/memleak"
+range  = ">=0.1.0"
+kind   = "init"
+phase  = "late"
+
 [[export]]
 api_iface    = "native"
 form         = "api"

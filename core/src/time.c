@@ -11,7 +11,9 @@
  *   这里以**毫秒**为换算基准(freq/1000 = 62500, 对 62.5 MHz 是精确的),
  *   再用"整数部分 + 余数部分"拆开算, 既无漂移也不溢出。
  *
- * WORKAROUND(br-wa-boot-001): 没有调度器, 所以"睡眠"退化为忙等。
+ * WORKAROUND(br-wa-boot-001) ① **已还清**(v0.2.0): 调度器就位后, "睡眠"由
+ * `br_task_sleep()` 真阻塞切换; 本文件的 `br_delay_*` 从此只是**忙等原语**
+ * (当前全树无调用点, 保留给早期相/调试用)。
  * 设计里没有 br_delay_*(设计只有 br_task_sleep, 因为它必然阻塞切换)。
  */
 #include <br/core/br_time.h>
@@ -62,6 +64,28 @@ br_time_t br_clock_now(void)
     const br_u64 rem = ticks % s_ticks_per_ms;
 
     return (br_time_t)((ms * 1000u) + ((rem * 1000u) / s_ticks_per_ms));
+}
+
+/*
+ * 相对微秒 → 绝对期限(设计 `3-01` §14 CA-4: 阻塞 API 收相对值, 内部统一成**绝对
+ * 期限**, tickless 框架只比较期限)。两处刻意:
+ *   - `BR_TIMEOUT_INF` **原样返回**: 它表示"没有期限", 不是"很远的期限";
+ *   - 溢出**饱和到 `BR_TIMEOUT_INF`**(而不是回绕成过去的时间点 —— 那会把"等到天荒地老"
+ *     变成"立刻超时", 是静默的语义反转; 见 6-01 TC-TIME-003 的"饱和不回绕")。
+ */
+br_time_t br_deadline_from_now(br_time_t rel_us)
+{
+    if (rel_us == BR_TIMEOUT_INF) {
+        return BR_TIMEOUT_INF;
+    }
+
+    const br_time_t now = br_clock_now();
+
+    if (rel_us > (BR_TIMEOUT_INF - now)) {
+        return BR_TIMEOUT_INF;
+    }
+
+    return now + rel_us;
 }
 
 void br_delay_us(br_time_t us)

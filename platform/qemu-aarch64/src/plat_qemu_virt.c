@@ -1,21 +1,91 @@
 /*
- * brickOS prototype v0.1.0 — QEMU virt (aarch64) 平台实现
+ * brickOS prototype v0.2.0 — QEMU virt (aarch64) 平台实现
  *
  * 设计对应: 本文件是 Platform 插件 `platform/qemu-aarch64` 的实现主体
  * (1-03 §1 插件清单第一行: QEMU virt: EL1、GICv3、PL011、arch timer、恒等映射页表、
- *  region 表; 里程碑 M0)。v0.1.0 取其中 MainLoop 需要的三件: PL011 + arch timer +
+ *  region 表; 里程碑 M0)。取其中 MainLoop 需要的三件: PL011 + arch timer +
  *  GICv3 中断子系统(初始化链见 br_plat_early_init)。
  *
- * WORKAROUND(br-wa-entry-001): 插件化已完成(manifest = ../plugin.toml, 描述符由
- * `brickie gen` 生成); **仍欠**的是"调用点由 .br_plugins 段枚举驱动"(M0 运行期)。
+ * 已还清(ADR-0005): 插件化已完成(manifest = ../plugin.toml, 描述符由
+ * `brickie gen` 生成, 调用点由 core 的插件管理器经 `.br_plugins` 段枚举驱动)。
+ * 标记保留到 WORKAROUNDS.md 由主控同步删除。
+ *
+ * 本文件同时是**插件生命周期钩子**的落点(设计 1-01 §9): 钩子名 = `symbol_prefix(short)`
+ * + 相 ⇒ `qemu_aarch64_early_init` / `qemu_aarch64_init` / `qemu_aarch64_start`,
+ * 由生成物 `build/gen/platform/qemu-aarch64/plugin_desc.c` 引用。
  */
 #include <br/core/br_console.h>
+#include <br/core/br_log.h>
+#include <br/board_irq.h>            /* BR_IRQ_TIMER(绑定表里的 virq) */
 #include <br/platform/br_mmu.h>
 #include <br/platform/br_plat.h>
 
 /* platform 插件将来在描述符里的 name 字段(设计 1-01 §6.1) */
 #define BR_PLAT_NAME_STR   "qemu-aarch64/virt"
 #define BR_PLAT_ISA_STR    "aarch64"
+
+/* 生命周期钩子自带原型满足 -Wmissing-prototypes(钩子名由生成器推导, 不是本插件的
+ * API 面 —— 不写进 plugin.toml 的 [[export]], 否则会改接口 hash)。 */
+int qemu_aarch64_early_init(void);
+int qemu_aarch64_init(void);
+int qemu_aarch64_start(void);
+
+/*
+ * EARLY 相(plugin_manager 的**第一步**, 显式取 plugin_type == platform):
+ * console → PIC 注册/能力协商/绑定表 → region 表 → 三池认领 → 4 KiB 恒等映射 + 开 MMU。
+ * 失败即启动失败: `br_plat_early_init()` 内部已经 [FATAL] + park(同"首败即停机"),
+ * 它**返回**就说明三步全绿 ⇒ 这里恒 0。
+ */
+int qemu_aarch64_early_init(void)
+{
+    br_plat_early_init();
+    return 0;
+}
+
+/*
+ * CORE 相(类别决定的 ② 完成点: 非 Service/Interface ⇒ CORE, 设计 1-01 §9)。
+ * 平台自身**没有额外动作**: console/PIC/绑定表/region 表/页表/MMU 都必须在任何插件
+ * init 之前就位, 所以它们全在 EARLY 相。保留这个钩子是为了让"platform 的 ② 完成点在
+ * CORE"(plugin.toml 的 `phase = "core"`)在启动序里**可见**, 而不是被省掉。
+ */
+int qemu_aarch64_init(void)
+{
+    return 0;
+}
+
+/*
+ * START 相(**全局开中断之后**, 设计 §6.2 的表): 设备与中断一起开跑。
+ *   ① 中断/内存映射一致性用例(启动期自检 —— 红了就该在第一时间看见);
+ *   ② `br_plat_irq_start()`: 注册 timer PPI 的 ISR + 使能该线 + 装第一个 100 ms 期限
+ *      + 全局开中断(已在管理器里开过, 这里幂等) —— 这是"心跳"的开始。
+ *
+ * ★ 为什么 ② 放在 ① 之后: 保持与 v0.1 完全相同的时序(那时 conformance 先跑,
+ *   MainLoop 之前才 arm timer), 于是 irq-test 的逐用例判据**一个字都不用动**。
+ *   F2/F3 要的"tick 已经在跑"由 ② 在 platform.start 内完成来保证 —— 它严格早于
+ *   APP 的 start()(管理器把 APP 的 start 排在最后)。
+ *
+ * 一致性用例的失败**不**作为 start 的失败返回: 它由门禁([IRQCONF]/[MEMCONF] 的
+ * FAIL 模式)判红, 而 start 的返回值只表达"设备 bring-up 成不成"(见 ADR-0005 §2.5)。
+ */
+int qemu_aarch64_start(void)
+{
+    const int irq_fail = br_plat_irq_conformance();
+    br_log_info("int: conformance %s (failures=%d)",
+                (irq_fail == 0) ? "ALL PASS" : "HAS FAILURES", irq_fail);
+
+    const int mem_fail = br_plat_mem_conformance();
+    br_log_info("mem: conformance %s (failures=%d)",
+                (mem_fail == 0) ? "ALL PASS" : "HAS FAILURES", mem_fail);
+
+    const int r = br_plat_irq_start();
+    if (r != 0) {
+        br_log_error("int: platform irq start failed: %d", r);
+        return r;   /* 首败即停机由 plugin_manager 执行(裁定 G6) */
+    }
+    br_log_info("int: timer PPI armed by platform (virq=%u INTID=%u, 100 ms)",
+                (br_u32)BR_IRQ_TIMER, 30u);
+    return 0;
+}
 
 const char *br_plat_name(void)
 {

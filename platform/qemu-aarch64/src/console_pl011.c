@@ -4,7 +4,7 @@
  * 实现 core 拥有的"早期 console 协议(轮询 putc)"(core/include/br/core/br_console.h),
  * 符合设计 1-01 §8 的三层模式: 接口在 core, 平台给"用哪个 UART、波特率"。
  *
- * WORKAROUND(br-wa-entry-001): 本文件是 Platform Entry 的一部分(未做成插件)。
+ * 已还清(ADR-0005): 本文件是 Platform Entry 的一部分(未做成插件 —— 这是**设计内**的形态,
  * 形态本身**不是** workaround —— 设计 1-01 §8 明确 console 双形态, 轮询版
  * 就是 M0 的早期 console(M0 的 `io/uart-pl011` 也不注册设备, 见 1-03 §1)。
  *

@@ -212,6 +212,7 @@ if [ "$_brickos_quiet" != "1" ]; then
         printf '%s' "$_brickos_missing" | tr ' ' '\n' | sed '/^$/d' | sed "s|^$_brickos_root/||" | sed 's/^/      /'
         echo "    → 取外部工具链:  make prebuilt"
         echo "    → 编本机工具:    make tools"
+        echo "    → 构建镜像:      brickie build   (镜像的入口是 brickie, 不是 make; 见 ADR-0004)"
     fi
 fi
 [ "$_brickos_with_make" = "1" ] && [ -n "$_brickos_make_dir" ] && \

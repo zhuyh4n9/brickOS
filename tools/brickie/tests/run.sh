@@ -743,6 +743,215 @@ W="$(cp_fx priv-platform-p4)"
 run_json "$W" check
 eq "V-19 正交表: map/protect 属 P4, platform 可声明 ⇒ 合法 0" "0" "$RC"
 
+# ================================================================ V-B 构建族
+# 施工图 = ACCEPTANCE.md §V-B; 契约 = docs/contract.md §5.4/§7.1/§7.2/§7.4 + §9 R-13…R-16。
+#
+# ★ 本节**不调用任何编译器**(V-9 的纪律同样约束测试自身): 只用 `build --dry-run` /
+#   `--emit-backends`(core 出计划、L5 干跑)+ 直接调 core 的 `judge` 信封。
+#   判据都在**声明面与规划数据**上: argv 里有没有 arch 标志/链接脚本、候选序对不对、
+#   码对不对 —— 一个字都不"看它编出来没有"(那需要交叉编译器, 属真构建的判据)。
+section "V-B 构建族(不调编译器的判据)"
+FX_BUILD="$(cp_fx build)"
+
+# 直接调 core 的信封(judge 的日志是**正文**, 经 context.log 传入; 判据在 core)。
+JUDGE_RESP=""
+core_judge() { # core_judge <work> <gate-name> <log-file> ⇒ JUDGE_RESP
+    local w="$1" name="$2" logf="$3"
+    "$PY" - "$w" "$name" "$logf" "$TMPROOT/.judge.req.json" <<'PYX'
+import json, sys
+w, name, logf, out = sys.argv[1:5]
+json.dump({"protocol": 1, "command": "judge", "root": w,
+           "args": {"name": name},
+           "context": {"log": open(logf, encoding="utf-8").read()}},
+          open(out, "w"))
+PYX
+    "$CORE" <"$TMPROOT/.judge.req.json" >"$TMPROOT/.judge.resp.json" 2>/dev/null
+    JUDGE_RESP="$TMPROOT/.judge.resp.json"
+}
+
+# ---------------------------------------------------------------- ① 计划形状
+# `build --dry-run` 不需要编译器: core 给计划, L5 只打印。
+W="$(cp_fx build)"
+run_json "$W" build --dry-run
+eq "V-B① build --dry-run 退出码 0" "0" "$RC"
+eqj "V-B① dry_run 标记" "$JQ_RESP" "data.dry_run" "true"
+eqj "V-B① 组件数 = 6(核心 + 5 插件)" "$JQ_RESP" "data.unit_count" "6"
+eqjc "V-B① data.units 与 unit_count 一致" "$JQ_RESP" "data.units" "6"
+eqj "V-B① 源文件数" "$JQ_RESP" "data.source_count" "7"
+eqj "V-B① steps_total = 9(7 编译 + 链接 + objcopy)" "$JQ_RESP" "data.steps_total" "9"
+eqjc "V-B① dry-run 下列出全部步骤" "$JQ_RESP" "data.steps" "9"
+keysj "V-B① data.units[0] 形状" "$JQ_RESP" "data.units.0" \
+    "defines,dir,includes,name,plugin,sources,sources_list"
+keysj "V-B① data.steps[0] 形状(contract §5.4)" "$JQ_RESP" "data.steps.0" \
+    "argv,consumes,expect_timeout,fail_code,group,judge,kind,label,log,outputs,stdout_lines,timeout_s,tool_code"
+eqj "V-B① steps[0].fail_code = BRV-BLD-0011" "$JQ_RESP" "data.steps.0.fail_code" "BRV-BLD-0011"
+eqj "V-B① steps[0].tool_code = BRV-BLD-0005" "$JQ_RESP" "data.steps.0.tool_code" "BRV-BLD-0005"
+eqj "V-B① target 来自 platform 插件" "$JQ_RESP" "data.target.owner" "platform/qemu-aarch64"
+eqj "V-B① target.arch" "$JQ_RESP" "data.target.arch" "aarch64"
+eqj "V-B① target.cross" "$JQ_RESP" "data.target.cross" "aarch64-linux-gnu-"
+eqj "V-B① target.linker_script(相对插件根)" "$JQ_RESP" "data.target.linker_script" \
+    "platform/qemu-aarch64/src/link.ld"
+STEPS_JSON="$(jqget "$JQ_RESP" data.steps)"
+contains "V-B① arch 标志(-mstrict-align)进了编译 argv" '"-mstrict-align"' "$STEPS_JSON"
+contains "V-B① arch 标志(-mgeneral-regs-only)进了编译 argv" '"-mgeneral-regs-only"' "$STEPS_JSON"
+contains "V-B① 链接脚本进了 -Wl,-T" '"-Wl,-T,platform/qemu-aarch64/src/link.ld"' "$STEPS_JSON"
+contains "V-B① -Wl,-Map 用产物落点" '"-Wl,-Map,build/brick.map"' "$STEPS_JSON"
+contains "V-B① 声明面的 cflags 进了 argv" '"-DFX_BUILD=1"' "$STEPS_JSON"
+contains "V-B① 汇编源(.S)也在计划里(路径相对 root)" \
+    'platform/qemu-aarch64/src/start.S' "$STEPS_JSON"
+# ★ 路径口径: 计划里的一切路径**相对 root**; 而声明面 `[build].sources` 的通配**相对插件根**。
+#   这条断言同时钉住"汇编不被当 C 编"(它必须走 asflags, 不许混进 C 的 -std=c11)。
+asm_ok() { # asm_ok <resp.json> ⇒ yes / no:…
+    "$PY" - "$1" <<'PYX'
+import json, sys
+d = json.load(open(sys.argv[1]))["data"]
+step = [s for s in d["steps"]
+        if s["kind"] == "compile" and any(a.endswith(".S") for a in s["argv"])]
+if not step:
+    print("no-asm-step")
+else:
+    argv = step[0]["argv"]
+    ok = ("-std=c11" not in argv and "-g3" in argv and "-mstrict-align" in argv)
+    print("yes" if ok else "no:" + " ".join(argv))
+PYX
+}
+eq "V-B① 汇编步骤按 asflags 编(不混 C 的 -std=c11)" "yes" "$(asm_ok "$JQ_RESP")"
+contains "V-B① 链接产物是 build/brick.elf" '"build/brick.elf"' "$STEPS_JSON"
+# 工具候选序(裁定 R-14): 顺序即策略, 解析结果由 core 给。
+eqjc "V-B① data.tools 七件" "$JQ_RESP" "data.tools" "7"
+eqj "V-B① tools[0].name = cc(BTreeMap 序)" "$JQ_RESP" "data.tools.0.name" "cc"
+keysj "V-B① data.tools[0] 形状" "$JQ_RESP" "data.tools.0" "candidates,name,resolved,what"
+eqj "V-B① cc 候选首位 = <cross>gcc" "$JQ_RESP" "data.tools.0.candidates.0" "aarch64-linux-gnu-gcc"
+eqj "V-B① cc 候选第 2 位 = gcc-16" "$JQ_RESP" "data.tools.0.candidates.1" "aarch64-linux-gnu-gcc-16"
+eqj "V-B① cc 候选末位 = 宿主 cc" "$JQ_RESP" "data.tools.0.candidates.5" "cc"
+eqj "V-B① tools[3].name = objcopy" "$JQ_RESP" "data.tools.3.name" "objcopy"
+eqj "V-B① objcopy 候选首位 = 交叉版" "$JQ_RESP" "data.tools.3.candidates.0" "aarch64-linux-gnu-objcopy"
+eqj "V-B① objcopy 候选末位 = 宿主版" "$JQ_RESP" "data.tools.3.candidates.1" "objcopy"
+hasj "V-B① tools[0] 带 resolved 键(解析在 core)" "$JQ_RESP" "data.tools.0.resolved"
+eqj "V-B① QEMU 型号来自 [build.target.qemu]" "$JQ_RESP" "data.target.qemu.machine" "virt,gic-version=3"
+
+# ---------------------------------------------------------------- ② 缺 [build]
+W="$(cp_fx build)"
+"$PY" - "$W/product.toml" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().split("[build]")[0].rstrip() + "\n")
+PY
+run_json "$W" build --dry-run
+eq "V-B② product.toml 缺 [build] ⇒ 退出码 2" "2" "$RC"
+eq "V-B② 报 BRV-BLD-0001" "1" "$(grep -c 'BRV-BLD-0001' "$ERR" || true)"
+
+# ---------------------------------------------------------------- ③ 缺 [build.target]
+W="$(cp_fx build)"
+"$PY" - "$W/platform/qemu-aarch64/plugin.toml" <<'PY'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().split("[build.target]")[0].rstrip() + "\n")
+PY
+run_json "$W" build --dry-run
+eq "V-B③ 没有插件声明 [build.target] ⇒ 退出码 2" "2" "$RC"
+eq "V-B③ 报 BRV-BLD-0003" "1" "$(grep -c 'BRV-BLD-0003' "$ERR" || true)"
+
+# ---------------------------------------------------------------- ④ 字面源不存在
+W="$(cp_fx build)"
+sed -i 's|sources  = \["src/\*.c"\]|sources  = ["src/*.c", "src/nope.c"]|' \
+    "$W/app/hello/plugin.toml"
+run_json "$W" build --dry-run
+eq "V-B④ [build].sources 字面路径不存在 ⇒ 退出码 2" "2" "$RC"
+eq "V-B④ 报 BRV-BLD-0007" "1" "$(grep -c 'BRV-BLD-0007' "$ERR" || true)"
+grep_at_least "V-B④ span 点名 build.sources" 'build\.sources' "$ERR"
+
+# ---------------------------------------------------------------- ⑤ test --list
+W="$(cp_fx build)"
+run_json "$W" test --list
+eq "V-B⑤ test --list 退出码 0" "0" "$RC"
+eqj "V-B⑤ 声明面文件" "$JQ_RESP" "data.file" "tests/gates.toml"
+eqj "V-B⑤ present" "$JQ_RESP" "data.present" "true"
+eqjc "V-B⑤ QEMU 门禁 4 条" "$JQ_RESP" "data.gates" "4"
+eqj "V-B⑤ gates[0]" "$JQ_RESP" "data.gates.0" "g-route"
+eqj "V-B⑤ gates[3]" "$JQ_RESP" "data.gates.3" "g-ok"
+eqjc "V-B⑤ 宿主用例 2 条" "$JQ_RESP" "data.hosttests" "2"
+eqj "V-B⑤ hosttests[1](带 depends)" "$JQ_RESP" "data.hosttests.1" "ht-dep"
+eqjc "V-B⑤ 脚本门禁 1 条" "$JQ_RESP" "data.scripts" "1"
+eqj "V-B⑤ scripts[0]" "$JQ_RESP" "data.scripts.0" "s-echo"
+eqjc "V-B⑤ build_post 一条" "$JQ_RESP" "data.build_post" "1"
+eqj "V-B⑤ build_post[0] = g-ok" "$JQ_RESP" "data.build_post.0" "g-ok"
+
+# ---------------------------------------------------------------- ⑥ judge(判据在 core)
+printf 'nothing here\n' >"$TMPROOT/judge-empty.log"
+printf 'BAD thing\n' >"$TMPROOT/judge-forbid.log"
+printf 'OK\nPASS TC-2 case\n' >"$TMPROOT/judge-ok.log"
+core_judge "$FX_BUILD" g-route "$TMPROOT/judge-empty.log"
+"$PY" "$JSONQ" text "$JUDGE_RESP" >"$TMPROOT/.judge.txt"
+eqj "V-B⑥ require 缺一条 ⇒ exit_code 1" "$JUDGE_RESP" "exit_code" "1"
+eqj "V-B⑥ require 缺一条 ⇒ failed 1" "$JUDGE_RESP" "data.failed" "1"
+eq "V-B⑥ require 缺一条 ⇒ BRV-BLD-0009" "1" \
+    "$(grep -c 'BRV-BLD-0009' "$TMPROOT/.judge.txt" || true)"
+eqj "V-B⑥ require 的 span" "$JUDGE_RESP" "diagnostics.0.span" "gate[0].require"
+core_judge "$FX_BUILD" g-forbid "$TMPROOT/judge-forbid.log"
+eqj "V-B⑥ forbid 命中 ⇒ exit_code 1" "$JUDGE_RESP" "exit_code" "1"
+eqj "V-B⑥ forbid 命中 ⇒ span" "$JUDGE_RESP" "diagnostics.0.span" "gate[0].forbid"
+core_judge "$FX_BUILD" g-tag "$TMPROOT/judge-empty.log"
+eqj "V-B⑥ 缺 PASS tag ⇒ exit_code 1" "$JUDGE_RESP" "exit_code" "1"
+eqj "V-B⑥ 缺 PASS tag ⇒ span" "$JUDGE_RESP" "diagnostics.0.span" "gate[0].require_tags"
+core_judge "$FX_BUILD" g-ok "$TMPROOT/judge-ok.log"
+eqj "V-B⑥ 全绿 ⇒ exit_code 0" "$JUDGE_RESP" "exit_code" "0"
+eqj "V-B⑥ 全绿 ⇒ failed 0" "$JUDGE_RESP" "data.failed" "0"
+eqj "V-B⑥ 全绿 ⇒ 无码 info(裁定 R-16)" "$JUDGE_RESP" "diagnostics.0.code" "null"
+eqj "V-B⑥ 全绿 ⇒ severity=info" "$JUDGE_RESP" "diagnostics.0.severity" "info"
+eqj "V-B⑥ 全绿 ⇒ checks 三条" "$JUDGE_RESP" "data.checks.2.ok" "true"
+core_judge "$FX_BUILD" no-such-gate "$TMPROOT/judge-empty.log"
+"$PY" "$JSONQ" text "$JUDGE_RESP" >"$TMPROOT/.judge.txt"
+eqj "V-B⑥ 未知门禁 ⇒ exit_code 2" "$JUDGE_RESP" "exit_code" "2"
+eq "V-B⑥ 未知门禁 ⇒ BRV-BLD-0008" "1" \
+    "$(grep -c 'BRV-BLD-0008' "$TMPROOT/.judge.txt" || true)"
+
+# ---------------------------------------------------------------- ⑦ 正则超子集
+W="$(cp_fx gates-regex)"
+run_json "$W" test --list
+eq "V-B⑦ 正则用 ( 分组 ⇒ 退出码 2" "2" "$RC"
+eq "V-B⑦ 报 BRV-BLD-0012(拒绝而不是静默)" "1" "$(grep -c 'BRV-BLD-0012' "$ERR" || true)"
+grep_at_least "V-B⑦ span 点名 gate.require[0]" 'gate\.require\[0\]' "$ERR"
+
+# ---------------------------------------------------------------- ⑧ clean 的 paths 表
+W="$(cp_fx build)"
+run_json "$W" clean --all
+eq "V-B⑧ clean --all 退出码 0" "0" "$RC"
+eqjc "V-B⑧ paths 13 条" "$JQ_RESP" "data.paths" "13"
+PATHS_JSON="$(jqget "$JQ_RESP" data.paths)"
+contains "V-B⑧ paths 含 build/obj" '"build/obj"' "$PATHS_JSON"
+contains "V-B⑧ paths 含 build/brick.elf" '"build/brick.elf"' "$PATHS_JSON"
+contains "V-B⑧ paths 含 build/brick.bin" '"build/brick.bin"' "$PATHS_JSON"
+contains "V-B⑧ paths 含 build/gen(--all)" '"build/gen"' "$PATHS_JSON"
+contains "V-B⑧ paths 含宿主用例落点 build/hosttest" '"build/hosttest"' "$PATHS_JSON"
+eqj "V-B⑧ paths 有序(字典序首项)" "$JQ_RESP" "data.paths.0" "build/brick.bin"
+eqjc "V-B⑧ 夹具里本来没有产物 ⇒ 一件都没删" "$JQ_RESP" "written" "0"
+
+# ---------------------------------------------------------------- ⑨ --emit-backends
+W="$(cp_fx build)"
+run_json "$W" build --dry-run --emit-backends
+eq "V-B⑨ --emit-backends 退出码 0" "0" "$RC"
+eqj "V-B⑨ emit_backends 标记" "$JQ_RESP" "data.emit_backends" "true"
+eqjc "V-B⑨ 落盘两件后端文件" "$JQ_RESP" "written" "2"
+eq "V-B⑨ build/gen/build.mk 就位" "yes" "$([ -f "$W/build/gen/build.mk" ] && echo yes || echo no)"
+eq "V-B⑨ build/gen/build.ninja 就位" "yes" "$([ -f "$W/build/gen/build.ninja" ] && echo yes || echo no)"
+grep_at_least "V-B⑨ build.mk 带生成物标记" 'brickie:generated' "$W/build/gen/build.mk"
+grep_at_least "V-B⑨ build.mk 是 BR-D4 后端 A" '\$\(ELF\): \$\(OBJS\)' "$W/build/gen/build.mk"
+grep_at_least "V-B⑨ build.mk 把链接脚本写进规则" '-Wl,-T,platform/qemu-aarch64/src/link.ld' \
+    "$W/build/gen/build.mk"
+grep_at_least "V-B⑨ build.ninja 带生成物标记" 'brickie:generated' "$W/build/gen/build.ninja"
+grep_at_least "V-B⑨ build.ninja 是 BR-D4 后端 B" '^rule link$' "$W/build/gen/build.ninja"
+grep_at_least "V-B⑨ build.ninja 烧进解析出的编译器" '^cc = ' "$W/build/gen/build.ninja"
+# C 源与汇编源**各一条 rule**(把汇编当 C 编只是"碰巧也能过", 不是判据)。
+grep_at_least "V-B⑨ ninja 有 cc rule(C 源)" '^rule cc$' "$W/build/gen/build.ninja"
+grep_at_least "V-B⑨ ninja 有 asm rule(.S 源)" '^rule asm$' "$W/build/gen/build.ninja"
+grep_at_least "V-B⑨ .S 走 asm rule" ': asm .*src/start\.S' "$W/build/gen/build.ninja"
+# ninja 的 .ninja_log/.ninja_deps 不许落到仓库根(踩过): builddir 钉在 build/gen 下。
+grep_at_least "V-B⑨ ninja 的 builddir 钉在 build/gen 下" '^builddir = build/gen/ninja$' \
+    "$W/build/gen/build.ninja"
+eq "V-B⑨ dry-run 不落增量状态(它是派生物)" "no" \
+    "$([ -f "$W/build/gen/build-state.json" ] && echo yes || echo no)"
+
 # ================================================================ N-1 反向验收: help 面
 section "N-1 §5.4 未交付命令一条都不在 --help 里"
 help_commands() { # <help 输出文件> ⇒ 逗号分隔的子命令名(已排序去重)
@@ -752,8 +961,10 @@ help_commands() { # <help 输出文件> ⇒ 逗号分隔的子命令名(已排�
 W="$(new_work)"
 run_brickie "$W" --help
 eq "N-1 顶层 help 退出码 0" "0" "$RC"
-eq "N-1 顶层命令面 = 7 组" "check,dep,gen,iface,init,new,ver" "$(help_commands "$OUT")"
-for c in build test run api-dump verify dbg pack add show env; do
+eq "N-1 顶层命令面 = 13 组(组合期 7 + 构建族 6)" \
+    "build,check,clean,dep,disasm,gen,iface,init,new,run,size,test,ver" "$(help_commands "$OUT")"
+# build/test/run 原在 §5.4 的禁名名单里, 现由 ADR-0004 交付(第二族)⇒ 只反查**仍不做**的。
+for c in api-dump verify dbg pack add show env; do
     eq "N-1 顶层 help 不含 $c" "0" \
         "$(help_commands "$OUT" | tr ',' '\n' | grep -cx "$c" || true)"
 done
@@ -772,7 +983,8 @@ eq "N-1 ver 子命令面" "bump,show" "$(help_commands "$OUT")"
 # ================================================================ N-2 反向验收: 未交付命令
 section "N-2 §5.4 未交付命令直接调用 ⇒ 退出码 2"
 W="$(new_work)"
-for c in build test run api-dump verify dbg pack add show env; do
+# build / test / run 已交付(见 N-1 注), 不再属于"未交付"名单。
+for c in api-dump verify dbg pack add show env; do
     run_brickie "$W" "$c"
     eq "N-2 brickie $c ⇒ 退出码 2" "2" "$RC"
 done

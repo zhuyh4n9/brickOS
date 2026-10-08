@@ -14,8 +14,9 @@
 
 模块地图:
 
-    cli.py       23 个叶子命令 + 2 个全局开关的 argparse 与编排流水线
+    cli.py       29 个叶子命令(23 组合期 + 6 构建族) + 2 个全局开关的 argparse 与编排流水线
     native.py    定位并调用 brickie-core / brickie-gen(JSON over stdio)
+    runner.py    构建族的**执行器**(并发/超时/日志/跳过被短路的下游; 无判定)
     schema.py    自带最小 JSON-Schema 子集(BRV-MF-0001 / 退出码 2)
     writer.py    幂等落盘 / --check 逐字节比对 / 声明面扫描
     present.py   把 data 渲染成人读文本(--json 与文本同源)

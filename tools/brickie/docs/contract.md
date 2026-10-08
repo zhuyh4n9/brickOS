@@ -72,6 +72,24 @@
 * 位置化: `file` 相对 `root`; `span` 用 TOML 路径(如 `export[0].entries[2].sig`)。
 * `--json` 下诊断数组按 `(code, file, span, target)` 稳定排序 ⇒ 快照测试可用。
 
+**构建族码 `BRV-BLD-0001..0012`**(本刀新开一族: `BRV-D8` 的编码表**没有 BUILD 族**,
+按 §9 的"未分配码的新缺陷按 §9 登记"落笔, 回灌项见 `rust/README.md` §10 S-B*):
+
+| 码 | 严重度 | 触发 |
+|---|---|---|
+| `BRV-BLD-0001` | error | `product.toml` 缺席, 或它缺 `[build]`(构建需要产品级声明) |
+| `BRV-BLD-0002` | error | `[build].sources` 展开后为空(声明了却一个文件都没匹配) |
+| `BRV-BLD-0003` | error | 没有 platform 插件声明 `[build.target]`(无从得知 arch / 交叉前缀 / 链接脚本) |
+| `BRV-BLD-0004` | error | 多个 platform 插件声明 `[build.target]`(谁是真值不明) |
+| `BRV-BLD-0005` | error | 工具解析失败(交叉编译器 / objcopy / objdump / size / qemu 不在场)—— **环境错**, 退出码 2 |
+| `BRV-BLD-0006` | error | 闭包内的插件没有 `[build].sources`(它会被组合, 却没说怎么编) |
+| `BRV-BLD-0007` | error | `[build].sources` 里的**字面**路径不存在(通配不匹配**不算**错, 见 0002) |
+| `BRV-BLD-0008` | error | `tests/gates.toml` 缺席, 或 `brickie test <name>` 的名字不在声明面里 |
+| `BRV-BLD-0009` | error | 门禁判红(日志缺 `require` / 命中 `forbid` / 缺 PASS 用例 tag) |
+| `BRV-BLD-0010` | error | `[build]` 的形状问题(产物落点 / 标志表非法, 如 `cflags` 为空) |
+| `BRV-BLD-0011` | error | 执行的步骤失败(编译 / 链接 / 脚本非零退出)—— 由 L5 检出, 码由 core 随步骤给 |
+| `BRV-BLD-0012` | error | `tests/gates.toml` 里的正则超出 core 支持的**子集**(报了, 不静默不匹配) |
+
 ## 4. 文件归属(§9.1.1 写路径纪律)
 
 `files[i] = {"path": "<相对 root>", "kind": "machine"|"rendered"|"human", "content": "<UTF-8>", "mode": "0644"}`
@@ -132,6 +150,99 @@
 `brickie-core --selftest`(不经 stdin 信封)在**不加载 Python** 的前提下跑全部领域用例
 (V-18a): 模型 / 版本矩阵 / IFACE-IR / 求解 / 分类学 / 特权 / 预算 / 解冻窗口。
 退出码 0 全绿 / 1 有失败; 失败明细打到 stdout。
+
+### 5.4 `brickie-core` 的构建族命令
+
+> **这一族是显式的第二族**(ADR-0004 / 设计 ADR-0003 的 S1–S4)。信封、诊断模型、
+> 退出码纪律与 §5.1/5.2 **完全相同**; 唯一区别是它**要求 (交叉) 工具链在场** ——
+> §0 的"不得要求 cc/cargo/nm 在场"只约束**组合期**命令, 见 §9 **R-13**。
+> **一切判定在 core**: 工具候选序与解析(R-14)、增量口径(R-15)、门禁红绿(R-16)。
+> L5 只做四件事: 校验 `argv[0]` 可执行、并按 `group` 并发/限时执行、收日志、呈现。
+
+| `command` | `args` | `data` 关键字段 | `files`(机器文件) |
+|---|---|---|---|
+| `build` | `{profile?, jobs, backend, tag?, dry_run, force, emit_backends}` | 公共摘要(见下) + `dry_run` / `emit_backends` | `build/gen/build.mk`(`backend=make` 或 `emit_backends`)、`build/gen/build.ninja`(`backend=ninja` 或 `emit_backends`)、`build/gen/build-state.json`(`direct` 且非 `dry_run`) |
+| `clean` | `{all}` | `{all, paths:[<相对 root>], note}` —— **paths 只是清单, 删除由 L5 做**(含"只删 root 之内"的守卫) | 无 |
+| `run` | `{timeout_s?}` | 公共摘要 + `mode:"run"`; `steps[0].kind="run"`、`expect_timeout=false`(交互式, 继承 stdio) | 无 |
+| `size` | `{}` | 公共摘要 + `mode:"size"`; 两条 `kind:"print"` 步骤(`size -A -x` 与 `size`) | 无 |
+| `disasm` | `{head}` | 公共摘要 + `mode:"disasm"`; 一条 `kind:"print"` 步骤(`objdump -d`), `stdout_lines=head` | 无 |
+| `test` | `{name?, list, jobs}` | `list=true` ⇒ `{gates:[名], hosttests:[名], scripts:[名], build_post:[名], file, present}`; 否则公共摘要 + `mode:"test"` + `gates:{file,gates,hosttests,scripts,build_post}` | 无 |
+| `judge` | `{name}` + `context.log`(日志**正文**, 不是路径) | `{name, failed, checks:[{kind,pattern,ok}], log_lines, pass_lines, require, forbid, require_tags, file}`; 全绿 ⇒ 无码 **info**, `failed>0` ⇒ `BRV-BLD-0009` + 退出码 1 | 无 |
+
+**公共摘要字段**(`build`/`run`/`size`/`disasm`/`test` 共有):
+
+```json
+{
+  "profile": "dev",            "backend": "direct",   "tag": "",
+  "target": {"owner": "platform/qemu-aarch64", "arch": "aarch64",
+             "cross": "aarch64-linux-gnu-",
+             "arch_flags": ["-march=armv8-a", "…"],
+             "linker_script": "platform/qemu-aarch64/src/link.ld",
+             "qemu": {"binary": "qemu-system-aarch64", "machine": "virt,gic-version=3",
+                      "cpu": "cortex-a53", "memory": "128M", "extra": ["-nographic"]}},
+  "outputs": {"obj_dir": "build/obj", "elf": "build/brick.elf",
+              "bin": "build/brick.bin", "map": "build/brick.map"},
+  "state_path": "build/gen/build-state.json", "gen_dir": "build/gen",
+  "units": [{"name":"core","dir":"","plugin":null,"sources":3,"includes":["core/include"],
+             "defines":[],"sources_list":["core/src/…"]}],
+  "unit_count": 8, "source_count": 30,
+  "tools": [ … 见下 … ],
+  "steps": [ … 见下 … ], "steps_total": 32, "steps_todo": 32, "up_to_date": 0,
+  "stale_outputs": [], "plan_hash": "sha256:…",
+  "flags": {"cflags": […], "asflags": […], "ldflags": […]}
+}
+```
+
+**`data.steps[i]` 的字段**(L5 侧只读这些键, 一条步骤的全部事实都在这里):
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `label` | string | 人读标签(`cc <src>` / `ld <elf>` / `qemu <gate>` …) |
+| `kind` | string | `compile` / `link` / `objcopy` / `run` / `gate` / `script` / `hosttest` / `hostrun` / `print` / `backend` |
+| `argv` | [string] | **具体命令**, `argv[0]` 已是 core 解析好的工具(core 未解析出时是 `@<名>` 占位) |
+| `cwd` | string? | 相对 root 的工作目录。L5 缺省按 `"."`; **core v0.1 不产出本键**(全部步骤在 root 下跑), 键位保留给将来 |
+| `group` | u32 | 编排口径: 同组(且为 `compile`/`hosttest`)可并发, 组间串行 |
+| `log` | string? | 日志落点(相对 root); `null` = 直接继承 stdio |
+| `timeout_s` | u64? | 超时上限; `null` = 不限时 |
+| `expect_timeout` | bool | `true` = **预期以超时结束**(QEMU 门禁: 镜像本来就跑到被掐)—— 超时不算失败 |
+| `judge` | string? | 需要 core 判定的门禁名(日志正文经 `judge` 命令回判) |
+| `stdout_lines` | u64? | 呈现时 stdout 的行数上限(展开 `--head`) |
+| `outputs` | [string] | 本步骤写出的文件(增量状态 / `clean` 用) |
+| `consumes` | [string] | 本步骤消费的、**由本计划里其它步骤产出**的文件。用途唯一: 上游失败时 L5 据此**跳过**下游 —— 否则 `ld` 会拿上一次的旧对象链接成功并打印 `ok ld`, 日志在骗人(而人看日志) |
+| `fail_code` | string | **步骤失败时该用的码**: L5 不自己编码(恒 `BRV-BLD-0011`) |
+| `tool_code` | string | `argv[0]` 不可执行时的码(恒 `BRV-BLD-0005`, 环境错 ⇒ 退出码 2) |
+
+> **路径口径(判据最容易踩的一处)**: `data.*` 与 `steps[i].{argv,outputs,log,state_path,elf/bin/map,obj_dir}`
+> 里的**一切路径都相对 root**(仓库根)。而声明面 `plugin.toml [build].sources/includes` 与
+> `[build.target].linker_script` 里的路径**相对插件根** —— 由 core 展开/拼接成相对 root 之后
+> 才出现在 `data` 里。所以"计划里的汇编源"是
+> `platform/qemu-aarch64/src/start.S`, 不是 `src/start.S`; 链接脚本是
+> `platform/qemu-aarch64/src/link.ld`。这两件事不一样, 写判据时按 **`data` 的形状**写。
+
+**`data.tools[i]` 的字段与"工具解析在 core"(裁定 R-14)**:
+
+| 字段 | 类型 | 语义 |
+|---|---|---|
+| `name` | string | 逻辑名: `cc` / `objcopy` / `objdump` / `size` / `qemu` / `make` / `ninja` |
+| `what` | string | 它在这个角色里是什么(呈现用) |
+| `candidates` | [string] | **候选序 = 策略**, 按序尝试。`cc` = `<cross>gcc` → `<cross>gcc-16…-13` → `cc`; binutils = 交叉版 → 宿主版 |
+| `resolved` | string? | **解析结果**(即 `tools_resolved`): 仓库 `prebuilts/toolchain/bin/<名>` 优先, 再退 `context.path`(缺省 = 进程 `PATH`); 全落空 ⇒ `null` |
+
+> `resolved` 之所以必须由 core 给: make / ninja 后端文件要把**解析结果烧进去**
+> (生成物里写的是具体编译器路径), L5 与生成物不许各自解析一次 —— 否则"谁在编"
+> 会有两个答案。所以 L5 只做**最后一道**可执行性校验(`runner.resolve_exe`), 不重选。
+
+**三后端与 BR-D4 的 A/B**: `--backend direct`(缺省)= L5 按 core 的 `steps` 直接编排;
+`make` = core 渲染 `build/gen/build.mk`(BR-D4 的**后端 A**)并执行; `ninja` = core 渲染
+`build/gen/build.ninja`(**后端 B**)并执行。ninja 生成物有两条要点:
+
+* **C 源与 `.S` 汇编各一条 rule**(`rule cc` / `rule asm`): 两类源的标志不同
+  (`cflags` vs `asflags`), 用一条模板渲染两类等于把汇编当 C 编 —— 编得过是**运气**, 不是判据;
+* 文件顶部钉 `builddir = build/gen/ninja`: ninja 的 `.ninja_log` / `.ninja_deps` 默认落在
+  **调用目录**, 不钉就会往仓库根丢两个状态文件(踩过)。
+
+三后端跑的是**同一批 argv**(只是由谁调度不同) ⇒ 同一输入出**逐字节一致**的 ELF/BIN
+(BR-D4 的 S2 判据)。`--emit-backends` 一次产出 A/B 两份, 不执行。
 
 ## 6. `brickie-gen` 命令
 
@@ -236,9 +347,27 @@ pins = []
 device_names = ["hsm0"]
 
 [build]
-sources = ["src/*.c"]
-includes = ["include"]
+sources  = ["src/*.c"]             # 相对插件根的通配(`*` 不跨 `/`); 字面路径不存在 ⇒ BRV-BLD-0007
+includes = ["include"]             # 相对插件根的 include 目录
+defines  = ["BR_FOO=1"]            # 可选: 追加 -D<name>(本刀新增字段, 裁定 R-17)
+
+[build.target]                     # ★ 只允许 plugin_type = "platform" 声明(每镜像恰一个, §8.3 ④)
+arch          = "aarch64"          # 目标架构名(呈现与产物命名用)
+cross         = "aarch64-linux-gnu-"   # 交叉前缀(WORKAROUND br-wa-toolchain-001 的过渡形态)
+arch_flags    = ["-march=armv8-a", "-mgeneral-regs-only", "-mstrict-align"]  # 由目标决定的标志
+linker_script = "src/link.ld"      # 相对**本插件根**的链接脚本
+
+[build.target.qemu]                # 目标机的跑法(brickie run / test 的 QEMU 门禁用)
+binary  = "qemu-system-aarch64"
+machine = "virt,gic-version=3"
+cpu     = "cortex-a53"
+memory  = "128M"
+extra   = ["-nographic"]
 ```
+
+> `[build]` / `[build.target]` 在 `brickie-v0.1.md` §7.1 里是"v0.1 只记录、v0.3 起被消费";
+> 本实现**提前消费**它(ADR-0004 的 S1–S3), 并新增 `defines` 与整张 `[build.target]` 表 ——
+> 缺口与理由登记在 §9 **R-17**。
 
 ### 7.2 `product.toml`
 
@@ -255,6 +384,18 @@ stack_kib = 16
 [lint]
 frozen_deps = "inherit"            # inherit | allow | deny
 allow_edges = [["framework/cdev-core","framework/dev-core"]]
+
+[build]                            # ★ 产品级构建策略: 标志表 + 产物落点 + 核心本体源集合(ADR-0003 的 S1)
+core_sources  = ["core/src/*.c", "core/src/*/*.c"]   # 核心本体(**不是插件**)的源集合, 相对仓库根
+core_includes = ["core/include"]   # 核心本体的 include 目录, 相对仓库根
+gen_sources   = ["build/gen/**/*.c"]  # 生成物源集合(由 brickie gen 产出); v0.1 可是 []
+cflags        = ["-std=c11", "-O2"]   # 必填(空 ⇒ BRV-BLD-0010: 工具不自带缺省策略)
+asflags       = ["-g3"]
+ldflags       = ["-nostdlib", "-no-pie"]
+obj_dir       = "build/obj"        # 可选; 缺省 build/obj
+
+[build.release]                    # `--profile release` **追加**在 dev 标志之后
+cflags_extra  = ["-DNDEBUG"]       # 另有 asflags_extra / ldflags_extra
 ```
 
 ### 7.3 机器文件
@@ -262,6 +403,67 @@ allow_edges = [["framework/cdev-core","framework/dev-core"]]
 * `api/iface/<provider-short?>/…`: 目录用**插件名的路径段**(`service/crypto` ⇒ `api/iface/service/crypto/<unit>.toml`)。
 * 快照头必须带 `hash_scope` / `truth` 与 `NOT_ABI` 提示(RV-3/V-11)。
 * `brickie.lock` / `build/index/dependents.json` 的形状见 `schema/lock.schema.json` / `schema/index.schema.json`。
+* `build/gen/build.mk` / `build/gen/build.ninja`(BR-D4 的 A/B 后端)与 `build/gen/build-state.json`
+  (增量状态)是**派生物**: 首行标记 `brickie:generated`, 可删可重建, 不进版本库。
+  形状由 `brickie-core` 给定(`files[]`), L5 只落盘(§4)。
+
+### 7.4 `tests/gates.toml` 的形状
+
+`brickie test` / `brickie build` 的门禁由这张**人写**表声明(形状门 = `schema/gates.schema.json`,
+BRV-D2 口径: 只表达单条记录形状; 跨字段判定由 `brickie-core` 报 `BRV-BLD-*`)。
+
+```toml
+schema = 1
+
+[run]
+default_timeout_s = 5              # 可选: 未单列 timeout_s 的 QEMU 门禁的缺省上限
+
+[host]                             # 宿主用例(不碰交叉工具链/QEMU)的编译事实
+cc      = "cc"                     # 可选; 缺省 cc
+cflags  = ["-std=c11", "-O2"]      # 可选
+bin_dir = "build/hosttest"         # 可选; 缺省 build/hosttest
+
+[[hosttest]]                       # 宿主可执行用例: 编 → 跑 → 退出码即判据
+name     = "string-test"
+sources  = ["core/src/string.c", "tests/host/string_test.c"]
+includes = ["core/include", "tests/host"]
+defines  = ["BR_HOSTTEST=1"]       # 可选
+depends  = ["other-hosttest"]      # 可选: 跑本用例前先跑它(拓扑展开)
+timeout_s = 30                     # 可选
+
+[[gate]]                           # QEMU 门禁: 限时跑镜像 → 日志按正则判 + 用例 tag 点名
+name         = "smoke"
+timeout_s    = 3                   # 可选(缺省取 [run].default_timeout_s)
+log          = "build/logs/smoke.log"  # 可选(缺省 build/logs/<name>.log)
+require      = ["core MainLoop", "irq_ticks=[1-9]"]   # 每条都必须在日志里出现
+forbid       = ["\\[PANIC\\]"]                        # 命中任何一条即红
+require_tags = ["TC-IRQ-001"]      # 每个 tag 都要有 "PASS <tag> " 行(裁掉用例也算红)
+expect       = "timeout"           # 可选; 缺省 timeout(镜像跑到被掐是预期结果)
+
+[[script]]                         # 脚本门禁: 跑一个脚本 → 退出码 + 可选 stdout 正则
+name    = "check-string"
+argv    = ["bash", "tools/check-string.sh", "build/obj/core/src/string.o"]
+require = ["ok   编译器支持例程无自递归"]
+forbid  = []
+
+[[script]]                         # 头文件自足性门禁: 每个头单独/全体/二次 include
+name    = "check-headers"          #   `-fsyntax-only` 都要过; 判据在脚本里
+argv    = ["bash", "tools/check-headers.sh"]
+
+[build]
+post = ["check-string", "check-headers"]   # `brickie build` 成功后自动跑的短名单
+```
+
+> **`check-headers` 为什么值得一条门禁**: 注释里误写 `*/` 会**提前闭合注释**,
+> 而最常见的误写来源就是路径通配符 —— `core/src/sched/*.c`、`platform/*/src/link.ld`、
+> `core/src/sync/**` 都含 `*/`(本仓已踩过三次)。这种错"编得过"是假象: **没有 `.c`
+> 包含的头文件根本不会被编译到**, 错误要等第一个使用者出现才炸 ⇒ 必须主动对每个头做
+> `-fsyntax-only`(单独 / 全体 / 二次 include 三种形态)。
+
+**正则子集(如实声明, 免得写出"永不匹配"的假绿)**: core **不引正则库**(§9.3 最小依赖集),
+只支持 `.` `*` `+` `?` `[...]`(含 `^` 取反与 `a-z` 区间)与 `\x` 转义; **不支持**
+分组 / 交替 / 锚点 `( ) | ^ $ { }` —— 写了它们 ⇒ **`BRV-BLD-0012`**(退出码 2), 而不是
+静默不匹配。"三种 FAIL 的 forbid"要写成三条, 不能写成一条交替正则(见 `tests/gates.toml` 的自注)。
 
 ## 8. L5(Python)的边界
 
@@ -292,9 +494,19 @@ allow_edges = [["framework/cdev-core","framework/dev-core"]]
 | R-10 | `dep-add --range` 缺省 | `*`(仍受 `compat_gen` 约束不适用: 结构依赖不钉代) | — |
 | R-11 | 快照目录: `<provider>` 是插件全名还是短名 | 用**插件全名的路径段**(`service/crypto` ⇒ `api/iface/service/crypto/`), 单元文件名 = `<unit>.toml` | 与 §5.6 的 `<provider>/<unit>` 一致 |
 | R-12 | 无时间戳的 `CHANGELOG.md` | 按"版本段"追加, 段头 = `<unit> v<4 段> (compat_gen=<N>)`, 无日期 | 逐字节可复现(§4) |
+| R-13 | `brickie-v0.1.md` §0 的边界纪律写"v0.1 任何命令**不得要求 cc/cargo/nm 在场**", 而构建族**必须**要交叉编译器 | 边界纪律的准确表述是: **组合期**命令(check / dep / iface / gen / new)不得要求编译器在场; 构建族(build / clean / run / size / disasm / test / judge)是**显式第二族**, 它就是"要求工具链在场"的命令 | 一句话管两族会自相矛盾; 纪律的**目的**(CI 的组合期作业零编译依赖)不受影响。见 `tools/brickie/README.md` §1 与 ADR-0004 |
+| R-14 | 工具候选序(`gcc` → `gcc-16` → …)与"用哪个编译器"该由谁定 | **候选序与解析都在 core**(`data.tools[i].candidates/resolved`); L5 只做最后一道可执行性校验, 不重选 | make / ninja 后端文件是**生成物**, 必须把解析结果**烧进去** —— 若 L5 或生成物各解析一次, "谁在编"就有两个答案 |
+| R-15 | 增量口径: "输入集合的内容戳"还是"argv 指纹 + 输入 mtime" | **argv 指纹 + 输入 (size, mtime)** 两条判据(与 make / ninja 同族); 上游要重建 ⇒ 下游显式传递重建 | `.d` 依赖文件是**构建的产物**(首次编译后才存在) ⇒ 按"输入集合算戳"会让头依赖永远多编一轮(实测踩到); 时间戳口径没有这个自指 |
+| R-16 | 门禁日志的红绿判据(require / forbid / PASS tag)归谁 | **判据在 core**(`judge` 命令按 `tests/gates.toml` 的正则判), L5 只收日志正文并执行 | "红绿"只能有一处真值; 否则文本输出、`--json` 与 CI 退出码会各判一次 |
+| R-17 | `plugin.toml [build]` / `product.toml [build]` 在 `§7.1` 里只有 `sources`/`includes` 两个字段, 表达不了完整编译事实 | 新增 `[build].defines`(插件级)与 `product.toml [build]` 的 `core_sources`/`core_includes`/`gen_sources`/`cflags`/`asflags`/`ldflags`/`obj_dir`/`[build.release].{cflags,asflags,ldflags}_extra`, 以及 platform 的整张 `[build.target]`/`[build.target.qemu]` | "怎么编"必须有**一处**声明面可写(否则又回到 Makefile 字面量); 形状已补进 `schema/*.schema.json` 与 §7.1/§7.2, 待回灌设计 §7.1/§7.2 |
 
 > **Rust 侧的补充裁定**: 求解/校验/接口引擎在实现中还被迫落笔了一批更细的口径
 > (S-1…S-19: 首次 publish = 建档不推进段、`closure` 不扫描 `requires_iface` 而 `check` 扫描、
 > platform 的 `[[res]]` 作容量不进消费者 Σ、`DEP-0011` 的判据、R2 的取值口径、
-> `app → third_party ability` 的例外、窗口内 publish 消费基线以免双 bump 等)。
+> `app → third_party ability` 的例外、窗口内 publish 消费基线以免双 bump 等),
+> 构建族另有 **S-B1…S-B6**(工具解析在 core / 增量口径 / 三后端与 BR-D4 的对应 /
+> 正则子集拒绝而非静默 / 门禁判据归属 / `build/gen/**` 的生成物归属)。
 > 它们是**引擎内部口径**, 逐条登记在 `rust/README.md` §10; 本文件的 R-* 是其上位清单。
+>
+> ⚠ **编号注意**: `rust/README.md` §10 的历史表用的是它自己的 R-1…R-16 编号
+> (与本文 R-* **不是同一套**); 本文的 R-13…R-16 是构建族的上位裁定。两者待回灌设计时统一。

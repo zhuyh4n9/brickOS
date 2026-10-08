@@ -95,8 +95,8 @@ flags/常量: `BR_DUMP_F_STRICT`(缺省, 未声明地址 ⇒ `-EINVAL`)、`BR_DU
 ## 验证
 
 ```sh
-make build/obj/service/dump/src/dump.o     # 对象级交叉编译(零警告; 不链接)
-make dbg-test                              # 运行期门禁(需 core/platform 内存实现就位)
+build/host/<triple>/bin/brickie build   # 全镜像交叉编译(含本插件; 零警告)
+make dbg-test                           # 运行期门禁(需 core/platform 内存实现就位)
 ```
 
 运行期用例(编进镜像, 逐项 `[DBGCONF] PASS/FAIL`):

@@ -359,6 +359,51 @@
         "includes": {
           "type": "array",
           "items": {"type": "string"}
+        },
+        "defines": {
+          "type": "array",
+          "items": {"type": "string"}
+        },
+        "target": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "arch": {
+              "type": "string"
+            },
+            "cross": {
+              "type": "string"
+            },
+            "arch_flags": {
+              "type": "array",
+              "items": {"type": "string"}
+            },
+            "linker_script": {
+              "type": "string"
+            },
+            "qemu": {
+              "type": "object",
+              "additionalProperties": true,
+              "properties": {
+                "binary": {
+                  "type": "string"
+                },
+                "machine": {
+                  "type": "string"
+                },
+                "cpu": {
+                  "type": "string"
+                },
+                "memory": {
+                  "type": "string"
+                },
+                "extra": {
+                  "type": "array",
+                  "items": {"type": "string"}
+                }
+              }
+            }
+          }
         }
       }
     }

@@ -18,17 +18,12 @@
 #include <br/core/br_fault.h>
 #include <br/core/br_irq.h>
 #include <br/core/br_pic.h>
+/* `br_sched_irq_epilogue()` 的声明与实现归调度侧(br_sched.h / core/src/sched/sched_core.c):
+ * 本文件只在 IRQ 退出路径上**调用**它(调用点不动)。 */
+#include <br/core/br_sched.h>
 #include <br/core/br_trace.h>
 
 #include "irq_internal.h"
-
-/*
- * 局部原型说明(P-IRQ-11): 设计 §14.2/§17.4 要求 br_sched_irq_epilogue 这个接缝落为
- * `br_sched_ops` 的一个槽位(不能 hidden), 但当前的冻结头(br_irq.h / irq_internal.h)里
- * **都没有**声明它; 本任务不允许改冻结头、也不允许新建头文件 ⇒ 在同一 TU 内先声明后定义,
- * 既满足 -Wmissing-prototypes, 又不动冻结契约。Stage 2 落地时应迁进调度侧头文件。
- */
-void br_sched_irq_epilogue(void);
 
 /* =====================================================================
  * 静态池(§3.3: 全部 BSS, 无运行期构造; RAM = 2 KB + 512 B @ 64 线)
@@ -749,16 +744,6 @@ EOI:
     }
 
     br_sched_irq_epilogue();
-}
-
-/* =====================================================================
- * core → 调度插件的唯一接缝(§11.2): Stage 1 = 空实现
- * ===================================================================== */
-
-void br_sched_irq_epilogue(void)
-{
-    /* Stage 1: 空实现(编译期消除)。v1 coop: 只在显式点切换(§11.2/§11.3)。
-     * v2 preempt: 在此检查 need_resched 并可能切栈(必须在 eoi 之后、ERET 之前)。 */
 }
 
 /* =====================================================================

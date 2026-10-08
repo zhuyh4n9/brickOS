@@ -14,8 +14,9 @@
  * 机制在 `src/mmu.c`(页表构造)与 core 的 `br_mem`/`br_mm` 实现里。
  *
  * ★ 两条登记在案的欠债(详见 WORKAROUNDS.md):
- *   - `WORKAROUND(br-wa-entry-001)`: 本文件由 Makefile 直编进镜像, 而不是由
- *     `.br_plugins` 段枚举驱动的启动链调用(插件管理器属 M0 运行期);
+ *   - `已还清(ADR-0005)`: 本文件随本插件的 `[build].sources` 编进镜像
+ *     (`brickie build` 消费声明面), 但启动链的**调用点**仍是 APP 直调, 还不是
+ *     `.br_plugins` 段枚举驱动(插件管理器属 M0 运行期);
  *   - `WORKAROUND(br-wa-mem-001)`: 下面的**池比例写死在这里**(1 MiB / 256 KiB /
  *     1 MiB / 256 KiB / 16 KiB), 未经 manifest 的 `[budget]`/`[[res]]` 生成 ——
  *     设计 3-04 §2 要的是"比例 = manifest 预算", 而 v0.1 还没有那条生成链路。
