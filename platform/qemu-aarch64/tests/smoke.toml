@@ -18,3 +18,33 @@ steps    = ["br_plat_ticks_freq()", "br_plat_ticks_now() 连读两次"]
 expect   = "freq 非 0 且 now 单调不减"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]
+
+# ---- 中断子系统(设计 3-02 Stage 1; 6-01 §3.7 的 TC-IRQ 组)----
+#
+# 这些用例在 v0.1 **已经可执行**: 它们就是 `src/irq_conf.c` 编进镜像的那一套,
+# 由 `make irq-test` 在 QEMU 上逐项判 PASS/FAIL。这里登记的是"平台侧入口"这一层
+# 的梗概; 逐用例的 id/期望见 `6-01` §3.7 与 `irq_conf.c` 的文件头。
+
+[[case]]
+id       = "plat-0003"
+pre      = "start.S 已调 br_irq_cpu_init(); br_plat_early_init() 进入中断初始化"
+steps    = ["br_plat_irq_init()", "检查 GICv3 的 ICC_CTLR_EL1.EOImode/PRIbits", "检查绑定表 5 条"]
+expect   = "PIC 注册成功(pic_id>=0)、EOImode==0、绑定表提交成功"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "plat-0004"
+pre      = "中断已全局放行; timer PPI(INTID 30)已 register+enable"
+steps    = ["br_plat_timer_start(100ms)", "等待 1s", "读 br_irq_stats_get(BR_IRQ_TIMER).count"]
+expect   = "count 随时间增长(真实硬件中断投递), 无 panic/spurious"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "plat-0005"
+pre      = "中断子系统已初始化"
+steps    = ["br_plat_irq_conformance()"]
+expect   = "返回 0(全部 TC-IRQ-* / GIC-* 项 PASS); 日志出现 SUMMARY fail=0"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

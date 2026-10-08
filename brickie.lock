@@ -22,12 +22,23 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.units]]
+id = "platform/qemu-aarch64#gicv3"
+provider = "platform/qemu-aarch64"
+unit = "gicv3"
+api_iface = "native"
+version = "0.1.1.0"
+compat_gen = 0
+hash = "sha256:edb5e16d25517877de07fc495ce80209148b746038208cf7be0df01deef0f094"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
 id = "platform/qemu-aarch64#plat"
 provider = "platform/qemu-aarch64"
 unit = "plat"
 api_iface = "native"
-version = "0.1.0.0"
+version = "0.1.2.0"
 compat_gen = 0
-hash = "sha256:199307d2638401c2507d174a0febc79b7926eee63b98594847d49d5e04b8043b"
+hash = "sha256:088c4dae5709b104bf874edc8c22251641e7ec82afac651284ce05d63d22b4ee"
 hash_scope = "decl"
 truth = "decl"

@@ -33,6 +33,7 @@
 #   make env                打印同样的 shell 片段(CI: eval "$(make -s env)")
 #   make run                在 QEMU 上跑(Ctrl-A X 退出)
 #   make smoke              3 秒冒烟: 自动判定启动与延时是否正常
+#   make irq-test           中断子系统逐用例门禁(TC-IRQ-*, target-only)
 #   make size / disasm      体积 / 反汇编
 #   make check-workarounds  WORKAROUND 登记表与源码标记是否一致
 #   make check-build        构建接线门禁: 缺省目标/工具在前/工具段零交叉依赖
@@ -138,7 +139,13 @@ INCLUDES := -Icore/include -Iplatform/qemu-aarch64/include -Iapp/hello/include
 
 # -ffreestanding: 无宿主运行时假设; -fno-builtin: 不把循环偷偷换成 memcpy
 # -mgeneral-regs-only: 内核不碰 FP/SIMD(设计侧 aarch64 目标的纪律)
-ARCHFLAGS := -march=armv8-a -mgeneral-regs-only
+# -mstrict-align: ★ **MMU 未开时是硬要求, 不是优化选项**。MMU 关着 ⇒ 全部访存按
+#   Device-nGnRnE 处理 ⇒ **非对齐访问会取 Alignment fault**(ESR.EC=0x25/DFSC=0x21)。
+#   而编译器按"Normal memory"的假设可以对 4 字节对齐的地址生成 8 字节 `stur`(例如
+#   给 `{u8;u32;u32}` 这样的 12 字节局部结构清零)—— 实测就踩到了:
+#   `stur xzr, [sp, #36]` ⇒ data abort。开了 MMU(恒等映射 + Normal 属性)之后才可以
+#   去掉本项; 在那之前它把"编译器假设的内存模型"和"真实的 MMU-off 环境"对齐。
+ARCHFLAGS := -march=armv8-a -mgeneral-regs-only -mstrict-align
 
 WARNFLAGS := -Wall -Wextra -Werror -Wshadow -Wundef -Wpointer-arith \
              -Wstrict-prototypes -Wmissing-prototypes
@@ -149,7 +156,10 @@ CFLAGS := -std=c11 $(ARCHFLAGS) -O2 -g3 $(WARNFLAGS) \
           -fno-pic -fno-pie -fno-asynchronous-unwind-tables \
           -fno-unwind-tables $(INCLUDES)
 
-ASFLAGS := $(ARCHFLAGS) -g3
+# 汇编也要能 `#include <br/core/br_exc.h>`(异常帧偏移的**唯一真值**):
+# .S 由 cpp 预处理, `__ASSEMBLER__` 由 GCC 自动定义, 该头里 C 专属部分被它挡住。
+# 不给 -I 的话汇编侧只能"镜像"一份偏移常量 —— 那就又有了第二处真值。
+ASFLAGS := $(ARCHFLAGS) -g3 $(INCLUDES)
 
 LDFLAGS := -nostdlib -nostartfiles -static -no-pie \
            -Wl,-T,$(LDSCRIPT) \
@@ -167,7 +177,7 @@ LDFLAGS := -nostdlib -nostartfiles -static -no-pie \
 .PHONY: all prebuilt prebuilt-check prebuilt-clean \
         tools tools-core tools-test tools-clean tools-prebuilt tools-prebuilt-check \
         brickie-check brickie-check-release brickie-compose \
-        run smoke size disasm check-workarounds check-build \
+        run smoke irq-test size disasm check-workarounds check-build \
         clean clean-brickos help print-host-triple print-host-bin-dir \
         print-prebuilt-bin-dir print-cross-compile env
 
@@ -289,7 +299,11 @@ $(OBJ_DIR)/%.o: %.S
 	$(CC) $(ASFLAGS) -c $< -o $@
 
 # ---------------------------------------------------------------- 运行/验证
-QEMUFLAGS ?= -M virt -cpu cortex-a53 -m 128M -nographic
+# ★ `gic-version=3` 是**显式**的: QEMU virt 的缺省是 GICv2(见 `-M virt,dumpdtb`
+#   的 compatible = "arm,cortex-a15-gic")。本原型的 platform 插件声明的是
+#   **GICv3**(设计 1-03 §1 的 platform/qemu-aarch64 行), 所以机器型号必须钉住 ——
+#   否则镜像里的 GICv3 驱动会写 GICv2 的地址, 表现为"PIC 初始化后收不到任何中断"。
+QEMUFLAGS ?= -M virt,gic-version=3 -cpu cortex-a53 -m 128M -nographic
 
 run: all
 	$(require_qemu)
@@ -308,8 +322,38 @@ smoke: all
 	if ! grep -q "tick=2 " $(BUILD_DIR)/smoke.log; then echo "FAIL: MainLoop 未跑到第 2 拍"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
 	if grep -q "EARLY" $(BUILD_DIR)/smoke.log; then echo "FAIL: 出现早醒(delay < 请求值)"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
 	if grep -q "FATAL" $(BUILD_DIR)/smoke.log; then echo "FAIL: 触发未处理异常"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	echo "PASS: 启动 + MainLoop + 延时判据"; \
+	if grep -q "\[PANIC\]" $(BUILD_DIR)/smoke.log; then echo "FAIL: 触发 panic"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
+	if ! grep -q "int: conformance ALL PASS" $(BUILD_DIR)/smoke.log; then echo "FAIL: 中断一致性用例未全绿"; grep "IRQCONF" $(BUILD_DIR)/smoke.log; exit 1; fi; \
+	if ! grep -q "irq_ticks=[1-9]" $(BUILD_DIR)/smoke.log; then echo "FAIL: timer PPI 中断未送达(irq_ticks 恒 0)"; tail -20 $(BUILD_DIR)/smoke.log; exit 1; fi; \
+	echo "PASS: 启动 + MainLoop + 延时判据 + 中断心跳 + 一致性用例全绿"; \
 	grep -c "^\[" $(BUILD_DIR)/smoke.log | sed 's/^/日志行数: /'
+
+# 中断子系统**逐用例**门禁(设计 6-01 §3.7 的 TC-IRQ-*; target-only)。
+# 与 smoke 的分工: smoke 只看"启动/延时/心跳"; irq-test 要求**每个列出的用例**
+# 都打出了 PASS —— 用例少了(被裁掉/没跑)也算红。
+IRQ_SECONDS ?= 6
+IRQ_REQUIRED := GIC-EOIMODE GIC-PRIBITS GIC-LINES GIC-TIMERID \
+                TC-IRQ-001 TC-IRQ-002 TC-IRQ-003 TC-IRQ-004 TC-IRQ-008 \
+                TC-IRQ-010 TC-IRQ-012 TC-IRQ-013 TC-IRQ-014 TC-IRQ-016 \
+                TC-IRQ-018 TC-IRQ-019 TC-IRQ-021 TC-IRQ-022 TC-IRQ-101 \
+                TC-IRQ-102 TC-IRQ-STATS
+
+irq-test: all
+	$(require_qemu)
+	@set +e; \
+	timeout $(IRQ_SECONDS) $(QEMU) $(QEMUFLAGS) -kernel $(ELF) > $(BUILD_DIR)/irq.log 2>&1; \
+	rc=$$?; \
+	if [ $$rc -ne 124 ]; then echo "FAIL: QEMU 未按期运行(rc=$$rc)"; tail -30 $(BUILD_DIR)/irq.log; exit 1; fi; \
+	if grep -q "\[IRQCONF\] FAIL" $(BUILD_DIR)/irq.log; then echo "FAIL: 有一致性用例未通过"; grep "\[IRQCONF\]" $(BUILD_DIR)/irq.log; exit 1; fi; \
+	if grep -q "\[PANIC\]" $(BUILD_DIR)/irq.log; then echo "FAIL: 触发 panic"; grep "\[PANIC\]" $(BUILD_DIR)/irq.log; exit 1; fi; \
+	if ! grep -q "\[IRQCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/irq.log; then echo "FAIL: 未见全绿摘要"; grep "IRQCONF" $(BUILD_DIR)/irq.log; exit 1; fi; \
+	for tc in $(IRQ_REQUIRED); do \
+	    if ! grep -q "PASS $$tc " $(BUILD_DIR)/irq.log; then echo "FAIL: 缺用例 PASS: $$tc"; grep "IRQCONF" $(BUILD_DIR)/irq.log; exit 1; fi; \
+	done; \
+	if ! grep -q "irq_ticks=[1-9]" $(BUILD_DIR)/irq.log; then echo "FAIL: timer PPI 中断未送达(irq_ticks 恒 0)"; tail -20 $(BUILD_DIR)/irq.log; exit 1; fi; \
+	echo "PASS: 中断子系统逐用例全绿(+ timer PPI 心跳)"; \
+	grep "\[IRQCONF\] SUMMARY" $(BUILD_DIR)/irq.log; \
+	grep -c "\[IRQCONF\] PASS" $(BUILD_DIR)/irq.log | sed 's/^/PASS 项数: /'
 
 size: all
 	$(call require_binutils,SIZE)
@@ -360,11 +404,11 @@ env:
 clean: clean-brickos tools-clean
 
 clean-brickos:
-	rm -rf $(OBJ_DIR) $(ELF) $(BIN) $(MAP) $(BUILD_DIR)/smoke.log
+	rm -rf $(OBJ_DIR) $(ELF) $(BIN) $(MAP) $(BUILD_DIR)/smoke.log $(BUILD_DIR)/irq.log
 
 help:
 	@echo "目标: all(缺省) prebuilt prebuilt-check prebuilt-clean"
-	@echo "      tools tools-test tools-prebuilt tools-prebuilt-check run smoke size disasm"
+	@echo "      tools tools-test tools-prebuilt tools-prebuilt-check run smoke irq-test size disasm"
 	@echo "      check-workarounds check-build clean tools-clean"
 	@echo "      print-host-triple print-host-bin-dir print-prebuilt-bin-dir print-cross-compile env"
 	@echo "变量: CROSS_COMPILE=$(CROSS_COMPILE)  CC=$(CC)"

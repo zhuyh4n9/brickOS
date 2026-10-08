@@ -1,0 +1,97 @@
+# brickie:generated
+# api/iface 快照 api/iface/platform/qemu-aarch64/gicv3.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "platform/qemu-aarch64#gicv3"
+provider = "platform/qemu-aarch64"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.1.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:edb5e16d25517877de07fc495ce80209148b746038208cf7be0df01deef0f094"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "func"
+name = "br_gicv3_register"
+sig = "int (const br_gicv3_cfg_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_gicv3_info"
+sig = "void (br_gicv3_info_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_gicv3_sgi_trigger"
+sig = "int (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_gicv3_readback_enabled"
+sig = "int (br_u32, int*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_gicv3_readback_prio"
+sig = "int (br_u32, br_u8*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_gicv3_readback_pending"
+sig = "int (br_u32, int*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_gicv3_raw_line_enable"
+sig = "int (br_u32, int)"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_gicv3_cfg_t"
+layout = "# {gicd_base, gicr_base, gicr_frame_size, gicr_max_frames, nr_irq}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_gicv3_info_t"
+layout = "# {prio_bits, eoimode, spi_lines, mpidr}"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_GICV3_INTID_SGI_MAX"
+value = "15"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_GICV3_INTID_PPI_BASE"
+value = "16"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_GICV3_INTID_SPI_BASE"
+value = "32"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_GICV3_PMR_ALL"
+value = "255"
+status = "experimental"

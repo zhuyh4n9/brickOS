@@ -44,6 +44,18 @@ SECTIONS
 
     .rodata : ALIGN(16) {
         *(.rodata .rodata.*)
+
+        /*
+         * extable(fixup 表, 设计 3-02 §10.4): 由 `BR_EXTABLE_ENTRY` 宏经
+         * `.pushsection .br_extable` 发射、链接器收集 —— **链接期生成, 无运行期初始化**
+         * (这正是"extable 必须先于任何可能触发它的代码就绪"的落地方式)。
+         * 段名含 '.', GNU ld 不会自动生成 __start_/__stop_ ⇒ 边界符号在此显式提供
+         * (与 3-01 §13.3 对 `.br_plugins` 的同一手法)。
+         */
+        . = ALIGN(8);
+        __br_extable_start = .;
+        KEEP(*(.br_extable))
+        __br_extable_stop = .;
     } :rodata
     . = ALIGN(4096);
 

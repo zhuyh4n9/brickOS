@@ -3,7 +3,8 @@
  *
  * 设计对应: 本文件是 Platform 插件 `platform/qemu-aarch64` 的实现主体
  * (1-03 §1 插件清单第一行: QEMU virt: EL1、GICv3、PL011、arch timer、恒等映射页表、
- *  region 表; 里程碑 M0)。v0.1.0 只取其中 MainLoop 需要的两件: PL011 + arch timer。
+ *  region 表; 里程碑 M0)。v0.1.0 取其中 MainLoop 需要的三件: PL011 + arch timer +
+ *  GICv3 中断子系统(初始化链见 br_plat_early_init)。
  *
  * WORKAROUND(br-wa-entry-001): 插件化已完成(manifest = ../plugin.toml, 描述符由
  * `brickie gen` 生成); **仍欠**的是"调用点由 .br_plugins 段枚举驱动"(M0 运行期)。
@@ -28,15 +29,25 @@ const char *br_plat_isa(void)
 void br_plat_early_init(void)
 {
     /*
-     * 顺序有讲究(设计 1-01 §9): 早期 console 必须最先就绪, 否则 init 链上
-     * 任何失败都是静默的 —— 原型阶段的排障成本几乎全在这里。
+     * 顺序有讲究(设计 1-01 §9 / 3-02 §14.3): 早期 console 必须最先就绪, 否则
+     * init 链上任何失败都是静默的 —— 原型阶段的排障成本几乎全在这里。
+     * 紧接着是中断子系统的平台侧三步(3-02 §14.3 步 1–3, 实现在 board_irq.c):
+     *   PIC 注册(GICv3 初始化)→ [caps_get] → 绑定表提交。
+     * ★ EARLY 相失败 = **启动失败**: 此时全局关中断、系统还没法跑, 明确停机比
+     *   "降级到无中断"诚实(§14.3 的错误处理义务)。这里刻意不用 br_panic_bare,
+     *   因为 fault 路径与 panic 属 core 的观测契约, 而停机入口已由平台提供。
      *
-     * v0.1.0 刻意不做的(等 M0/M2): GICv3 初始化、恒等映射页表、region 表、
-     * cache 维护。MainLoop 不碰内存管理与中断, 做了也无法验证。
+     * v0.1.0 仍不做的(等 M0/M2): 恒等映射页表、region 表、cache 维护。
      */
     br_console_init();
 
-    /* arch timer 由固件/QEMU 预置 CNTFRQ_EL0, 无需初始化; 只需在 core 侧换算。 */
+    if (br_plat_irq_init() != 0) {
+        br_console_puts("[FATAL] platform IRQ init failed\n");
+        br_plat_park_forever();
+    }
+
+    /* arch timer 由固件/QEMU 预置 CNTFRQ_EL0, 无需初始化; 频率换算见 board_irq.c
+     * 的 br_plat_timer_*(装弹写 CNTP_TVAL_EL0 / CNTP_CTL_EL0)。 */
 }
 
 BR_NORETURN void br_plat_park_forever(void)

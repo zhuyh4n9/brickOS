@@ -13,12 +13,12 @@
  *         -> platform.early_init                        [br_plat_early_init]
  *         -> core.init ...                              [br_core_main, 见 br-wa-boot-001]
  *
- * 本文件只做 5 件事, 不碰内存管理与中断控制器:
+ * 本文件只做 5 件事, 不碰内存管理与中断控制器本体:
  *   1. 选 CPU(boot 核继续, 其余核 park)
  *   2. 屏蔽异常源(DAIF)+ 必要时从 EL2 降到 EL1h
- *   3. 装载启动栈 + 设向量表
+ *   3. 装载启动栈 + 设向量表(表本体在 vectors.S)
  *   4. 清零 BSS
- *   5. 调平台早期初始化, 再交 core
+ *   5. 初始化 core 的 per-CPU 中断状态, 再调平台早期初始化, 最后交 core
  */
 
     .section .text.boot, "ax"
@@ -59,8 +59,9 @@ _start:
     mov     sp, x0
 
     /* ---- 3b. 设异常向量表 ----
-     * v0.1.0 不开中断, 但 fault/SError 仍可能来; 没有向量表就会跳到地址 0
-     * 静默挂死 —— 那是最难查的一种 bug。这里至少保证"能喊一声"。 */
+     * 表本体在 vectors.S(16 槽 × 0x80 B, 2 KiB 对齐; 0x200 = fault, 0x280 = IRQ)。
+     * v0.1 在走进 core 之前不开中断, 但 fault/SError 仍可能来; 没有向量表就会
+     * 跳到地址 0 静默挂死 —— 那是最难查的一种 bug。 */
     ldr     x0, =br_plat_vectors
     msr     vbar_el1, x0
 
@@ -74,7 +75,14 @@ _start:
     b       .Lbss_loop
 .Lbss_done:
 
-    /* ---- 5a. 平台早期初始化: 早期 console 就绪(之后才有可观测性) ---- */
+    /* ---- 4b. core 的 per-CPU 中断状态初始化 ----
+     * 设计侧这一步属 core.init; v0.1.0 没有 core.init(WORKAROUND br-wa-boot-001),
+     * 所以由 Platform Entry 在 BSS 清零之后、br_plat_early_init() 之前调用。
+     * 它把 TPIDR_EL1 指向本核的 br_irq_cpu_t —— 此后任何 IRQ 入口都要用(3-02 §14.4)。
+     * 顺序硬约束(§14.3): 必须在 BSS 清零后(否则 CPU-local 结构被抹掉)。 */
+    bl      br_irq_cpu_init
+
+    /* ---- 5a. 平台早期初始化: console + PIC 注册 + 绑定表(失败即停机) ---- */
     bl      br_plat_early_init
 
     /* ---- 5b. 交 core: MainLoop(延时 + 日志), 不返回 ---- */
@@ -86,42 +94,10 @@ _start:
     .size   _start, . - _start
 
 /*
- * 异常向量表(AArch64 四级表, 每级 4 个入口, 每个入口 0x80 字节 = 16 条指令)。
- * v0.1.0 全部 16 个入口都走"喊一声 + 停机": 这是 Platform Entry 的一部分,
- * 对应的正式形态是设计 3-02 的中断框架(M0+)。
- */
-    .section .text.vectors, "ax"
-    .balign 2048
-    .global br_plat_vectors
-    .type   br_plat_vectors, %object
-
-.macro BR_VECTOR idx
-    .balign 0x80
-    mov     x0, #\idx
-    b       br_plat_unexpected_exception
-.endm
-
-br_plat_vectors:
-    BR_VECTOR 0    /* Current EL with SP_EL0: Synchronous        */
-    BR_VECTOR 1    /* Current EL with SP_EL0: IRQ                */
-    BR_VECTOR 2    /* Current EL with SP_EL0: FIQ                */
-    BR_VECTOR 3    /* Current EL with SP_EL0: SError             */
-    BR_VECTOR 4    /* Current EL with SP_ELx: Synchronous        */
-    BR_VECTOR 5    /* Current EL with SP_ELx: IRQ                */
-    BR_VECTOR 6    /* Current EL with SP_ELx: FIQ                */
-    BR_VECTOR 7    /* Current EL with SP_ELx: SError             */
-    BR_VECTOR 8    /* Lower EL using AArch64: Synchronous        */
-    BR_VECTOR 9    /* Lower EL using AArch64: IRQ                */
-    BR_VECTOR 10   /* Lower EL using AArch64: FIQ                */
-    BR_VECTOR 11   /* Lower EL using AArch64: SError             */
-    BR_VECTOR 12   /* Lower EL using AArch32: Synchronous        */
-    BR_VECTOR 13   /* Lower EL using AArch32: IRQ                */
-    BR_VECTOR 14   /* Lower EL using AArch32: FIQ                */
-    BR_VECTOR 15   /* Lower EL using AArch32: SError             */
-
-    .size   br_plat_vectors, . - br_plat_vectors
-
-/*
+ * 异常向量表**不在这里** —— 实体在 vectors.S(16 槽 × 0x80 B, 2 KiB 对齐,
+ * 0x200 = fault 桩, 0x280 = IRQ 桩, 其余 14 槽 = 真实可用的 panic 桩;
+ * 设计 3-02 §10.2)。本文件只负责把它装进 VBAR_EL1(见 3b)。
+ *
  * 其余核的停机位。放在 .text 尾(不进 .text.boot, 免得挤占入口布局)。
  */
     .section .text, "ax"

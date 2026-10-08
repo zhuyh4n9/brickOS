@@ -1,5 +1,5 @@
 /*
- * brickOS prototype v0.1.0 — APP 入口(M0): MainLoop(延时 + 日志)
+ * brickOS prototype v0.1.0 — APP 入口(M0): MainLoop(中断驱动的心跳 + 延时 + 日志)
  *
  * 调用者: Platform 插件(platform/qemu-aarch64/src/start.S), 在
  * br_plat_early_init() 之后。这是 v0.1.0 全镜像里唯一的一条跨层边:
@@ -12,7 +12,7 @@
  * ======================= WORKAROUND(br-wa-boot-001) =======================
  * 设计侧这里是一整条启动链(1-01 §9 / §6.2 阶段表):
  *
- *   core.init(堆/中断框架/注册表/调度框架对象, 无线程)
+ *   core.init(TPIDR_EL1/中断框架等, 无线程)
  *     -> plugin_manager 扫 .br_plugins 段 + 拓扑排序(环 = 硬错误)
  *       -> EARLY(调度插件注册 br_sched_ops, core 锁定)
  *         -> CORE(非服务插件 init)
@@ -21,15 +21,15 @@
  *               -> app.start() 创建 APP 线程
  *                 -> br_sched_run() 首次调度, idle 进 WFI
  *
- * v0.1.0 **整条链缺席**: 没有堆、没有注册表、没有插件描述符、没有调度器,
- * 所以没有 EARLY/CORE/LATE 可挂, 也没有 idle 线程可以让出 CPU。
- * 于是这条链被压缩成"一个死循环里做延时 + 日志"。
- *
- * 关键认识: **`br_core_main` 的归宿不是长大, 而是被拆掉。**
- *   - 顶层那行 `br_plat_name()` 打印 -> 变成插件描述符枚举
- *   - `br_log_init()`               -> 变成 core.init 的一步
- *   - 循环体                        -> 变成 app.start() 里的 APP 线程
- *   - 循环边的延时                  -> 变成 br_task_sleep(M1)
+ * v0.1.0 仍**没有**堆/注册表/插件描述符/调度器, 所以 EARLY/CORE/LATE 无从挂起。
+ * 中断子系统(3-02 的 Stage 1)现在**已经在**:
+ *   - `core.init` 的 TPIDR_EL1 这一步  -> `br_irq_cpu_init()`(start.S 调, 见其声明)
+ *   - PIC/绑定表/能力协商               -> `br_plat_early_init()` 内的平台步骤 1–3
+ *   - "全部插件 init 之后开中断"         -> 一致性用例入口里显式 `br_irq_cpu_enable()`
+ *   - "core 在 core.init 注册 timer PPI 的 ISR" -> **本文件**(APP 是 v0.1 唯一有
+ *     init/thread 上下文的角色)注册 + 使能, 设计 3-02 §11.1 的"路径四"(timer PPI)
+ *   - `app.start()`                    -> `br_core_main()` 的死循环(仍未拆)
+ * 也就是说: **中断框架这一半已经落地, 启动链这一半仍然欠着**。
  * ==========================================================================
  */
 #include <br/core/br_main.h>
@@ -38,10 +38,32 @@
 #include <br/core/br_version.h>
 
 #include <br/platform/br_plat.h>
+#include <br/board_irq.h>
 
 /* MainLoop 周期。选 1s 是因为它同时是"人能看清的节奏"与"计时误差能被
  * 日志一眼量化"的长度。 */
 #define BR_MAINLOOP_PERIOD_MS   1000u
+
+/*
+ * 中断心跳的**开跑**交给 platform(`br_plat_irq_start()`: 注册 timer PPI 的 ISR +
+ * 使能 + 装弹 + 全局开中断)。
+ *
+ * ★ 为什么 APP 不自己 `br_irq_register`(P-IRQ-17): 设计 3-01 §13.6 的特权分级把
+ *   "中断控制"归 **P3**(仅调度类 ability 与 platform 可声明), APP 是 **P0**。
+ *   在 P0 的位置上做 P3 的事是一处**声明面与实现不一致**, 而 `brickie check` 的
+ *   priv 域(声明合法性)看不到源码、不会报红 ⇒ 只能靠**放置**避免。
+ *   ⇒ APP 只读平台的心跳计数, 始终是纯 P0 消费者。
+ */
+static void mainloop_irq_setup(void)
+{
+    const int r = br_plat_irq_start();
+    if (r != 0) {
+        br_log_error("int: platform irq start failed: %d", r);
+        return;
+    }
+    br_log_info("int: timer PPI armed by platform (virq=%u INTID=%u, 100 ms)",
+                (br_u32)BR_IRQ_TIMER, 30u);
+}
 
 BR_NORETURN void br_core_main(void)
 {
@@ -49,12 +71,23 @@ BR_NORETURN void br_core_main(void)
     br_log_init();
     br_log_set_level(BR_LOG_DEBUG);
 
-    br_log_info("%s %s -- core MainLoop (delay + logging)",
+    br_log_info("%s %s -- core MainLoop (interrupt heartbeat + delay + logging)",
                 BR_PROTOTYPE_NAME, BR_VERSION_STRING);
     br_log_info("platform: %s (%s)", br_plat_name(), br_plat_isa());
     br_log_info("clock: %lu Hz (arch timer), %lu ticks/ms (exact integer conversion)",
                 br_clock_freq_hz(), br_clock_ticks_per_ms());
-    br_log_info("entry chain: start.S -> br_plat_early_init -> br_core_main");
+    br_log_info("entry chain: start.S -> br_irq_cpu_init -> br_plat_early_init -> br_core_main");
+
+    /*
+     * 中断子系统一致性用例(设计 6-01 §3.7 的 TC-IRQ-*, target-only)。
+     * 放在 MainLoop 之前: 它是启动期的自检, 红了就该在第一时间看见。
+     * 入口内部会执行"全局开中断"(设计 §14.3 的最后一步)。
+     */
+    const int conf_fail = br_plat_irq_conformance();
+    br_log_info("int: conformance %s (failures=%d)",
+                (conf_fail == 0) ? "ALL PASS" : "HAS FAILURES", conf_fail);
+
+    mainloop_irq_setup();
 
     br_u64 tick = 0;
 
@@ -72,11 +105,12 @@ BR_NORETURN void br_core_main(void)
          */
         const br_bool delay_ok = (measured >= BR_MAINLOOP_PERIOD_MS * BR_US_PER_MS);
 
-        br_log_info("tick=%lu uptime=%lu us delay=%lu us (>=%lu us: %s)",
+        br_log_info("tick=%lu uptime=%lu us delay=%lu us (>=%lu us: %s) irq_ticks=%lu",
                     tick,
                     (br_u64)br_clock_now(),
                     (br_u64)measured,
                     (br_u64)(BR_MAINLOOP_PERIOD_MS * BR_US_PER_MS),
-                    delay_ok ? "ok" : "EARLY");
+                    delay_ok ? "ok" : "EARLY",
+                    (br_u64)br_plat_timer_ticks());
     }
 }

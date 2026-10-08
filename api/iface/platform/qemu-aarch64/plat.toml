@@ -9,11 +9,11 @@ NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 [unit_meta]
 api_iface = "native"
 form = "api"
-version = "0.1.0.0"
+version = "0.1.2.0"
 compat_gen = 0
 freeze_state = "unfrozen"
 status = "experimental"
-hash = "sha256:199307d2638401c2507d174a0febc79b7926eee63b98594847d49d5e04b8043b"
+hash = "sha256:088c4dae5709b104bf874edc8c22251641e7ec82afac651284ce05d63d22b4ee"
 hash_scope = "decl"
 truth = "decl"
 strict_params = false
@@ -58,4 +58,46 @@ status = "experimental"
 kind = "func"
 name = "br_plat_unexpected_exception"
 sig = "void (br_u64)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_irq_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_irq_start"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_timer_ticks"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_timer_stop"
+sig = "void (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_irq_conformance"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_irq_trigger"
+sig = "int (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_irq_hwirq"
+sig = "int (br_u32, br_u32*)"
 status = "experimental"
