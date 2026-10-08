@@ -9,11 +9,11 @@ NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 [unit_meta]
 api_iface = "native"
 form = "api"
-version = "0.1.2.0"
+version = "0.1.3.0"
 compat_gen = 0
 freeze_state = "unfrozen"
 status = "experimental"
-hash = "sha256:088c4dae5709b104bf874edc8c22251641e7ec82afac651284ce05d63d22b4ee"
+hash = "sha256:ef36d8bea3eca02fe1df18a61011f757a55ab2e7b286413fac031f61c04b305c"
 hash_scope = "decl"
 truth = "decl"
 strict_params = false
@@ -100,4 +100,10 @@ status = "experimental"
 kind = "func"
 name = "br_plat_irq_hwirq"
 sig = "int (br_u32, br_u32*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_mem_conformance"
+sig = "int (void)"
 status = "experimental"

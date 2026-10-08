@@ -1,0 +1,90 @@
+# service/memleak — 泄漏与堆破坏报告服务(plugin_type = ability, subkind = service)
+#
+# 设计出处: docs/5-debug/5-01-debug.md §4(分层策略):
+#   - target 便宜替代(v1.x): TLSF 红区 + freelist 毒化 + (栈 canary 未做);
+#   - target memleak(v2.0): per-plugin arena 记账 → 按归属出泄漏报告。
+# ★ 诚实声明(ADR-0003): 本原型实现"v1.x 机制已到位 + v2 的**归属标签**近似",
+#   **没有**预算上限/强制归属/OOM 策略 —— 所以能报"谁没还、在哪分配的",
+#   不能报"某插件超预算"。
+#
+# 特权: P0。它**只读** core 的堆观测契约(`br_heap_stats_get`/`br_heap_walk`/
+# `br_heap_check`), 不建池、不映射 —— 故不声明 [privileged]。
+schema = 1
+
+[plugin]
+name        = "service/memleak"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "service"
+lang        = "c"
+phase       = "late"
+version     = "0.1.0.0"
+summary     = "泄漏/破坏报告: 按归属标签出存活块账 + 红区/魔数/毒化违约计数(消费 core 的堆观测契约)"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 4
+notes    = "归属标签注册 + 自检用的记账快照 + 报告行缓冲"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u32       = "uint32_t"
+br_u64       = "uint64_t"
+br_size_t    = "size_t"
+br_uintptr_t = "uintptr_t"
+br_owner_t   = "uint16_t"
+
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "memleak"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:4847d941784c39b7b8efd55aabdfbb445f3eaf0b165e310da2fd20dfb19cdf01"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_memleak_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_memleak_selftest"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_memleak_report"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_memleak_live"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_memleak_live_by_owner"
+sig  = "br_u32 (br_owner_t)"
+[[export.entries]]
+kind = "func"
+name = "br_memleak_corruptions"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_memleak_owner"
+sig  = "br_owner_t (void)"
+[[export.entries]]
+kind = "macro"
+name = "BR_MEMLEAK_MAX_ROWS_PER_OWNER"
+value = "8"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

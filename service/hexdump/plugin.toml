@@ -1,0 +1,78 @@
+# service/hexdump — 十六进制 + ASCII 呈现原语(plugin_type = ability, subkind = service)
+#
+# 设计出处: docs/5-debug/5-01-debug.md §2(debug bridge 的 MEMRD / 主机侧 `brickie dbg`)
+# 与 §3(ramdump 输出)。最底层呈现原语: 谁读内存谁负责边界判定, 本插件只负责"把字节
+# 变成行"——所以它没有 privileged 声明(P0)。
+#
+# 格式是本插件的**契约**(用例 TC-DBG-020 逐字节断言): 见
+# service/hexdump/include/br/debug/br_hexdump.h 的文件头。
+schema = 1
+
+[plugin]
+name        = "service/hexdump"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "service"
+lang        = "c"
+phase       = "late"
+version     = "0.1.0.0"
+summary     = "hexdump 原语: 16 字节/行(地址 + hex + ASCII), 缓冲与 console 两条路径, snprintf 式截断语义"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "无状态(只用一个行缓冲); 预留 1 KiB 给 br_hexdump_to 的调用方共享测试缓冲"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u32       = "uint32_t"
+br_u64       = "uint64_t"
+br_size_t    = "size_t"
+br_uintptr_t = "uintptr_t"
+
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "hexdump"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:4629b1bf2e6ec0f56b0272c6d8960131ba51490f61e4baae4a26963983f17324"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_hexdump_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_hexdump_selftest"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_hexdump_to"
+sig  = "br_size_t (char*, br_size_t, const void*, br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_hexdump"
+sig  = "br_size_t (const void*, br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_hexdump_line_bytes"
+sig  = "br_size_t (void)"
+[[export.entries]]
+kind = "macro"
+name = "BR_HEXDUMP_WIDTH"
+value = "16"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

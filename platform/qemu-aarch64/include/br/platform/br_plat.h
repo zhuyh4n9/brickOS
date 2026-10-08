@@ -29,12 +29,15 @@
 
 /*
  * 平台早期初始化。**由 Platform Entry(start.S)调用**, 在 BSS 清零之后、
- * 进入 core 之前。v0.1.0 只做两件事:
+ * 进入 core 之前。现在做三件(按此顺序):
  *   1. 早期 console 就绪(轮询 PL011)—— 必须最先, 之后才有可观测性;
- *   2. 记录平台参数(供 core 的时钟换算使用)。
+ *   2. 中断子系统的平台侧三步(PIC 注册 / caps / 绑定表, `br_plat_irq_init`);
+ *   3. 内存映射: 声明 region 表 → `br_mem_init()` 认领三池 → 建 4 KiB 恒等映射
+ *      页表并开 MMU(`br_mm_register` + `ops.activate`)。
  *
  * 设计侧它对应 platform.early_init(1-01 §9): 时钟 / 引脚 / RAM / 恒等映射页表
- * (br_mm) / 早期 console。v0.1.0 只有 console —— 因为 MainLoop 不碰内存管理与 MMU。
+ * (br_mm) / 早期 console。第 3 步落地后, "MMU 用于 region 属性"的 v1 政策生效,
+ * `-mstrict-align` 从"硬要求"退化为"防御性旋钮"(见 Makefile 的注释)。
  */
 void br_plat_early_init(void);
 
@@ -98,6 +101,20 @@ int br_plat_irq_trigger(br_u32 virq);
  * 返回 0 或 -ENODEV。
  */
 int br_plat_irq_hwirq(br_u32 virq, br_u32 *out);
+
+/* ---- 内存映射子系统(设计 3-04; 页表/region 表/三池) ----
+ *
+ * 平台侧的三件事(顺序有讲究, 见 `br_plat_early_init` 的注释):
+ *   ① 声明 region 表(`br_mm_region_add`: 镜像/栈/三池/MMIO/保留区);
+ *   ② `br_mem_init()`(core 按 region 种类认领池);
+ *   ③ `br_mm_register(ops)` + `ops.activate()` 建 4 KiB 恒等映射页表并开 MMU。
+ *
+ * `br_plat_mem_conformance()` = 内存/MMU 一致性用例入口(设计 6-01 §3.5/§3.6 的
+ * `TC-MEM-*` 与 `TC-MM-*`, 在 QEMU 上跑)。返回**失败项数**(0 = 全绿), 每项打
+ * `[MEMCONF] PASS/FAIL <用例名> <描述>` 行, 末尾打 `[MEMCONF] SUMMARY pass=N fail=0 total=N`
+ * —— 于是红绿由 `make dbg-test` / CI 的 grep 判定, 不靠人眼。
+ */
+int br_plat_mem_conformance(void);
 
 /* 停机(不可返回)。没有调度器, 所以没有"idle 线程", 只有 WFE 死循环。 */
 BR_NORETURN void br_plat_park_forever(void);

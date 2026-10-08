@@ -1,0 +1,43 @@
+# service/memleak — conformance 用例(人写)
+#
+# 由 `brickie new` 生成字段形状(照 `6-01` §2 的用例表契约: {id, pre, steps, expect,
+# sched, platform}); **v0.1 不消费它**(无 test 命令, 排 v0.4, §0 边界纪律)。
+# 运行期的真身是编进镜像的 `br_memleak_selftest()`(见 src/memleak.c), 由
+# `br_dump_conformance()`(dump 编排)调用、`make dbg-test` 判定; 本表的 id 与镜像
+# 日志里的用例 tag 一一对应。
+#
+# 共同前置: 堆已初始化(br_mem_init 完成)、MMU 已开; 每一例收尾都把堆恢复干净 ——
+# 用例是判据, 不给 MainLoop 留破坏现场(只有 TC-DBG-040 需要"先泄漏再归还")。
+schema = 1
+
+[[case]]
+id       = "TC-DBG-040"
+pre      = "堆已就绪; 本插件归属标签已注册(br_memleak_owner() != BR_OWNER_NONE)"
+steps    = ["记基线 br_memleak_live() / br_memleak_live_by_owner(owner)", "br_heap_owner_set(owner); br_malloc(123) 后故意丢掉指针", "再取 live / live_by_owner 并调用 br_memleak_report()", "核对增量后 br_free 归还那块"]
+expect   = "本归属存活块 >= 基线 + 1; report 的 live 与独立观测一致且增量归属唯一(真泄漏可检出)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-041"
+pre      = "堆已就绪; core 的块布局约定: 用户区后紧邻红区, 红区填充 0xA5"
+steps    = ["p = br_malloc(64)", "((volatile br_u8*)p)[64] = 0xFF(越界 1 字节, 落在红区)", "br_heap_check()", "把该字节复原为 0xA5", "br_heap_check()", "br_free(p)"]
+expect   = "踩红区后 br_heap_check() > 0; 复原 0xA5 后 br_heap_check() == 0(红区越界可检出且可复原)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-042"
+pre      = "堆已就绪"
+steps    = ["p = br_malloc(32)", "br_free(p)", "br_free(p)(第二次)", "br_heap_stats_get() 读 double_free", "br_heap_check()", "再 br_malloc(48)/br_free 一次"]
+expect   = "double_free >= 1(第二次释放被拦截); br_heap_check() == 0; 之后仍能正常分配/释放(双重释放可检出且不破坏堆)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-043"
+pre      = "堆已就绪; 前面用例已把堆恢复干净"
+steps    = ["基线 br_heap_usage(&u0,&total)", "分配 10 块 × 100 B", "br_heap_usage(&u1,&total)", "全部释放", "br_heap_usage(&u2,&total)"]
+expect   = "全部 10 块分配成功; u1 >= u0 + 1000; u2 == u0(记账匹配, 严格回到基线)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

@@ -39,6 +39,7 @@
 
 #include <br/platform/br_plat.h>
 #include <br/board_irq.h>
+#include <br/debug/br_dump.h>
 
 /* MainLoop 周期。选 1s 是因为它同时是"人能看清的节奏"与"计时误差能被
  * 日志一眼量化"的长度。 */
@@ -87,6 +88,31 @@ BR_NORETURN void br_core_main(void)
     br_log_info("int: conformance %s (failures=%d)",
                 (conf_fail == 0) ? "ALL PASS" : "HAS FAILURES", conf_fail);
 
+    /*
+     * 内存映射子系统一致性用例(设计 6-01 §3.5/§3.6 的 `TC-MEM-*` 与 `TC-MM-*`)。
+     * 放在 MainLoop 之前同上: 启动期自检。此时 MMU 已由 platform early_init 打开
+     * (恒等映射 + region 属性), 所以用例里的"真正未映射地址"才取翻译 fault。
+     */
+    const int mem_fail = br_plat_mem_conformance();
+    br_log_info("mem: conformance %s (failures=%d)",
+                (mem_fail == 0) ? "ALL PASS" : "HAS FAILURES", mem_fail);
+
+    /*
+     * 调试域一致性用例(设计 5-01 §3 的捕获集: region 表/堆账/泄漏/trace/回溯)。
+     * ★ 这条 app → service/dump 的边是 `product.toml [lint].allow_edges` 里的第二条
+     *   **M0 引导例外**(设计 §7.3 的表里 app ✗ ability; Interface 层 `iface-min` 属 M2,
+     *   运行期插件管理器属 M0)⇒ 属 WORKAROUND(br-wa-boot-001) 的欠债, 不是静默放行。
+     *   APP 只认识 dump 一个面: 其余四个调试插件的 LATE 相 init 与 selftest 由
+     *   `br_dump_conformance()` 按声明面依赖序代调(它们都是 dump 的 `[[dep]]`)。
+     */
+    const int dbg_fail = br_dump_conformance();
+    br_log_info("dbg: conformance %s (failures=%d)",
+                (dbg_fail == 0) ? "ALL PASS" : "HAS FAILURES", dbg_fail);
+
+    /* 启动现场一份(三套门禁截取证据的地方; 行数口径见 br_dump.h) */
+    const br_u32 dump_lines = br_dump_all();
+    br_log_info("dbg: boot snapshot lines=%lu", (br_u64)dump_lines);
+
     mainloop_irq_setup();
 
     br_u64 tick = 0;
@@ -112,5 +138,16 @@ BR_NORETURN void br_core_main(void)
                     (br_u64)(BR_MAINLOOP_PERIOD_MS * BR_US_PER_MS),
                     delay_ok ? "ok" : "EARLY",
                     (br_u64)br_plat_timer_ticks());
+
+        /*
+         * 第 2 拍再取一次 trace: 此时 timer PPI 已经跑了 ~20 次, 环里是**中断上下文**
+         * 落下的事件(IRQ_ENTER/EXIT)—— 这是"trace 在 ISR 里可用"(5-01 §1 + CA-3 白名单)
+         * 在真机上的活证据, 也是调试服务在稳定态可用的证明(启动那一刻的现场已由
+         * `br_dump_all()` 取过)。
+         */
+        if (tick == 2u) {
+            const br_u32 drained = br_dump_trace(0u);
+            br_log_info("dbg: steady-state trace drained=%lu", (br_u64)drained);
+        }
     }
 }

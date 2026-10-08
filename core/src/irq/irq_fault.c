@@ -16,6 +16,7 @@
 #include <br/core/br_fault.h>
 #include <br/core/br_trace.h>
 
+#include "../panic_internal.h"
 #include "irq_internal.h"
 
 /*
@@ -67,6 +68,23 @@ void br_fault_enter(br_exc_frame_t *f)
     br_irq_cpu_t *cpu = br_irq_cpu();
 
     cpu->in_fault++;
+
+    /*
+     * ★ **panic 重入护栏**(实测发现, ADR-0003 §5): panic 输出期间再 fault ⇒ 静默停机。
+     *
+     * 为什么必须有: panic 的输出通道是轮询 console, 而"console 也访问不了"正是常见的
+     * 崩溃形态。没有这条护栏时, "panic 打印 → 再 fault → 又走 panic → 再 fault" 是
+     * **无界递归**, 每次压 0x140 B 异常帧 ⇒ 64 KiB 启动栈被吃穿, 异常帧落进 .bss
+     * (实测: SP 掉进页表 `s_l2_dev`, 页表被覆盖后连取指都翻译不过去)⇒ **原始 fault
+     * 现场彻底丢失**。有了它, 行为退化为"第一句 panic 打得出就打, 打不出就安静停住":
+     * 诊断价值最大化, 破坏最小化。
+     *
+     * 位置纪律: 必须在 `in_fault++` **之后**、任何留痕/打印/handler 调用**之前** ——
+     * 留痕会写 trace 环(那时它自己也未必可信), 而打印就是重入源本身。
+     */
+    if (br_panic_in_progress()) {
+        br_panic_halt();
+    }
 
     const br_u32 ec = (br_u32)((f->esr >> BR_ESR_EC_SHIFT) & (br_u64)BR_ESR_EC_MASK);
 

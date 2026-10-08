@@ -1,0 +1,55 @@
+# brickie:generated
+# api/iface 快照 api/iface/service/hexdump/hexdump.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "service/hexdump#hexdump"
+provider = "service/hexdump"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:4629b1bf2e6ec0f56b0272c6d8960131ba51490f61e4baae4a26963983f17324"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "func"
+name = "br_hexdump_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_hexdump_selftest"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_hexdump_to"
+sig = "br_size_t (char*, br_size_t, const void*, br_size_t)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_hexdump"
+sig = "br_size_t (const void*, br_size_t)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_hexdump_line_bytes"
+sig = "br_size_t (void)"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_HEXDUMP_WIDTH"
+value = "16"
+status = "experimental"

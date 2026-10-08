@@ -20,7 +20,30 @@
 #include <br/core/br_console.h>
 #include <br/core/br_fault.h>
 
+#include "panic_internal.h"
+
 #include <stdarg.h>
+
+/*
+ * panic 重入护栏的状态(§10.6 与 ADR-0003 §5)。
+ * v0.1 单核 ⇒ 一个文件内静态量足够(v2 的 per-CPU 化随 TPIDR_EL1 的 per-CPU 一起做);
+ * 它是 **volatile** 的: fault 可能在编译器看不见的地方重入。
+ */
+static volatile br_u32 s_panic_depth;
+
+br_bool br_panic_in_progress(void)
+{
+    return (s_panic_depth != 0u) ? BR_TRUE : BR_FALSE;
+}
+
+BR_NORETURN void br_panic_halt(void)
+{
+    /* 不打印、不取锁、不碰任何可能已损坏的设施 —— 只停住。
+     * wfe 而非 wfi: 事件型等待, 不承诺被"被屏蔽的 pending 中断"唤醒(§11.1)。 */
+    for (;;) {
+        __asm__ volatile("wfe" ::: "memory");
+    }
+}
 
 /* 无符号数按 base 输出: buf 逆序生成, 再按 width(零/空格填充)补齐后正序打出。
  * buf 24 字节足够: 64 位十进制最长 20 位, 十六进制 16 位。 */
@@ -166,26 +189,26 @@ BR_NORETURN void br_panic_bare(const char *fmt, ...)
 {
     va_list ap;
 
+    /* ★ 先置重入标志再打印: 打印路径若再 fault, fault 路径会看到它并静默停机,
+     *   而不是继续递归(见 panic_internal.h 的背景说明)。 */
+    s_panic_depth++;
+
     va_start(ap, fmt);
     panic_vprint("[PANIC]", fmt, ap);
     va_end(ap);
 
-    /* 就地停机: 不调用任何平台/插件代码(§8.3.1)。wfe 而非 wfi —— 事件型等待,
-     * 不承诺被"被屏蔽的 pending 中断"唤醒(那正是 WFI 的行为, 见 §11.1 的 idle 讨论)。 */
-    for (;;) {
-        __asm__ volatile("wfe" ::: "memory");
-    }
+    br_panic_halt();
 }
 
 BR_NORETURN void br_panic(const char *fmt, ...)
 {
     va_list ap;
 
+    s_panic_depth++;
+
     va_start(ap, fmt);
     panic_vprint("[PANIC](thread)", fmt, ap);
     va_end(ap);
 
-    for (;;) {
-        __asm__ volatile("wfe" ::: "memory");
-    }
+    br_panic_halt();
 }

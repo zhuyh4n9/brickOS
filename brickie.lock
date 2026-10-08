@@ -21,6 +21,31 @@ name = "platform/qemu-aarch64"
 version = "0.1.0.0"
 compat_gen = 0
 
+[[lock.plugins]]
+name = "service/backtrace"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "service/dump"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "service/hexdump"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "service/memleak"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "service/trace"
+version = "0.1.0.0"
+compat_gen = 0
+
 [[lock.units]]
 id = "platform/qemu-aarch64#gicv3"
 provider = "platform/qemu-aarch64"
@@ -37,8 +62,63 @@ id = "platform/qemu-aarch64#plat"
 provider = "platform/qemu-aarch64"
 unit = "plat"
 api_iface = "native"
-version = "0.1.2.0"
+version = "0.1.3.0"
 compat_gen = 0
-hash = "sha256:088c4dae5709b104bf874edc8c22251641e7ec82afac651284ce05d63d22b4ee"
+hash = "sha256:ef36d8bea3eca02fe1df18a61011f757a55ab2e7b286413fac031f61c04b305c"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "service/backtrace#backtrace"
+provider = "service/backtrace"
+unit = "backtrace"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:0b2a3249f76bf6d91b1057ba4042b102b79a065e3b9ca83361327ca7dc1df419"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "service/dump#dump"
+provider = "service/dump"
+unit = "dump"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:d02f0a4af0753aa2ed4842e4dc4b6a338ca187a9908a326be48a1d24fcf5cec7"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "service/hexdump#hexdump"
+provider = "service/hexdump"
+unit = "hexdump"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:4629b1bf2e6ec0f56b0272c6d8960131ba51490f61e4baae4a26963983f17324"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "service/memleak#memleak"
+provider = "service/memleak"
+unit = "memleak"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:4847d941784c39b7b8efd55aabdfbb445f3eaf0b165e310da2fd20dfb19cdf01"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "service/trace#trace"
+provider = "service/trace"
+unit = "trace"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:a7d8fc97fbea303a552023370c452178a544633bf16797addcabaf6e3e88ab8d"
 hash_scope = "decl"
 truth = "decl"

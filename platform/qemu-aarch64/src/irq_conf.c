@@ -46,6 +46,16 @@
 /* 域窗口必须装进一个 32 位 pending 字(v0.1 的静态 bitmap 池按此裁剪) */
 _Static_assert(BR_IRQ_DOMAIN_WINDOW <= 32u, "域窗口超出单字位图容量");
 
+/*
+ * extable 负控制用的"确定 fault"地址: 0x42000000 在 RAM 段(0x40000000, -m 128M)之内,
+ * 但在页表的 RAM 映射窗口(0x40000000 + 8 MiB = 0x40800000)之外 ⇒ 页表项 invalid
+ * ⇒ 访问取 translation fault。为什么不取 0x1000 那种"看起来没映射"的地址: QEMU virt
+ * 把低地址区间实现成"返回 0 的 unassigned/flash", 根本不 fault(实测过一次, P-IRQ-16)。
+ * 这个字面量与 br_mmu.h 的 BR_PLAT_CONF_UNMAPPED 同值; irq_conf.c 不依赖 MMU 头,
+ * 故此处自带一份并注明出处(改动窗口边界时两处一起改)。
+ */
+#define CONF_UNMAPPED_ADDR   0x42000000ul
+
 /* =====================================================================
  * 断言与统计
  * ===================================================================== */
@@ -250,26 +260,25 @@ static void conf_extable(void)
                 "extable 正控制: 合法地址读出真值");
 
     /*
-     * ★ 怎么造出"确定可恢复的访存 fault"(P-IRQ-16, 实测校准过两次):
-     *   本原型 **MMU 未开** ⇒ 全部访存按 Device-nGnRnE 处理 ⇒ **非对齐访问必取
-     *   Alignment fault**(EC=0x25/DFSC=0x21)。这正是 `-mstrict-align` 存在的理由;
-     *   反过来, 它给了我们一个不依赖内存映射的确定性 fault。
-     *   反例(实测): "读一个看起来没映射的地址"(如 0x1000)在 QEMU virt 上**不会** fault
-     *   —— 那些区间被实现为返回值 0 的 unassigned/flash 区域。
-     *   ⚠ 将来开了 MMU(Normal 属性 + 对齐检查关), 非对齐访问不再 fault ⇒ 本用例必须
-     *     换成"真正未映射的地址"或权限 fault; 这一条随 MMU 工作一起改。
+     * ★ 怎么造出"确定可恢复的访存 fault"(P-IRQ-16; 随内存映射子系统一起改过一次):
+     *   旧手法是 MMU-off 时的**非对齐访问**(全部访存按 Device-nGnRnE ⇒ Alignment
+     *   fault, EC=0x25/DFSC=0x21)。平台内存映射子系统落地后 MMU 已开, 且 SCTLR_EL1 的
+     *   A/SA/SA0 被显式清 0(见 mmu.c 的 MMU_SCTLR_A 注释: 字段号按 ARMv8 更正过)
+     *   ⇒ 对 Normal 内存的非对齐访问**不再** fault(`-mstrict-align` 因此从硬要求
+     *   退化为防御性旋钮, 见 Makefile 的注释)。
+     *   现在改用**真正未映射的地址**: CONF_UNMAPPED_ADDR 落在页表的 RAM 映射窗口
+     *   (0x40000000 + 8 MiB)之外, 对应 L1/L2 项为 invalid ⇒ **Translation fault**
+     *   (EC=0x25/DFSC=0x04..0x07 一类), 与旧手法同样确定、同样由 extable 修复。
      */
-    const br_uintptr_t misaligned = ((br_uintptr_t)&probe_src) + 1u;
-
     v = 0u;
-    const int r2 = conf_probe_read32(misaligned, &v);
-    br_log_info("[IRQCONF] info probe(misaligned=0x%lx) ret=%d", (br_u64)misaligned, r2);
+    const int r2 = conf_probe_read32(CONF_UNMAPPED_ADDR, &v);
+    br_log_info("[IRQCONF] info probe(unmapped=0x%lx) ret=%d", (br_u64)CONF_UNMAPPED_ADDR, r2);
     conf_report(r2 == BR_ERR(BR_EFAULT), "TC-IRQ-010",
-                "extable 命中: 非对齐访存(MMU-off 下确定 fault)降级为 -EFAULT, 系统存活");
+                "extable 命中: 未映射地址(translation fault)降级为 -EFAULT, 系统存活");
 
     /* 第二个 fault: 若 in_fault 没复位, 这一次会被当成 double fault(裸 panic) */
     v = 0u;
-    const int r3 = conf_probe_read32(misaligned, &v);
+    const int r3 = conf_probe_read32(CONF_UNMAPPED_ADDR, &v);
     conf_report(r3 == BR_ERR(BR_EFAULT), "TC-IRQ-022",
                 "命中修复后 in_fault 已复位(第二个 fault 仍走修复路径, 不是 double fault)");
 

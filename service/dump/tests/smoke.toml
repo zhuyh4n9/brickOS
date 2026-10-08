@@ -1,0 +1,43 @@
+# service/dump — conformance 用例(人写)
+#
+# 由 `brickie new` 生成字段形状(照 `6-01` §2 的用例表契约: {id, pre, steps, expect,
+# sched, platform}); **v0.1 不消费它**(无 test 命令, 排 v0.4, §0 边界纪律)。
+# 运行期的真身是编进镜像的 `br_dump_conformance()`(见 src/dump.c), 由 `make dbg-test`
+# 在 QEMU 上逐项判 PASS/FAIL; 本表的 id 与镜像日志里的用例 tag 一一对应。
+#
+# 归属: 本文件覆盖 **dump 自己的用例**(TC-DBG-03x / 100); 转调插件的用例
+# (TC-DBG-00x trace / 01x backtrace / 02x hexdump / 04x memleak)在各自插件的
+# tests/smoke.toml 里, 由 `br_dump_conformance()` 汇总。
+schema = 1
+
+[[case]]
+id       = "TC-DBG-030"
+pre      = "MMU 已激活, region 表已声明(br_plat_early_init 已完成); 堆已初始化"
+steps    = ["br_mm_region_count()", "br_dump_regions() 并核对返回条数", "核对末行 '[DUMP] regions=<n>'"]
+expect   = "返回条数 == br_mm_region_count() 且 > 0(清单与 region 表同源同数)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-031"
+pre      = "同上; 0x42000000 在 RAM 窗口(0x40000000 + 8 MiB)之外 ⇒ region 表未声明"
+steps    = ["br_dump_memory(0x42000000, 16, BR_DUMP_F_STRICT)", "br_dump_memory(0x42000000, 16, BR_DUMP_F_FORCE)"]
+expect   = "STRICT ⇒ -EINVAL; FORCE ⇒ >= 0 且不触发 data abort(表外地址不读取, 只打表头说明)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-032"
+pre      = "同上; br_mem_layout() 可读(堆池已认领)"
+steps    = ["br_mem_layout() 取 heap.base", "br_dump_memory(heap.base, 32, BR_DUMP_F_STRICT)", "br_hexdump_to(NULL, 0, heap.base, 32) 取需要长度"]
+expect   = "返回 32; hexdump 需要长度 == 2 * br_hexdump_line_bytes()(32 B = 2 整行, 确实渲染)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-100"
+pre      = "堆已初始化、MMU 已开、中断已放行; trace/backtrace/hexdump/memleak 的 init 已按 LATE 相顺序调用"
+steps    = ["br_dump_all()", "br_bt_last_count()", "br_mm_region_count()", "br_memleak_live()", "br_memleak_corruptions()"]
+expect   = "dump_all 累计行数 >= 8(首末标题 + region + heap + leaks + trace + bt); 且子段观测交叉成立(region_count > 0, bt_last_count > 0, heap_check == 0)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

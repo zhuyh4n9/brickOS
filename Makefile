@@ -129,13 +129,19 @@ include mk/host.mk
 CORE_SRCS := $(wildcard core/src/*.c) $(wildcard core/src/*/*.c)
 PLAT_SRCS := $(wildcard platform/qemu-aarch64/src/*.c)
 APP_SRCS  := $(wildcard app/hello/src/*.c)
+# 调试/观测服务插件(service/<name>/): 目录名 = 插件名(§8.3 ④), 顶层目录 = namespace。
+# 声明面由各自 plugin.toml 治理(唯一真值), 这里只做**编译编排** —— v0.1 没有
+# 描述符段驱动的自动编排(见 WORKAROUND br-wa-entry-001), 故显式列源集合。
+SVC_SRCS  := $(wildcard service/*/src/*.c)
 ASM_SRCS  := $(wildcard platform/qemu-aarch64/src/*.S)
 
-SRCS := $(CORE_SRCS) $(PLAT_SRCS) $(APP_SRCS) $(ASM_SRCS)
+SRCS := $(CORE_SRCS) $(PLAT_SRCS) $(APP_SRCS) $(SVC_SRCS) $(ASM_SRCS)
 OBJS := $(addprefix $(OBJ_DIR)/,$(patsubst %.c,%.o,$(patsubst %.S,%.o,$(SRCS))))
 
 # --------------------------------------------------------------------- 选项
-INCLUDES := -Icore/include -Iplatform/qemu-aarch64/include -Iapp/hello/include
+# 每个插件的 include/ 都进搜索路径(插件对外头文件在 include/, 布局见 §8.3 ④)
+SVC_INCLUDES := $(addprefix -I,$(wildcard service/*/include))
+INCLUDES := -Icore/include -Iplatform/qemu-aarch64/include -Iapp/hello/include $(SVC_INCLUDES)
 
 # -ffreestanding: 无宿主运行时假设; -fno-builtin: 不把循环偷偷换成 memcpy
 # -mgeneral-regs-only: 内核不碰 FP/SIMD(设计侧 aarch64 目标的纪律)
@@ -154,7 +160,10 @@ CFLAGS := -std=c11 $(ARCHFLAGS) -O2 -g3 $(WARNFLAGS) \
           -ffreestanding -fno-builtin -fno-common -fno-stack-protector \
           -ffunction-sections -fdata-sections \
           -fno-pic -fno-pie -fno-asynchronous-unwind-tables \
-          -fno-unwind-tables $(INCLUDES)
+          -fno-unwind-tables -fno-omit-frame-pointer $(INCLUDES)
+# ★ `-fno-omit-frame-pointer` 不是性能选项, 是 **service/backtrace 的编译期前提**:
+#   栈回溯靠 x29(fp) 链走查(5-01 §3 的"各线程栈"捕获), 而 -O2 默认会把 fp 当普通
+#   寄存器省掉 ⇒ 链断在第一帧。代价是每函数多一次 stp/ldp, 换"崩溃时能走栈"。
 
 # 汇编也要能 `#include <br/core/br_exc.h>`(异常帧偏移的**唯一真值**):
 # .S 由 cpp 预处理, `__ASSEMBLER__` 由 GCC 自动定义, 该头里 C 专属部分被它挡住。
@@ -177,7 +186,7 @@ LDFLAGS := -nostdlib -nostartfiles -static -no-pie \
 .PHONY: all prebuilt prebuilt-check prebuilt-clean \
         tools tools-core tools-test tools-clean tools-prebuilt tools-prebuilt-check \
         brickie-check brickie-check-release brickie-compose \
-        run smoke irq-test size disasm check-workarounds check-build \
+        run smoke irq-test mem-test string-test dbg-test check-string size disasm check-workarounds check-build \
         clean clean-brickos help print-host-triple print-host-bin-dir \
         print-prebuilt-bin-dir print-cross-compile env
 
@@ -276,8 +285,29 @@ brickie-compose: tools
 $(OBJS): | tools brickie-check
 
 # ============================================================== ② 镜像段
-all: $(ELF) $(BIN)
+all: $(ELF) $(BIN) check-string
 	@echo "OK: $(ELF)  ($(CC))"
+
+# ------------------------------------- 编译器支持例程的**自递归**门禁(core/src/string.c)
+# 为什么值得一条门禁: `core/src/string.c` 里那对定长 8 的 `__builtin_memcpy` 曾被
+# GCC 降成对 **memcpy 自己**的 libcall ⇒ 无限递归 ⇒ 栈无界增长压穿 64 KiB 启动栈、
+# 异常帧落进 .bss 的页表 ⇒ 表现为"开机即翻译 fault, 且原始 fault 现场丢失"。
+# 这类错误"编得过、宿主也跑得对"(宿主链的是 libc), **只有反汇编看得见** ——
+# 所以钉成机械判据: 四个例程内部**不得有对自身的 bl**。
+# (判据只禁自递归, 不禁 memmove→memcpy 这类正当调用。)
+check-string: $(OBJ_DIR)/core/src/string.o
+	$(call require_binutils,OBJDUMP)
+	@bad=0; \
+	for f in memcpy memmove memset memcmp; do \
+	    n=$$($(OBJDUMP) -d --no-show-raw-insn $< \
+	         | awk -v f="<$$f>:" 'index($$0,f){inb=1;next} /^[0-9a-f]+ </{inb=0} inb' \
+	         | grep -c "bl.*<$$f>"); \
+	    if [ "$$n" != "0" ]; then echo "FAIL: $$f 内部有 $$n 条对自身的 bl(自递归 libcall)"; bad=1; fi; \
+	done; \
+	if [ $$bad -ne 0 ]; then \
+	    echo "--- memcpy 反汇编 ---"; $(OBJDUMP) -d --no-show-raw-insn $< | sed -n '/<memcpy>:/,/^$$/p'; exit 1; \
+	fi; \
+	echo "ok   编译器支持例程无自递归(memcpy/memmove/memset/memcmp 内部 0 条自调用 bl)"
 
 $(ELF): $(OBJS) $(LDSCRIPT)
 	$(require_cross)
@@ -324,8 +354,10 @@ smoke: all
 	if grep -q "FATAL" $(BUILD_DIR)/smoke.log; then echo "FAIL: 触发未处理异常"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
 	if grep -q "\[PANIC\]" $(BUILD_DIR)/smoke.log; then echo "FAIL: 触发 panic"; cat $(BUILD_DIR)/smoke.log; exit 1; fi; \
 	if ! grep -q "int: conformance ALL PASS" $(BUILD_DIR)/smoke.log; then echo "FAIL: 中断一致性用例未全绿"; grep "IRQCONF" $(BUILD_DIR)/smoke.log; exit 1; fi; \
+	if ! grep -q "\[MEMCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/smoke.log; then echo "FAIL: 内存映射一致性用例未全绿"; grep "MEMCONF" $(BUILD_DIR)/smoke.log; exit 1; fi; \
+	if ! grep -q "\[DBGCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/smoke.log; then echo "FAIL: 调试插件一致性用例未全绿"; grep "DBGCONF" $(BUILD_DIR)/smoke.log; exit 1; fi; \
 	if ! grep -q "irq_ticks=[1-9]" $(BUILD_DIR)/smoke.log; then echo "FAIL: timer PPI 中断未送达(irq_ticks 恒 0)"; tail -20 $(BUILD_DIR)/smoke.log; exit 1; fi; \
-	echo "PASS: 启动 + MainLoop + 延时判据 + 中断心跳 + 一致性用例全绿"; \
+	echo "PASS: 启动 + MainLoop + 延时判据 + 中断心跳 + 三套一致性用例(IRQ/MEM/DBG)全绿"; \
 	grep -c "^\[" $(BUILD_DIR)/smoke.log | sed 's/^/日志行数: /'
 
 # 中断子系统**逐用例**门禁(设计 6-01 §3.7 的 TC-IRQ-*; target-only)。
@@ -355,11 +387,76 @@ irq-test: all
 	grep "\[IRQCONF\] SUMMARY" $(BUILD_DIR)/irq.log; \
 	grep -c "\[IRQCONF\] PASS" $(BUILD_DIR)/irq.log | sed 's/^/PASS 项数: /'
 
+# 内存子系统 + 调试插件门禁(target-only): 要求 [MEMCONF] 与 [DBGCONF] 两个摘要
+# 同时 fail=0, 且列出的用例 tag **一个不缺**(裁掉用例也算红 —— 与 irq-test 同一纪律)。
+MEMDBG_SECONDS ?= 8
+MEMCONF_REQUIRED := MM-ACTIVE MM-IDENT MM-POOLS MM-REGION MM-RO MM-NXDESC MM-UNMAP \
+                    TC-MEM-001 TC-MEM-002 TC-MEM-003 TC-MEM-004 TC-MEM-005 \
+                    TC-MEM-006 TC-MEM-007 TC-MM-001 TC-MM-002 TC-MM-003
+DBGCONF_REQUIRED := DBG-INIT TC-DBG-001 TC-DBG-002 TC-DBG-003 TC-DBG-010 TC-DBG-011 \
+                    TC-DBG-020 TC-DBG-021 TC-DBG-030 TC-DBG-031 TC-DBG-032 \
+                    TC-DBG-040 TC-DBG-041 TC-DBG-042 TC-DBG-043 TC-DBG-100
+
+dbg-test: all
+	$(require_qemu)
+	@set +e; \
+	timeout $(MEMDBG_SECONDS) $(QEMU) $(QEMUFLAGS) -kernel $(ELF) > $(BUILD_DIR)/dbg.log 2>&1; \
+	rc=$$?; \
+	if [ $$rc -ne 124 ]; then echo "FAIL: QEMU 未按期运行(rc=$$rc)"; tail -40 $(BUILD_DIR)/dbg.log; exit 1; fi; \
+	if grep -qE "\[(MEMCONF|DBGCONF)\] FAIL" $(BUILD_DIR)/dbg.log; then echo "FAIL: 有失败用例"; grep -E "\[(MEMCONF|DBGCONF)\]" $(BUILD_DIR)/dbg.log; exit 1; fi; \
+	if grep -q "\[PANIC\]" $(BUILD_DIR)/dbg.log; then echo "FAIL: 触发 panic"; grep "\[PANIC\]" $(BUILD_DIR)/dbg.log; exit 1; fi; \
+	if ! grep -q "\[MEMCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/dbg.log; then echo "FAIL: 未见 MEMCONF 全绿摘要"; grep "MEMCONF" $(BUILD_DIR)/dbg.log; exit 1; fi; \
+	if ! grep -q "\[DBGCONF\] SUMMARY pass=[0-9]* fail=0 " $(BUILD_DIR)/dbg.log; then echo "FAIL: 未见 DBGCONF 全绿摘要"; grep "DBGCONF" $(BUILD_DIR)/dbg.log; exit 1; fi; \
+	for tc in $(MEMCONF_REQUIRED); do \
+	    if ! grep -q "PASS $$tc " $(BUILD_DIR)/dbg.log; then echo "FAIL: 缺用例 PASS: $$tc"; grep "MEMCONF" $(BUILD_DIR)/dbg.log; exit 1; fi; \
+	done; \
+	for tc in $(DBGCONF_REQUIRED); do \
+	    if ! grep -q "PASS $$tc " $(BUILD_DIR)/dbg.log; then echo "FAIL: 缺用例 PASS: $$tc"; grep "DBGCONF" $(BUILD_DIR)/dbg.log; exit 1; fi; \
+	done; \
+	if ! grep -q "irq_ticks=[1-9]" $(BUILD_DIR)/dbg.log; then echo "FAIL: timer PPI 中断未送达"; tail -20 $(BUILD_DIR)/dbg.log; exit 1; fi; \
+	echo "PASS: 内存映射 + 调试插件逐用例全绿(MEMCONF + DBGCONF)"; \
+	grep "\[MEMCONF\] SUMMARY" $(BUILD_DIR)/dbg.log; \
+	grep "\[DBGCONF\] SUMMARY" $(BUILD_DIR)/dbg.log; \
+	grep -c "\[MEMCONF\] PASS" $(BUILD_DIR)/dbg.log | sed 's/^/MEMCONF PASS 项数: /'; \
+	grep -c "\[DBGCONF\] PASS" $(BUILD_DIR)/dbg.log | sed 's/^/DBGCONF PASS 项数: /'
+
+# ---------------------------------------------- 宿主侧内存语义门禁(不需交叉/QEMU)
+# 把 core 的内存实现(tlsf/mem/page/mm)编成**宿主可执行**, 跑随机化压测 + 不变量断言。
+# 为什么值得单独一条: TLSF 的合并/分裂/碎片、页位图的 run 分配、region 表的重叠判定
+# 是**算法性质**, 在 host 上几秒钟能跑上百万次操作 —— 而同一批性质在 QEMU 上要靠几条
+# 用例撞运气。这就是设计 1-03 说的 "host 平台插件: CI 秒级 + 完整 ASan 白捡"
+# (完整 ASan 归 host 平台插件, 这里先用 -O2 + 断言 + 参考模型对拍)。
+HOSTCC ?= cc
+HOSTTEST_DIR := $(BUILD_DIR)/hosttest
+MEMTEST_BIN  := $(HOSTTEST_DIR)/mem_test
+STRINGTEST_BIN := $(HOSTTEST_DIR)/string_test
+MEMTEST_SRCS := core/src/mem/tlsf.c core/src/mem/mem.c core/src/mem/page.c \
+                core/src/mm/mm.c tests/host/mem_test.c tests/host/host_stubs.c
+STRINGTEST_SRCS := core/src/string.c tests/host/string_test.c
+HOSTTEST_FLAGS := -std=c11 -O2 -g -DBR_HOSTTEST=1 \
+                  -Wall -Wextra -Werror -Wshadow -Wundef -Wpointer-arith \
+                  -Wstrict-prototypes -Wmissing-prototypes \
+                  -Icore/include -Icore/src -Icore/src/mem -Icore/src/mm -Itests/host
+
+# 编译器支持例程的**语义**门禁(与 `check-string` 的分工: 那条看反汇编有没有自递归,
+# 这条看"搬对了没有、越界了没有")。自递归在宿主上会立刻爆栈 ⇒ 本用例也是那个 bug 的
+# 回归判据(ADR-0003 §5.2)。宿主链 libc, 但被测的是**我们自己的**实现, 所以有效。
+string-test:
+	@echo "== 宿主侧编译器支持例程用例(memcpy/memmove/memset/memcmp)=="
+	@mkdir -p $(HOSTTEST_DIR)
+	$(HOSTCC) $(HOSTTEST_FLAGS) $(STRINGTEST_SRCS) -o $(STRINGTEST_BIN)
+	@$(STRINGTEST_BIN)
+
+mem-test: string-test
+	@echo "== 宿主侧内存语义门禁(不需要交叉工具链/QEMU; HOSTCC=$(HOSTCC)) =="
+	@mkdir -p $(HOSTTEST_DIR)
+	$(HOSTCC) $(HOSTTEST_FLAGS) $(MEMTEST_SRCS) -o $(MEMTEST_BIN)
+	@$(MEMTEST_BIN)
+
 size: all
 	$(call require_binutils,SIZE)
 	$(SIZE) -A -x $(ELF)
 	@$(SIZE) $(ELF)
-
 disasm: all
 	$(call require_binutils,OBJDUMP)
 	$(OBJDUMP) -d $(ELF) | head -120
@@ -404,11 +501,12 @@ env:
 clean: clean-brickos tools-clean
 
 clean-brickos:
-	rm -rf $(OBJ_DIR) $(ELF) $(BIN) $(MAP) $(BUILD_DIR)/smoke.log $(BUILD_DIR)/irq.log
+	rm -rf $(OBJ_DIR) $(ELF) $(BIN) $(MAP) $(BUILD_DIR)/smoke.log $(BUILD_DIR)/irq.log $(BUILD_DIR)/dbg.log $(HOSTTEST_DIR)
 
 help:
 	@echo "目标: all(缺省) prebuilt prebuilt-check prebuilt-clean"
-	@echo "      tools tools-test tools-prebuilt tools-prebuilt-check run smoke irq-test size disasm"
+	@echo "      tools tools-test tools-prebuilt tools-prebuilt-check run smoke irq-test"
+	@echo "      mem-test(宿主内存语义) dbg-test(内存映射 + 调试插件) check-string(自递归门禁)"
 	@echo "      check-workarounds check-build clean tools-clean"
 	@echo "      print-host-triple print-host-bin-dir print-prebuilt-bin-dir print-cross-compile env"
 	@echo "变量: CROSS_COMPILE=$(CROSS_COMPILE)  CC=$(CC)"

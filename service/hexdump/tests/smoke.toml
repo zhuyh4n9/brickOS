@@ -1,0 +1,38 @@
+# service/hexdump — conformance 用例(人写)
+#
+# 与 `br_hexdump_selftest()` 里的 TC-DBG-020/021 一一对应:
+# v0.1 的红绿由 in-image 自检打 `[DBGCONF] PASS/FAIL`(make dbg-test 的
+# DBGCONF_REQUIRED 名单);本文件是同一批用例的声明面形状(照 `6-01` §2 的字段契约)。
+# 设计出处: `docs/5-debug/5-01-debug.md` §2(MEMRD)/§3(ramdump 输出);
+# 行格式契约见 `include/br/debug/br_hexdump.h` 的文件头。
+schema = 1
+
+[[case]]
+id       = "TC-DBG-020"
+pre      = "已启动到 MainLoop; 有一段 16 字节负载 \"Hello, world!\\n\\0\\0\" 与 3 字节负载 {'A',0x1f,0x7f}"
+steps    = [
+    "把 16 字节负载放静态缓冲(真实地址), 用 br_hexdump_to 渲染一行",
+    "用独立写的地址渲染 + 头文件样例的 71 字节后缀构造期望串",
+    "断言渲染结果与期望串逐字节相等(0x0a 在 ASCII 列显示为 '.')",
+    "对 3 字节负载渲染尾行: 缺的 hex 组用 3 空格占位、ASCII 列用空格补齐",
+    "断言两次返回的都是 br_hexdump_line_bytes() == 87",
+]
+expect   = "[DBGCONF] PASS TC-DBG-020 ..."
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-021"
+pre      = "TC-DBG-020 已跑过"
+steps    = [
+    "char buf[10]; br_hexdump_to(buf, 10, base, 16) 断言返回 87(需要的字节数, 不含 NUL)",
+    "断言 buf[9] == '\\0' 且 strlen(buf) == 9(snprintf 式截断)",
+    "断言 br_hexdump_to(NULL, 0, base, 16) == 87(只回报长度)",
+    "断言 br_hexdump_to(buf, 0, base, 16) == 87(cap == 0 同理)",
+    "断言 br_hexdump_to(buf, 10, NULL, 16) == 0(base 为空且有长度 ⇒ 0)",
+    "断言 br_hexdump_to(buf, 10, base, 0) == 0(长度为 0)",
+    "断言 br_hexdump_line_bytes() == 87",
+]
+expect   = "[DBGCONF] PASS TC-DBG-021 ..."
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]

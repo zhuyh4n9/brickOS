@@ -1,0 +1,99 @@
+# service/trace — trace 观测服务(plugin_type = ability, subkind = service)
+#
+# 设计出处: 1-03 §1 的 v1.0 插件清单行 "service/trace | Service | 16B 事件环形缓冲
+# (docs/5-debug/5-01-debug.md) | core | M2"。
+#
+# ★ 归属裁定(见 docs/decisions/0003-memory-map-heap-and-debug-plugins.md):
+#   16 B 事件的**环与 ISR 发射点在 core**(`br/core/br_trace.h` 的 `br_trace_emit`),
+#   因为 CA-3 的 ISR 白名单要求中断/fault 路径不依赖"服务是否已 init";
+#   本插件是它的**唯一消费方**(drain/解码/过滤/计数/成行), 即 5-01 意义上的 trace 插件。
+schema = 1
+
+[plugin]
+name        = "service/trace"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "service"
+lang        = "c"
+phase       = "late"                # service ⇒ LATE(§7.2 的相位推导)
+version     = "0.1.0.0"
+summary     = "trace 观测服务: core 16B 事件环的唯一消费方(drain/解码/计数/呈现)+ 动态事件名注册 + marker"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 2
+notes    = "动态 id 名字表(32 槽)+ 每 id 消费计数 + 解码行缓冲"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u32       = "uint32_t"
+br_u64       = "uint64_t"
+br_size_t    = "size_t"
+br_uintptr_t = "uintptr_t"
+
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "trace"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:a7d8fc97fbea303a552023370c452178a544633bf16797addcabaf6e3e88ab8d"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_trace_svc_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_svc_selftest"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_svc_marker"
+sig  = "int (const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_svc_register"
+sig  = "int (const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_svc_name"
+sig  = "const char* (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_svc_report"
+sig  = "br_u32 (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_svc_summary"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_svc_seen"
+sig  = "br_u32 (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_svc_reset"
+sig  = "void (void)"
+[[export.entries]]
+kind = "macro"
+name = "BR_TRACE_SVC_ID_BASE"
+value = "1024"
+[[export.entries]]
+kind = "macro"
+name = "BR_TRACE_SVC_ID_SLOTS"
+value = "32"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

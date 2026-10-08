@@ -40,6 +40,12 @@ range  = ">=0.1.0"
 kind   = "runtime"
 symbol = "br_plat_name"
 
+[[dep]]
+name   = "service/dump"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_dump_all"
+
 [build]
 sources  = ["src/*.c"]
 includes = ["include"]

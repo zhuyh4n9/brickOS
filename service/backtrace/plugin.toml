@@ -1,0 +1,101 @@
+# service/backtrace — 栈回溯捕获服务(plugin_type = ability, subkind = service)
+#
+# 设计出处: docs/5-debug/5-01-debug.md §3(ramdump 捕获集含"各线程栈"; host 侧
+# "离线分析(...栈回溯)")。职责边界因此被设计划死: **target 只捕获, host 才符号化**
+# —— 所以本插件不生成也不携带符号表(那要两遍链接, 属 v1.x)。
+#
+# 编译期前提: `-fno-omit-frame-pointer`(Makefile 的 CFLAGS)。见本插件 README。
+schema = 1
+
+[plugin]
+name        = "service/backtrace"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "service"
+lang        = "c"
+phase       = "late"
+version     = "0.1.0.0"
+summary     = "栈回溯捕获: x29(fp) 链走查 + 栈边界/深度/单调护栏; 符号化解码归 host(离线)"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 2
+notes    = "最近一次捕获的快照(BR_BT_MAX_FRAMES 帧)+ 栈范围"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u32       = "uint32_t"
+br_u64       = "uint64_t"
+br_size_t    = "size_t"
+br_uintptr_t = "uintptr_t"
+
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "backtrace"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:0b2a3249f76bf6d91b1057ba4042b102b79a065e3b9ca83361327ca7dc1df419"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_bt_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_bt_selftest"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_bt_set_stack_bounds"
+sig  = "int (br_uintptr_t, br_uintptr_t)"
+[[export.entries]]
+kind = "func"
+name = "br_bt_capture"
+sig  = "br_u32 (br_bt_frame_t*, br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_bt_capture_from"
+sig  = "br_u32 (br_uintptr_t, br_uintptr_t, br_bt_frame_t*, br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_bt_print"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_bt_print_from"
+sig  = "br_u32 (br_uintptr_t, br_uintptr_t)"
+[[export.entries]]
+kind = "func"
+name = "br_bt_last_count"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_bt_last"
+sig  = "const br_bt_frame_t* (void)"
+[[export.entries]]
+kind = "type"
+name = "br_bt_frame_t"
+layout = "# {pc, fp, sp, depth}"
+[[export.entries]]
+kind = "macro"
+name = "BR_BT_MAX_FRAMES"
+value = "16"
+[[export.entries]]
+kind = "macro"
+name = "BR_BT_MAX_DEPTH"
+value = "32"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

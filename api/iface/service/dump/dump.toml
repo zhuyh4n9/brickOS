@@ -1,0 +1,91 @@
+# brickie:generated
+# api/iface 快照 api/iface/service/dump/dump.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "service/dump#dump"
+provider = "service/dump"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:d02f0a4af0753aa2ed4842e4dc4b6a338ca187a9908a326be48a1d24fcf5cec7"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "func"
+name = "br_dump_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dump_conformance"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dump_regions"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dump_memory"
+sig = "int (br_uintptr_t, br_size_t, br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dump_heap"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dump_trace"
+sig = "br_u32 (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dump_backtrace"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dump_leaks"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dump_all"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_DUMP_F_STRICT"
+value = "0"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_DUMP_F_FORCE"
+value = "1"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_DUMP_MAX_BYTES"
+value = "4096"
+status = "experimental"

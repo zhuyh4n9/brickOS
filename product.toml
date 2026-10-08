@@ -12,18 +12,27 @@ core    = ">=0.1.0"
 stage   = "dev"                 # dev | release; CLI 覆盖(§7.5)
 
 [select]
+# 只列**直接选择**的插件; service/dump 会经依赖闭包把 service/{trace,backtrace,hexdump,memleak}
+# 拉进来(能力经 `[[dep]]` 声明, 产品只做选择 —— BRV-D4 唯一真值)。
 plugins = [
   "platform/qemu-aarch64",
+  "service/dump",
 ]
 
 [budget]
+# 两份上限的分工(brickie-v0.1 §8.1): platform 的 [[res]] = **物理容量**(已抬到 8 MiB:
+# 页表 + 划给 core 的三池), 本项 = **插件预算**(各插件 [[res]] 之和 ≤ 本值)。
+# 所以本值仍取 64 KiB —— 它管的是"插件代码/数据", 不是 platform 交出来的池容量。
 ram_kib   = 64
 stack_kib = 16
 
 [lint]
 frozen_deps = "inherit"         # inherit(跟随 [product].stage) | allow | deny
-# 显式豁免: **M0 引导例外**(app 直调 platform; 1-03 §1 的 app/hello 行)。
-# 框住它的作用域, 使"还有几条例外"在评审时一眼可见。
+# 显式豁免: **M0 引导例外**(app 直调 platform / app 直调调试服务; 1-03 §1 的 app/hello 行)。
+# 按设计 §7.3, app 只许依赖 interface; 而 Interface 插件(iface-min)属 M2、运行期插件
+# 管理器属 M0 —— 二者都还没落地, 所以 app 的调用点是"替身启动链"的一部分, 属
+# WORKAROUND(br-wa-boot-001) 的欠债。豁免必须**逐条列名**, 使"还有几条例外"一眼可见。
 allow_edges = [
   ["app/hello", "platform/qemu-aarch64"],
+  ["app/hello", "service/dump"],
 ]

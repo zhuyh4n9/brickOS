@@ -1,0 +1,52 @@
+# service/trace — conformance 用例(人写)
+#
+# 与 `br_trace_svc_selftest()` 里的 TC-DBG-001/002/003 一一对应:
+# v0.1 的红绿由 in-image 自检打 `[DBGCONF] PASS/FAIL`(make dbg-test 的
+# DBGCONF_REQUIRED 名单);本文件是同一批用例的声明面形状(照 `6-01` §2 的字段契约)。
+# 设计出处: `docs/5-debug/5-01-debug.md` §1。
+schema = 1
+
+[[case]]
+id       = "TC-DBG-001"
+pre      = "已启动到 MainLoop; br_trace_svc_init() 已调用(LATE 相)"
+steps    = [
+    "br_trace_svc_reset() 清消费侧计数(不动 core 环)",
+    "br_trace_svc_marker(\"selftest.a\") 两次, 记录返回 id1/id2",
+    "断言 id1 == id2 且 id1 >= BR_TRACE_SVC_ID_BASE(1024)",
+    "断言 br_trace_svc_name(id1) 逐字符等于 \"selftest.a\"",
+    "br_trace_svc_report(0) 取走事件, 断言条数 >= 2",
+    "断言 br_trace_svc_seen(id1) >= 2",
+    "register(\"selftest.victor\") 与 register(\"selftest.yankee\")(两者 hash 同槽), 断言各自成功、id 不同、name 各自正确, 且用例内复核 trc_slot_of 相同",
+    "register(dup_a) 与 register(dup_b)(内容同为 \"selftest.dup\"、地址不同), 断言首个成功、次个 == -ENOSPC",
+]
+expect   = "[DBGCONF] PASS TC-DBG-001 ... 四行均 PASS; 期间 [TRACE] 行出现 name=selftest.a"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-002"
+pre      = "TC-DBG-001 已跑过; trace 环当前无积压或积压可被一轮 drain 取净"
+steps    = [
+    "记录 br_trace_overrun() 为 before",
+    "连续调用 br_trace_svc_marker(\"selftest.a\") BR_TRACE_RING_SIZE + 8 = 264 次且不消费(故意打满环)",
+    "br_trace_svc_report(0) 有界循环直到取空",
+    "断言 br_trace_overrun() > 0(>0 是这段历史被覆盖的诚实信号)",
+    "调用 br_trace_svc_summary(), 断言打印前后的 br_trace_overrun() 读数一致(summary 的 overrun 与断言同源)",
+]
+expect   = "[DBGCONF] PASS TC-DBG-002 ...; summary 行 overrun=[1-9][0-9]* 与其后读数一致"
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-003"
+pre      = "TC-DBG-002 已跑过"
+steps    = [
+    "br_trace_svc_reset()",
+    "连续 5 次 br_trace_svc_marker(\"selftest.a\")",
+    "断言 br_trace_svc_report(2) == 2(只取最旧 2 条)",
+    "断言紧接着的 br_trace_svc_report(0) >= 3(从最旧未消费处续读, 不丢中间积压)",
+    "收尾: br_trace_svc_reset() 并把环 drain 空, 避免污染后续 dump 的 trace 段",
+]
+expect   = "[DBGCONF] PASS TC-DBG-003 ..."
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]

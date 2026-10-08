@@ -1,0 +1,85 @@
+# brickie:generated
+# api/iface 快照 api/iface/service/trace/trace.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "service/trace#trace"
+provider = "service/trace"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:a7d8fc97fbea303a552023370c452178a544633bf16797addcabaf6e3e88ab8d"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "func"
+name = "br_trace_svc_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_trace_svc_selftest"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_trace_svc_marker"
+sig = "int (const char*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_trace_svc_register"
+sig = "int (const char*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_trace_svc_name"
+sig = "const char* (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_trace_svc_report"
+sig = "br_u32 (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_trace_svc_summary"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_trace_svc_seen"
+sig = "br_u32 (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_trace_svc_reset"
+sig = "void (void)"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_TRACE_SVC_ID_BASE"
+value = "1024"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_TRACE_SVC_ID_SLOTS"
+value = "32"
+status = "experimental"

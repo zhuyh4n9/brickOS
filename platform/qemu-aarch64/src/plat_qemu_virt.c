@@ -10,6 +10,7 @@
  * `brickie gen` 生成); **仍欠**的是"调用点由 .br_plugins 段枚举驱动"(M0 运行期)。
  */
 #include <br/core/br_console.h>
+#include <br/platform/br_mmu.h>
 #include <br/platform/br_plat.h>
 
 /* platform 插件将来在描述符里的 name 字段(设计 1-01 §6.1) */
@@ -37,12 +38,31 @@ void br_plat_early_init(void)
      *   "降级到无中断"诚实(§14.3 的错误处理义务)。这里刻意不用 br_panic_bare,
      *   因为 fault 路径与 panic 属 core 的观测契约, 而停机入口已由平台提供。
      *
-     * v0.1.0 仍不做的(等 M0/M2): 恒等映射页表、region 表、cache 维护。
+     * 最后是内存映射子系统(设计 3-04 §1「恒等映射 + 属性隔离」; 1-01 §9 的
+     * "RAM / 恒等映射页表"两步), 顺序同样是硬的:
+     *   ① `br_plat_memmap_init()`: 声明 region 表 → `br_mem_init()` 认领三池。
+     *      必须先有 region 表: 它是"哪块 RAM 是什么"的唯一真值, 页表与 core 的池都从它取。
+     *   ② `br_plat_mmu_init()`: `br_mm_register` → `br_mm_activate` 建 4 KiB 恒等映射
+     *      页表并开 MMU。★ MMU 一开, 之后每一次取指/访存都过翻译 ⇒ 页表必须已经覆盖
+     *      当前 PC/SP(页表自身也在 .bss 的映射范围内)。
+     *   为什么放在 IRQ 之后: GIC 的配置在最前面的三步里完成, 此刻 MMU 还没开, 走的
+     *   是"物理地址直取"; 开 MMU 之后 GIC 寄存器走 Device 背景映射(0x08000000/0x080A0000
+     *   都在低 1 GiB 的 2 MiB 块里), 两种情形都被覆盖。
      */
     br_console_init();
 
     if (br_plat_irq_init() != 0) {
         br_console_puts("[FATAL] platform IRQ init failed\n");
+        br_plat_park_forever();
+    }
+
+    if (br_plat_memmap_init() != 0) {
+        br_console_puts("[FATAL] mem region declare failed\n");
+        br_plat_park_forever();
+    }
+
+    if (br_plat_mmu_init() != 0) {
+        br_console_puts("[FATAL] memory mapping init failed\n");
         br_plat_park_forever();
     }
 

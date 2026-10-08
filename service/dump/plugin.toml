@@ -1,0 +1,132 @@
+# service/dump — 现场倾倒服务(plugin_type = ability, subkind = service)
+#
+# 设计出处: docs/5-debug/5-01-debug.md §2(MEMRD/TRACE_READ/GETINFO)与 §3
+# (ramdump 的捕获集: 寄存器组、trace 环、**内存 region 表**、arena 统计)。
+#
+# 归属: 本插件是**编排者** —— 呈现原语归 service/hexdump, 栈回溯归 service/backtrace,
+# 环的消费归 service/trace, 堆/泄漏账归 service/memleak; 本插件自己只做
+# ① 按 region 表做边界判定、② 编排现场、③ 调试域 conformance 入口。
+#
+# 特权: P0(不声明 [privileged])。⚠ 读内存不属 3-01 §13.6 的 ops 三轴
+# (alloc/free/map/protect/flush/invalidate/unmap) —— 这是分级模型的一个缺口,
+# 已在 ADR-0003 登记为回灌项(debug 观测面需要一个"读/inspect"轴值或专门级别)。
+schema = 1
+
+[plugin]
+name        = "service/dump"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "service"
+lang        = "c"
+phase       = "late"
+version     = "0.1.0.0"
+summary     = "现场倾倒: region 清单 / 边界受检的内存 dump / 堆与泄漏摘要 / trace 呈现 / 栈回溯 + 调试域 conformance 入口"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 4
+notes    = "编排状态 + 转调缓冲; dump 路径刻意只用静态缓冲(5-01 §3 的约束)"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u32       = "uint32_t"
+br_u64       = "uint64_t"
+br_size_t    = "size_t"
+br_uintptr_t = "uintptr_t"
+br_owner_t   = "uint16_t"
+
+# ---- 结构依赖(runtime: 真实调用边)----
+[[dep]]
+name   = "service/trace"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_trace_svc_report"
+
+[[dep]]
+name   = "service/backtrace"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_bt_print"
+
+[[dep]]
+name   = "service/hexdump"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_hexdump_to"
+
+[[dep]]
+name   = "service/memleak"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_memleak_report"
+
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "dump"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:d02f0a4af0753aa2ed4842e4dc4b6a338ca187a9908a326be48a1d24fcf5cec7"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_dump_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_dump_conformance"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_dump_regions"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_dump_memory"
+sig  = "int (br_uintptr_t, br_size_t, br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_dump_heap"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_dump_trace"
+sig  = "br_u32 (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_dump_backtrace"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_dump_leaks"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_dump_all"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "macro"
+name = "BR_DUMP_F_STRICT"
+value = "0"
+[[export.entries]]
+kind = "macro"
+name = "BR_DUMP_F_FORCE"
+value = "1"
+[[export.entries]]
+kind = "macro"
+name = "BR_DUMP_MAX_BYTES"
+value = "4096"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]
