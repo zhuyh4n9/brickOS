@@ -120,8 +120,8 @@
 | `service/trace` | Service | 16B 事件环形缓冲(`docs/5-debug/5-01-debug.md`) | core | M2 |
 | `service/dbg-bridge` | Service | COBS/UART 最小命令集 + panic 独立通道 | vfs-core(/dev/uart0)+ trace | M3 |
 | `iface-posix` | Interface | 薄皮肤: 再导出 svc-posix + stdio/errno 接线 | svc-posix | M2 |
-| `iface-min` | Interface | 极简别名层, 直通 native | core | M2 |
-| `app/hello` + conformance | APP | 启动链演示(M0: 直接主循环, 不依赖 iface)+ native API conformance 首版(M3, **用例目录: `docs/6-test/6-01-test.md`**) | —(M0)/iface(M3) | M0/M3 |
+| `iface-min` | Interface | 极简别名层, 直通 native(`api_type = native`, `form = "api"`; 见 `1-01` §7.4 的皮肤分类表) | core | M2 |
+| `app/hello` + conformance | APP | 启动链演示(M0: 直接主循环, 不依赖 iface —— **M0 引导例外**, 此时 Interface 插件尚未交付)+ native API conformance 首版(M3, **用例目录: `docs/6-test/6-01-test.md`**) | —(M0)/iface(M3) | M0/M3 |
 
 注: 框架件、svc-posix 与 fs/tmpfs/fs/devfs 经**依赖闭包**自动进入组合(`brickie add` 无需显式列出; 挂载计划含 "/" 或 "/dev" 即拉入); sqlite(三方移植, 模式 A)在 M2 作为移植性验证件, 不属系统插件。
 
@@ -139,7 +139,7 @@
 | `service/hsm-host` | Service | **host 协议面**: 解帧 / 命令分派 / 结果回填 / 逐条审计; 唯一接触 host 的服务 | io/virtio-hsm + crypto + keyring + seclog | M5 |
 | `service/seclog` | Service | **安全日志**: 只追加 + SHA-256 摘要链 → `/data/seclog`; 与 trace(观测, 可整层移除)职责正交 | service/crypto + vfs-core | M5 |
 | `iface-pkcs11` | Interface | **由 v2.0 前移**: 严格叶子薄皮肤, PKCS#11 子集适配 keyring + crypto | service/crypto + service/keyring | M5 |
-| `app/hsm` | APP | 密钥策略: 首启 provision / 策略表 / 命令节流 / 审计巡检 | iface-pkcs11(或直调 native) | M5 |
+| `app/hsm` | APP | 密钥策略: 首启 provision / 策略表 / 命令节流 / 审计巡检 | iface-pkcs11(零开销路径由 iface-min 承接; A-2, 见 `brickie` v0.1 §13.2) | M5 |
 
 **M5 的复用量(即"组合即产品"的证据)**: 四件框架件 + `fs/tmpfs`/`fs/devfs`/`fs/littlefs` + `io/virtio-blk` + `service/trace` + `sched-coop` 全部**零改写**, 仅在 manifest 中选取; `iface-posix`/`svc-posix` **不在** HSM 组合内(接口可裁剪的证据)。M5 **不依赖 M4**(可在 QEMU 上独立交付); M4 若先行, 熵源契约缺口(9-02 §6.3 O-H1)可一并收口。
 

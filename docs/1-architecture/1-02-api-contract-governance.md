@@ -28,7 +28,7 @@
 
 ## 1. 问题陈述
 
-native `br_*` API 是全系统第一契约: 所有插件作者 + 直调 APP 都编码面对它(主文档 R7)。
+native `br_*` API 是全系统第一契约: 所有插件作者都编码面对它, APP 亦不例外——APP 经 Interface 插件(如 `iface-min`)面对 native API(主文档 R7)。(A-2; 见 `brickie` v0.1 §13.2)
 它一旦"被顺手改动", 代价分散在所有插件库里, 且无人能完整盘点 → 必须有变更流程与机械门禁。
 
 ## 2. D12: 冻结与演化流程
@@ -43,10 +43,12 @@ frozen ◀──(撤销弃用, §2.6.2)── deprecated
 | 态 | 标注 | 保护 | 变更自由度 |
 |---|---|---|---|
 | experimental | `BR_API_EXPERIMENTAL` | 无 | 随时可碎, 无流程门槛(改动留 CA 存档, §2.2) |
-| frozen | 进入 golden 面 | CI 门禁硬保护 | 新增=轻量; 语义/签名变更=决策记录+弃用周期 |
-| deprecated | `BR_API_DEPRECATED` | 门禁仍保护 | 存在但警告; 移除需决策记录 + 两个 minor 版本无使用 |
+| frozen | 进入 golden 面 | CI 门禁硬保护 | **单向冻结(append-only 保护)**: 面只能追加, 不能改写/删除已承诺条目 —— **新增=轻量**(即**新增免解冻**), 语义/签名变更或删除=决策记录+弃用周期(须改面时走**解冻 → 重新冻结**, §2.6.2) |
+| deprecated | `BR_API_DEPRECATED` | 门禁仍保护 | 存在但警告; 移除需决策记录 + 两个 minor 版本无使用(**v0.1 口径见下注**) |
 
 **冻结节奏: 按子系统分批, 不搞"全部冻结"。** M3 之前不冻结任何东西(M0–M2 是 API 探索期, 冻结会卡死自己, 见 D15)。
+
+> **弃用周期在 v0.1 的口径(`brickie` v0.1 §6.4; `r1/03` P1-5)**: "两个 minor 无使用"拆成两条 —— **声明面零使用是硬门**(v0.1 可统计: 该单元未出现在任何 `requires_iface`/`reexport_of` 中); **符号面零使用(谁在代码里调了它)在 v0.1 无法验证** ⇒ 该项**降级为 warning**(`release` 亦然, `--profile dev` 下只提示, 不阻断 `REMOVED`)。
 
 ### 2.2 变更流程: 轻量 RFC(决策记录)
 
@@ -75,6 +77,7 @@ PR 模板: "是否触及 frozen 面?" 勾"是" → 必须链接决策记录, 否
 | frozen 新增纯函数 | 轻量: PR 说明 + 同 PR 更新 golden |
 | frozen 语义变更(阻塞行为/错误码/ISR 安全性) | 完整决策记录 + 弃用周期 |
 | frozen 删除/签名变更 | 决策记录 + 弃用周期 |
+| **解冻 / 重新冻结**(单元级 `freeze_state` 进出 `unfreezing`; 见 §2.6.2) | **最高门槛**(影响所有插件): 需决策记录 + 明确的"改/删哪些已冻结条目"清单; 只有**确有**改/删时才 `COMPAT_GEN+1`(空解冻不 bump) |
 | sched_class 契约 / 插件描述符 / 注册表语义 | 最高门槛(影响所有插件) |
 
 ### 2.3 兼容 CI 门禁(三层)
@@ -102,8 +105,10 @@ api/frozen/br-sched.txt        ← golden 文件(生成物, 勿手编)
 
 **层 3 — 版本矩阵(声明层): 抓"声明的兼容性是愿望"**
 
-- 插件声明 `requires: core@>=1.2`; CI 把全部一方插件 × 声称支持的 core 版本各编一遍
+- 插件声明 `compat.core = ">=1.2.0"`(3 段 `range`)与**精确钉代**的 `compat_gen`; CI 把全部一方插件 × 声称支持的 core 版本各编一遍
+- **依赖必须精确指定 `COMPAT_GEN`; `>=`/`>`/`=` 只比较 `MAJOR.MINOR.REVISE`**(版本 = 四段 `COMPAT_GEN.MAJOR.MINOR.REVISE`; `range` 固定 3 段, 缺段右补 0, 4 段非法。A-12)
 - 声称支持但编不过 = 红
+- **层 3 对齐 golden 版本戳(§2.6.6)**
 
 ### 2.4 API 设计纪律(门禁的另一半)
 
@@ -112,6 +117,8 @@ api/frozen/br-sched.txt        ← golden 文件(生成物, 勿手编)
 - **不透明句柄优先**: 插件只拿 `br_thread_t*`, 不得嵌入/窥视 core 结构; 访问器函数化
 - 必要的内联访问器显式标注 `BR_API_INLINE_FROZEN`
 - 枚举只追加、不重排、不当位标志跨版本扩展
+- **条目级 `append vs modify` 判定**(冻结面变更的判定表, 与 `brickie` v0.1 §5.4 同源): 「追加」(免解冻) = 新增独立结构体 / 枚举**末尾**追加成员 / 填充预留槽位; 「修改」(**须走硬路径**) = **给已有结构体加/删/重排字段**(D22: 后补字段 = 布局破坏) / 枚举重排或复用旧位 / 已有 service 的 ops 表加槽或改签名 / 改已有宏的值
+- **冻结前应预留扩展槽**: 预留即免将来解冻 —— 它把"将来必须走最高门槛"变成"现在就已存在", 让 `COMPAT_GEN` 更稳定(D22 的推广, 冻结评审清单必查项)
 - 布局纪律让 abidiff 的"布局面"趋近于零 → 门禁自然轻
 
 ### 2.5 静态组合下"兼容"的三层含义(为什么 D14 重要)
@@ -140,6 +147,14 @@ api/frozen/br-sched.txt        ← golden 文件(生成物, 勿手编)
 
 **同步规则**(CI 执法): 头文件改动 ⇒ 同 PR 更新 3-01 规格与 golden(若触及 frozen)——**声明的事实来源是头文件, 符号真值是构建产物; 文档与 golden 都是衍生物**。
 
+> **v0.1 的过渡真值(关闭 `r1/02` P1-10)**: 上述"头文件 = 声明真值"是**目标态**; 而 `brickie` v0.1 的**接口面真值暂时是声明文件**(`api/iface/<provider>/<unit>.toml` + `plugin.toml [[export]]`), 因为 v0.1 **无编译、无符号表**。过渡规则(本节即其落点):
+> 1. **每个接口单元必须显式声明 `truth`(v0.1 只允许 `"decl"`)与 `hash_scope`(`"decl"`)** —— 即"谁是真值"是**可读、可校验的元数据**, 不是隐性假设(`brickie` v0.1 §6.6 / BRV-D7 的 C 方案);
+> 2. **头文件此时不是治理对象**: v0.1 的 golden 门禁仍按 §2.6.4 对 **core 符号面**生效, 但**接口单元的 `iface_hash` 是"声明面 hash", 不是 ABI hash** —— 快照文件头必须印这句话(对应 `brickie` 的 V-11/RV-3);
+> 3. **迁移门禁(v0.2 起)**: `truth = "header"` 的单元强制 `brickie iface check` **双算一致**(声明面 hash 与符号面 hash 的**条目集合差为空**), 不一致 ⇒ 红 —— 这条使"真值迁移"成为一次**可验收的开关**, 而不是静默的真值偷换;
+> 4. **不新增第三真值**: 声明面与符号面之外, 不得再引入"以文档/以 golden 文本为准"的第三条路径。
+>
+> 该过渡**只影响接口发布侧**(`brickie iface *`), 不改变本节三层 CI 门禁对 core 符号面的既有执法。
+
 #### 2.6.2 生命周期状态机(机械语义)
 
 ![2.6.2 生命周期状态机(机械语义)](pics/1-02-api-contract-governance-01.png)
@@ -148,13 +163,31 @@ api/frozen/br-sched.txt        ← golden 文件(生成物, 勿手编)
 
 > 注: "CA 记录" = `docs/3-os-core/3-01-core-api-list.md` §14 的契约决策记录(CA-*)——轻量存档; experimental 区改动无流程门槛、仅留此存档(§2.2)。
 
+**两条轴, 缺一不可**(口径来自 `brickie` v0.1 §5.3.1, 本节即其下游落地):
+
+| 轴 | 取值 | 粒度 | 回答 |
+|---|---|---|---|
+| **`status`**(本节状态机) | `EXPERIMENTAL` \| `FROZEN` \| `DEPRECATED` | **条目** | "这个条目受不受保护?" |
+| **`freeze_state`**(单元级瞬态) | `unfrozen` \| `frozen` \| **`unfreezing`** | **接口单元** | "这个单元当前在不在冻结窗口里?" |
+
+> `unfreezing` **不是**第 4 个 `status`: 窗口内的条目**仍是我们不打算放弃的承诺**, 只是正在**重新谈判** ⇒ 单列单元级瞬态, 避免 `frozen → unfreezing` 被误读为"放弃承诺"。
+
 | 转换 | 触发 | 前置条件 | 产物 |
 |---|---|---|---|
 | *→EXPERIMENTAL | 新增函数 | CA 记录(轻) | 头文件声明 + 3-01 规格 |
-| EXPERIMENTAL→FROZEN | 冻结批次(3-01 §15)或个案 RFC | **当期已交付调度器的 conformance 矩阵全绿**(层 2) | golden 收录 + 标注改 FROZEN + 决策记录 |
+| EXPERIMENTAL→FROZEN | 冻结批次(3-01 §15)或个案 RFC | **当期已交付调度器的 conformance 矩阵全绿**(层 2); **v0.1 显式例外见下** | golden 收录 + 标注改 FROZEN + 决策记录 |
 | FROZEN→DEPRECATED | 语义变更/移除意向 RFC | 完整决策记录 | 标注改 DEPRECATED(编译警告)+ 迁移指南 |
 | DEPRECATED→移除 | 弃用周期到期 | 两个 minor 版本无使用(§2.1) | 删 golden 记录 + 删头文件声明 |
 | DEPRECATED→FROZEN | 撤销弃用 | 决策记录 | 标注恢复 |
+| **FROZEN→(单元进入 `unfreezing`)** | `brickie iface unfreeze <unit> --note <决策记录>` | **最高门槛**(§2.1/§2.2): 决策记录内必须写明"要改/删哪些已冻结条目" | 单元 `freeze_state: frozen → unfreezing`; 条目 `status` **不变**(仍 `FROZEN`); 新快照 |
+| **(单元 `unfreezing`)→FROZEN** | `brickie iface refreeze <unit> [--note <path>]` | 改/删已完成, 且改面动作本身满足对应阈值行(签名变更/删除 ⇒ 弃用周期等) | 单元 `freeze_state` 回 `frozen`; **确有**改/删已冻结条目 ⇒ `COMPAT_GEN+1` + golden 更新, **空解冻 ⇒ 四段全不动** |
+| **(单元 `unfreezing`)→release 阻断** | 任何 `brickie check --profile release` | 单元处于 `unfreezing` | **红**: `BRV-IFACE-0009` —— 发布不得停在"半谈判"状态 |
+
+> **两条改面路径(v0.1 §5.3.3 的落地)**: **软路径** = 面内演化(纯语义变更 / 弃用 → RFC + 弃用周期, **不 unfreeze**, `COMPAT_GEN` 不变); **硬路径** = `unfreeze` → 改/删已有条目 → `refreeze`(`COMPAT_GEN+1`)。二者**独立要求**: 删除 frozen 接口走硬路径, **同时**仍须满足 §2.6.5 的弃用周期——一个管兼容代, 一个管通知期。
+>
+> **`append vs modify` 的判定落在条目内部结构上**(v0.1 §5.4, 详见 §2.4/§4.1): "新增免解冻"**只在条目级成立** —— 给已冻结**结构体加字段**是**修改**(D22"后补字段 = 布局破坏") ⇒ 必须走硬路径。
+
+> **⚠ v0.1 的显式例外(`freeze` 不得真正落 frozen)**: 上表 `EXPERIMENTAL→FROZEN` 的前置是"**当期已交付调度器的 conformance 矩阵全绿**"(层 2), 而 test/conformance 排在 v0.4、golden 排在 v0.6 ⇒ **v0.1 无法完成一次合法冻结**。故 v0.1 的处理是: `brickie iface freeze` **只能生成"待升格提案"**(写入 `build/gen/proposals/<unit>.toml` + 要求 `--note`), **不得落 `frozen` 快照、不得 bump `COMPAT_GEN`**; 真正的升格在 v0.4+(有矩阵)执行。**这是显式例外声明, 不是对状态机的静默偏离** —— 本例外已回灌自 `brickie` v0.1 设计 §6.4(该文档 A-26)。
 
 #### 2.6.3 标注的编译期语义
 
@@ -179,6 +212,16 @@ CI 层 1: 构建产物 vs golden diff
 - **PR 工作流**: 改头文件 → 本地 `brickie api-dump` 出 diff → 同 PR 提交 golden 变更 → CI 用**独立重生成**比对(防手编 golden 造假)
 - 记录粒度: 符号名 / 签名 / 结构布局(不透明体记 `# opaque`) / 枚举值(append-only: 只追加不重排, §4.1)
 - **分组 = 冻结批次单元**(3-01 §15): 每文件独立升格, 互不绑架
+- **`COMPAT_GEN` 的粒度 = 接口/冻结批次单元**(`br-sched`/`br-mem`/… 每个 golden 文件即一个冻结单元); 插件级取 `max(F_u)` 且该值**仅**用于注册表/显示/结构依赖(**不参与** `range` 比较), 见 `brickie` v0.1 §5.5/§8.1
+
+**IFACE-IR 的 hash 输入字段(声明面 hash 的规范化规则, 本节是下游落点)**: 记录粒度必须覆盖**所有会变的面**, 否则"面变了但 hash 没变"会漏检。以下四条与 `brickie` v0.1 §6.2 的规则 4/7/9/10 一一对应:
+
+| # | 规则 | 理由 |
+|---|---|---|
+| 1 | `func` 取**规范化签名**(参数名不进 sig; `--strict-params` 可选) | 形参改名是源码兼容的, 不应抖 hash |
+| 2 | **`macro` 取宏值、`var` 取常量值、`enum` 取成员表(按声明序)、`service` 取 ops 槽位摘要** 进 hash | `#define BR_MAX 16→4096` 与"已有 service 的 ops 表加槽"必须产生**不同 hash**; 缺这些字段时变更集会错报 `NONE` |
+| 3 | 类型别名经 **`[iface.typedefs]` 表显式展开**到规范名 | 避免"同一类型的两种写法"产生两个面; 规则依赖一张必须存在的表 |
+| 4 | hash 做**域分隔**(unit id + `hash_rev` 前缀), 且 `strict_params` 存进快照 | 防跨单元碰撞; 防跨环境 hash 抖动 |
 
 #### 2.6.5 变更的完整产物清单(阈值表的机械展开)
 
@@ -188,14 +231,15 @@ CI 层 1: 构建产物 vs golden diff
 | frozen 纯新增 | 轻(PR 说明) | +1 行(同 PR) | 更新 | 新函数用例先行 | — |
 | EXPERIMENTAL→FROZEN | 决策记录(批次) | 整组收录 | 状态标注 | **当期已交付调度器矩阵全绿前置** | — |
 | frozen 语义变更 | 完整 RFC | 旧记录挂 DEPRECATED | 更新 | 新旧用例并存 | 是 |
-| frozen 删除/签名变 | 完整 RFC | 移除(周期后) | 移除 | 移除用例 | 是(两 minor) |
+| frozen 删除/签名变 | 完整 RFC | 移除(周期后) | 移除 | 移除用例 | 是(两 minor; **v0.1 口径 = 声明面硬门 + 符号面软门, 见 §2.1 注**) |
+| **解冻 / 重新冻结**(§2.6.2 的单元级 `freeze_state` 转移) | **最高门槛 RFC**(注明改/删哪些已冻结条目) | 确有改/删 ⇒ 更新并 `COMPAT_GEN+1`; 空解冻 ⇒ **不动** | 随改面动作更新 | 改面动作对应用例 | 视改面动作 |
 | sched_class/描述符/注册表 | 最高门槛 RFC | 元契约面 | 主文档 §5/§6 | 全矩阵 | 视影响 |
 
 #### 2.6.6 门禁的 native API 特化
 
 - **层 1 双保险**: 可见性宏(3-01 §13.1 hidden 默认)与 golden 互查——未标注符号泄漏出 `libbrcore.a` = 红; 标注 `BR_API_FROZEN`/`BR_API_DEPRECATED` 而 golden 无记录 = 红; `BR_API_EXPERIMENTAL` 不入 golden(§2.6.2)
 - **层 2 是升格前置**(§2.6.2), 不是事后检查——矩阵红 = 不许进 frozen
-- **层 3 对齐 golden 版本戳**: golden 文件头记录冻结版本, 插件 `requires: core@>=x.y` 解析时比对
+- **层 3 对齐 golden 版本戳**: golden 文件头记录冻结版本, 插件 `compat.core = ">=x.y.0"`(3 段)配合精确钉代的 `compat_gen` 解析时比对
 
 ## 3. D13: 接口声明粒度与叠加
 
@@ -220,7 +264,10 @@ CI 层 1: 构建产物 vs golden diff
 - CI 校验: 声明模块覆盖全部已导出公共符号(不多不少)
 
 **再导出规则:**
-- `reexports: [...]` 显式声明; **不转移所有权**, 纯传递依赖
+- `reexport_of: [...]` 显式声明(声明面即 `[[export]]` 的 **`reexport_of` 列表**; 旧名 `reexports` 已改名, 见 `brickie` v0.1 §13.2 A-11); **不转移所有权**, 纯传递依赖
+- **一个皮肤可以同时再导出多个提供者**(判例: `iface-pkcs11` 再导出 `service/crypto` 与 `service/keyring` 两个单元) ⇒ 该字段**必须是列表**, 单值装不下旗舰判例
+- **再导出单元的分类必须与皮肤自身的 `api_type` 相等**(分类不变量; 皮肤是 `runtime_adapter` 则被再导出单元也必须是 `runtime_adapter`) ⇒ 该字段同时是分类学的执法点
+- **"自有别名面"不走本条**: 若接口插件暴露的是自己拥有的别名面(判例: `iface-min` 的 native 别名层), 则用 `form = "api"` 且 `api_iface` 随该面的规范(`iface-min` ⇒ `api_type = native`), **不需要** `reexport_of` —— 见 `1-01` §7.4 的三种皮肤分类表
 - 主人被移除 ⇒ 再导出方组合期报错(依赖声明可见)
 
 **共享状态唯一主人(碰撞检测的真正对象):**

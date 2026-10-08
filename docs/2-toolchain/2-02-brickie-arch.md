@@ -59,7 +59,7 @@
 | C3 | host 平台插件把同一套语义用例跑成 Linux 进程 ⇒ 需要**双后端**(host-native / QEMU target), 且是同一命令 | `1-03` §5 第 6 项; `6-01` §2 |
 | C4 | golden 必须**独立重生成**比对, 防手编 | `1-02` §2.6.4 |
 | C5 | `abi_id` = 工具链 + ABI 影响选项指纹, 二进制分发(远期 .a)要匹配 | 主文档 §6.1 / §6.4-6 |
-| C6 | manifest 表达格式(YAML/TOML/DSL)、构建系统(make/cmake/自研)、插件树组织三项**均未定** | `4-03` §3; `2-01` §3; `4-02` §3 |
+| C6 | manifest 表达格式、构建系统(make/cmake/自研)、插件树组织三项 | `4-03` §3; `2-01` §3; `4-02` §3 —— **三项均已收敛**: 表达格式 = **TOML**(A-4); 构建后端 = **生成物 + make**(BR-D4); 插件树 = **顶层即 namespace**(4-02 §3, A-27)。**本行的"均未定"已不成立** |
 
 C1 + C2 直接决定两件先决事: **声明面必须独立于编译**(否则要么两阶段构建, 要么工具永远在编译之后才能报错), 以及 **`brickie` 的 M0 形态是"求解器 + 可解释报错", 不是"全功能 CLI"**。
 
@@ -96,6 +96,8 @@ C1 + C2 直接决定两件先决事: **声明面必须独立于编译**(否则�
 
 **倾向: Python 3 先行**(v1), 并把"**无第三方依赖**"当纪律(标准库 + 一个 YAML 解析器); 若 CI 可复现性成为痛点, 再评估用 Go 重写核心库 —— BR-D1 的库边界就是为这次替换留的门。
 
+> **⚠ 已被 `brickie` v0.1 修订(关闭 `r1/02` P1-6; 本篇 A-29)**: 原型 v1.0 的 `brickie` **不采用"Python 单语言先行"**, 而是 **L5 Python + L0/L1 Rust + L2 C++ 三语言、以 JSON over stdio 分进程**(`brickie-v0.1` BRV-D3/§9.1)。理由: ① 需求方硬约束(C9)要求工具链语言分工; ② 求解器/版本引擎/IFACE-IR 要被 CI 与 IDE 独立调用(库化, BR-D1 的 B 倾向); ③ 代码生成器必须与 `1-01` §6.1 的描述符/可见性宏同源, 且 v0.2 的接口依赖扫描注定要接 C/C++ 头文件解析器。**本行的"Python 3 先行"只保留为"实现顺序"的先手, 不再是"单语言"结论**; Go/Rust 的备选讨论(上表)随之退役 —— 若 CI 可复现性成为痛点, 出口仍是 BR-D1 的库边界。§8 的 **Q3** 据此标"已定(修订)"。
+
 ### BR-D4 — 构建后端边界
 
 | 备选 | 说明 |
@@ -109,12 +111,13 @@ C1 + C2 直接决定两件先决事: **声明面必须独立于编译**(否则�
 ### BR-D5 — 状态、增量与可复现
 
 - 状态目录 `build/`(不进版本库), 内含: 求解结果(闭包/拓扑/预算)、生成物、**输入内容 hash**(不按 mtime 判断, 与 `docs/render-plantuml.sh` 同一纪律)。
+- **进版本库的三件(已定, A-8)**: ① `brickie.lock`(仓库根; **闭包解 + 兼容代 `compat_gen` 快照**); ② `api/iface/<provider>/<unit>.toml`(接口面快照); ③ `api/iface/CHANGELOG.md`。状态目录与生成物**一律不进库**。`api/iface/**`(接口发布的记录, 由 `brickie` 写)与 `api/frozen/**`(golden 符号面, 由 `api-dump` 写, 1-02 §2.6.4)**两处分工**: 前者是**接口单元级**的声明面快照 + 版本/状态, 后者是**core/框架件符号级**的真值文件; 二者同属治理产物但**不同粒度、不同生产者**, 不可互相替代。
 - **宿主原生件出树**(参考 Android `out/host/...`): `brickie` 自己的编译产物(原生子进程可执行 / 静态库 / 对象 / **自包含入口 ELF**)落 `build/host/<host-arch>/<host-os>/{bin,lib,obj}/`, 其中 `host-arch` ∈ {`x86-64`,`aarch64`,…}、`host-os` ∈ {`linux`,`darwin`,`win`,…}; 源码树不留 `.o`/可执行。与镜像类产物在 `build/` 下分居两侧(同 Android 的 `out/host` / `out/target`)。**L5(Python 前端)的交付形态是一个单文件自包含 ELF** —— C++ 启动器 + 把 `python/brickie/**`、`templates/**` 与**原生子进程工具**(`brickie-gen` 等)嵌入的载荷, 运行时解包再由系统 `python3` 解释并执行嵌入工具(零新增第三方依赖; 见 ADR [`0004`](../decisions/0004-brickie-prebuilts-bootstrap.md) §7)。
 - **自举种子进库**(参考 Android `prebuilts/`): 除派生的 `build/host/**` 外, 同一宿主三元组下随源码提交预编译件 `prebuilts/seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen}` —— 其中 `brickie` **单文件自包含**(内含 `brickie-gen`), **只拷它一个**就能跑; 独立副本 `brickie-gen` 供开发态直用(冗余, 非运行前提)。查找顺序 = `$BRICKIE_GEN`(入口 ELF 指向解包出来的嵌入件) → `build/host/...`(新编优先) → `prebuilts/seed/brickie/...`(种子) → 旧落点 → `PATH`。与**下载缓存** `prebuilts/toolchain/`(派生侧、不进库)严格区分, 见 ADR [`0004`](../decisions/0004-brickie-prebuilts-bootstrap.md)。
 - 增量判断 = 「声明面 + 产品 manifest + 生成物」内容 hash 比对; 变了才重生成, 再交后端增量编译。
 - **可复现性**: 镜像与产物带 `brickie` 版本 + `abi_id` 指纹(C5); `brickie env` 打印全部影响 ABI 的输入(编译器版本/选项/目标三元组/宿主三元组)。
 
-**倾向: 采纳**(无备选争议); 待拍板的只是"状态文件放 `build/` 还是仓库根 `.brickie/`"(Q5)。
+**倾向: 采纳**(无备选争议); **Q5 已关闭**: 状态文件放 `build/`(不放 `.brickie/`), 需进库的三件单独放仓库根与 `api/`(见上)。本节其余内容(A-8)已回灌。
 
 ### BR-D6 — target 抽象(C3 的解法)
 
@@ -166,19 +169,27 @@ C1 + C2 直接决定两件先决事: **声明面必须独立于编译**(否则�
 
 ## 5. 命令面(草案)
 
-| 命令 | 输入 | 产物 / 效果 | 层 | 里程碑 |
-|---|---|---|---|---|
-| `brickie init <app>` | 模板 | 产品骨架(manifest + APP 目录) | L5 | M3 |
-| `brickie add <plugin>...` | 插件路径(`4-02` 约定) | 更新产品 manifest(闭包求解后写入) | L1+L2 | M1 |
-| `brickie check` | 产品 manifest + 插件树 | 六项组合期校验的完整诊断(环/版本/分类学/预算/接口/abi) | L1+L4 | **M0(环检测先行)** |
-| `brickie build` | 同上 + 平台参数 | `build/gen/*` + 镜像(或 host 可执行文件) | L2+L3 | M1 |
-| `brickie run` | 镜像 / host 目标 | host-native 执行 或 QEMU 启动 | L3 | M2(QEMU) / M3(host) |
-| `brickie test` | 用例集 + platform | conformance 矩阵报告(`6-01` §2) | L3+L4 | M3 |
-| `brickie api-dump` | 构建产物 | `api/frozen/*.txt` + diff | L3+L4 | M3(`1-02` §2.6.4) |
-| `brickie dbg` | bridge 流 / fault dump | 解码、回溯、时序对照 | L3 | M3(`5-01` §1) |
-| `brickie new <kind>` | 类别 | 插件模板(声明片段 + 描述符骨架 + conformance 骨架) | L5 | v1.x(`4-02` §2 第 6 项; 复用 BR-D2 生成器) |
-| `brickie show` / `brickie env` | — | 求解结果(闭包+拓扑+预算) / 影响 ABI 的输入清单 | L1 | M1 |
-| `brickie pack` | 插件 / 产品 | 二进制分发件(.a + 头 + `abi_id`) | L2 | **v2+(D14 远期)** |
+> **v0.1 命令面已定稿并回灌(A-27)**: 原型 v1.0 的工具首发只交付 **23 条叶子命令 + 2 条全局开关**(清单 = `brickie-v0.1` §8.4 + §7.7 + §6.5 + §5.3.4); 相冲突的旧条目按本表右列"v0.1 处置"改写。**里程碑整体前移**: `new` 与 `init` 从 `2-02` 原判的 **v1.x/M4+ 与 M3 前移到 v0.1**(否则"第一条命令"在权威架构文档里不存在, 实现无出处可依)。
+
+| 命令 | 输入 | 产物 / 效果 | 层 | 里程碑 | v0.1 处置 |
+|---|---|---|---|---|---|
+| `brickie new <plugin_type> <name> [--api <api_type>] [--lang c] [--subkind <s>] [--force]` | 类别 + 名(**两个位置参数**); `<name>` 按 `brickie-v0.1` §8.3 的 `<namespace>/<short>`(`namespace ∈ app\|iface\|platform\|sched\|framework\|io\|fs\|service`; **裸名合法**, `ability/<short>` 仅为通配读法; r1/03 P0-7) | 插件骨架(6 件生成物: `plugin.toml`/`src`/`include`/`tests/smoke.toml`/`README.md`/`build/gen/<plugin>/plugin_desc.c`) | L5 | **v0.1**(原判 v1.x; 复用 BR-D2 生成器) | 采纳本标准形态; `4-02` §2 第 6 项同步 |
+| `brickie init <product>` | 模板 | 产品骨架(`product.toml` + `app/<name>/` + `brickie.lock` 初版) | L5 | **v0.1**(原判 M3) | 位置参数取 `<product>`; `--domain` 归产品 manifest 字段而非命令旗标 |
+| `brickie dep add <plugin> <dep>[@range] [--kind init\|runtime\|type] [--phase <相>]` | 插件路径 | **写 `plugin.toml`** 并重算闭包 | L1+L2 | **v0.1** | **取代**旧 `brickie add <plugin>...`(那一条改的是**产品 manifest**; 两件事分开: 产品选择走 `product.toml` 的 `[select]`) |
+| `brickie dep rm` / `dep tree` / `dep graph` / `dep why` / `dep index` | — | 依赖删改/树/图/最短路径/反向索引(`build/index/dependents.json`) | L1+L2 | **v0.1** | 新增条目 |
+| `brickie dep closure [--json]` | 产品 manifest + 插件树 | 产品闭包 + 拓扑序 + **预算合计**(per-plugin `[[res]]` 求和) | L1 | **v0.1** | **取代**旧 `brickie show`(求解结果的呈现改由它承担) |
+| `brickie gen [--check]` | 声明面 | 重建 `build/gen/**`; `--check` 逐字节比对不写盘 | L2 | **v0.1** | 新增条目(BR-D5 生成物纪律的落点) |
+| `brickie check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release] [--json]` | 产品 manifest + 插件树 | 组合期校验的完整诊断(环/版本/分类学/预算/接口/特权/abi) | L1+L4 | **v0.1(M0: `--deps` 先行)** | `--profile` 为 v0.1 新增(§7.5 门禁); 无码输出见 `brickie-v0.1` BRV-D8 |
+| `brickie ver show <plugin>` / `ver bump <plugin> --rule major\|minor\|revise` | 插件 | 四段版本 + `compat_gen` 来源 / **人工声明**版本段 | L1 | **v0.1** | **取代**旧 `brickie env`(影响 ABI 的输入清单改由 `--version --deps` 承担) |
+| `brickie iface list/show/diff/status/publish/freeze/deprecate/undeprecate/unfreeze/refreeze` | 接口单元 | 接口发布与三态/解冻机制(含 `build/gen/proposals/<unit>.toml`) | L1+L2 | **v0.1** | 全新条目(`2-02` §5 原无此面) |
+| `brickie --version [--deps]` / `brickie <cmd> --json` | — | 版本 + 全环境指纹 / 机器可读输出 | L5 | **v0.1** | 全局开关; **`--json` 取"根与子命令都接受"**(两种读法都兼容, 见 `brickie-v0.1` checklist §5.6 裁定 #2) |
+| `brickie build` | 同上 + 平台参数 | `build/gen/*` + 镜像(或 host 可执行文件) | L2+L3 | M1 | 不在 v0.1(明确不做, 防顺手多做) |
+| `brickie run` | 镜像 / host 目标 | host-native 执行 或 QEMU 启动 | L3 | M2(QEMU) / M3(host) | 不在 v0.1 |
+| `brickie test` | 用例集 + platform | conformance 矩阵报告(`6-01` §2) | L3+L4 | M3 | 不在 v0.1(排 v0.4) |
+| `brickie api-dump` | 构建产物 | `api/frozen/*.txt` + diff | L3+L4 | M3(`1-02` §2.6.4) | 不在 v0.1(排 v0.6) |
+| `brickie dbg` | bridge 流 / fault dump | 解码、回溯、时序对照 | L3 | M3(`5-01` §1) | 不在 v0.1 |
+| `brickie pack` | 插件 / 产品 | 二进制分发件(.a + 头 + `abi_id`) | L2 | **v2+(D14 远期)** | 不在 v0.1 |
+| ~~`brickie show` / `brickie env`~~ | — | — | — | — | **退役**: 分别被 `dep closure` 与 `ver show`/`--version --deps` 取代(不保留别名) |
 
 ## 6. 与既有机制的接口
 
@@ -195,28 +206,29 @@ C1 + C2 直接决定两件先决事: **声明面必须独立于编译**(否则�
 
 | 里程碑 | `brickie` 能力 | 验收 |
 |---|---|---|
-| **M0** | L0+L1 + `brickie check`(环/闭包/分类学), 声明面最小可用版 | 故意造环 → 报完整环路径(C2) |
-| M1 | L2 生成器 + `brickie build`/`add`/`show`(make 后端) | 组合出可启动 hello 镜像 |
+| **M0** | L0+L1 + `brickie check --deps`(环/闭包/分类学), 声明面最小可用版 | 故意造环 → 报完整环路径(C2) |
+| **原型 v1.0 工具首发**(A-27) | **v0.1 命令面全量**: 骨架生成(`new`/`gen`)+ 依赖管理与分析(`dep *`)+ 版本(`ver *`)+ 接口发布(`iface *`, 含解冻/重冻)+ 全局开关(`--version`/`--json`) | `brickie-v0.1` §10 的 V-1…V-17; **`new`/`init` 由此前移**(原判 v1.x/M3) |
+| M1 | L2 生成器 + `brickie build`(make 后端)+ 产品选择写入 | 组合出可启动 hello 镜像 |
 | M2 | QEMU 后端 + 挂载计划/描述符生成物 + 资源预算校验 | M2 四框架件 + tmpfs/devfs 组合跑通 |
-| M3 | host-native 后端 + `brickie test`/`api-dump`/`dbg`/`init` + `--json` | 三层门禁可在 CI 一键执行; native API 冻结启动 |
-| M4+ | `brickie new` 脚手架、多产品共库、`brickie pack`(二进制分发) | 真实 SoC platform 插件接入(`1-03` §3 M4) |
+| M3 | host-native 后端 + `brickie test`/`api-dump`/`dbg` + `--json` 快照 | 三层门禁可在 CI 一键执行; native API 冻结启动 |
+| M4+ | 多产品共库、`brickie pack`(二进制分发) | 真实 SoC platform 插件接入(`1-03` §3 M4) |
 
 > **与 roadmap 的差异点(需在 `1-03` 侧对齐)**: `1-03` §3 把"CLI"排在 M3, 但 M0 的验收依赖组合器(C2)。建议明确为「M0: 求解器 CLI(最小)」+「M3: 完整体验 CLI」, 或把 M0 验收改写为"求解器库单测 + 一条命令"。
 
 ## 8. 开放问题(待拍板)
 
-| # | 问题 | 倾向 | 阻塞谁 |
-|---|---|---|---|
-| Q1 | BR-D1 工具形态: 核心库 + 薄 CLI | B | 接口纪律, 影响全篇 |
-| Q2 | BR-D2 声明面唯一真值(声明片段 → 生成描述符) | C | `4-03` 双真值裁定; `4-02` 描述符宏形态 |
-| Q3 | BR-D3 语言与依赖锁: Python 先行 | Python | CI 环境 |
-| Q4 | BR-D4 后端: 生成物 + make | A | `2-01` §3 构建系统选型 |
-| Q5 | 状态目录位置(`build/` vs `.brickie/`)与 `.gitignore` 形态 | `build/` | 仓库骨架 |
-| Q6 | BR-D6 target 抽象: platform 插件即 target | A+C | host 平台插件(`1-03` §5 第 6 项) |
-| Q7 | `--json` schema 与 `4-03` manifest schema 是否同一份 | 是(同源) | `4-03` 定稿 |
-| Q8 | 插件树组织: `plugins/<类别>/<名>` 还是顶层即类别 | 顶层即类别(CLI 示例形态) | `4-02` §3 |
-| Q9 | 多产品共库: `products/<name>.manifest` 的组织 | 需要 | `4-03` §3 |
-| Q10 | 二进制分发件(`brickie pack`)格式与 `abi_id` 校验时机 | v2 再定 | D14 远期 |
+| # | 问题 | 倾向 | 阻塞谁 | 状态 |
+|---|---|---|---|---|
+| Q1 | BR-D1 工具形态: 核心库 + 薄 CLI | B | 接口纪律, 影响全篇 | 待拍 |
+| Q2 | BR-D2 声明面唯一真值(声明片段 → 生成描述符) | C | `4-03` 双真值裁定; `4-02` 描述符宏形态 | 待拍(**宏形态已定稿**: `static const`, 见 `4-02` §1/A-3) |
+| Q3 | BR-D3 语言与依赖锁 | **已定(修订)**: 三语言分工 = L5 Python + L0/L1 Rust + L2 C++, JSON over stdio(`brickie-v0.1` BRV-D3/§9.1); 依赖纪律 = "每语言最小依赖集 + 锁版本 + 可离线复现"(`brickie-v0.1` §9.3) | CI 环境 | ✅ **已闭合并回灌**(`r1/02` P1-6; 见本篇 BR-D3 的修订注与 A-29) |
+| Q4 | BR-D4 后端: 生成物 + make | A | `2-01` §3 构建系统选型 | 待拍 |
+| **Q5** | ~~状态目录位置(`build/` vs `.brickie/`)与 `.gitignore` 形态~~ | `build/` | 仓库骨架 | **✅ 已关闭(A-8)**: 状态与生成物在 `build/`(不进库); 进库三件 = `brickie.lock`/`api/iface/**`/`api/iface/CHANGELOG.md` |
+| Q6 | BR-D6 target 抽象: platform 插件即 target | A+C | host 平台插件(`1-03` §5 第 6 项) | 待拍 |
+| **Q7** | ~~`--json` schema 与 `4-03` manifest schema 是否同一份~~ | 是(同源) | `4-03` 定稿 | **✅ 已关闭(A-9/BRV-D2)**: 同源 —— `--json` 与 TOML 输入是同一内部模型的两个序列化; schema 单一形式放 `brickie/schema/` |
+| Q8 | 插件树组织: `plugins/<类别>/<名>` 还是顶层即类别 | 顶层即类别 | `4-02` §3 | **已答**: 顶层即 `namespace`(A-27; `4-02` §3 开放问题已关闭) |
+| Q9 | 多产品共库: `products/<name>.manifest` 的组织 | 需要 | `4-03` §3 | v0.1 **不涉及**(`brickie-v0.1` §5.3 标注); 归 `4-03` 深化 |
+| Q10 | 二进制分发件(`brickie pack`)格式与 `abi_id` 校验时机 | v2 再定 | D14 远期 | 待定(v2+) |
 
 ## 9. 本篇"成文"的条件
 

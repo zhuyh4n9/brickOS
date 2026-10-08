@@ -35,7 +35,7 @@
 1. **manifest 格式定稿**(语义侧 → `docs/4-plugin/4-03-plugin-manifest.md`, 与其共同交付): schema + 校验器
 2. `brickie` CLI 命令集: add/remove/build/run/check/flash [?]; 参数与配置文件
 3. 组合器: 依赖闭包求解、拓扑输出、生成物(manifest.c/h、链接脚本片段、挂载计划表)
-4. 构建系统选型与 **repo 骨架**(DoD 第 5 项): 目录布局(plugins/ core/ apps/ tools/)、构建入口; **宿主工具产物出树**到 `build/host/<host-arch>/<host-os>/bin`(参考 Android `out/host/`; 与镜像类产物在 `build/` 下分家 —— 见 `2-02` BR-D5 与 `brickie-v0.1` BRV-D5)
+4. 构建系统选型与 **repo 骨架**(DoD 第 5 项): 目录布局(**顶层即 `namespace`**: `app/` `iface/` `platform/` `sched/` `framework/` `io/` `fs/` `service/`, 加 `core/` 与 `tools/`; ~~`plugins/<类别>/<名>`~~ 的读法**已废止** —— 见 `4-02` §3 与 `brickie-v0.1` A-27)、构建入口; **宿主工具产物出树**到 `build/host/<host-arch>/<host-os>/bin`(参考 Android `out/host/`; 与镜像类产物在 `build/` 下分家 —— 见 `2-02` BR-D5 与 `brickie-v0.1` BRV-D5)
 5. golden 生成器: 构建产物符号表(`nm --defined-only`)→ `api/frozen/*.txt` + abidiff 布局比对(1-02 §2.6.4/3-01 §13.4: 真值是构建产物; 头文件解析仅用于 D13 模块→符号映射)
 6. conformance 运行器: host 平台 + QEMU 目标、三调度器矩阵、报告格式
 7. 镜像产物: 布局、符号表、trace id 表(5-01)随镜像分发

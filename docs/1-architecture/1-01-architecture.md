@@ -7,7 +7,7 @@
 > v0.9: D22 设备 ops 统一预留——**所有设备类别 ops 预留 ioctl/suspend/resume**(poll/close 由 cdev-core 通用 br_file_ops 适配层提供, devfs 经钩子取得; 动机 = D14: ops 布局入 golden, 预留即免二进制破坏); D23 VFS ops 分层——**super(fs 级)/inode/file/dentry(预留)四层, Linux 型**; 路径走查(lookup 链)移入 vfs-core; inode v1 瞬态(无缓存, SD-3 不变); file_ops 增加 open(会话建立); D20 钩子演化为返回 {fops, fpriv}(`docs/7-storage/7-01-vfs.md` §2, `docs/8-device/8-01-device.md` §2/§3)。
 > v0.8: D21 设备接入 VFS——**所有设备经 /dev(devfs 插件)接入 VFS 管理**(Linux devtmpfs/rCore DeviceFS 同型); **fs/tmpfs 挂载为 rootfs("/")**; `br_open` 撤销裸名设备路由(单一挂载表路由, SD-1 修订); **vfs-core 纯化**(设备依赖移出); D20 协议扩展 open_file 钩子; 新插件 fs/tmpfs + fs/devfs(`docs/7-storage/7-03-concrete-fs.md` §2/§3)。
 > v0.7: D20 设备子分类框架化——dev-core 收缩为**通用设备**(注册表/命名/语义/子分类协议), 向下分 **cdev-core(字符, 含 flash 子型)**/**bdev-core(块)** 子分类框架; **spi-nor/nand 对接 cdev-core**; 框架件 3→4 件(§3/§4.5/§6.3/§7.2, `docs/8-device/8-01-device.md` §3)。
-> v0.6: D19 框架件拆分——设备/挂载注册表与 VFS/设备框架成为 **dev-core / vfs-core / bdev-core 插件**(§4.5, `docs/8-device/8-01-device.md` §1); 插件分类七类→八类(+框架件); core 收缩为 native API + 服务注册表; 依赖宪法更新(§7.2)。
+> v0.6: D19 框架件拆分——设备/挂载注册表与 VFS/设备框架成为 **dev-core / vfs-core / bdev-core 插件**(§4.5, `docs/8-device/8-01-device.md` §1); 插件分类七类→八类(+框架件)——**该"八类"表述后来被 §6.3 收口为 `plugin_type`(四类)× `api_type`(三值)+ 派生 `subkind`(A-1)**; core 收缩为 native API + 服务注册表; 依赖宪法更新(§7.2)。
 > v0.5: D18 修正案——**POSIX 双角色拆分**: `svc-posix`(POSIX 运行时)从接口插件降为**普通服务**, 三方中间件(sqlite/curl 类)可声明依赖它; 接口插件成为**严格叶子**(仅被 APP 依赖); 依赖铁律重写为四条治理规则(§7.2); 依赖方向论证更新(§7.5); 移植双模式(§7.6)。
 > v0.4: 吸收评审意见(用户手写笔记 `1-01-architecture-comment.md`, 仓库外、不随库分发): 战略语境与持久资产(§0); 虚拟内存政策反转——v1 恒等/v2 重定位/vx MPU(§4.3); 平台能力三层模式(§8); 插件依赖·版本·环管理深化(§6.5); 存储栈(§10); debug 基础设施(§11); D1 修订——v3 动态加载+鉴权(§12); D5/D6/D9/D10 落定; 版本路线图拆至 `docs/1-architecture/1-03-roadmap.md`, debug 细节拆至 `docs/5-debug/5-01-debug.md`。
 > v0.3: 接口插件化(D11), core 收缩为 native API + 注册表。
@@ -132,7 +132,7 @@
 | D22 | 设备 ops 统一预留 | **所有设备类别 ops 预留 ioctl / suspend / resume(poll/close 由 cdev-core 通用 br_file_ops 适配层提供, devfs 经钩子取得)** | 动机 = D14: ops 布局入 golden, 后补字段 = 布局破坏——**预留即免破坏**; suspend/resume 为设备级 PM 钩子(v1 无统一调用方, v2 service/pm 经注册表枚举, O-S6); NULL → -ENOTSUP; 详见 `docs/8-device/8-01-device.md` §3 |
 | D23 | VFS ops 分层 | **super(fs 级)/ inode / file / dentry(预留)四层 ops, Linux 型** | **路径走查(lookup 链)在 vfs-core**; inode v1 瞬态(走查产物, free_inode 即弃——有 inode ops, 无 inode cache, SD-3 不变); `br_dentry_ops` 为 v2 dcache 预留(槽位先占, D14 同理); `br_file_ops` 增加 open(会话建立); D20 open_file 钩子演化为返回 {fops, fpriv}; littlefs inode = 路径前缀包装, devfs 根 inode = 注册表投影; 详见 `docs/7-storage/7-01-vfs.md` §2 |
 | D24 | HSM 完整样例入 v1.x(M5) | **第二产品域从"声明"变为"可运行样例"**: 新增 6 件插件(`io/virtio-hsm`、`service/crypto`、`service/keyring`、`service/hsm-host`、`service/seclog`、**`iface-pkcs11` 由 v2.0 前移**)+ 样例 APP `app/hsm` | **组合即产品**(增量只有 APP + manifest)/ **置换证明**(调度器 · 密码后端 · 接口各换一次, 插件源码零改写)/ 复用 v1.0 全栈(四件框架件 + vfs 栈 + trace)/ **不依赖 M4**(QEMU virtio-serial 对端); `iface-posix`/`svc-posix` 不在样例组合内(接口可裁剪); 里程碑 = 1-03 §3 M5; 设计基线 `docs/9-app/9-02-hsm-sample.md` |
-| D25 | crypto 服务的版本策略 | **服务契约 v1.x(M5) 定稿; v2.0 只做后端与算法面扩展——契约不变** | v1.x = mbedTLS 算法子集(SHA-256 / HMAC-SHA256 / AES-CBC/CTR / DRBG; **不含 ed25519/TLS**)+ 服务面一次定稿; v2.0 = 完整算法集 + 恒定时间加固 + 硬件引擎后端; **算法实现一律引上游, 不自行实现密码原语**(风格纪律); v3 动态加载的**绑定约束是重定位(v2)**, 不是"crypto 服务是否存在"(§12); 遗留缺口: 熵源契约(O-H1)、ops 是否入 golden(O-H7) |
+| D25 | crypto 服务的版本策略 | **服务契约 v1.x(M5) 定稿; v2.0 只做后端与算法面扩展——契约不变** | v1.x = mbedTLS 算法子集(SHA-256 / HMAC-SHA256 / AES-CBC/CTR / DRBG; **不含 ed25519/TLS**)+ 服务面一次定稿; v2.0 = 完整算法集 + 恒定时间加固 + 硬件引擎后端; **算法实现一律引上游, 不自行实现密码原语**(风格纪律); v3 动态加载的**绑定约束是重定位(v2)**, 不是"crypto 服务是否存在"(§12); 遗留缺口: 熵源契约(O-H1); **ops 是否入 golden(O-H7)已关闭 = 入**(`api/frozen/br-crypto.txt`/`br-keyring.txt`, 冻结批次见 `3-01` §15 第六批) |
 | D26 | HSM 资产边界(诚实声明) | **v1.x 无内存隔离 ⇒ 资产保护 = 逻辑边界(密钥只经 keyring 不透明 handle 暴露)+ 落盘加密 + 物理封装/外置安全核假设; 不承诺抵抗同地址空间内的任意读** | 域支撑矩阵(§14.1)逐格写"有/无/部分", 缺口须有编号与版本归宿; 认证件策略(§12: 可完全不编入动态路径)照旧; "伪安全"叙事风险登记 R10; 威胁表详见 `docs/9-app/9-02-hsm-sample.md` §2.3 |
 
 ## 2. 两个"单"的工程含义
@@ -155,6 +155,7 @@
 - syscall 退化为普通函数调用: 接口插件 = 库, 零陷入开销、无用户/内核拷贝
 - 无地址空间切换 ⇒ 上下文切换只剩"寄存器 + 栈"
 - 无特权级配置面 ⇒ 启动代码极短; 调试器一个地址空间看穿全局
+  > **术语辨析(关闭 `r1/02` P1-7)**: 此处指**硬件特权级**(EL1 单级裸跑, 不引入 EL0/EL2/TrustZone), 与 `3-01` §13.6 的 **"特权接口分级" P0–P4**(= "哪些 native API 子集可被哪类插件**声明**"的 API 子集分级)**不是同一件事**; 后者是声明面模型, 不改变本行的"单特权级"结论。
 
 **代价(诚实面对):**
 - 无硬件隔离: 野指针可破坏一切。缓解: MMU region 属性(v1 起恒等映射即有 RO/NX/device 保护, §4.3)+ 插件分段(D4)+ 将来 MPU 插件
@@ -327,10 +328,10 @@ void br_sched_register(const br_sched_ops *ops);
 ```c
 typedef struct {
     const char *name;              /* "io-can", "iface-posix", "app-main" */
-    uint16_t    ver[3];            /* 插件自身语义版本 {maj, min, pat} */
+    uint16_t    ver[4];            /* 四段版本 COMPAT_GEN.MAJOR.MINOR.REVISE(A-3/A-14) */
     uint16_t    api_rev;           /* 编码面对的 native API 版本 */
-    uint32_t    sched_class;       /* §5.3 */
-    const br_dep_t *deps;          /* {name, ">=1.0,<2.0", phase} 数组 */
+    uint32_t    sched_class;       /* §5.3; 组合期与调度器互查 */
+    const br_dep_t *deps;          /* {name, range, phase, compat_gen} 数组; range 固定 3 段(§7.7) */
     const char *abi_id;            /* 工具链 + ABI 影响选项指纹(D14 二进制分发) */
     const char *const *api_syms;   /* 仅 Interface 插件: 占有的 API 符号族(§7.3) */
     br_res_t    res;               /* RAM/栈/IRQ/DMA 需求, 组合期预算校验 */
@@ -340,9 +341,14 @@ typedef struct {
 } br_plugin_t;
 
 #define BR_PLUGIN(name_, deps_, ...) \
-    const br_plugin_t _br_plugin_##name_ \
+    static const br_plugin_t _br_plugin_##name_ \
     __attribute__((used, section(".br_plugins"), aligned(4))) = {...};
 ```
+
+> **描述符字段的三处口径(与 `brickie` v0.1 对齐, 见该文 §13.2 A-3/A-10/A-14)**:
+> 1. **`ver[4]`**: 三段装不下"兼容代"这一独立轴; 四段语义即 `COMPAT_GEN.MAJOR.MINOR.REVISE`(`brickie` v0.1 §5.2), **`COMPAT_GEN` 与 `MAJOR` 正交**。
+> 2. **`br_dep_t` 的形状**: `{name, range, phase, compat_gen}` —— `range` 固定 **3 段**(只比 `MAJOR.MINOR.REVISE`, `">=1.0"` ≡ `">=1.0.0"`; 4 段非法); `compat_gen` **精确匹配**且**仅接口依赖携带**; **结构依赖(`init`/`runtime`/`type`)不带** `compat_gen`(依 F3)。`phase` 的语义由"相位"收窄为**相位断言**(见下)。
+> 3. **宏形态定稿**: 取 **`static const`**(近零导出面, CA-10 / 3-01 §13.3), 取代本节首版的非 static 形态 —— 段收集只需 `used` + `section`, 外部链接不是必需。这条同时关闭 `4-02` §1 记录的"宏形态两处矛盾"。
 
 ### 6.2 生命周期阶段
 
@@ -357,18 +363,61 @@ typedef struct {
 | LATE | `init`(Service → Interface 依序) | 同 CORE |
 | 全局开中断后 | `start`(全部插件) → `app.start()` | 中断可用, 可创建线程 |
 
-### 6.3 插件分类(八类, v0.6: +框架件)
+**"两个完成点"(组合期相位判定的机械语义, 必读)**: 上表意味着**每个插件有两个独立的完成点**:
 
-| 类 | 内容 | 数量约束 | 依赖方向 |
+| 完成点 | 何时到达 | 覆盖谁 |
+|---|---|---|
+| ① **注册可用** | EARLY 相的 `early_init` 返回之后 | **全部插件**(`early_init` 是全体回调) |
+| ② **能力可用** | 该插件所属相的 `init` 返回之后 | 有 `init` 钩子的插件; 仅注册型插件(如只做 EARLY 注册的框架件)可声明第 ② 点即为 EARLY |
+
+**声明面**: 插件在 `plugin.toml` 用 `[plugin].phase ∈ {early, core, late, app}` 声明其**第 ② 个完成点**(`early` = 无 `init` 钩子, ② 与 ① 重合); `init` 所在的相由插件类别决定 —— **非 Service/Interface ⇒ CORE, Service/Interface ⇒ LATE**(声明与之不符即 schema 错)。
+
+**`br_dep_t.phase` 的语义收窄为"相位断言"**: 它是依赖方对提供方**第 ② 个完成点**的断言("要求你不晚于该相完成"), **不是**提供方的自述(自述在提供方的 `[plugin].phase`)。组合期校验两条:
+
+1. **完成点单调**: 对每条 `init` 边 `A → B`,`rank(complete(B)) ≤ rank(complete(A))`,其中 `rank(EARLY)=0 < CORE=1 < LATE=2 < APP=3`; 违例 ⇒ 红 **`BRV-DEP-0009`**(报"B 在 A 之后完成, 但 A 依赖 B")。
+2. **断言一致**: 断言值与提供方自述冲突(提供方自述晚于断言)⇒ 红 **`BRV-DEP-0010`**(两码的权威定义见 `brickie` v0.1 §7.2, 本篇只引用、不重复定义)。
+
+> **为什么必须写"两个完成点"**: 若把 `phase` 读成"插件只有一个完成相", 则 `sched-coop → platform/qemu-aarch64` 这类边会被推导成违例(platform 的 `early_init`/`init` 与 sched-coop 的 `init` 在时间上交错), 而它实际完全合法 —— 判据是**第 ② 个完成点的序**: 两边同在 CORE ⇒ `CORE ≤ CORE` ✅。这条口径同时回灌到工具侧(`brickie` v0.1 §7.2/A-10)与依赖文档(`4-04` §2)。
+>
+> **规则边界**: 只覆盖**已声明**的 `init` 边; 未声明的隐式耦合(谁在 `init` 里悄悄用了尚未 `init` 完的服务)不在声明面校验范围, 由符号级接口依赖扫描 + 源码静态分析接手(§6.4-3 后半)。
+
+### 6.3 插件分类(两维 + 派生 `subkind`; A-1 回灌后)
+
+> **口径(A-1)**: 插件分类由**两个正交维度**决定 —— `plugin_type`(架构层级, 四值)与 `api_type`(API 遵守规范, 三值); 旧"八类"(Platform/Scheduler/框架件/IO/FS/Service/Interface/APP)**不是第三个维度**, 而是 `plugin_type × api_type` 组合的人读视图, 降为派生列 `subkind`(scheduler/framework/io/fs/service)。**数量约束与依赖方向只由 `plugin_type` + `api_type` 决定**; `subkind` 只用于授权与检索(`brickie` v0.1 §3.1–§3.3 是 v0.1 的完整形态)。
+
+**表 A — `plugin_type`(架构层级)**
+
+| `plugin_type` | 内容 | 数量约束 | 依赖方向 |
 |---|---|---|---|
-| Platform | reset 汇编、时钟/引脚/RAM、中断控制器实现、console、cache、timer、**内存 region 表** | 每 SoC 一个 | 最底层 |
-| **Scheduler** | 调度策略(§5) | **恰一个** | 用 core 框架 |
-| **框架件(Framework)** | 能力基础设施: **dev-core**(通用设备注册表/语义/子分类协议)、**cdev-core**(字符设备 + flash 子型)、**bdev-core**(bdev 子分类, 依赖 dev-core)、**vfs-core**(br_file/br_open/挂载表) | 每件 0 或 1, 按需组合 | 依赖 core; 被驱动/FS/服务依赖; 纪律同 core(golden/门禁) |
-| I/O | 外设驱动: uart/spi/i2c/can/gpio/adc/display | 任意 | 向 cdev-core / bdev-core 注册设备 |
-| FS | tmpfs(rootfs) / devfs(/dev) / littlefs / EROFS / romfs | 任意 | **依赖 vfs-core**, 注册挂载(D21: 设备经 devfs 接入 VFS) |
-| Service | 中间件: lwIP、UDS 诊断、日志、OTA、crypto、trace、**svc-posix(POSIX 运行时, D18)**、**keyring/hsm-host/seclog(v1.x/M5, D24)**、三方移植件(sqlite…) | 任意 | 向 core 服务注册表发布; **服务间可声明依赖(含 svc-posix 与框架件)** |
-| **Interface** | API 皮肤(严格叶子): POSIX 薄皮肤 / 极简 / 域标准(§7; **iface-pkcs11 = v1.x/M5, D24**) | **零或多个, 可叠加** | 仅被 APP 依赖; 可再导出 svc-posix 符号 |
-| APP | 唯一业务逻辑 | 1 | 依赖 Interface(或直调 native), 不许被依赖 |
+| `platform` | reset 汇编、时钟/引脚/RAM、中断控制器实现、console、cache、timer、**内存 region 表** | **每 SoC 恰 1** | 最底层(不被依赖方要求) |
+| `ability` | 核心能力扩展 = 旧"框架件 + I/O + FS + Service + Scheduler"的总和 | 0..n; **`subkind = scheduler` 恰 1** | 依赖 core; 被 `ability`/`app`(经 interface)依赖; 框架件间单向(见下) |
+| `interface` | API 皮肤(**严格叶子**): POSIX 薄皮肤 / 极简 / 域标准 | 0..n, 可叠加 | **仅被 `app` 依赖**; 可再导出服务符号 |
+| `app` | 唯一业务逻辑 | **恰 1**, 不许被依赖 | **仅经 `interface`**(A-2; 零开销路径由 `iface-min` 承接) |
+
+**表 B — `subkind`(旧八类的承接, 派生列)**
+
+| 旧类 | `plugin_type` | `subkind` | 依赖方向(保持不变) |
+|---|---|---|---|
+| Platform | `platform` | — | 最底层 |
+| Scheduler | `ability` | `scheduler` | 用 core 框架 |
+| **框架件(Framework)** | `ability` | `framework` | 依赖 core; 被驱动/FS/服务依赖; **框架件间单向**(cdev-core→dev-core 与 vfs-core, bdev-core→dev-core); 纪律同 core(golden/门禁) |
+| I/O | `ability` | `io` | 向 cdev-core / bdev-core 注册设备 |
+| FS | `ability` | `fs` | **依赖 vfs-core**, 注册挂载(D21: 设备经 devfs 接入 VFS) |
+| Service | `ability` | `service` | 向 core 服务注册表发布; **服务间可声明依赖(含 svc-posix 与框架件)** |
+| Interface | `interface` | — | 仅被 APP 依赖; 可再导出**多个**提供者的单元(`reexport_of` 列表) |
+| APP | `app` | — | **仅经 Interface** 依赖 |
+
+**表 C — `api_type`(API 遵守规范, 与上两表正交)**
+
+| `api_type` | 定义 | 可抛出的接口分类 |
+|---|---|---|
+| `native` | 严格遵守 brickOS native API 规范, 不依赖任何 POSIX/三方基座 | 仅 `native` |
+| `runtime_adapter` | 为 `third_party` 提供接口支持的适配基座(如 `svc-posix`、`iface-pkcs11` 一类皮肤) | 仅 `runtime_adapter` |
+| `third_party` | 携带上游源码的三方件(如 `service/sqlite`、`service/lwip`) | 仅 `third_party`(**可不抛**; 能力经注册表发布亦合法) |
+
+> **APP "仅经 Interface"(A-2 收敛)**: 本行原写"依赖 Interface(**或直调 native**)", 与 `9-01` 的"必须经 Interface"长期矛盾。**现取唯一口径: APP 只依赖 Interface 插件**; 需要"零开销直通 native"的场景由 `iface-min`(极薄别名层, §7.4)承接 —— 它把 native 面以 Interface 身份暴露, 于是"不直调 native"与"零开销"同时成立。`4-01` §2、`9-01`、`1-02` §1、`1-03` §1、`9-02`、`8-01` 的同口径表述按此同步。
+>
+> **`api_type` 的接口分类规则见 §7.3**(导出面分类不变量); 各插件的 `sched_class` 声明见 §6.1 描述符。
 
 ### 6.4 组合期校验(构建器执行)
 
@@ -381,12 +430,18 @@ typedef struct {
 
 ### 6.5 依赖与环管理(评审深化)
 
-**两类依赖必须区分:**
+**三类依赖必须区分**(第三类与组合期相位规则见 `brickie` v0.1 §7.1/§7.2, 该文 A-6):
 
-| | init 依赖(初始化顺序) | 调用依赖(运行期调用) |
-|---|---|---|
-| 含义 | "你必须先 init 完我才能 init" | "我运行时会调你的函数" |
-| 环政策 | **禁止**——拓扑排序硬错误 | **允许**——经回调/注册表天然无环 |
+| | init 依赖(初始化顺序) | 调用依赖(运行期调用) | **type 依赖(仅编译期)** |
+|---|---|---|---|
+| 含义 | "你必须先 init 完我才能 init" | "我运行时会调你的函数" | "我只需要你的头文件/类型可见" |
+| 环政策 | **禁止**——拓扑排序硬错误 | **允许**——经回调/注册表天然无环 | **允许**——只报 info |
+| 相位断言 | **有**(见下) | 无 | 无 |
+| 闭包参与 | ✅ | ✅ | ✅(但**不拉入运行期依赖**) |
+
+> **为什么必须有 `type`**: `dev-core → vfs-core` 是**仅头文件类型依赖**(`8-01` §1.3 / O-S7)。若写成 `runtime`, 会按"runtime 参与闭包"把 vfs-core **拉进组合**, 从而落入 `8-01` 的"形态 B", 推翻 D19/O-S7(设备框架本可独立于 VFS 成立)。`type` 边表达"编译期需要类型、运行期不需要该插件在场"。
+
+**相位单调规则(创建期硬约束, 声明面可执法)**: 对每条 `init` 边 `A → B`(A 依赖 B), 必须 `rank(complete(B)) ≤ rank(complete(A))`, 其中完成点与相序的定义见 §6.2(`EARLY < CORE < LATE < APP`); 违例 ⇒ 组合期错误 `BRV-DEP-0009`(报"B 在 A 之后完成, 但 A 依赖 B"), 依赖方断言与提供方自述冲突 ⇒ `BRV-DEP-0010`(码的权威定义见 `brickie` v0.1 §7.2, 本篇只引用)。**规则只覆盖已声明 init 边**; 未声明的隐式耦合不在声明面校验范围。没有这条规则, 一个无环依赖图仍可能因相位顺序而**无法按声明的顺序初始化** —— 拓扑排序成功但启动序列失败, 属于典型的"构建期看不出来、运行期必炸"。
 
 **环的四种解法模式**(当"互相需要"的诱惑出现时):
 
@@ -429,9 +484,11 @@ v0.4 的铁律"能力插件永不依赖接口插件"是安全的**结构代理**
 ### 7.3 组合规则
 
 - **叠加式**: 一镜像可含多个接口插件(posix + pkcs11 共存)
-- **符号命名空间独占**: `api_syms` 声明; 重叠 ⇒ 组合期硬错误(链接前检测)
+- **符号命名空间独占**: `api_syms` 声明(工具链清单里对应 `[[export]].symbols`); 重叠 ⇒ 组合期硬错误(链接前检测)
+- **导出面分类(不变量, A-11)**: 每个 `[[export]]` 表带 `api_iface`(接口分类)字段, 且**必须等于该插件的 `api_type`**; 分类取三值 `native` / `runtime_adapter` / `third_party`(与 `api_type` 同域闭合)。**三方件若不声明 `[[export]]`**, 其能力面不进接口治理(经注册表消费, 见 §7.6); 若声明, 只能取 `third_party` 分类。
 - **双层粒度(D13)**: manifest 模块级声明+版本(人读); 碰撞检测符号级(链接器符号表为唯一真值); 模块→符号映射由工具从头文件生成, CI 防漂移
-- **再导出**: 显式 `reexports`, 不转移所有权, 纯传递依赖
+- **再导出**: 显式 `reexport_of` 声明(**列表**, 可含多个被再导出单元), 不转移所有权, 纯传递依赖; 被再导出单元的分类必须与皮肤自身的 `api_type` 相等 —— **`iface-pkcs11` 同时再导出 crypto 与 keyring 两个单元即是该字段必须为列表的判例**(D24/M5; 旧名 `reexports` 的映射见 `brickie` v0.1 §13.2 A-11)
+- **`skin` 边豁免依赖禁则**: 皮肤对提供者的再导出边**豁免**"按 `api_type` 判依赖方向"的禁则(否则 `iface-posix`→`svc-posix`、`iface-pkcs11`→`crypto`/`keyring` 会被误杀); 豁免必须由 `reexport_of` 显式声明方能成立, 不可隐式
 - **共享状态唯一主人**: fd 表恰一个 owner, socket 类插件向 owner 注册 file_ops(VFS provider 模式)
 - **host 直通模式**: host 平台插件上 iface-posix 可直通宿主机 open(), APP 逻辑 CI 全速跑(`docs/5-debug/5-01-debug.md` §4 同源思路)
 
@@ -441,7 +498,17 @@ v0.4 的铁律"能力插件永不依赖接口插件"是安全的**结构代理**
 |---|---|---|
 | `iface-posix` | **薄皮肤**: 再导出 svc-posix 符号(D13 reexport, 不转移所有权)+ APP 面 stdio/errno 接线 | v1.0 |
 | `iface-min` | 极薄别名层, 直通 native API, 无 fd/errno 开销 | v1.0 |
-| `iface-pkcs11` | 域标准: 加密 token API, 适配 crypto + keyring Service | **v1.x(M5, D24——原排 v2.0, 由 HSM 完整样例前移)** |
+| `iface-pkcs11` | 域标准: 加密 token API, 适配 crypto + keyring Service; **一个皮肤同时再导出两个单元**(`reexport_of` 列表的判例) | **v1.x(M5, D24——原排 v2.0, 由 HSM 完整样例前移)** |
+
+> **接口分类的取法(分类学收敛的直接后果)**: 三个皮肤的 `api_type` **不是同一个值**, 按"它抛出的面是什么分类"逐个判定(硬不变量: `export.api_iface == plugin.api_type`, `brickie` v0.1 §3.5 不变量 1 / `BRV-TAX-0016`):
+>
+> | 皮肤 | `api_type` | `[[export]]` 形态 | 理由 |
+> |---|---|---|---|
+> | `iface-posix` | `runtime_adapter` | `form = "skin"`, `reexport_of = ["service/svc-posix#<unit>"]` | 它**再导出** `svc-posix`(runtime_adapter 基座)的单元 ⇒ 分类必须与基座相等 |
+> | `iface-min` | **`native`** | `form = "api"`, `api_iface = "native"` | 它**不**再导出任何插件单元 —— 它暴露的是**自己拥有的 native API 别名面**(编译期别名, 直通 core native) ⇒ 取 `native`; 若把它标成 `runtime_adapter`, 不变量 1 会因"抛 native 面"判红(`BRV-TAX-0016`), 而 `form="skin"` 又要求 `reexport_of` 非空(它没有可再导出的单元) |
+> | `iface-pkcs11` | `runtime_adapter` | `form = "skin"`, `reexport_of = ["service/crypto#crypto", "service/keyring#keyring"]`(**列表**) | 再导出两个服务单元 ⇒ 每项分类必须与皮肤自身相等 ⇒ `service/crypto`/`service/keyring` 的接口面取 `runtime_adapter`(见 `11-01` §1) |
+>
+> **一句话判据**: **"再导出别人的单元" ⇒ 分类随被再导出单元(必须相等); "暴露自己拥有的别名面" ⇒ 分类随该面的规范(native 别名面 = `native`)。** `iface-min` 属后者 —— 它正是 A-2 所说的"零开销合规出口"。
 
 POSIX 的**实现**在 `svc-posix`(Service 类, §3): fd 表 + VFS 路由 + pthread 映射 + libc stub, 实现于 native API + 注册表; socket 子系统路由到 net 服务。皮肤与基座一份实现、两个身份(D18)。
 
@@ -454,7 +521,11 @@ POSIX 的**实现**在 `svc-posix`(Service 类, §3): fd 表 + VFS 路由 + pthr
 1. **谁实现谁**(不变): 标准 API 的一部分语义由中间件实现——POSIX sockets → lwIP, PKCS#11 → crypto。适配器必须同时看见"标准的语义"与"能力的机器", 只能坐在两者之间。
 2. **接口必须是严格叶子**(v0.5 强化): 除 APP 外没有任何插件依赖接口插件 ⇒ 皮肤可任意替换/裁剪, 且换皮肤永不重验服务。反向(服务依赖皮肤)则每换 API 皮肤都要重验中间件——验证经济学: 依赖箭头 = 重新验证的方向, 贵的(网络栈/crypto)必须待在箭头根部。
 3. **复用经济学**(v0.5 诚实版): native 编码的服务在任何组合可用; POSIX 编码的服务在**不带 svc-posix 的组合**中不可用——这是组合期可见的取舍(manifest 闭包), 不是运行期惊喜。极小组合照旧纯 native, 可裁剪性不变。
-4. **两种绑定分离**(不变): 结构需求走 manifest 声明; 运行机会走注册表晚绑定——svc-posix 与 littlefs 之间没有依赖边, 换 FS 零改动。
+4. **两种绑定分离**(不变, **口径已收口 = `r1/02` P0-1**): **结构需求(三类"能力面"依赖)走 manifest 声明**; **运行机会走注册表晚绑定**。二者**不互相替代, 也不互相豁免**:
+   - **声明面**: 只要一个插件要**调用另一个插件的函数/使用它的符号面**, 就必须在 `plugin.toml` 的 `[[dep]]` 里声明该边(`kind = "runtime"` 或 `"type"`); 这保证"极小组合可裁剪"的承诺可被组合期执法(§7.5 的复用经济学)。
+   - **注册表面**: 插件在运行期**按名字**从 core 服务注册表取用能力(如 `service/seclog` 找 `crypto`、FS 找 bdev), 这是**运行机会合**, **不产生依赖边、不拉入闭包**。
+   - **所以 `svc-posix` 与 `littlefs` 的事实是**: 二者之间**没有直接的符号面调用边**(littlefs 通过 vfs-core 的 `br_file_ops` 契约工作、挂在挂载表上), 因此 `[[dep]]` 里**不需要** `littlefs → svc-posix` 这条边; "换 FS 零改动"来自**契约(vfs-core)不变**, **不是**来自"可以零声明地直接调别人"。
+   - **反例(必须红)**: 某插件在代码里直接调 `svc-posix` 的 `open()` 却不在 `[[dep]]` 里声明 `runtime` 边 ⇒ 组合期报"未声明的能力面依赖"(v0.1 靠声明面自洽性校验 + `--json` 诊断, v0.2 起由符号级扫描执法)。
 
 **四分法**(v0.5): 能力(Service/I/O/FS)提供机器; **基座(svc-posix)提供"标准的运行时实现"供能力复用**; 皮肤(Interface)提供 APP 面的标准; 消费(APP)使用标准。谁想"用"标准 API, 谁就是 APP 类插件(测试/样例/工具同此)。
 
@@ -466,7 +537,8 @@ POSIX 的**实现**在 `svc-posix`(Service 类, §3): fd 表 + VFS 路由 + pthr
 
 ```c
 /* service/sqlite/plugin.c — 移植的全部增量 */
-BR_PLUGIN(sqlite, .deps = (const br_dep_t[]){{"svc-posix", ">=1.0", BR_PHASE_LATE}}, ...);  /* deps 形状见 §6.1: {name, 区间, phase} 数组 */
+BR_PLUGIN(sqlite, .deps = (const br_dep_t[]){{"svc-posix", ">=1.0.0", BR_PHASE_LATE, 0}}, ...);  /* deps 形状见 §6.1/§7.7: {name, range, phase, compat_gen} 数组 */
+/* range 固定 3 段; compat_gen 仅接口依赖携带, 结构依赖(init/runtime/type)不带 ⇒ 此处为 0 */
 static int sqlite_port_init(void) {
     sqlite3_config(SQLITE_CONFIG_MUTEX, &br_mutex_methods);  /* br_mutex */
     sqlite3_config(SQLITE_CONFIG_MALLOC, &br_mem_methods);   /* br_malloc */
@@ -488,6 +560,37 @@ static int sqlite_port_init(void) {
 1. svc-posix 成为引力中心——中间件自然滑向全 POSIX 编码, native API 使用萎缩(Unikraft 教训)。缓解: 一方服务 native-first 写进风格规范; svc-posix 在 manifest 显式可见
 2. 子集诚实义务——实现/未实现必须成文 + conformance 覆盖; 三方代码在链接期撞墙好过运行期
 3. 契约治理面 +1: svc-posix 的 POSIX 符号面进 golden/门禁体系(`docs/1-architecture/1-02-api-contract-governance.md` §2.3 同机制)
+
+**svc-posix 的冻结批次**: `br-svcposix.txt` 的升格排期 = `docs/3-os-core/3-01-core-api-list.md` §15 **第五批**(非 core 组, M3; POSIX 子集清单成文且实现到位后)。这条是 release 的前置: `brickie check --profile release` 禁止依赖未冻结接口, 而三方中间件(如 sqlite 模式 A)对 svc-posix 是 `type`/`runtime` 结构依赖 ⇒ 不参与该判定; 真正受影响的是 `requires_iface` 侧消费 POSIX 符号面的插件。*(`brickie` v0.1 §7.5 的 A-18)*
+
+### 7.7 版本区间与兼容声明
+
+**依赖 = (`compat_gen` 精确匹配的整数值, `range` 范围表达式)**; 版本 = 四段 `COMPAT_GEN.MAJOR.MINOR.REVISE`(§6.1)。`compat_gen` **精确匹配**(跨代比较无意义), `range` 固定 **3 段**、只比较 `MAJOR.MINOR.REVISE`。
+
+| 写法 | 语义 | 备注 |
+|---|---|---|
+| `=M.m.r` | 精确 | 需求方点名 |
+| `>=M.m.r` / `>M.m.r` / `<=M.m.r` / `<M.m.r` | 按 `(M,m,r)` **字典序**比较 | 需求方点名 |
+| `~M.m.r` | 允许 `r` 升, `m`/`M` 固定 | 语法糖 |
+| `^M.m.r` | 允许 `m`/`r` 升, `M` 固定 | 语法糖 |
+| `*` | 任意(仍受 `compat_gen` 精确匹配约束) | — |
+| `,` | 交集(AND) | — |
+| **4 段 `range`**(如 `>=F.M.m.r`) | **非法** | 直接落实"只比较 `M.m.r`" |
+
+**等价区间式**: `~`/`^` 是语法糖, 在解析期**一次性展开**为显式区间; `--json` 输出恒为展开后的形式(避免两种真值)。
+
+| 语法糖 | 等价的显式区间 | 语义 |
+|---|---|---|
+| `~M.m.r` | `>=M.m.r,<M.(m+1).0` | 允许 `r` 升, `m`/`M` 固定 |
+| `^M.m.r` | `>=M.m.r,<(M+1).0.0` | 允许 `m`/`r` 升, `M` 固定 |
+
+**arity 归一化**: `range` 固定 **3 段**, **缺段右补 0**(`">=1.0"` ≡ `">=1.0.0"`); **4 段即错**。
+
+**单版本政策**: 同一插件名在闭包内**只允许一个版本**; 多版本共存 ⇒ **组合期硬错误**(`BRV-DEP-0011`)。
+
+`COMPAT_GEN` **不进 `range`**、**不能跨代比较**(字典序仅限同代内)。
+
+> 出处: (`brickie` v0.1 §7.4; A-5/A-15 回灌)
 
 ## 8. 平台能力三层模式(评审: memory map / 中断控制器可否为插件)
 
@@ -602,7 +705,7 @@ brickie build --release   # 产线镜像
 | 组合粒度 | 插件级(含调度器+接口) | 无(仅调度) | Kconfig+dev tree | 库级 | 静态配置生成 |
 | 调度策略 | 插件(协作/抢占/时间表) | 固定 | 固定(可配置) | 固定 | 静态表 |
 | 应用 API | 插件(POSIX/极简/域标准) | FreeRTOS API | 固定+POSIX shim | libc | RTE 风格 |
-| 特权级 | 单级 | 单级(可选 MPU 分离) | 可选 userspace | 单级(云) | SC1 单级 |
+| 特权级(硬件) | 单级 | 单级(可选 MPU 分离) | 可选 userspace | 单级(云) | SC1 单级 |
 | 定位 | 深度嵌入式原型→成熟基座 | 通用 MCU | 通用嵌入式 | 云/KVM | 车规确定性 |
 
 ## 16. 风险清单

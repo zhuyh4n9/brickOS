@@ -2,6 +2,7 @@
 
 > 存储域系列(3 篇, 章节 **7-storage**): 7-01-vfs · **7-02-bdev** · 7-03-concrete-fs。**设备管理独立成章** → `docs/8-device/8-01-device.md`。
 > **契约归属(D19/D20)**: 块设备能力由 **bdev-core 插件**提供——dev-core 通用设备下的**块设备子分类框架**, **依赖 dev-core**(块设备注册进 dev-core 命名空间)——bdev 类 ops/几何/可堆叠/分区映射器; page cache 以堆叠插件构建于其上。
+> **治理与冻结批次**: 本篇 API 面进 golden(`br-bdevcore.txt`), 与 core 同一套决策记录/门禁纪律; 冻结批次 = `docs/3-os-core/3-01-core-api-list.md` §15 第四批(非 core 组, 每文件独立升格, v1.x/M3 起)。
 > 版本: v1.0(virtio-blk); 分区 v1.x; page cache vx.0。本篇决策 SD-8/SD-9; 另涉 SD-2 的 bdev 侧(决策记录见 `8-01-device` §7)。
 
 ## 缩略词(abbreviations)

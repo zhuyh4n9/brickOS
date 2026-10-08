@@ -111,7 +111,7 @@
 | `io/virtio-blk` | I/O | `/data` 介质(QEMU bdev + littlefs 适配) |
 | `service/trace` | Service | 热路径事件(含 HSM 命令/拒绝/审计探针) |
 
-> **明确不选**: `iface-posix` 与 `svc-posix` **不在**本样例组合内——HSM 的 APP 面走 `iface-pkcs11`(+ 直调 native), 不需要 POSIX 运行时; 这正是**接口面可裁剪**的证据(§10)。若某客户的 host 侧工具链要求 POSIX 面, 加回二者即可, 服务层零改动。
+> **明确不选**: `iface-posix` 与 `svc-posix` **不在**本样例组合内——HSM 的 APP 面走 `iface-pkcs11`(需要零开销直通 native 时选 `iface-min`; A-2, 见 `brickie` v0.1 §13.2), 不需要 POSIX 运行时; 这正是**接口面可裁剪**的证据(§10)。若某客户的 host 侧工具链要求 POSIX 面, 加回二者即可, 服务层零改动。
 
 **新增(v1.x / M5)**:
 
@@ -123,7 +123,7 @@
 | `service/hsm-host` | Service | **host 协议面**: 解析主机命令(经 `/dev/hsm0`)、路由到 keyring/crypto、逐条审计; 唯一接触 host 的服务 | io/virtio-hsm + service/crypto + service/keyring + service/seclog |
 | `service/seclog` | Service | **安全日志**: 只追加事件 + SHA-256 摘要链, 写穿 `/data/seclog`; 经 trace 段位导出 | service/crypto + vfs-core |
 | `iface-pkcs11` | Interface | **前置到 v1.x**(原 v2.0): 严格叶子薄皮肤, PKCS#11 子集适配 keyring + crypto | service/crypto + service/keyring |
-| `app/hsm` | **APP** | 密钥策略: 首启 provision、策略表装载、命令消费节流、审计巡检 | iface-pkcs11(或直调 native) |
+| `app/hsm` | **APP** | 密钥策略: 首启 provision、策略表装载、命令消费节流、审计巡检 | iface-pkcs11(零开销路径由 `iface-min` 承接; A-2, 见 `brickie` v0.1 §13.2) |
 
 合计 **6 件新插件 + 1 个样例 APP**(D24); 挂载计划复用既有 `tmpfs→/ → devfs→/dev → littlefs→/data`(`docs/7-storage/7-03-concrete-fs.md` §6), **不新增 FS**。
 
@@ -237,11 +237,12 @@ v1.x **无单调硬件**(无 RTC / eFuse / 计费计数器的约定), 因此回�
 
 ### 6.2 契约治理
 
-crypto / keyring 的 ops 表是**插件间契约**(v2 换后端不得破坏消费者)⇒ 应按框架件的 golden 纪律治理(`docs/1-architecture/1-02-api-contract-governance.md` §2.6, D12/D14 机制)。v1.x 两服务 API 标 **EXPERIMENTAL**; 是否把 `br-crypto.txt`/`br-keyring.txt` 并入 golden 清单(与四件框架件同级)= **O-H7**(倾向: 入, 理由即"v2 后端替换要求布局稳定")。
+crypto / keyring 的 ops 表是**插件间契约**(v2 换后端不得破坏消费者)⇒ 应按框架件的 golden 纪律治理(`docs/1-architecture/1-02-api-contract-governance.md` §2.6, D12/D14 机制)。v1.x 两服务 API 标 **EXPERIMENTAL**。
+**O-H7 已关闭(2026-xx): `br-crypto.txt` / `br-keyring.txt` 并入 golden 清单**(与四件框架件同级), 冻结批次 = `docs/3-os-core/3-01-core-api-list.md` §15 **第六批**(M5 随服务契约升格)。**理由**: v2 换后端/加算法面不得破坏消费者契约, 而"ops 布局稳定"只有 golden 能强制; 该结论同时解除 HSM 样例在 `--profile release` 下的冻结排期阻断(`brickie` v0.1 §7.5 的连带结论 A-19/BRV-Q15)。
 
 ### 6.3 熵源缺口(O-H1)
 
-v1.x 没有平台级的熵源契约: 真实 SoC 的 TRNG 与"平台→crypto 的熵注入"接口**均未定义**(M4 只承诺 PMIC/GPIO 级联域)。M5 的样例路径: QEMU 侧注入测试种子(`TEST_ENTROPY=1` 构建, **不得用于生产密钥**), 并在 trace/seclog 中标注。**需要一个 core 级熵源契约**(平台提供 / crypto 消费)登记为 **O-H1**, 建议在 M4 真实 SoC 设计时一并收口——这是本样例暴露的**真实契约缺口之一**(另两个: `-EPERM` 错误码 O-H8、crypto ops 是否入 golden O-H7)。
+v1.x 没有平台级的熵源契约: 真实 SoC 的 TRNG 与"平台→crypto 的熵注入"接口**均未定义**(M4 只承诺 PMIC/GPIO 级联域)。M5 的样例路径: QEMU 侧注入测试种子(`TEST_ENTROPY=1` 构建, **不得用于生产密钥**), 并在 trace/seclog 中标注。**需要一个 core 级熵源契约**(平台提供 / crypto 消费)登记为 **O-H1**, 建议在 M4 真实 SoC 设计时一并收口——这是本样例暴露的**真实契约缺口之一**(另两个: `-EPERM` 错误码 O-H8、crypto ops 是否入 golden O-H7 —— **其中 O-H7 已关闭 = 入 golden**, 见 §6.2)。
 
 ### 6.4 侧信道的诚实声明
 
@@ -283,11 +284,13 @@ brickie add platform/qemu-aarch64 sched/sched-coop \
        dev-core cdev-core bdev-core vfs-core fs/tmpfs fs/devfs fs/littlefs \
        io/virtio-blk io/virtio-hsm \
        service/crypto service/keyring service/hsm-host service/seclog \
-       iface/pkcs11 app/hsm        # 框架件/闭包由 brickie add 自动拉入
+       iface-pkcs11 app/hsm        # 框架件/闭包由 brickie add 自动拉入
 brickie build
 brickie run qemu --hsm-peer=unix:/tmp/hsm.sock   # 参数形态待 2-01 §3 收口(O-H4)
 brickie test hsm                                  # host 平台 CI(含 ASan)
 ```
+
+> **命名口径(r1/03 P0-7, 同 `brickie-v0.1` §8.3)**: 清单里 `platform/…`、`sched/…`、`fs/…`、`io/…`、`service/…`、`app/hsm` 走推荐形态 `<namespace>/<short>`; **裸名合法, 不强制改名** —— `dev-core`/`cdev-core`/`bdev-core`/`vfs-core`(以及可写作 `sched-coop` 的 `sched/sched-coop`)都是既有名; `iface-pkcs11` 亦取既有裸名(其推荐 namespace 为 `iface/`, 即 `iface/pkcs11`)。原稿此处写作 `iface/pkcs11`, 现与全库(`10-01`/`1-01`/`1-03`/`11-01`)统一为 `iface-pkcs11`。
 
 > manifest 示例**略**: 表达格式(YAML/TOML/DSL)仍在 `docs/4-plugin/4-03-plugin-manifest.md` §3 开放, 样例不预设格式; 其**语义输入**见本表 + §3.1 + §5.2(依赖 / 挂载计划 / 策略表 / 熵源开关 `TEST_ENTROPY`)。
 
@@ -309,7 +312,7 @@ brickie test hsm                                  # host 平台 CI(含 ASan)
 | 证明 | 操作 | 期望 |
 |---|---|---|
 | **设备接入形态可裁剪** | `io/virtio-hsm` 不链 `fs/devfs`/vfs-core, `hsm-host` 经 `br_cdev_*` 会话直取(形态 B, `8-01` §1.2) | 设备面组合成立; 但 **`keyring`/`seclog` 仍需 vfs-core 落盘**(`/data/keys`、`/data/seclog`)⇒ **形态 B 只对设备面成立, 整样例不以形态 B 成立** |
-| **接口面可裁剪** | 不选 `iface-pkcs11`, `app/hsm` 改直调 native(keyring/crypto 服务 API) | 服务层零改写; **APP 源码有差异**(皮肤换成 native 调用) |
+| **接口面可裁剪** | 不选 `iface-pkcs11` 时, `app/hsm` 改经 `iface-min` 直通 native(keyring/crypto 服务 API); APP 仍只依赖 Interface 插件, 不越过接口层直调(A-2; 见 `brickie` v0.1 §13.2) | 服务层零改写; **APP 源码有差异**(皮肤换成 native 调用) |
 
 **表 B — 需要 v2 能力才能验证的置换(登记为 M5 之外的证明)**
 
@@ -343,7 +346,7 @@ brickie test hsm                                  # host 平台 CI(含 ASan)
 | **O-H4** | 开放 | **QEMU 对端形态**(§7.1): virtio-serial+chardev(基线)/ 自研 virtio-mmio 模型 / 真安全核 |
 | **O-H5** | 开放 | **硬件密码引擎后端**(§6.1 v2+): 设备子分类归属(cdev 子型? 新子分类?)与 DMA/cache 纪律 |
 | **O-H6** | 开放 | **ed25519 的版本归属**(§6.1): v1.x 子集不含是**范围与冻结策略**; 若 v2 前需要签名面, 需重新论证 |
-| **O-H7** | 开放 | **crypto/keyring ops 是否入 golden**(§6.2): 倾向入, 与四件框架件同级 |
+| ~~**O-H7**~~ | **已关闭** | **crypto/keyring ops 入 golden**(§6.2): 已定为**入**, 与四件框架件同级 —— `api/frozen/br-crypto.txt`/`br-keyring.txt`, 冻结批次见 `3-01-core-api-list.md` §15 第六批(M5 随服务契约) |
 | **O-H8** | 开放 | **`-EPERM` 错误码缺口**(§4.2): 并入 3-01 §11 与 6-01 INV-4, 否则退化为 `-EINVAL` |
 
 ## 13. 决策关联

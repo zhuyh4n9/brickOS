@@ -31,6 +31,7 @@
 | **READY / RUNNING / BLOCKED / ZOMBIE** | — | 任务状态(ZOMBIE = 已退出待 join 回收) |
 | **SMP** | Symmetric Multi-Processing | 对称多处理(多核同构) |
 | **SP** | Stack Pointer | 栈指针(初始 SP 需 16 字节对齐, AAPCS64) |
+| **P0–P4** | — | **特权接口分级**(`none`/`resource`/`memory`/`core`/`machine`): "哪些 native API 子集可被哪类插件声明"——**API 子集分级, 不是硬件特权级**(§13.6, A-7) |
 | **TCB** | Task Control Block | 任务控制块(任务的全部元数据) |
 | **TLSF** | Two-Level Segregated Fit | O(1) 动态内存分配算法(此仓库的堆池实现) |
 
@@ -41,11 +42,14 @@
 | 契约层 | 拥有者 | golden 文件 | 文档 |
 |---|---|---|---|
 | **native API(本清单)** | core | `br-sched/br-mem/br-mm/br-irq/br-svc.txt` | 本文 |
-| 框架件 API | dev-core / cdev-core / vfs-core / bdev-core | `br-devcore/br-cdevcore/br-vfscore/br-bdevcore.txt` | `docs/7-storage/7-01-vfs.md`–`8-01` |
-| POSIX 符号面 | svc-posix | `br-svcposix.txt` | 主文档 §7 |
+| 框架件 API | dev-core / cdev-core / vfs-core / bdev-core | `br-devcore/br-cdevcore/br-vfscore/br-bdevcore.txt`(冻结批次见 §15 第四批) | `docs/7-storage/7-01-vfs.md`–`8-01` |
+| POSIX 符号面 | svc-posix | `br-svcposix.txt`(§15 第五批) | 主文档 §7 |
+| 服务 ops 契约(HSM) | crypto / keyring | `br-crypto.txt` / `br-keyring.txt`(§15 第六批; O-H7 已关闭 = 入 golden) | `docs/11-service/11-01-service.md` / `docs/9-app/9-02-hsm-sample.md` §6.2 |
 | 插件元契约(描述符/生命周期) | core(plugin_manager) | —(冻结元契约) | 主文档 §6.1 |
 
 **刻意不在本清单上**(防面膨胀, 同样是契约): fd/文件/挂载(vfs-core)、设备/cdev/bdev/flash(dev-core/cdev-core/bdev-core)、POSIX 符号(svc-posix)、SMP 原语(v2: per-CPU/IPI)、async I/O(v2+)、per-plugin arena 归属分配(v2, memleak 记账 `docs/5-debug/5-01-debug.md` §4)。
+
+> **"不在本清单"≠ "没有冻结批次"**: 框架件四件 / `svc-posix` POSIX 面 / `crypto`·`keyring` ops 的 golden 文件**已排期**(§15 第四/五/六批)——此前它们只有治理声明而无批次, 使依赖方的 `--profile release` 检查被永久阻断; 现批次到位, 其 API 面的详细规格仍以各域文档为准(`7-01-vfs`/`7-02-bdev`/`8-01-device`/`11-01-service`/`9-02-hsm-sample` §6.2)。
 
 ## 1. API 总览(按 golden 分组)
 
@@ -56,6 +60,9 @@
 | `br-mm.txt` | MMU/cache(§7) | 5 | 无 | 第一批(签名 M2 起定稿——主文档风险 R4; M3/v1.0 升格 frozen, D15) |
 | `br-irq.txt` | 中断 + 级联域(§8) | 9 | lock/unlock | 基础五件第一批; 域四件随 M4 实现后冻结 |
 | `br-svc.txt` | 服务注册表(§9) | 2 | 无 | 第一批 |
+| `br-devcore.txt` / `br-cdevcore.txt` / `br-vfscore.txt` / `br-bdevcore.txt` | **框架件 API**(四件, §0; 纪律同 core, 治理见 1-02 §2.3 层 1) | 见各域文档 | 按域 | **第四批**(非 core 组; 每文件独立升格, M2/M3 起分批; 见 §15) |
+| `br-svcposix.txt` | **POSIX 符号面**(svc-posix, D18) | §0 见主文档 §7 | 无 | **第五批**(非 core 组; M3; 见 §15) |
+| `br-crypto.txt` / `br-keyring.txt` | **服务 ops 契约**(HSM 服务组, D25) | §0 见 11-01 / 9-02 §6.2 | 无 | **第六批**(非 core 组; M5 随服务契约; **O-H7 已关闭 = 入 golden**; 见 §15) |
 
 ## 2. 任务与线程(br-sched 组)
 
@@ -370,6 +377,42 @@ extern const br_plugin_t __br_plugins_start[], __br_plugins_stop[];
 - **v1 同树同编译**: 源码 + 布局兼容自然成立, 符号面治理仍全程执行(为 v2 演练)
 - **v2 二进制分发**(core 以 `.a` + 头交付): 符号面/结构布局成硬契约(golden + 描述符 abi_id); static archive 无 ELF 符号版本化 ⇒ **版本矩阵 CI**(1-02 §2.3 层 3)承担兼容声明执法
 
+### 13.6 特权接口分级与 memory 粒度模型(A-7; 归入 §13 契约治理, 不另起编号)
+
+> **术语辨析(必读, 防同名不同义)**: 本节的 **P0–P4 是"API 子集分级"** —— 级别名描述"哪些 native API 子集被许可声明", **不是硬件特权级**(本系统 EL1 单特权级裸跑, 1-01 §2.2/§15; 也不引入 EL0/EL2/TrustZone)。为避免与"单特权级"的架构结论相撞, 正文一律用**"特权接口分级"**这一说法; `plugin.toml` 的字段名沿用 `[privileged]`(工具侧既有命名, 见 `brickie` v0.1 §3.4/§8.1)。
+
+**定义**: 特权接口 = "**只有特定 `plugin_type` 才被许可声明的 native API 子集**"; 分级是**可执法的声明面模型**(谁可以声明哪一部分 core 面), 与 1-01 §6.4-3 的 `sched_class` 校验同属"声明面完备性"。
+
+| 级别 | 名称 | 内容 | 允许的 `plugin_type` |
+|---|---|---|---|
+| P0 | `none` | 仅普通 native API(任务/时间/锁/服务注册表/内存分配) | `app`, `interface`, `ability`, `platform` |
+| P1 | `resource` | 资源独占声明: IRQ 线 / DMA 通道 / 引脚 / 设备名 | `ability`, `platform` |
+| P2 | `memory` | 内存管理面: **专用池**创建(contig/page)/ DMA 缓冲 / cache 维护 | `ability`(默认上限), `platform` |
+| P3 | `core` | core 内核面: 中断控制 / 调度钩子 / 时钟源 / fault handler 注册 | `ability.subkind = scheduler`, `platform` |
+| P4 | `machine` | 机器面: MMU/页表 / EL 态 / PIC / 复位 / 早期 console | `platform` |
+
+**memory 粒度的三轴表达**(声明 = 级别 × 操作 × 粒度 × 内存类型):
+
+```
+ops         : alloc | free | map | protect | flush | invalidate | unmap
+granularity : byte | page | region | pool        # 越靠右授权越大
+regions     : heap | dma | contig | page | mmio | reserved      # 与 3-04 的三池 + region 表一一对应
+```
+
+- **`regions` 必须覆盖 3-04 的三池**: TLSF 堆(heap)/ 连续池(contig)/ 页池(page), 加 `dma`(DMA 缓冲)/ `mmio`(寄存器窗口)/ `reserved`(保留区); 只写 `heap|dma|mmio|reserved` 会**漏掉 contig/page 两池**, 使"池创建/池级授权"无法声明。
+- **`ops` 必须含 `unmap`**: 与 `br_mm_map`/`br_mm_unmap`(本文 §7)的 API 面对齐; `unmap` 不出现会让"粒度为 region 的回收"没有声明载体。
+- **(ops × granularity × region) 正交性**: 组合非法 ⇒ 诊断码 `BRV-PRIV-0002`; 声明越出 `[privileged].level` 允许的档位 ⇒ `BRV-PRIV-0001`(`brickie` v0.1 §3.4/BRV-D8)。
+- **正交表的规范表在 `brickie` v0.1 §3.4**(四行: `alloc`/`free` 含**池生命周期**; `map`/`protect` 与 `unmap` 属 **P4/machine**, 只有 `platform` 可声明; `flush`/`invalidate` 属 P2)。本节只给三轴取值域, **不重复**声明矩阵。两处必须一致: `3-01` §10 的 `br_mm_region_add`(归 Platform)正是"`map`/`protect` 属 P4"在 API 归属上的体现。
+- **归属**: `map`/`protect` 属 **P4(machine)**(MMU/页表面, 只有 platform 可声明); 池生命周期(`alloc`/`free`, granularity = pool)属 **P2(memory)**, 且只针对 **contig/page 两个专用池**(TLSF 堆的 `br_malloc`/`br_free` 是 **P0 普通 native API**, 不需特权声明); `br_mm_region_add`(静态 region 表)归 **Platform**(§10)。三者不重复、不冲突。
+
+**v0.1 的执法范围(诚实声明)**: 只做"**声明合法性**"(如 `app` 声明 P1+ ⇒ 红)与登记; **不**做"实际是否越权调用"的检查 —— 那属于 v0.2 的接口依赖扫描与源码静态分析(1-01 §6.4-3 后半)。**运行期零检测**不变。
+
+**落点与回灌状态(A-7)**:
+- **声明面**: `plugin.toml` 的 `[privileged]`(`level` + `[[privileged.memory]]{granularity, ops, regions}` + `[[privileged.resources]]`)——schema 见 `brickie` v0.1 §8.1;
+- **内存侧交叉引用**: `docs/3-os-core/3-04-memory.md` 的三池与 region 表是本分级的**被声明对象**; 3-04 加指针(本轮已回灌);
+- **作者视角**: `docs/4-plugin/4-01-plugin-dev.md` §1/§2 的"资源声明"一条按本分级表述(本轮已回灌);
+- **运行期**: `3-05` 只管校验与登记, 不暴露给运行期(`3-05` §1)。
+
 ## 14. 决策记录(CA-*)
 
 | # | 决策 | 理由 |
@@ -387,10 +430,17 @@ extern const br_plugin_t __br_plugins_start[], __br_plugins_stop[];
 
 ## 15. 冻结计划(D15 落地)
 
-golden 文件划分(§1)= 分批冻结的最小单元:
+golden 文件划分(§1)= 分批冻结的最小单元。**冻结粒度 = 接口/冻结批次单元**(即每个 golden 文件); 插件级 `COMPAT_GEN` 取 `max(F_u)`, 该值**仅**用于注册表/显示/结构依赖, 不参与 `range` 比较(`brickie` v0.1 §5.5/§8.1 = A-16)。
 
 - **第一批(M3, 变化少的先冻)**: `br-mem` / `br-mm` / `br-irq`(基础五件)/ `br-svc`——contig/page 已实现则同批, 否则随实现
 - **第二批(M3 后, conformance 矩阵压测后)**: `br-sched`——任务/同步与调度器策略强耦合, 必须 `{当期已交付调度器} × 同一套语义测试` 全绿后升格(1-02 §2.3 层 2); v1.0(M3) 时点仅有 sched-coop, sched-preempt(v2.0)/sched-tt(v3.0) 交付后必须在其上追加矩阵行并保持全绿
-- **随实现批(M4 后)**: 级联域四件(`br-irq.txt` 增补)——真实 SoC 的 PMIC/GPIO 实战后冻结
+- **第三批(随实现批, M4 后)**: 级联域四件(`br-irq.txt` 增补)——真实 SoC 的 PMIC/GPIO 实战后冻结
+- **第四批(非 core 组 · 框架件四件, M2/M3 起分批)**: `br-devcore.txt` / `br-cdevcore.txt` / `br-vfscore.txt` / `br-bdevcore.txt`——这四件在 §0 已有治理声明(1-02 §2.3 层 1 的 v0.6/v0.7 条目), 但此前**没有冻结批次**, 使任何依赖它们的 `--profile release` 检查被 `BRV-VER-0004` **永久阻断**。冻结**以接口单元为粒度**(每文件独立升格), 随对应框架件的实现成熟分批(M2 起 dev-core/cdev-core, M3 起 vfs-core/bdev-core); 各域文档(`7-01-vfs`/`7-02-bdev`/`8-01-device`)的 API 面按此排期升格
+- **第五批(非 core 组 · POSIX 符号面, M3)**: `br-svcposix.txt`——POSIX 子集清单成文且实现到位后升格(1-02 §2.3 层 1 的 v0.5 条目); 子集"诚实义务"要求未实现项在链接期暴露
+- **第六批(非 core 组 · 服务 ops 契约, M5 随服务契约)**: `br-crypto.txt` / `br-keyring.txt`——`service/crypto` 与 `service/keyring` 的 **ops 表入 golden**(关闭 `11-01` §3 开放问题与 `9-02` §6.2 O-H7): v2 换后端/加算法面**不得破坏消费者** ⇒ ops 布局稳定必须由 golden 强制。v1.x 两服务 API 标 `EXPERIMENTAL`, 随 M5 服务契约定稿升格
 
-每批升格走一次决策记录(1-02 §2.2 阈值表); 新增函数 = PR 更新 golden(评审可见面在长大); 语义变更 = 决策记录 + 弃用周期。
+> **框架件"纪律同 core"的落点**(1-01 §6.3 的"框架件…纪律同 core(golden/门禁)"由此获得承载方): 框架件的 API 面**走同一套**决策记录 + golden + 三层门禁流程, 只是**分组文件与冻结批次不同**; "纪律同 core"指流程同源, 不指"进 `br-*` core 分组"。
+>
+> **每批升格前的评审清单必查项**(1-02 §2.2/§2.6.2, A-25): ① 当期已交付调度器的 conformance 矩阵全绿(层 2); ② **冻结前应预留扩展槽**(D22 的推广: 预留即免将来解冻, 让 `COMPAT_GEN` 更稳定); ③ golden 记录粒度覆盖 `macro` 值/`enum` 成员表/`service` ops 槽位摘要(1-02 §2.6.4), 否则面变化会漏检。
+
+每批升格走一次决策记录(1-02 §2.2 阈值表); 新增函数 = PR 更新 golden(评审可见面在长大); 语义变更 = 决策记录 + 弃用周期; **改/删已冻结条目 = 解冻 → 重新冻结**(1-02 §2.6.2 的状态机路径)。

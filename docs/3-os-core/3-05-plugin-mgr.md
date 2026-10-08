@@ -30,29 +30,31 @@
 plugin_manager 是 core 的**编排者**: 拥有插件生命周期与 init 拓扑。组合期(构建时)做静态校验, 运行期只做编排——**v1 无热插拔**。
 
 已有决策(待深化时继承):
-- **插件描述符**(§6.1): `BR_PLUGIN(...)` 宏生成 `br_plugin_t`(元契约, 冻结); 描述符带 `abi_id` 字段(D14: Day1 即存在, v2 二进制分发起生效)
-- **生命周期**(§6.2): EARLY → CORE → LATE → APP 四相(回调↔阶段映射见主文档 §6.2); 启动序列见主文档 §9
-- **init-DAG**(§6.5): manifest 依赖声明 → 拓扑排序; **环 = 组合期硬错误**(报环路径)
-- **组合期校验**(§6.4): 资源冲突(IRQ/DMA/引脚/设备名唯一)、版本区间
-- **八类插件分类学**(§6.3): Platform / Scheduler(恰一)/ 框架件 / IO / FS / Service / Interface(严格叶子)/ APP(恰一)
+- **插件描述符**(§6.1): `BR_PLUGIN(...)` 宏生成 `br_plugin_t`(元契约, 冻结); **形态定稿 = `static const` + `.br_plugins` 段**(A-3, 近零导出面 CA-10); 描述符带 `abi_id` 字段(D14: Day1 即存在, v2 二进制分发起生效); **`ver[4]`** = `COMPAT_GEN.MAJOR.MINOR.REVISE`, `br_dep_t = {name, range, phase, compat_gen}`(`compat_gen` 仅接口依赖携带)
+- **生命周期**(§6.2): EARLY → CORE → LATE → APP 四相(回调↔阶段映射见主文档 §6.2); 启动序列见主文档 §9。**每插件两个完成点**: ① EARLY 的 `early_init` = 注册可用(全部插件); ② `phase` 所声明相的 `init` = 能力可用(非 Service/Interface ⇒ CORE, Service/Interface ⇒ LATE)
+- **init-DAG**(§6.5): manifest 依赖声明 → 拓扑排序; **环 = 组合期硬错误**(报环路径); **相位单调规则**: 对每条 `init` 边 `A → B`(A 依赖 B)必须 `rank(complete(B)) ≤ rank(complete(A))`(`rank(EARLY)=0 < CORE=1 < LATE=2 < APP=3`), 口径前提是**每插件两个完成点**(① `early_init` 返回 = 注册可用; ② `phase` 所声明相的 `init` 返回 = 能力可用); `br_dep_t.phase` 是依赖方的**断言**(与提供方自述 `[plugin].phase` 冲突 ⇒ 红)。两条校验码: **(R1) 完成点单调**违例 ⇒ `BRV-DEP-0009`; **(R2) 断言一致**冲突 ⇒ `BRV-DEP-0010`。**相内排序由拓扑序决定, 相间由本条规则校验**; 规则**只覆盖已声明 init 边**, 隐式耦合归符号级扫描(`brickie` v0.1 §7.2, A-6)。判例: `sched-coop → platform/qemu-aarch64` 两边第 ② 完成点同在 CORE ⇒ `CORE ≤ CORE` **合法, 不误杀**
+- **组合期校验**(§6.4): 资源冲突(IRQ/DMA/引脚/设备名唯一)、**资源预算**(Σ per-plugin RAM/栈 ≤ 产品预算, 输入 = `plugin.toml` 的 `[[res]]`)、版本区间(四段 + `compat_gen` 精确匹配 + `range` 3 段)、**`sched_class` 与调度器组合合法性**(输入 = `[plugin].sched_class`)
+- **插件分类学(A-1)**: **规范形态 = `plugin_type`(四类: `platform`/`ability`/`interface`/`app`)× `api_type`(三值: `native`/`runtime_adapter`/`third_party`)+ 派生列 `subkind`**(scheduler/framework/io/fs/service); 旧"八类"(Platform/Scheduler/框架件/IO/FS/Service/Interface/APP)只是该组合的**人读视图**, 不再是独立维度。**数量约束与依赖方向只由 `plugin_type` + `api_type` 决定**, `subkind` 只用于授权与检索 —— 权威定义见 `docs/1-architecture/1-01-architecture.md` §6.3 的表 A/B/C
+- **导出面分类不变量**(A-11): `export.api_iface == plugin.api_type`(三值域); `form = "skin"` 的 `reexport_of` 是**列表**且每项分类必须与自身相等; `skin` 再导出边豁免 `api_type` 依赖禁则
+- **解冻瞬态**: 接口单元的 `freeze_state`(`unfrozen`/`frozen`/`unfreezing`)由组合器侧读写, 运行期不感知(接口发布机制见 `brickie` v0.1 §5.3/§6.4 与 `1-02` §2.6.2)
 
 ## 2. 大纲(待成文)
 
 1. manifest 格式定稿(DoD 第 4 项)→ **语义已迁至 `docs/4-plugin/4-03-plugin-manifest.md`**(schema/真值/校验输入), 2-01 定工具实现; 本篇保留组合期校验(本节第 5 项)对 manifest 结果的**消费**
-2. 描述符二进制细节: 段位置(`.br_plugins`)+ 边界符号枚举(`__br_plugins_start/__br_plugins_stop`, 链接脚本 PROVIDE——段名含 `.` 非 C 合法标识符; 机制见 3-01 §13.3)、abi_id 编码(D14)
-3. 生命周期状态机: 注册→early_init→init→start→运行; 错误路径(init 失败 = 启动失败)
-4. init-DAG 实现: 拓扑排序、环检测输出、相(EARLY/CORE/LATE/APP)内排序
-5. 组合期校验清单(全量规则): 资源冲突 / 符号命名空间 / 设备名唯一 / 版本区间 / sched_class 与调度器组合合法性
+2. 描述符二进制细节: 段位置(`.br_plugins`)+ 边界符号枚举(`__br_plugins_start/__br_plugins_stop`, 链接脚本 PROVIDE——段名含 `.` 非 C 合法标识符; 机制见 3-01 §13.3)、abi_id 编码(D14)、**`ver[4]` 与 `br_dep_t` 的字段序**(A-3/A-14; 头文件名由生成器约定, 见 checklist §5.6 裁定 #6)
+3. 生命周期状态机: 注册→early_init→init→start→运行; 错误路径(init 失败 = 启动失败); **两个完成点与相内拓扑序、相间相位单调校验的关系**(主文档 §6.2)
+4. init-DAG 实现: 拓扑排序、环检测输出、相(EARLY/CORE/LATE/APP)内排序、**相位单调校验(两条码 `BRV-DEP-0009` 完成点单调 / `BRV-DEP-0010` 断言一致; 相内排序由拓扑序决定、相间由规则校验; 含"只覆盖已声明 init 边"的边界声明)**
+5. 组合期校验清单(全量规则): 资源冲突 / 资源预算 / 符号命名空间 / 设备名唯一 / 版本区间 / sched_class 与调度器组合合法性 / **相位单调(`BRV-DEP-0009`/`BRV-DEP-0010`, 只覆盖已声明 init 边)** /**导出面分类不变量**(§6.3 的 `BRV-TAX-0016/0017/0018/0019`)
 6. 符号命名空间: `br_*` 独占(§7.2)、链接期检查手段
 7. 动态加载(v3): modload 服务 + ed25519 鉴权(D1 修订)——描述符如何扩展
 
 ## 3. 开放问题
 
-| # | 问题 |
-|---|---|
-| — | manifest 的表达格式(YAML? TOML? 自定义 DSL [?])→ 迁 `docs/4-plugin/4-03-plugin-manifest.md` §3 |
-| — | 插件版本区间语义(semver 子集?)→ 迁 `docs/4-plugin/4-04-plugin-deps.md` §3 |
-| — | 动态加载的描述符兼容(D14 布局契约的交互) |
+| # | 问题 | 状态 |
+|---|---|---|
+| ~~—~~ | ~~manifest 的表达格式(YAML? TOML? 自定义 DSL [?])~~ → 迁 `docs/4-plugin/4-03-plugin-manifest.md` §3 | **✅ 已答(A-4)**: **TOML** |
+| ~~—~~ | ~~插件版本区间语义(semver 子集?)~~ → 迁 `docs/4-plugin/4-04-plugin-deps.md` §3 | **✅ 已答(A-5)**: 四段版本 + `compat_gen` 精确匹配 + `range` 3 段 |
+| — | 动态加载的描述符兼容(D14 布局契约的交互) | 待定(v3; 与 `1-02` D14 布局硬门禁同轴) |
 
 ## 4. DoD 关联
 

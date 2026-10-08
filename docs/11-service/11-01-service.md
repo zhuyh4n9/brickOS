@@ -34,6 +34,7 @@ Service = 可依赖、可被依赖的**能力插件**(运行时/协议栈/中间
 - **sqlite 模式 A 移植**(M2) = 移植性验证(战略语境: 移植故事是架构生死线)
 - 服务清单: trace(M2)/ dbg-bridge(M3)/ svc-posix(M2)/ **crypto(M5 契约, D25; v2 后端扩展 ★)**/ **keyring(M5)**/ **hsm-host(M5)**/ **seclog(M5)**/ lwip(v2 ★)/ ramdump(v2)/ modload(v3)
 - **HSM 服务组(v1.x/M5, D24)**: `crypto`(密码运算) · `keyring`(**密钥资产唯一主人**, 对外只给不透明 handle) · `hsm-host`(host 协议面) · `seclog`(只追加 + 摘要链审计)——四者的职责切分与命令集见 `docs/9-app/9-02-hsm-sample.md` §3–§8
+- **两个服务接口面的分类(分类不变量; A-11)**: `service/crypto` 与 `service/keyring` 的接口面分类为 **`runtime_adapter`** —— 因为 `iface-pkcs11` 是 `api_type = runtime_adapter` 的再导出皮肤, 被再导出单元的 `api_iface` 必须与皮肤自身相等(硬不变量, `brickie` v0.1 §3.5; 皮肤取法见 `1-01` §7.3/§7.4)
 
 ## 2. 大纲(待成文)
 
@@ -55,5 +56,5 @@ Service = 可依赖、可被依赖的**能力插件**(运行时/协议栈/中间
 | **D7** | Service 插件边界判据(与 `docs/3-os-core/3-06-service-mgmt.md` 共同落定) |
 | — | socket 表的主人: svc-posix vs lwip(单一主人规则的应用) |
 | — | 三方服务的符号面治理: POSIX 面 golden(br-svcposix.txt)之外的符号如何约束 |
-| — | **crypto/keyring 的 ops 表是否入 golden**(与四件框架件同级)——倾向入(v2 换后端要求布局稳定), 见 9-02 §6.2 O-H7 |
+| ~~—~~ | ~~**crypto/keyring 的 ops 表是否入 golden**(与四件框架件同级)——倾向入(v2 换后端要求布局稳定), 见 9-02 §6.2 O-H7~~ ⇒ **✅ 已关闭(2026-xx)**: **入 golden** —— `api/frozen/br-crypto.txt` / `br-keyring.txt`, 冻结批次 = `3-os-core/3-01-core-api-list.md` §15 **第六批**(M5 随服务契约); 理由: v2 换后端/加算法面不得破坏消费者契约(1-02 §2.6), 而"布局稳定"只有 golden 能强制。v1.x 两服务 API 标 `EXPERIMENTAL`, 随 M5 服务契约定稿升格 |
 | — | **平台熵源契约**(平台提供 / crypto 消费)缺失, 建议 M4 真实 SoC 设计时收口——9-02 §6.3 O-H1 |

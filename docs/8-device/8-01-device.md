@@ -59,7 +59,7 @@ dev-core(通用设备)          唯一扁平命名空间、命名规则、调用
 VFS(vfs-core)              br_open 挂载表 · br_file_t / br_file_ops(7-01-vfs §1/§2)
    │
    ▼
-消费者                     APP(POSIX 经 svc-posix fd 表) / native 直调
+消费者                     APP(经 Interface 插件) / 服务·框架件(native)
 ```
 
 要点:
@@ -75,7 +75,7 @@ VFS(vfs-core)              br_open 挂载表 · br_file_t / br_file_ops(7-01-vfs
 
 - 组成: `deviceXXX` + 对应 `*-core` + `dev-core` + `vfs-core` + `fs/devfs`(+ `fs/tmpfs` rootfs 可选)
 - 设备可见性: 以 **`/dev/<name>`** 出现; 打开/session 经子分类 **open_file 钩子**(cdev-core 的通用 `br_file_ops` 适配层)接入
-- 消费者: APP 经 svc-posix fd 表(POSIX)或 native `br_open`
+- 消费者: APP 经 Interface 插件——POSIX 面经 svc-posix fd 表(`iface-posix`), native `br_open` 面经 `iface-min`(A-2; 见 `brickie` v0.1 §13.2); **服务/框架件之间的 native 调用不受此约束**
 - 适用: **POSIX 产品、需要"文件与设备同一命名空间/同一句柄"的产品**(SD-1 单路由的完整收益)
 - 代价: 链入 vfs-core + devfs; 每次打开多一层挂载表路由
 
@@ -146,6 +146,8 @@ VFS(vfs-core)              br_open 挂载表 · br_file_t / br_file_ops(7-01-vfs
 > 源文件: [plantUML/8-01-device-02.puml](plantUML/8-01-device-02.puml)
 
 **框架件的治理身份**: **插件的身份, core 的纪律**——插件形态 ⇒ 可按组合裁剪(无存储产品不链 vfs-core/bdev-core); core 纪律 ⇒ API 面进 golden/门禁(`docs/1-architecture/1-02-api-contract-governance.md`, D12 机制), 不透明句柄(D14)。这是 core 的第三次收缩: POSIX→接口插件(v0.3), POSIX 运行时→服务(v0.5/D18), **能力框架→框架件(v0.6/D19)**; D20 进一步把设备侧框架**按子分类再切细**。
+
+> **框架件的冻结批次(必读, 否则 release 会被永久阻断)**: 四件框架件的 API 面各有独立 golden 文件(`br-devcore.txt`/`br-cdevcore.txt`/`br-vfscore.txt`/`br-bdevcore.txt`), 其**冻结批次 = `docs/3-os-core/3-01-core-api-list.md` §15 第四批**(非 core 组; 每文件独立升格, M2 起 dev-core/cdev-core、M3 起 vfs-core/bdev-core, 随实现成熟分批)。这条是 `brickie` 的 `--profile release`(禁止依赖未冻结接口)能通过的前置: **有治理声明却无冻结批次的框架件会让所有 release 组合被永久阻断**。冻结粒度与插件级 `COMPAT_GEN` 的取法见 `3-01` §15 与 `brickie` v0.1 §5.5/§8.1(A-16/A-18)。
 
 > **多域消费者(D24, v1.x/M5)**: HSM 完整样例是这套体系的**首个第二产品域消费者**——`io/virtio-hsm` 走**形态 A**(器件 → cdev-core → dev-core → devfs → VFS, `/dev/hsm0`), 消费者为 `service/hsm-host`; 样例的裁剪变体再给**形态 B**(不链 vfs-core, 经 `br_cdev_*` 会话直取)作对照。设备侧框架件在此**零改动**——这是 §1.2 "形态选择是组合决策" 的实测。详见 `docs/9-app/9-02-hsm-sample.md` §7.2/§10。
 

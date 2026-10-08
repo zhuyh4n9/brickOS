@@ -1,7 +1,7 @@
 # 4-01 — 插件开发指南(plugin development)
 
 > 章节: **4-plugin**。状态: **骨架**(横切入口; 各类纵深契约在领域文档; 布局/manifest/依赖语义 → 本类 4-02/4-03/4-04, 预留待细化)。
-> **本类存在的理由**: 所有功能扩展均依赖插件——驱动、文件系统、服务、接口、平台、调度器、**框架件**、APP 全部是插件。八类各有契约, 但**通用流程与纪律是共享的**——本篇是所有插件作者的入口。
+> **本类存在的理由**: 所有功能扩展均依赖插件——驱动、文件系统、服务、接口、平台、调度器、**框架件**、APP 全部是插件。插件类别(`plugin_type` × `api_type` + 派生 `subkind`)各有契约, 但**通用流程与纪律是共享的**——本篇是所有插件作者的入口。
 
 ## 缩略词(abbreviations)
 
@@ -38,22 +38,28 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 > 深化落点(本类, 预留待细化): 布局 → `4-02-plugin-layout.md`; manifest → `4-03-plugin-manifest.md`; 依赖 → `4-04-plugin-deps.md`。
 
 - **依赖声明**: 指向插件名 + 版本区间; init-DAG 无环(§7.2, 环 = 组合期硬错误)
-- **资源声明**: IRQ / DMA 通道 / 引脚 / RAM 预算(§6.4 组合期冲突检测); 设备名唯一(注册表主键)
+- **资源声明**: IRQ / DMA 通道 / 引脚 / 设备名 + per-plugin RAM/栈预算(§6.4 组合期冲突检测与预算合计); 设备名唯一(注册表主键)。**特权接口分级(A-7)**: 需要超出普通 native API 的面时, 在 `plugin.toml [privileged]` 声明 `level`(P0–P4)与 memory 三轴(ops × granularity × regions, `regions` 必须覆盖 heap/contig/page 三池); 声明越级 ⇒ `BRV-PRIV-0001`, 组合非法 ⇒ `BRV-PRIV-0002` —— 完整分级表与执法范围见 `docs/3-os-core/3-01-core-api-list.md` §13.6(注意: P0–P4 是 **API 子集分级**, 不是硬件特权级)
 - **符号纪律**: `br_*` 前缀 core 保留(§7.2 命名空间独占); 插件自有符号带插件名前缀
 - **ISR 纪律**(如涉及中断): 白名单四件之外全部 thread-only(3-01 §11)
 
-## 2. 八类插件的作者视角(路由表)
+## 2. 插件类别的作者视角(路由表)
 
-| 类别 | 你提供 | 依赖 | 纵深契约 | 验证 |
+> **分类口径(A-1 回灌后)**: 插件的**规范分类 = `plugin_type`(四类: `app`/`interface`/`ability`/`platform`)× `api_type`(三值: `native`/`runtime_adapter`/`third_party`)+ 派生列 `subkind`**(scheduler/framework/io/fs/service)。下表按**作者最关心的 `subkind`/旧类名**分行, 是为了让"我要写哪种插件"能一眼查到; **数量约束与依赖方向只由 `plugin_type` + `api_type` 决定**, 权威定义见 `docs/1-architecture/1-01-architecture.md` §6.3 的表 A/B/C。旧"八类"不再是与 `plugin_type` 并列的维度。
+
+| 类别(旧类名 = `subkind`) | 你提供 | 依赖 | 纵深契约 | 验证 |
 |---|---|---|---|---|
-| **Platform** | PIC ops 表 / 早期 console / region / 链接脚本 | — | 主文档 §8(三层模式) | 真硬件 M4 |
-| **Scheduler**(恰一) | `br_sched_ops` + sched_class 声明 | core | `3-03-sched` | 三形态 conformance 矩阵 |
-| **框架件** | 能力契约 API(注册表/ops 形状) | core / 框架件间单向(cdev-core→dev-core 与 vfs-core, bdev-core→dev-core) | `7-01`–`7-03` + `8-01`(7-01 §2 / 7-02 §1 / 8-01 §2–3) | golden + conformance |
-| **IO(驱动)** | 设备 ops 表(cdev/bdev/flash) | cdev-core / bdev-core | `8-01-device` §3/§6 | ISR/DMA 静态扫描 |
-| **FS** | ops 四层(super/inode/file/dentry) | vfs-core(挂载) | `7-01-vfs` §2 / `7-03` | 掉电用例 |
-| **Service** | init + 运行时 + 注册表发布 | 服务 / 框架件 | `3-06` / `11-01` | 单一主人审查 |
-| **Interface** | 再导出皮肤 | svc-posix 等服务或 core(iface-min 直通) | `10-01-interface` | 叶子检查(无被依赖) |
-| **APP**(恰一) | main | Interface(或直调 native) | `9-01-app` | 启动链演示 |
+| **Platform**(`plugin_type = platform`) | PIC ops 表 / 早期 console / region / 链接脚本 | — | 主文档 §8(三层模式) | 真硬件 M4 |
+| **Scheduler**(`ability`, `subkind = scheduler`, 恰一) | `br_sched_ops` + sched_class 声明 | core | `3-03-sched` | 三形态 conformance 矩阵 |
+| **框架件**(`ability`, `subkind = framework`) | 能力契约 API(注册表/ops 形状) | core / 框架件间单向(cdev-core→dev-core 与 vfs-core, bdev-core→dev-core) | `7-01`–`7-03` + `8-01`(7-01 §2 / 7-02 §1 / 8-01 §2–3) | golden + conformance |
+| **IO(驱动)**(`ability`, `subkind = io`) | 设备 ops 表(cdev/bdev/flash) | cdev-core / bdev-core | `8-01-device` §3/§6 | ISR/DMA 静态扫描 |
+| **FS**(`ability`, `subkind = fs`) | ops 四层(super/inode/file/dentry) | vfs-core(挂载) | `7-01-vfs` §2 / `7-03` | 掉电用例 |
+| **Service**(`ability`, `subkind = service`) | init + 运行时 + 注册表发布 | 服务 / 框架件 | `3-06` / `11-01` | 单一主人审查 |
+| **Interface**(`plugin_type = interface`) | 再导出皮肤(`reexport_of` 可含**多个**提供者单元) | svc-posix 等服务或 core(iface-min 直通) | `10-01-interface` | 叶子检查(无被依赖) |
+| **APP**(`plugin_type = app`, 恰一) | main | **Interface(仅此一路; 零开销直通由 iface-min 承接)** | `9-01-app` | 启动链演示 |
+
+> **两处按 A-1/A-2 收敛**: ① 旧类名全部落位为 `plugin_type` + `subkind`(没有"第八个维度"); ② **APP 行原写"依赖 Interface(或直调 native)"已收敛为"仅经 Interface"** —— 需要零开销的 APP 依赖 `iface-min`(native 的薄别名层), 而不是越过接口层直调。
+>
+> **`api_type` 的读法**: 上表每行都可再叠加 `api_type` —— 携带上游源码的三方件(`service/sqlite`/`service/lwip`)是 `plugin_type = ability` + `api_type = third_party`; POSIX 基座 `svc-posix` 与域标准皮肤 `iface-pkcs11` 是 `api_type = runtime_adapter`。
 
 (文档编号: 存储域 7-01–7-03 在 `7-storage`, 设备域 8-01 在 `8-device`, 3-03–3-05/3-06 在 `3-os-core`, 9-01 在 `9-app`, 10-01 在 `10-interface`, 11-01 在 `11-service`。)
 
@@ -95,7 +101,7 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 | 语义 conformance | 行为测试跑在 host 平台(秒级)+ 目标 | 1-02 §2.3 层 2 / **用例目录: `docs/6-test/6-01-test.md`** |
 | 静态扫描 | ISR 白名单(CA-3)/ DMA 纪律(主文档 R4)/ 符号命名(D13/CA-10) | 静态分析 = D10 双保险之一; conformance 矩阵 = R1 执法 |
 | golden 面 | API 面冻结合规(abidiff) | 1-02 层 1 |
-| 版本矩阵 | `requires: core@>=x.y` × 声称版本全编 | 1-02 层 3 |
+| 版本矩阵 | `compat.core = ">=x.y.0"`(3 段 `range`)+ **精确钉代**的 `compat_gen` × 声称版本全编 | 1-02 层 3(A-12) |
 
 ## 7. 开放问题
 

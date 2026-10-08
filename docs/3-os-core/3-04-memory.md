@@ -33,6 +33,7 @@ core 提供**三个池(TLSF 堆 / contig 池 / 页池, CA-7/CA-8)+ MMU 接口 + 
 - **DMA**(CA-6): `br_dma_buf_t` 含 dma_addr, v1 恒等下 == vaddr(为 v2 重定位预留形状)
 - **br_mm**: region 表(静态)、map/unmap 签名 v1 起定稿(R4; 升格 frozen 走 D15)、cache 维护(`br_mm_cache_flush/invalidate`, 驱动 DMA 前后)
 - **region 属性**: `BR_MM_RO/NX/DEVICE/CACHED`(append-only, D14)
+- **本节的池与 region 是"特权接口分级"的被声明对象(A-7)**: 插件在 `plugin.toml` 的 `[privileged]` 里声明可用的 memory 面(级别 P2/P4 × ops × granularity × regions), `regions` 取值**必须覆盖本节的 heap/contig/page 三池**并含 `dma`/`mmio`/`reserved`; 完整分级表与正交性规则(含 `BRV-PRIV-0001/0002`)见 `docs/3-os-core/3-01-core-api-list.md` **§13.6**。分工: 本节定义"池与 region 是什么", 3-01 §13.6 定义"谁可以声明怎么用"。
 
 ## 2. 大纲(待成文)
 

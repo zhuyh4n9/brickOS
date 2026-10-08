@@ -31,9 +31,16 @@ Interface 插件 = APP 看到的 API 皮肤。**严格叶子**: 除 APP 外没�
 - **v1.x/M5(D24)**: **iface-pkcs11 前移**——加密 token API(PKCS#11 子集)薄皮肤, 适配 `service/crypto` + `service/keyring`(原排 v2.0); 它是 **HSM 完整样例的接口面**, 消费者只有 `app/hsm`(严格叶子的判例)
 - 未排期: iface-autosar-ish(车规生态)
 
+**接口分类与再导出规则(A-11; `brickie` v0.1 §3.5)**:
+- **接口分类(`api_iface`)**: 接口单元带分类字段, 取三值 `native` / `runtime_adapter` / `third_party`(与 `api_type` 同域闭合), 且 `export.api_iface == [plugin].api_type`(硬不变量, 违例 `BRV-TAX-0016`); `api_type = "third_party"` 的插件**可不声明任何 `[[export]]`**(能力经注册表发布, 完全合法), 若声明则只能取 `third_party` 分类, 不得抛 `native`/`runtime_adapter` 面(违例 `BRV-TAX-0017`)
+- **再导出(`reexport_of`)**: 皮肤自身的 `api_type` 决定其可再导出的分类; `form = "skin"`(再导出皮肤)时 `reexport_of` 是**列表**(可含**多个**被再导出单元), 且其中**每一项**的分类必须与皮肤自身 `api_type` 相等(违例 `BRV-TAX-0018`); `form != "skin"` 却声明 `reexport_of`/`symbols` ⇒ 反向不变量违例 `BRV-TAX-0019`
+- **旗舰判例**: `iface-pkcs11`(`plugin_type = interface`、`api_type = runtime_adapter`)同时再导出 `service/crypto#crypto` 与 `service/keyring#keyring` 两个单元 ⇒ `reexport_of = ["service/crypto#crypto", "service/keyring#keyring"]`(**列表**装下两个提供者); 这要求两个被再导出单元的接口面分类同为 `runtime_adapter`(见 `11-01` §1、`1-01` §7.3/§7.4)
+- **`skin` 边豁免 `api_type` 依赖禁则**: `form = "skin"` 的再导出边豁免该禁则(否则 `iface-posix`→`svc-posix`、`iface-pkcs11`→`crypto`/`keyring` 会被误杀), 豁免必须由 `reexport_of` 显式声明, 不可隐式
+- **改名映射**: 旧名 `reexports` → 新名 `reexport_of`; 旧名 `api_syms` → 工具链字段 `symbols`
+
 ## 2. 大纲(待成文)
 
-1. 再导出机制: 符号表层面如何实现(#define? 弱符号? 链接器脚本 [?])与 D13 的符号级真值对齐
+1. 再导出机制(字段 = `reexport_of` **列表**, 每个元素一个被再导出单元; 见 §1): 符号表层面如何实现(#define? 弱符号? 链接器脚本 [?])与 D13 的符号级真值对齐
 2. iface-posix: POSIX 子集清单(与 svc-posix 的 frozen 面对齐, 1-02)、stdio/errno 接线细节
 3. iface-min: 别名表设计——APP 用最短路径直通 native
 4. **iface-pkcs11(v1.x/M5, D24)**: PKCS#11 子集清单与两个后端的边界(crypto = 运算 / keyring = 密钥生命周期); 拒绝语义的 errno 映射(`-EPERM` 缺口见 `docs/9-app/9-02-hsm-sample.md` §4.2 O-H8); **域标准皮肤的泛化判例**(9-02 §10)

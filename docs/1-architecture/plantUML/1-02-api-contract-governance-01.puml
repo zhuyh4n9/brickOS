@@ -1,11 +1,27 @@
 @startuml
+title native API 生命周期状态机(条目级 status + 单元级 freeze_state)
+skinparam state {
+  BackgroundColor #F8F8F8
+  BorderColor #444444
+}
+skinparam note {
+  BackgroundColor #FFFFF0
+  BorderColor #999999
+}
+
 [*] --> EXPERIMENTAL : 新增(CA 记录, 轻)
 EXPERIMENTAL --> EXPERIMENTAL : 随时改\n(CA 记录)
-EXPERIMENTAL --> FROZEN : 冻结批次/个案 RFC\n前置: 已交付调度器矩阵全绿
-FROZEN --> FROZEN : 纯新增\n(PR + golden 同步)
+EXPERIMENTAL --> FROZEN : 冻结批次/个案 RFC\n前置: 已交付调度器矩阵全绿\n(v0.1 只能出"待升格提案", 见下)
+FROZEN --> FROZEN : 纯新增(append-only)\n(PR + golden 同步, 免解冻)
 FROZEN --> DEPRECATED : 语义变更/移除意向\n(RFC + 迁移指南)
 DEPRECATED --> FROZEN : 撤销弃用\n(决策记录)
 DEPRECATED --> [*] : 周期到期\n(两个 minor 无使用)
+
+state "单元级瞬态\nfreeze_state = unfreezing" as UNFREEZING #FFF3CD
+FROZEN --> UNFREEZING : unfreeze <unit> --note\n最高门槛 RFC(写明改/删哪些条目)
+UNFREEZING --> FROZEN : refreeze <unit>\n确有改/删 ⇒ COMPAT_GEN+1\n空解冻 ⇒ 四段全不动
+UNFREEZING --> UNFREEZING : 改/删已有条目(硬路径)
+
 note right of EXPERIMENTAL
   不在 golden(CI 不保护)
   标注 BR_API_EXPERIMENTAL
@@ -13,9 +29,26 @@ end note
 note right of FROZEN
   在 golden: 删/签名/布局变 = 红
   标注 BR_API_FROZEN
+  新增 = 追加 = 免解冻
 end note
 note right of DEPRECATED
   仍在 golden(门禁仍保护)
   编译警告(deprecated 属性)
+end note
+note right of UNFREEZING
+  status 不变(仍 FROZEN)
+  条目仍是不打算放弃的承诺
+  只是正在"重新谈判" ⇒ 不引入第 4 个 status
+end note
+note bottom of UNFREEZING
+  release 阻断: 任何 brickie check --profile release
+  见到 unfreezing ⇒ 红(BRV-IFACE-0009)
+  防止发布停在"半谈判"状态
+end note
+note bottom of FROZEN
+  v0.1 显式例外: freeze 只能生成"待升格提案"
+  (build/gen/proposals/<unit>.toml)
+  不得落 frozen 快照、不得 bump COMPAT_GEN
+  原因: conformance 矩阵排 v0.4
 end note
 @enduml
