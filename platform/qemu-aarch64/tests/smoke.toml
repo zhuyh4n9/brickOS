@@ -1,0 +1,20 @@
+# platform/qemu-aarch64 — conformance 用例骨架(人写)
+#
+# **v0.1 不消费它**(无 test 命令, 排 v0.4, §0 边界纪律); 字段形状照 `6-01` §2, 定稿前按需改。
+schema = 1
+
+[[case]]
+id       = "plat-0001"
+pre      = "start.S 已把异常级别/栈备好, 调用 br_plat_early_init()"
+steps    = ["调用 br_plat_early_init()", "检查 PL011 已可输出"]
+expect   = "早期 console 就绪(br_console_putc 可用)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "plat-0002"
+pre      = "br_plat_early_init() 已完成"
+steps    = ["br_plat_ticks_freq()", "br_plat_ticks_now() 连读两次"]
+expect   = "freq 非 0 且 now 单调不减"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

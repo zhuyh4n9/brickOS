@@ -1,0 +1,18 @@
+{
+  "command": "iface status",
+  "data": {
+    "check": false,
+    "consistent": true,
+    "declaration_hash": "sha256:03c394cc333d0d95d0e974082f38f80df097f388c9d7c762251b74b0659f4846",
+    "expected_snapshot_path": "api/iface/service/a/a.toml",
+    "id": "service/a#a",
+    "plugin_toml_hash": null,
+    "recomputed_hash": "sha256:03c394cc333d0d95d0e974082f38f80df097f388c9d7c762251b74b0659f4846",
+    "snapshot_hash": "sha256:03c394cc333d0d95d0e974082f38f80df097f388c9d7c762251b74b0659f4846"
+  },
+  "diagnostics": [],
+  "exit_code": 0,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

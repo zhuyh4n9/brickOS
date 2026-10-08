@@ -1,0 +1,120 @@
+{
+  "command": "dep closure",
+  "data": {
+    "cycles": [],
+    "has_platform": true,
+    "init_edges": [
+      {
+        "from": "sched/coop",
+        "to": "platform/qemu-aarch64"
+      },
+      {
+        "from": "service/crypto",
+        "to": "sched/coop"
+      }
+    ],
+    "plugins": [
+      {
+        "api_type": "native",
+        "compat_gen": 0,
+        "name": "app/hsm",
+        "phase": "app",
+        "plugin_type": "app",
+        "ram_kib": 0,
+        "selected": true,
+        "stack_kib": 0,
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "compat_gen": 0,
+        "name": "iface/hsm-api",
+        "phase": "late",
+        "plugin_type": "interface",
+        "ram_kib": 0,
+        "selected": true,
+        "stack_kib": 0,
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "compat_gen": 0,
+        "name": "platform/qemu-aarch64",
+        "phase": "core",
+        "plugin_type": "platform",
+        "ram_kib": 8192,
+        "selected": true,
+        "stack_kib": 64,
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "compat_gen": 0,
+        "name": "sched/coop",
+        "phase": "core",
+        "plugin_type": "ability",
+        "ram_kib": 0,
+        "selected": true,
+        "stack_kib": 0,
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "compat_gen": 0,
+        "name": "service/crypto",
+        "phase": "late",
+        "plugin_type": "ability",
+        "ram_kib": 48,
+        "selected": true,
+        "stack_kib": 4,
+        "version": "0.1.0.0"
+      }
+    ],
+    "profile": "dev",
+    "runtime_edges": [
+      {
+        "from": "app/hsm",
+        "to": "iface/hsm-api"
+      },
+      {
+        "from": "iface/hsm-api",
+        "to": "service/crypto"
+      }
+    ],
+    "seeds": [
+      "app/hsm"
+    ],
+    "selected": [
+      "app/hsm",
+      "iface/hsm-api",
+      "platform/qemu-aarch64",
+      "sched/coop",
+      "service/crypto"
+    ],
+    "topo_order": [
+      "app/hsm",
+      "iface/hsm-api",
+      "platform/qemu-aarch64",
+      "sched/coop",
+      "service/crypto"
+    ],
+    "totals": {
+      "budget": {
+        "ram_kib": 512,
+        "stack_kib": 16
+      },
+      "platform_capacity": {
+        "ram_kib": 8192,
+        "stack_kib": 64
+      },
+      "ram_kib": 48,
+      "stack_kib": 4
+    },
+    "type_edges": []
+  },
+  "diagnostics": [],
+  "exit_code": 0,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

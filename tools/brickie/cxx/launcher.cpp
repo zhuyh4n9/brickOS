@@ -10,7 +10,8 @@
 //   ┌─ brickie(本 ELF) ─────────────────────────────────────────────────┐
 //   │  1. 定位自身路径(/proc/self/exe, 退化到 argv[0])                   │
 //   │  2. 解包嵌入载荷 → $TMPDIR/brickie-XXXXXX/{python,templates,bin}   │
-//   │  3. 布环境: PYTHONPATH / BRICKIE_TOOL_ROOT / BRICKIE_GEN(指嵌入件) │
+//   │  3. 布环境: PYTHONPATH / BRICKIE_TOOL_ROOT / BRICKIE_GEN /         │
+//   │             BRICKIE_CORE(均指嵌入件)                                │
 //   │  4. fork+exec `python3 -m brickie <原样参数>`; 等子进程(含其孙进程)  │
 //   │  5. 清理临时目录, 转发子进程退出码                                 │
 //   └────────────────────────────────────────────────────────────────────┘
@@ -19,10 +20,11 @@
 // (BR-D3 修订口径); 自举种子要能随源码复现。自写启动器 + 未压缩 tar 载荷
 // 只需要 g++ 与 Python 标准库, 且载荷逐字节可复现。
 //
-// **单文件自包含**: 原生工具嵌在载荷的 `bin/` 下(带可执行位), 启动器把
-// `BRICKIE_GEN` 指到解包出来的那份 ⇒ **只拷 `brickie` 一个文件**到任何地方都能跑,
-// 不需要同目录的 `brickie-gen`、不需要源码树、不需要 `PYTHONPATH`。
-// (过渡兜底: 若载荷里没有该工具而自身同目录有独立的 `brickie-gen`, 也认。)
+// **单文件自包含**: 原生工具嵌在载荷的 `bin/` 下(带可执行位) —— 现在必嵌
+// `brickie-gen`(L2), 若 `brickie-core`(L0/L1 Rust)已就位则一并嵌。启动器把
+// `BRICKIE_GEN` / `BRICKIE_CORE` 指到解包出来的那几份 ⇒ **只拷 `brickie` 一个文件**
+// 到任何地方都能跑, 不需要同目录的 `brickie-gen`、不需要源码树、不需要 `PYTHONPATH`。
+// (过渡兜底: 若载荷里没有 `brickie-gen` 而自身同目录有独立的 `brickie-gen`, 也认。)
 //
 // 退出码: 子进程的退出码原样转发; 启动器自身的环境错(找不到/解不开载荷、
 // 建不了临时目录、起不了 python3)按 BRV-D9 的"环境错"档返回 **2**。
@@ -297,6 +299,13 @@ int main(int argc, char** argv) {
             std::string sibling = self_dir + "/brickie-gen";
             if (is_executable(sibling)) set_env("BRICKIE_GEN", sibling);
         }
+    }
+
+    // L0/L1 的 Rust 核心: 载荷里有就指过去(缺失是允许的降级 —— 构建期 core 可能
+    // 还没产出, 见 cxx/Makefile 的 CORE_EMBED); 与 BRICKIE_GEN 一样不覆盖显式值。
+    if (::getenv("BRICKIE_CORE") == nullptr) {
+        std::string embedded = work + "/bin/brickie-core";
+        if (is_executable(embedded)) set_env("BRICKIE_CORE", embedded);
     }
 
     const char* python_env = std::getenv("BRICKIE_PYTHON");

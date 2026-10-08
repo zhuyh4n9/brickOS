@@ -14,11 +14,12 @@
 #   3) 顺序靠 order-only 依赖而非行序(-j 也不倒);
 #   4) 工具段零交叉依赖(判据 = 交叉编译器前缀本身, 不是裸 'aarch64');
 #   5) 宿主产物**出树**到 build/host/<host-arch>/<host-os>/bin(参考 Android):
-#      brickie-gen(L2)与 brickie(自包含入口 ELF)两个都要, 且原生工具要**嵌进**
-#      入口 ELF(`--embed <产物>=bin/<名>`) —— 需求: "brickie-gen 等工具均需要
-#      编译到 python 的 brickie elf 中";
+#      三件都要 —— brickie-gen(L2)、brickie-core(L0/L1)、brickie(自包含入口 ELF),
+#      且两个原生工具都要**嵌进**入口 ELF(`--embed <产物>=bin/<名>`) —— 需求:
+#      "brickie-gen 等工具均需要编译到 python 的 brickie elf 中";
 #   6) 自举种子**进库**在 prebuilts/seed/brickie/<host-arch>/<host-os>/bin(见 ADR-0004),
-#      且入口 ELF 的魔数必须是 \x7fELF("编译为 elf" 不许退化成脚本)。
+#      三件齐({brickie,brickie-gen,brickie-core}), 且入口 ELF 的魔数必须是
+#      \x7fELF("编译为 elf" 不许退化成脚本)。
 #
 # 用法: bash tools/check-build.sh   (或 make check-build)
 # 退出码: 0 = 一致, 1 = 不一致, 2 = 用法/环境错
@@ -125,13 +126,27 @@ else
 fi
 # 原生工具必须**嵌进**入口 ELF(需求: "brickie-gen 等工具均需要编译到 brickie elf 中")。
 # 判据是打包命令里带 --embed <构建产物>=bin/<名>; 否则入口 ELF 只是"壳", 不是自包含的。
-if printf '%s\n' "$dry_tools" | grep -qE -- '--embed .*brickie-gen=bin/brickie-gen'; then
-    pass "打包命令把原生工具嵌进入口 ELF(--embed ...=bin/brickie-gen)"
+# 三件宿主可执行都要进载荷: brickie-gen(L2 生成器)与 brickie-core(L0/L1 核心)。
+for tool in brickie-gen brickie-core; do
+    if printf '%s\n' "$dry_tools" | grep -qE -- "--embed .*${tool}=bin/${tool}"; then
+        pass "打包命令把原生工具嵌进入口 ELF(--embed ...=bin/${tool})"
+    else
+        fail "打包命令**没有**把 ${tool} 嵌进入口 ELF(缺 --embed ...=bin/${tool})"
+        printf '%s\n' "$dry_tools" | grep -F -- 'freeze.py' | sed 's/^/     | /' | head -3
+    fi
+done
+# L0/L1 的 Rust 核心: 构建命令必须把它**出树**到宿主 bin 目录。
+# 注意 `core` 是 **tools/brickie/Makefile 里的目标**(不在 `tools` 的依赖里: 没有
+# cargo 的 checkout 也要能编 L5/L2), 所以这里**直接进那一层干跑** —— 根 Makefile
+# 的 `tools-core` 是 $(MAKE) 递归行, 干跑时会真的执行(不能用在门禁里)。
+dry_core="$($DRY -C tools/brickie core 2>&1)"
+if [ -n "$host_bin" ] && printf '%s\n' "$dry_core" | grep -qF -- "$host_bin/brickie-core"; then
+    pass "Rust 核心产物落在宿主 bin 目录($host_bin/brickie-core)"
 else
-    fail "打包命令**没有**把 brickie-gen 嵌进入口 ELF(缺 --embed ...=bin/brickie-gen)"
-    printf '%s\n' "$dry_tools" | grep -F -- 'freeze.py' | sed 's/^/     | /' | head -3
+    fail "Rust 核心(brickie-core)**没有**落在宿主 bin 目录($host_bin/brickie-core)"
+    printf '%s\n' "$dry_core" | grep -F -- 'brickie-core' | sed 's/^/     | /' | head -3
 fi
-if printf '%s\n' "$dry_tools" | grep -qE ' -o (main|json|diag|text|rules|gen_new)\.o'; then
+if printf '%s\n' "$dry_tools" | grep -qE ' -o (main|json|diag|text|rules|gen_new|render)\.o'; then
     fail "工具段仍在源码树里落中间产物(-o <name>.o)"
     printf '%s\n' "$dry_tools" | grep -E ' -o [a-z_]+\.o' | sed 's/^/     | /' | head -3
 else
@@ -147,7 +162,7 @@ if printf '%s\n' "$seed_bin" | grep -qE '/prebuilts/seed/brickie/[^/]+/[^/]+/bin
 else
     fail "自举种子目录不符合约定: '$seed_bin'"
 fi
-for name in brickie brickie-gen; do
+for name in brickie brickie-gen brickie-core; do
     if [ -x "$seed_bin/$name" ]; then
         pass "自举种子就位($seed_bin/$name)"
     else

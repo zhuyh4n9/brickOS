@@ -1,0 +1,29 @@
+schema = 1
+
+[plugin]
+name        = "service/x"
+plugin_type = "ability"
+api_type    = "native"
+lang        = "c"
+subkind     = "service"
+phase       = "late"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+
+
+
+[privileged]
+level = "P2"
+[[privileged.memory]]
+granularity = "page"
+ops     = ["map"]
+regions = ["mmio"]
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

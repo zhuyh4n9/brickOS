@@ -1,0 +1,33 @@
+schema = 1
+
+[plugin]
+name        = "service/x"
+plugin_type = "ability"
+api_type    = "native"
+lang        = "c"
+subkind     = "service"
+phase       = "late"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+
+[[export]]
+name         = "x"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = ""
+status       = "experimental"
+reexport_of  = ["service/y#y"]
+
+
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

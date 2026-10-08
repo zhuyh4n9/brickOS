@@ -16,19 +16,19 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 
 ## 1. v0.1.0 做什么
 
-**一条链, 两个环节:**
+**一条链, 三个环节:**
 
 ```
-(Platform Entry) aarch64 Start.S  ──►  (Core) MainLoop(延时 + 日志)
+(Platform 插件) aarch64 Start.S  ──►  (Core) br_core_main  ──►  (APP 插件) MainLoop(延时 + 日志)
 ```
 
 | 环节 | 内容 | 代码 |
 |---|---|---|
-| **Platform Entry** | reset、选核、EL2→EL1 降级、栈、向量表、BSS 清零 | `platform/src/aarch64/start.S` |
-| | 早期 console(PL011 轮询)、arch timer 读数 | `platform/src/aarch64/console_pl011.c` / `timer_arch.c` |
-| | 链接脚本 | `platform/src/aarch64/link.ld` |
-| **Core** | MainLoop: 每秒打一行日志, 延时自带"不早醒"判据 | `core/src/startup/main.c` |
-| | 时钟换算(us)+ 忙等延时 | `core/src/time.c` |
+| **Platform Entry**(`platform/qemu-aarch64` 插件) | reset、选核、EL2→EL1 降级、栈、向量表、BSS 清零 | `platform/qemu-aarch64/src/start.S` |
+| | 早期 console(PL011 轮询)、arch timer 读数 | `platform/qemu-aarch64/src/console_pl011.c` / `timer_arch.c` |
+| | 链接脚本 | `platform/qemu-aarch64/src/link.ld` |
+| **APP**(`app/hello` 插件) | MainLoop: 每秒打一行日志, 延时自带"不早醒"判据(原 `core/src/startup/main.c`, 已随 M0 引导例外迁入 APP) | `app/hello/src/main.c` |
+| **Core**(内核本体, 不是插件) | 时钟换算(us)+ 忙等延时 | `core/src/time.c` |
 | | 日志(格式化 + 等级过滤), 不走 libc printf | `core/src/log.c` |
 
 **验证目标**(不是"能编译"): 镜像能在 QEMU virt 上从 reset 跑到 MainLoop, 日志时间戳单调,
@@ -41,7 +41,7 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 
 | 不做 | 理由 |
 |---|---|
-| **插件化(描述符 / manifest / 组合器)** | 这正是组合器 brickie 与插件管理器的产出(`4-02`/`4-03`, `3-05`)。工具**只到「生成骨架」这一步**(v0.1 的 `new`; 见 `tools/brickie/README.md` 的进度表), **插件发现 / 描述符接线 / 组合期 `check` 都还没有** ⇒ 插件化目前仍是手工假装。**Platform Entry 因此挂了 WORKAROUND, 见 §5** |
+| **插件化(描述符 / manifest / 组合器)** | 这正是组合器 brickie 与插件管理器的产出(`4-02`/`4-03`, `3-05`)。**声明期**已由 brickie v0.1 接管(插件发现 / 校验 / 描述符生成 / 接口发布 / 版本治理; 见 [`tools/brickie/README.md`](tools/brickie/README.md)), 但**运行期**的插件管理器与描述符段(`.br_plugins`)仍未落地 ⇒ `platform/qemu-aarch64` 与 `app/hello` 虽已是插件, 调用点仍由 Makefile 直接编进镜像。**Platform Entry 因此仍挂 WORKAROUND, 见 §5** |
 | 调度器 / 线程 / `br_sched_ops` | M1。没有调度器就没有"可让出的对象", 所以睡眠只能是忙等 |
 | 中断 / GICv3 / 中断框架 | M0。v0.1.0 全程关中断(DAIF 全屏蔽) |
 | MMU / 恒等映射 / region 表 / cache 维护 | MainLoop 不碰内存管理, 做了也无法验证 |
@@ -56,60 +56,75 @@ brickOS/
 ├── Makefile                     构建 / 运行 / 冒烟 / 门禁
 ├── README.md                    本文件
 ├── WORKAROUNDS.md               WORKAROUND 登记表(欠债清单)
+├── product.toml                 产品声明: app 选择 / 插件选择 / 预算 / M0 引导例外豁免
 ├── mk/
 │   └── host.mk                  宿主三元组 + 宿主产物目录(build/host/… 与 prebuilts/…)
+├── docs/decisions/              本原型的决策记录(如 0001-platform-plugin-manifest.md)
 ├── prebuilts/toolchain/                    外部工具链**下载缓存**(派生, 不进库; fetch-prebuilt.py)
 ├── prebuilts/                   宿主工具**自举种子**(进库; 见下, 详见其 README)
-│   └── brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen}
+│   └── seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}
 ├── tools/
 │   ├── host-detect.sh           宿主 arch/os 探测(布局映射的唯一真值)
 │   ├── check-workarounds.sh     源码标记 ↔ 登记表 一致性检查
 │   ├── check-build.sh           构建接线门禁(宿主产物出树 / 自举种子进库)
 │   └── brickie/                 【组合期工具】brickie(原名 `br`; 详见其 README)
-│       ├── Makefile             宿主 g++ + python3, **不碰交叉工具链**
-│       ├── freeze.py            打包器: Python 包 + 模板 → 嵌入 ELF 的载荷
-│       ├── cxx/                 L2 生成器 + L5 入口 ELF 的源码(产物出树, 见下)
+│       ├── Makefile             宿主 g++/cargo + python3, **不碰交叉工具链**
+│       ├── freeze.py            打包器: Python 包 + 模板 + schema + 原生工具 → 嵌入 ELF 的载荷
+│       ├── cxx/                 L2 渲染器 + L5 入口 ELF 的源码(产物出树, 见下)
+│       ├── rust/                L0/L1 Rust 核心 brickie-core(判定 / 求解 / 版本 / IFACE-IR)
 │       ├── python/brickie/      L5 前端(子命令 / 输出 / 退出码 / 文件编排)
+│       ├── schema/*.schema.json 声明面形状(机器可读)
+│       ├── docs/contract.md     跨语言接口契约(唯一权威)
 │       ├── templates/           骨架模板(四类 × c)
 │       └── tests/               端到端用例
-├── core/                        【Core】与平台无关的部分
+├── app/hello/                   【APP 插件】M0 MainLoop(镜像唯一 app; M0 引导例外)
+│   ├── plugin.toml              人写 ← 插件级唯一真值
+│   └── src/main.c               MainLoop(延时 + 日志; 原 core/src/startup/main.c)
+├── core/                        【Core】内核本体(**不是插件**; 被 [compat].core 引用)
 │   ├── include/br/core/
 │   │   ├── br_types.h           基础类型(不用 <stdint.h>)
 │   │   ├── br_version.h         版本标识
 │   │   ├── br_console.h         早期 console 契约(接口在 core, 实现在 platform)
 │   │   ├── br_log.h             日志契约
 │   │   ├── br_time.h            时钟/延时契约
-│   │   └── br_main.h            core 入口契约
+│   │   └── br_main.h            core 入口契约(实现随 APP 走)
 │   └── src/
-│       ├── startup/main.c       MainLoop(延时 + 日志)
 │       ├── log.c                格式化 + 等级过滤
 │       └── time.c               时钟换算 + 忙等延时
-└── platform/                    【Platform Entry】与平台/ISA 绑定的部分
+└── platform/qemu-aarch64/       【Platform 插件】与平台/ISA 绑定的部分
+    ├── plugin.toml              人写 ← 插件级唯一真值(显式导出 7 个 br_plat_* 符号)
     ├── include/br/platform/
     │   └── br_plat.h            Platform Entry 契约(含 WORKAROUND 声明)
-    └── src/aarch64/
-        ├── start.S              入口: reset / 选核 / 向量表 / BSS / 交 core
-        ├── link.ld              链接脚本(显式 text/rodata/data 三段权限)
-        ├── plat_qemu_virt.c     平台身份 + early_init + 异常兜底
-        ├── console_pl011.c      PL011 轮询 putc
-        └── timer_arch.c         CNTFRQ_EL0 / CNTPCT_EL0
+    ├── src/
+    │   ├── start.S              入口: reset / 选核 / 向量表 / BSS / 交 core
+    │   ├── link.ld              链接脚本(显式 text/rodata/data 三段权限)
+    │   ├── plat_qemu_virt.c     平台身份 + early_init + 异常兜底
+    │   ├── console_pl011.c      PL011 轮询 putc
+    │   └── timer_arch.c         CNTFRQ_EL0 / CNTPCT_EL0
+    └── tests/smoke.toml         用例骨架(v0.1 不消费)
 ```
 
-唯一的跨层边是 **Platform → Core**: `start.S` 调 `br_plat_early_init()` 再调 `br_core_main()`。
+唯一的跨层边是 **APP/Platform → Core**: `start.S` 调 `br_plat_early_init()` 再调
+`br_core_main()`; `app/hello` 直调 `platform/qemu-aarch64` 的 `br_plat_name()`(M0 引导
+例外, 在 `product.toml` 里显式豁免)。
 
 ## 4. 构建与运行
 
-构建是**两段式**, 而且**工具在前**:
+构建是**两段式**, 而且**工具与组合期校验在前**:
 
 ```
-① tools/    brickie(组合期工具)   宿主 g++ 编 C++ 生成器 + Python 前端
-                                        │  不碰交叉工具链(v0.1 零编译依赖纪律)
-                                        ▼
+① tools/    brickie(组合期工具)   宿主 g++ 编 C++ 渲染器 + Python 前端; cargo 编 Rust 核心
+                                         │  合并进同一个自包含入口 ELF
+                                         ▼
+⓪ 声明面    brickie check          用入口 ELF 校验 product.toml / 插件树(dev profile)
+                                         │  不碰交叉工具链(v0.1 零编译依赖纪律)
+                                         │  (Makefile 里标"⓪", 实际排在①之后 —— 校验要用刚编的入口 ELF)
+                                         ▼
 ② brickOS   aarch64 裸机镜像      外部交叉 gcc
 ```
 
-顺序由 `Makefile` 里一条 order-only 依赖钉死(`$(OBJS): | tools`), 所以 `make -j`
-也不会倒过来; 同时"工具重新编过"不会触发镜像重链。
+顺序由 `Makefile` 里一条 order-only 依赖钉死(`$(OBJS): | tools brickie-check`), 所以
+`make -j` 也不会倒过来; 同时"工具/声明面变新"不会触发镜像重链。
 这条纪律由 `make check-build` 把关 —— 顺序纪律坏起来通常是**静默**的(比如把 tools 段
 写成文件里第一条规则, `make` 就只编工具然后 exit 0, 镜像根本没编却不报错), 所以钉成门禁。
 
@@ -118,8 +133,9 @@ brickOS/
 分居 `build/` 两侧, 源码树里不留任何 `.o`/可执行文件:
 
 ```
-build/host/<host-arch>/<host-os>/bin/brickie        # 单文件自包含 ELF(前端 + 模板 + brickie-gen)
-                              …/bin/brickie-gen     # L2 生成器(宿主可执行)
+build/host/<host-arch>/<host-os>/bin/brickie        # 单文件自包含 ELF(前端 + 模板 + schema + 两个原生工具)
+                              …/bin/brickie-gen     # L2 渲染器(宿主可执行)
+                              …/bin/brickie-core    # L0/L1 Rust 核心(宿主可执行)
                               …/lib/libbrickie-gen.a # 宿主静态库
                               …/obj/cxx/*.o          # 中间产物
 ```
@@ -136,28 +152,30 @@ make print-prebuilt-bin-dir   # …/prebuilts/seed/brickie/x86-64/linux/bin
 ```
 
 **Python 前端 + 原生工具都在一个 ELF 里**: `brickie` 是**单文件自包含入口 ELF** ——
-由 `tools/brickie/cxx/launcher.cpp` 把 Python 包、模板与**原生工具**(`brickie-gen`)经
-`tools/brickie/freeze.py` 打成未压缩 tar 后嵌进二进制, 运行时解包到临时目录再用系统
-`python3` 解释, 并把 `BRICKIE_GEN` 指到解包出来的内嵌 `brickie-gen`。于是**只拷
-`brickie` 一个文件**就能跑: 不需要 `PYTHONPATH`、不需要源码树、不需要同目录的
-`brickie-gen`、不需要 `g++`; 且**零新增第三方依赖**(不用 PyInstaller/Nuitka)。
-详见 [tools/brickie/README.md](tools/brickie/README.md) 与 ADR `0004` §7。
+由 `tools/brickie/cxx/launcher.cpp` 把 Python 包、模板、`schema/**` 与**两个原生工具**
+(`brickie-gen`、`brickie-core`)经 `tools/brickie/freeze.py` 打成未压缩 tar 后嵌进二进制,
+运行时解包到临时目录再用系统 `python3` 解释, 并把 `BRICKIE_GEN` / `BRICKIE_CORE` 指到
+解包出来的内嵌工具。于是**只拷 `brickie` 一个文件**就能跑: 不需要 `PYTHONPATH`、
+不需要源码树、不需要同目录的原生工具、不需要 `g++`/`cargo`; 且**零新增第三方依赖**
+(不用 PyInstaller/Nuitka)。详见 [tools/brickie/README.md](tools/brickie/README.md) 与 ADR `0004` §7。
 
 **自举种子(进版本库, `prebuilts/`)**: 除"本机刚编的" `build/host/**` 外, 同一套
 宿主三元组下还随源码提交预编译件:
 
 ```
-prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie        # ★ 单文件自包含(内含 brickie-gen)
-                                           /brickie-gen    # L2 生成器(冗余副本, 供开发态直用)
+prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie        # ★ 单文件自包含(内含两个原生工具)
+                                           /brickie-gen    # L2 渲染器(冗余副本, 供开发态直用)
+                                           /brickie-core   # L0/L1 Rust 核心(冗余副本)
 ```
 
-它让**没有 `g++` 的全新 checkout** 也能直接跑 `brickie`(`brickie` 自带代码、模板与
-原生工具; 开发态的 Python 前端找不到 `build/` 也会退到种子), 也是将来
-**用 brickie 自举管理 brickie 自身编译**的"第一块砖"。改了工具源码后重新发布:
+它让**没有 `g++`/`cargo` 的全新 checkout** 也能直接跑 `brickie`(`brickie` 自带代码、
+模板、schema 与原生工具; 开发态的 Python 前端找不到 `build/` 也会退到种子), 也是将来
+**用 brickie 自举管理 brickie 自身编译**的"第一块砖"。三个可执行必须**同时**在位
+(缺 `brickie-core` ⇒ `make tools-prebuilt` FAIL)。改了工具源码后重新发布:
 
 ```bash
-make tools-prebuilt          # 编工具 → 发布种子(cmp 相同则不写盘)
-make tools-prebuilt-check    # 只检查种子是否落后于源码
+make tools-prebuilt          # 编工具(brickie/brickie-gen/brickie-core) → 发布种子(cmp 相同则不写盘)
+make tools-prebuilt-check    # 只检查三件种子是否落后于源码
 ```
 
 > **`prebuilts/` 下分两侧**(单一顶层目录, 见 ADR `0005`):
@@ -187,33 +205,44 @@ CI 里不想 `source` 就用 `eval "$(make -s env)"`(同一份片段)。
 > 工具链还没取件、工具还没编时, `setup.sh` 照样工作, 只是把缺失目录列出来并提示
 > `make prebuilt` / `make tools`(PATH 里放不存在的目录无害)。
 
-**工具段**只要宿主 `g++` + `python3`(≥3.11), **不需要交叉工具链**:
+**工具段**只要宿主 `g++` + `python3`(≥3.11); L0/L1 的 Rust 核心另需 `cargo`, **都不需要
+交叉工具链**:
 
 ```bash
-make tools              # 只编工具(没装交叉编译器的机器/CI 工具作业可用)
-make tools-test         # 工具自身用例: 生成器自检 + 端到端 94 条(含自包含入口 ELF)
+make tools              # 只编工具 L5/L2(没装交叉编译器的机器/CI 工具作业可用)
+make tools-core         # 只编 L0/L1 的 brickie-core(cargo; 出树到同一 bin 目录)
+make tools-test         # 工具自身用例: 渲染器自检 + 端到端 542 项(含 V-1…V-19 与自包含入口 ELF)
 ```
 
 **镜像段**的工具链是外部的(内部工具链未就绪, 见 §5 的 `br-wa-toolchain-001`)。需要:
-`aarch64-linux-gnu-gcc`(或带版本号的 `gcc-14`/`gcc-13`, Makefile 会自动探测)、
+`aarch64-linux-gnu-gcc`(或带版本号的 `gcc-16`/`gcc-15`/`gcc-14`/`gcc-13`, Makefile 会自动探测)、
 `binutils-aarch64-linux-gnu`、`qemu-system-aarch64`。
 
 ```bash
 # 在仓库根执行(本分支根目录 = 原型树, 没有 brickOS/ 前缀)
-make                    # ①编工具 → ②构建 build/brick.elf + .bin
+make                    # ①编工具 → ⓪brickie check(dev) → ②构建 build/brick.elf + .bin
+make brickie-check      # 只用 brickie 校验声明面(dev; 不编镜像)
+make brickie-check-release  # 发布级门禁(brickie check --profile release)
+make brickie-compose    # 用 brickie gen 重建 build/gen/** 生成物(不编译)
 make run                # 在 QEMU virt 上跑(Ctrl-A X 退出)
 make smoke              # 3 秒冒烟: 自动判定启动/延时判据, 红绿可进 CI
 make size               # 体积
 make disasm             # 反汇编
 make check-workarounds  # WORKAROUND 登记一致性
-make check-build        # 构建接线门禁: 缺省目标/工具在前/工具段零交叉依赖/出树/种子
-make tools-prebuilt     # 发布自举种子到 prebuilts/seed/brickie/<arch>/<os>/bin/
+make check-build        # 构建接线门禁: 缺省目标/工具在前/工具段零交叉依赖/出树/种子三件
+make tools-prebuilt     # 发布三件自举种子到 prebuilts/seed/brickie/<arch>/<os>/bin/
 make clean              # 清掉①与②的产物(只清工具: make tools-clean; 不动 prebuilts/)
 ```
 
-> ⚠ **工具还没参与镜像构建**: brickie 目前只在①被编出来, ②仍是**手工组合**
-> (没有插件发现 / 描述符生成 / 组合期 `check`)。这正是 `br-wa-entry-001` 的欠债,
-> 接线动作见 §5 与 `WORKAROUNDS.md`。
+> ⚠ **工具只接管了镜像的"声明面", 还没接管"调用点"**: `make` 现在只多做一件事 ——
+> 编译镜像前先跑 `brickie check`(dev)校验声明面; 描述符生成要显式 `make brickie-compose`。
+> 镜像本身仍由 Makefile **手工组合** —— `.br_plugins` 段枚举驱动的启动链(插件管理器)
+> 属 M0 运行期, 仍未落地。这正是 `br-wa-entry-001` 剩下的第 ③ 条欠债, 见 §5 与
+> `WORKAROUNDS.md`。
+>
+> ⚠ 由于这条 order-only 依赖, **声明面校验不过时缺省 `make` 会止步在 ⓪**(组合期
+> 校验红 ⇒ 退出码 1, 镜像不编)。这是**有意**的: 声明面自洽是镜像构建的前置。只编工具用
+> `make tools` / `make tools-core`; 只想看结论用 `make brickie-check`。
 
 换工具链前缀只需一个变量(这是 `br-wa-toolchain-001` 的还债口):
 
@@ -252,15 +281,19 @@ v0.1.0 有三条欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**:
 
 | id | 一句话 |
 |---|---|
-| `br-wa-entry-001` | **Platform Entry 不是插件**, 被 Makefile 直接编进镜像 —— 这就是你要求的标记项 |
-| `br-wa-boot-001` | 启动链被压缩成一个死循环(无 plugin_manager / init 阶段 / 调度器) |
+| `br-wa-entry-001` | **Platform 的插件化只完成了一半**: `plugin.toml` + 描述符已就位, 但 `start.S` 的调用点仍由 Makefile 直接编进镜像 |
+| `br-wa-boot-001` | 启动链被压缩成一个死循环(无 plugin_manager / init 阶段 / 调度器); MainLoop 现归 APP 插件 `app/hello` |
 | `br-wa-toolchain-001` | 工具链用外部 gcc |
 
 **`br-wa-entry-001` 的退出条件**(`brickie`, 原名 `br`, 就绪后必须做的三件事):
 
-1. `br` 能按布局约定发现并校验插件(`4-02`);
-2. `platform/` 收敛为插件 `platform/qemu-aarch64`(`BR_PLUGIN` 描述符 + 声明片段, `4-03`);
-3. `start.S` 的调用点从"Makefile 直编"改为 `.br_plugins` 段枚举驱动(`3-05 §2.2`)。
+1. ~~`br` 能按布局约定发现并校验插件(`4-02`)~~ ⇒ **已还**(`brickie check` / `gen`, 见
+   [docs/decisions/0001-platform-plugin-manifest.md](docs/decisions/0001-platform-plugin-manifest.md));
+2. ~~`platform/` 收敛为插件 `platform/qemu-aarch64`(`BR_PLUGIN` 描述符 + 声明片段, `4-03`)~~
+   ⇒ **已还**(`platform/qemu-aarch64/plugin.toml` + 生成物
+   `build/gen/platform/qemu-aarch64/plugin_desc.c`);
+3. **仍欠**: `start.S` 的调用点从"Makefile 直编"改为 `.br_plugins` 段枚举驱动
+   (`3-05 §2.2` 的 `__br_plugins_start/__br_plugins_stop`) —— 依赖插件管理器(M0 运行期)。
 
 代码里的标记形如 `WORKAROUND(br-wa-entry-001)`, 与登记表由 `make check-workarounds` 绑死:
 **任一侧多/少即报红** —— 欠债最怕的不是欠着, 是没人知道欠着。
@@ -280,12 +313,17 @@ v0.1.0 有三条欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**:
 ## 7. 下一步(往 M0 走)
 
 按设计 `1-03 §3`, M0 = **启动链 + 插件管理**, 验收 = "hello + init 链打印 + 故意造环看组合器报错"。
-本原型离它有四步, 顺序有依赖关系:
+本原型离它还差以下几步, 顺序有依赖关系(状态按当前 checkout):
 
-1. **`br` 最小形态 = 求解器 + 可解释报错**(`2-02 §3` BR-D2 / §7: M0 的 `br check` 先于完整 CLI);
-   这一步是 `br-wa-entry-001` 的前提。
+1. **组合器 `brickie` 的声明面** —— **已交付**(三语言: L5 Python 前端 23 条叶子命令、
+   L0/L1 Rust 核心、L2 C++ 渲染器, 入口 = 单文件自包含 ELF)。`platform/qemu-aarch64` 与
+   `app/hello` 已被它接管(manifest + `check` + 快照 + lock + 描述符生成物)。这一段是
+   `br-wa-entry-001` 第 ③ 条的前提, 前提已具备。
 2. 插件描述符段(`.br_plugins` + `__br_plugins_start/stop`)与**声明面唯一真值**(`2-02` BR-D2)。
-3. `platform/` 收敛为插件 → 兑掉 `br-wa-entry-001`。
+   `platform/qemu-aarch64` 与 `app/hello` 的 manifest / 描述符生成物已在 `build/gen/**`,
+   缺的是**运行期按段枚举**。
+3. `start.S` 的调用点改为段枚举驱动 → 兑掉 `br-wa-entry-001` 的第 ③ 条
+   (第 ①② 条已随插件化还清)。
 4. 中断框架 + 调度器(M1) → 把 MainLoop 拆成 `app.start()` 的 APP 线程 + `br_sched_run()`。
 
 在 4 之前, `br_core_main` 会一直在那里 —— 但它的归宿是**被拆掉, 不是长大**(见 `main.c` 顶部注释)。

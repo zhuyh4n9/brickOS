@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "product.toml — brickie v0.1 产品选择面(BRV-D2: 单条记录形状)",
+  "description": "只表达单条记录形状(contract §7.2)。'恰一个 app'、'select.plugins 全局唯一'、预算与闭包的关系等跨字段/跨文件不变量由 brickie-core 报码。",
+  "type": "object",
+  "required": ["schema", "product"],
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "enum": [1]
+    },
+    "product": {
+      "type": "object",
+      "required": ["name", "app"],
+      "additionalProperties": true,
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "version": {
+          "type": "string"
+        },
+        "app": {
+          "type": "string"
+        },
+        "core": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string",
+          "enum": ["dev", "release"]
+        }
+      }
+    },
+    "select": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "plugins": {
+          "type": "array",
+          "items": {"type": "string"}
+        }
+      }
+    },
+    "budget": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "ram_kib": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "stack_kib": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "lint": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "frozen_deps": {
+          "type": "string",
+          "enum": ["inherit", "allow", "deny"]
+        },
+        "allow_edges": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {"type": "string"}
+          }
+        }
+      }
+    }
+  }
+}

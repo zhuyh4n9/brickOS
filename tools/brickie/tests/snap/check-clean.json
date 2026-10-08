@@ -1,0 +1,54 @@
+{
+  "command": "check",
+  "data": {
+    "plugin": null,
+    "scope_results": {
+      "deps": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "deps",
+        "warnings": 0
+      },
+      "iface": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "iface",
+        "warnings": 0
+      },
+      "priv": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "priv",
+        "warnings": 0
+      },
+      "tax": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "tax",
+        "warnings": 0
+      }
+    },
+    "scopes": [
+      "deps",
+      "iface",
+      "tax",
+      "priv"
+    ],
+    "summary": {
+      "closure": {
+        "plugins": 5,
+        "ram_kib": 48,
+        "stack_kib": 4
+      },
+      "errors": 0,
+      "infos": 0,
+      "profile": "dev",
+      "warnings": 0
+    }
+  },
+  "diagnostics": [],
+  "exit_code": 0,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

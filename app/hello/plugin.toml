@@ -1,0 +1,45 @@
+# app/hello — M0 启动链演示(plugin_type = app; 唯一业务逻辑)
+#
+# 设计出处: 1-03 §1 的 v1.0 插件清单 —— "app/hello + conformance | APP |
+# 启动链演示(M0: 直接主循环, 不依赖 iface —— **M0 引导例外**, 此时 Interface
+# 插件尚未交付)"。本件实现的是 `br_core_main`(WORKAROUND br-wa-boot-001 的
+# 临时形态), 它的归宿是把 MainLoop 拆成 `app.start()`。
+schema = 1
+
+[plugin]
+name        = "app/hello"
+plugin_type = "app"
+api_type    = "native"          # 纯消费者: 只表示"代码面向 native API 编码"
+lang        = "c"
+phase       = "app"             # ② 完成点在 APP 相(无 init 钩子, 只有主循环)
+version     = "0.1.0.0"
+summary     = "M0 MainLoop: 延时 + 日志(启动链演示)"
+license     = "WTFPL"
+
+[[res]]
+kind     = "ram"
+used_kib = 2
+[[res]]
+kind     = "stack"
+used_kib = 4
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+# ---- 结构依赖 ----
+# ⚠ **M0 引导例外**: app 直调 platform(设计 §7.3 的表里 app ✗ platform)。
+# 该边由 `product.toml [lint].allow_edges` 显式豁免 ⇒ 可评审的例外, 不是静默放行。
+# Interface 插件交付后(1-03 的 M2: iface-min), 本边应改为 app → iface → platform。
+[[dep]]
+name   = "platform/qemu-aarch64"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_plat_name"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

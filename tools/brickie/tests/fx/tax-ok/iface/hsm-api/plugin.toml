@@ -1,0 +1,26 @@
+schema = 1
+
+[plugin]
+name        = "iface/hsm-api"
+plugin_type = "interface"
+api_type    = "native"
+lang        = "c"
+phase       = "late"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+[[dep]]
+name  = "service/crypto"
+range = "*"
+kind  = "runtime"
+
+
+
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

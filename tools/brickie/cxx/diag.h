@@ -37,6 +37,8 @@ public:
     void add(Diag d);
     void usage(std::string message, std::string hint = "");      // 无码 ⇒ 退出码 2
     void env(std::string message, std::string hint = "");        // 无码 ⇒ 退出码 2
+    // 带位置的用法错(file = 仓库相对路径或模板相对路径); 仍是无码诊断 ⇒ 退出码 2。
+    void usageAt(std::string file, std::string message, std::string hint = "");
     void coded(std::string code, Severity sev, std::string target, std::string file,
                std::string message, std::string hint = "");
 

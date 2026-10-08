@@ -1,0 +1,19 @@
+schema = 1
+
+[product]
+name    = "hsm"
+version = "0.1.0.0"
+app     = "app/hsm"
+core    = ">=1.0.0"
+stage   = "dev"
+
+[select]
+plugins = ["app/hsm", "platform/qemu-aarch64", "service/big-a", "service/big-b"]
+
+[budget]
+ram_kib   = 512
+stack_kib = 16
+
+[lint]
+frozen_deps = "inherit"
+allow_edges = []

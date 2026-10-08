@@ -2,7 +2,7 @@
 #
 # 布局(参考 Android 的 out/host/...):
 #
-#   build/host/<host-arch>/<host-os>/bin/   ← 宿主可执行(brickie-gen + 入口 ELF brickie)
+#   build/host/<host-arch>/<host-os>/bin/   ← 宿主可执行(brickie-core + brickie-gen + 入口 ELF brickie)
 #   build/host/<host-arch>/<host-os>/lib/   ← 宿主静态库(如 libbrickie-gen.a)
 #   build/host/<host-arch>/<host-os>/obj/   ← 宿主中间产物(.o)
 #
@@ -11,13 +11,14 @@
 #
 # 另有一份**进版本库**的宿主产物(自举种子, 参考 Android 的 prebuilts/):
 #
-#   prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie      ← L5 入口 ELF(嵌入 Python 载荷)
-#   prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie-gen  ← L2 生成器
+#   prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie       ← L5 入口 ELF(嵌入 Python 载荷)
+#   prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie-gen   ← L2 渲染器
+#   prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie-core  ← L0/L1 Rust 核心
 #
 #   `build/host/**` 是**本次/本机**构建产物(派生, 不进库); `prebuilts/**` 是
-#   随源码提交的**种子**, 供没有 g++ 的全新 checkout 直接把 brickie 跑起来 ——
-#   也即"用 brickie 自举管理 brickie 自身编译"的起点(见 ADR 0004)。两个 ELF 成对,
-#   入口 ELF 会自定位同目录的 brickie-gen ⇒ 种子目录自洽。
+#   随源码提交的**种子**, 供没有 g++/cargo 的全新 checkout 直接把 brickie 跑起来 ——
+#   也即"用 brickie 自举管理 brickie 自身编译"的起点(见 ADR 0004)。三件成组,
+#   入口 ELF 的载荷里已嵌两个原生工具(种子目录只是冗余副本, 供开发态直用)。
 #
 # 单一真值: arch/os 的映射只在 tools/host-detect.sh; 本文件只把它变成 make 变量。
 # 用法: 在 Makefile 里 `include <相对路径>/mk/host.mk` —— 路径按**本文件自身位置**
@@ -58,7 +59,7 @@ HOST_BIN_DIR := $(HOST_OUT)/bin
 HOST_LIB_DIR := $(HOST_OUT)/lib
 HOST_OBJ_DIR := $(HOST_OUT)/obj
 
-# 自举种子(进版本库): prebuilts/seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen}
+# 自举种子(进版本库): prebuilts/seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}
 PREBUILTS_ROOT           ?= $(REPO_ROOT)/prebuilts
 PREBUILT_BRICKIE_DIR     := $(PREBUILTS_ROOT)/seed/brickie/$(HOST_TRIPLE)
 PREBUILT_BRICKIE_BIN_DIR := $(PREBUILT_BRICKIE_DIR)/bin

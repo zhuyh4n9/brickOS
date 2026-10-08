@@ -1,0 +1,32 @@
+schema = 1
+
+[plugin]
+name        = "iface/skin"
+plugin_type = "interface"
+api_type    = "runtime_adapter"
+lang        = "c"
+phase       = "late"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+
+[[export]]
+name         = "skin"
+api_iface    = "runtime_adapter"
+form         = "skin"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = ""
+status       = "experimental"
+reexport_of  = ["service/ra-crypto#crypto"]
+
+
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

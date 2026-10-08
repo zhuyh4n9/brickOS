@@ -22,6 +22,7 @@
 
     python/brickie/**         L5 前端(模式 0644)
     templates/**              骨架模板(模式 0644)
+    schema/*.schema.json      声明面形状 schema(模式 0644; BRV-D2 的形状门输入)
     bin/<tool>                **原生工具**(模式 0755; 由 --embed 逐个指定)
 
 ## 载荷格式: 未压缩 ustar tar
@@ -36,11 +37,17 @@
   --c   <file>          生成的 C++ 源: `const unsigned char brickie_payload[]` + 长度
   --tar <file>          载荷本体(可选; 供 `tar tvf` 人工检查)
   --embed <src>[=<dst>] 把一个**已构建的原生工具**嵌进载荷(可重复);
-                        缺省落点 = `bin/<basename>`, 模式 0755
+                        缺省落点 = `bin/<basename>`, 模式 0755。
+                        多工具时逐条给, 如:
+                          --embed build/.../bin/brickie-gen=bin/brickie-gen \
+                          --embed build/.../bin/brickie-core=bin/brickie-core
+                        落点按路径排序、模式位显式写入、mtime/uid/gid 归零 ⇒ 逐字节可复现;
+                        同一落点重复嵌入会在打包前报错(见 collect_entries)。
 
 用法:
   python3 tools/brickie/freeze.py --c <out.cpp> --tar <out.tar> \
-      --embed build/host/x86-64/linux/bin/brickie-gen=bin/brickie-gen
+      --embed build/host/x86-64/linux/bin/brickie-gen=bin/brickie-gen \
+      --embed build/host/x86-64/linux/bin/brickie-core=bin/brickie-core
 退出码: 0 成功 / 2 用法或环境错
 """
 
@@ -52,8 +59,10 @@ from pathlib import Path
 
 TOOL_ROOT = Path(__file__).resolve().parent
 
-# 源码形态的载荷根: L5 前端与模板(测试、pyproject、构建脚本都不进)。
-PAYLOAD_ROOTS = ("python", "templates")
+# 源码形态的载荷根: L5 前端 + 模板 + schema(测试、pyproject、构建脚本都不进)。
+# `schema/` 必须在载荷里: L5 的**形状校验**按 schema/*.schema.json 做(BRV-D2),
+# 而入口 ELF 运行时只有载荷里的东西可用 ⇒ 不嵌进去, 形状门在单文件形态下会静默降级。
+PAYLOAD_ROOTS = ("python", "templates", "schema")
 
 # 一个载荷条目: (相对路径, 内容, 模式)
 Entry = tuple[str, bytes, int]
@@ -209,7 +218,8 @@ def main(argv: list[str] | None = None) -> int:
         tar_path.write_bytes(payload)
 
     tools = [path for path, _, mode in entries if mode & 0o111]
-    print(f"freeze: {len(entries)} 个文件(含 {len(tools)} 个原生工具) → "
+    detail = ("(" + ", ".join(tools) + ")") if tools else "(无)"
+    print(f"freeze: {len(entries)} 个文件, 原生工具 {len(tools)} 个{detail} → "
           f"{len(payload)} 字节载荷 → {c_path}")
     return 0
 

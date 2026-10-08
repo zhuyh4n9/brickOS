@@ -1,0 +1,62 @@
+{
+  "command": "check",
+  "data": {
+    "plugin": null,
+    "scope_results": {
+      "deps": {
+        "errors": 1,
+        "infos": 0,
+        "scope": "deps",
+        "warnings": 0
+      },
+      "iface": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "iface",
+        "warnings": 0
+      },
+      "priv": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "priv",
+        "warnings": 0
+      },
+      "tax": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "tax",
+        "warnings": 0
+      }
+    },
+    "scopes": [
+      "deps",
+      "iface",
+      "tax",
+      "priv"
+    ],
+    "summary": {
+      "closure": {
+        "plugins": 3,
+        "ram_kib": 0,
+        "stack_kib": 0
+      },
+      "errors": 1,
+      "infos": 0,
+      "profile": "dev",
+      "warnings": 0
+    }
+  },
+  "diagnostics": [
+    {
+      "code": "BRV-MF-0001",
+      "file": "service/a/plugin.toml",
+      "severity": "error",
+      "span": "dep",
+      "target": "service/a"
+    }
+  ],
+  "exit_code": 1,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

@@ -22,9 +22,13 @@
 #   退出条件 = 只改 CROSS_COMPILE(见 WORKAROUNDS.md), 构建规则本身不动。
 #
 # 用法:
-#   make                    ①编工具 → ②构建 build/brick.elf + .bin
-#   make tools              只编工具(不需要交叉编译器)
+#   make                    ⓪组合期校验 → ①编工具 → ②构建 build/brick.elf + .bin
+#   make tools              只编 L5/L2(不需要交叉编译器, 也不需要 cargo)
+#   make tools-core         只编 L0/L1 的 Rust 核心(brickie-core; 需要 cargo)
 #   make tools-test         跑工具自身用例(生成器自检 + 端到端)
+#   make brickie-check      用 brickie 校验声明面(dev; 不编镜像)
+#   make brickie-check-release  发布级门禁(--profile release)
+#   make brickie-compose    重建 build/gen/** 生成物(不编译)
 #   source setup.sh         配置开发环境(PATH + 环境变量; 见 ADR-0002 §7.5)
 #   make env                打印同样的 shell 片段(CI: eval "$(make -s env)")
 #   make run                在 QEMU 上跑(Ctrl-A X 退出)
@@ -70,7 +74,7 @@ ifneq ($(wildcard $(PREBUILT_MAKE)),)
 endif
 
 # 无版本号优先; 退化到带版本号的驱动名(Ubuntu 只装 gcc-N 时没有软链)
-CC_CANDIDATES := $(CROSS_COMPILE)gcc $(CROSS_COMPILE)gcc-15 $(CROSS_COMPILE)gcc-14 $(CROSS_COMPILE)gcc-13
+CC_CANDIDATES := $(CROSS_COMPILE)gcc $(CROSS_COMPILE)gcc-16 $(CROSS_COMPILE)gcc-15 $(CROSS_COMPILE)gcc-14 $(CROSS_COMPILE)gcc-13
 CC := $(firstword $(foreach c,$(CC_CANDIDATES),$(if $(shell command -v $(c) 2>/dev/null),$(c))))
 
 binutils_probe = $(firstword $(foreach c,$(CROSS_COMPILE)$(1),$(if $(shell command -v $(c) 2>/dev/null),$(c))))
@@ -102,7 +106,7 @@ OBJ_DIR   := $(BUILD_DIR)/obj
 ELF       := $(BUILD_DIR)/brick.elf
 BIN       := $(BUILD_DIR)/brick.bin
 MAP       := $(BUILD_DIR)/brick.map
-LDSCRIPT  := platform/src/aarch64/link.ld
+LDSCRIPT  := platform/qemu-aarch64/src/link.ld
 
 # 宿主工具产物(出树): build/host/<host-arch>/<host-os>/{bin,lib,obj}
 # 由 mk/host.mk 经 tools/host-detect.sh 探测宿主; 与镜像产物(build/obj, build/brick.*)
@@ -117,15 +121,20 @@ HOST_BUILD_ROOT := $(abspath $(BUILD_DIR))
 include mk/host.mk
 
 # ------------------------------------------------------------------- 源文件
+# 插件树就是镜像的源码树(**顶层目录 = namespace**, brickie-v0.1 §8.3 ④):
+#   platform/qemu-aarch64/   Platform 插件(每镜像恰 1; 含 start.S/link.ld/console/timer)
+#   app/hello/               镜像唯一的 APP(§3.2): M0 的 MainLoop
+#   core/                    内核本体(**不是插件**; 被 [compat].core 引用)
 CORE_SRCS := $(wildcard core/src/*.c) $(wildcard core/src/*/*.c)
-PLAT_SRCS := $(wildcard platform/src/*/*.c)
-ASM_SRCS  := $(wildcard platform/src/*/*.S)
+PLAT_SRCS := $(wildcard platform/qemu-aarch64/src/*.c)
+APP_SRCS  := $(wildcard app/hello/src/*.c)
+ASM_SRCS  := $(wildcard platform/qemu-aarch64/src/*.S)
 
-SRCS := $(CORE_SRCS) $(PLAT_SRCS) $(ASM_SRCS)
+SRCS := $(CORE_SRCS) $(PLAT_SRCS) $(APP_SRCS) $(ASM_SRCS)
 OBJS := $(addprefix $(OBJ_DIR)/,$(patsubst %.c,%.o,$(patsubst %.S,%.o,$(SRCS))))
 
 # --------------------------------------------------------------------- 选项
-INCLUDES := -Icore/include -Iplatform/include
+INCLUDES := -Icore/include -Iplatform/qemu-aarch64/include -Iapp/hello/include
 
 # -ffreestanding: 无宿主运行时假设; -fno-builtin: 不把循环偷偷换成 memcpy
 # -mgeneral-regs-only: 内核不碰 FP/SIMD(设计侧 aarch64 目标的纪律)
@@ -156,7 +165,8 @@ LDFLAGS := -nostdlib -nostartfiles -static -no-pie \
 .DEFAULT_GOAL := all
 
 .PHONY: all prebuilt prebuilt-check prebuilt-clean \
-        tools tools-test tools-clean tools-prebuilt tools-prebuilt-check \
+        tools tools-core tools-test tools-clean tools-prebuilt tools-prebuilt-check \
+        brickie-check brickie-check-release brickie-compose \
         run smoke size disasm check-workarounds check-build \
         clean clean-brickos help print-host-triple print-host-bin-dir \
         print-prebuilt-bin-dir print-cross-compile env
@@ -211,6 +221,12 @@ tools-test:
 tools-clean:
 	@$(MAKE) --no-print-directory -C $(TOOLS_DIR) clean
 
+# L0/L1 的 Rust 核心(单独目标: `make tools` 只编 L5/L2, 这样没有 cargo 的 checkout
+# 也能起步; 自举种子要求三件齐 ⇒ `make tools-prebuilt` 会连它一起要)。
+tools-core:
+	@echo "== ① tools: brickie-core(L0/L1 Rust; cargo + 出树到 $(HOST_BIN_DIR))=="
+	@$(MAKE) --no-print-directory -C $(TOOLS_DIR) core
+
 # 自举种子(进版本库): 发布到 prebuilts/seed/brickie/<host-arch>/<host-os>/bin/。
 # 将来 brickie 自举管理自身编译时, 这个种子就是"第一块砖"。
 tools-prebuilt: tools
@@ -221,9 +237,33 @@ tools-prebuilt: tools
 tools-prebuilt-check: tools
 	@$(MAKE) --no-print-directory -C $(TOOLS_DIR) prebuilt-check
 
-# 顺序铁律: 镜像的每个目标文件都排在工具之后(order-only ⇒ 工具变新不触发重链)。
+# ------------------------------------------------ 组合期声明面(用 brickie 管)
+# 声明面(schema/依赖/导出面/特权/预算)由 brickie 校验与治理; 生成物由 brickie gen
+# 重建(`build/gen/**`), **不参与编译** —— 编译编排是 v0.3 的能力(brickie-v0.1 §0)。
+#
+# 入口用**入口 ELF**: 它自带 Python 前端与两个原生工具(brickie-core/brickie-gen),
+# 所以这里不需要 PYTHONPATH/源码树; 找不到 core 时会退回自举种子(见 native.py 的
+# 查找顺序)。`make check-build` 的第 6 条不变量会核对种子三件齐。
+BRICKIE      := $(HOST_BIN_DIR)/brickie
+COMPOSE_ROOT := $(abspath .)
+
+.PHONY: brickie-check brickie-check-release brickie-compose
+brickie-check: tools
+	@echo "== 组合期校验: brickie check(声明面完备性, dev)=="
+	@$(BRICKIE) check --root $(COMPOSE_ROOT)
+
+brickie-check-release: tools
+	@echo "== 组合期校验: brickie check --profile release(发布级门禁)=="
+	@$(BRICKIE) check --root $(COMPOSE_ROOT) --profile release
+
+brickie-compose: tools
+	@echo "== 生成物重建: brickie gen → build/gen/**(不编译)=="
+	@$(BRICKIE) gen --root $(COMPOSE_ROOT)
+
+# 顺序铁律: 镜像的每个目标文件都排在工具**与组合期校验**之后
+# (order-only ⇒ 工具/声明面变新不触发重链, 但每次都会先校验)。
 # 挂在 $(OBJS) 上而不是 $(ELF) 上, 是为了让 `make -j` 也不会编译与建工具并行。
-$(OBJS): | tools
+$(OBJS): | tools brickie-check
 
 # ============================================================== ② 镜像段
 all: $(ELF) $(BIN)

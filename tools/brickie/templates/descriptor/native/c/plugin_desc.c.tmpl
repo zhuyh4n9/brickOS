@@ -1,6 +1,6 @@
 /* brickie:generated — 生成物, 请勿手改。
  * 重新生成: brickie gen
- * 来源: {{PLUGIN_NAME}}/plugin.toml(唯一真值) + `1-01` §6.1 元契约
+ * 来源: {{name}}/plugin.toml(唯一真值) + `1-01` §6.1 元契约
  *
  * 本文件按以下**尚未定稿**的假设生成(裁定项 = checklist W-2 / A-3 / A-14 / W-6):
  *   1. 描述符实例形态 = `static const` + `.br_plugins` 段收集
@@ -15,20 +15,20 @@
  */
 #include "br_plugin.h"
 
-#include "{{SHORT}}/{{SHORT}}.h"
+#include "{{descriptor_include}}"
 
 /* 段收集: 插件无需导出任何符号;
  * plugin_manager 经链接器边界符号 __br_plugins_start/__br_plugins_stop 枚举。 */
 #define BR_PLUGIN_SECTION __attribute__((used, section(".br_plugins"), aligned(4)))
 
-static const br_plugin_t BR_PLUGIN_SECTION {{DESC_SYMBOL}} = {
-    .name       = "{{PLUGIN_NAME}}",
-    .ver        = { {{COMPAT_GEN}}, {{MAJOR}}, {{MINOR}}, {{REVISE}} },
-    .api_rev    = {{API_REV}},
+static const br_plugin_t BR_PLUGIN_SECTION {{descriptor_symbol}} = {
+    .name       = "{{name}}",
+    .ver        = { 0, 1, 0, 0 },   /* {{version}} = COMPAT_GEN.MAJOR.MINOR.REVISE; 骨架初值 */
+    .api_rev    = 1,
     .deps       = 0,        /* 骨架无结构依赖; brickie dep add 写入 plugin.toml 后重算 */
     .abi_id     = "",
     .api_syms   = 0,        /* 仅 Interface 插件占有符号族(`1-01` §7.3); 骨架未声明 */
-    .early_init = {{SYMPREFIX}}early_init,
-    .init       = {{SYMPREFIX}}init,
-    .start      = {{SYMPREFIX}}start,
+    .early_init = {{symbol_prefix}}early_init,
+    .init       = {{symbol_prefix}}init,
+    .start      = {{symbol_prefix}}start,
 };

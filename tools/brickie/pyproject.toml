@@ -5,10 +5,11 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "brickie"
 version = "0.1.0"
-description = "brickie — brickOS 组合期工具(host 侧, 零编译依赖的声明面闭环)"
+description = "brickie — brickOS 组合期工具(host 侧, 零依赖的声明面闭环)"
 readme = "README.md"
-requires-python = ">=3.11"          # tomllib 进标准库
+requires-python = ">=3.11"          # tomllib 进标准库(声明面 TOML 解析)
 license = { text = "WTFPL" }
+# **零第三方依赖**(§9.3): 只用 Python3 标准库 —— 自带最小 JSON-Schema 子集, 不引 jsonschema。
 
 [project.scripts]
 brickie = "brickie.cli:main"
@@ -16,3 +17,8 @@ brickie = "brickie.cli:main"
 [tool.setuptools]
 package-dir = { "" = "python" }
 packages = ["brickie"]
+
+# 形状校验用的 schema 随包分发(源码树里规范位置是 tools/brickie/schema/,
+# 包内 python/brickie/schema/ 是它的镜像 —— 入口 ELF 的载荷只收 python/** 与 templates/**)。
+[tool.setuptools.package-data]
+brickie = ["schema/*.schema.json", "README.md"]

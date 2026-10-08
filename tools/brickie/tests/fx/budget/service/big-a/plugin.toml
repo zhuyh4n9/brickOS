@@ -1,0 +1,29 @@
+schema = 1
+
+[plugin]
+name        = "service/big-a"
+plugin_type = "ability"
+api_type    = "native"
+lang        = "c"
+subkind     = "service"
+phase       = "late"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+
+
+[[res]]
+kind = "ram"
+used_kib = 400
+[[res]]
+kind = "stack"
+used_kib = 10
+
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

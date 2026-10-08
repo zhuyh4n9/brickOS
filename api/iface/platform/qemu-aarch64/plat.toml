@@ -1,0 +1,61 @@
+# brickie:generated
+# api/iface 快照 api/iface/platform/qemu-aarch64/plat.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "platform/qemu-aarch64#plat"
+provider = "platform/qemu-aarch64"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:199307d2638401c2507d174a0febc79b7926eee63b98594847d49d5e04b8043b"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "func"
+name = "br_plat_early_init"
+sig = "void (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_name"
+sig = "const char* (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_isa"
+sig = "const char* (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_ticks_freq"
+sig = "br_u64 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_ticks_now"
+sig = "br_u64 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_park_forever"
+sig = "void (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_unexpected_exception"
+sig = "void (br_u64)"
+status = "experimental"

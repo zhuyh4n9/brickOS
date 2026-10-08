@@ -1,0 +1,29 @@
+# product.toml — 镜像组合(brickOS prototype v0.1.0, QEMU virt aarch64)
+#
+# 产品级**只声明"选择与预算"**; 插件的自述(dep/export/privileged)只许在各自的
+# plugin.toml 里(BRV-D4 唯一真值)。
+schema = 1
+
+[product]
+name    = "brickos-prototype"
+version = "0.1.0.0"             # COMPAT_GEN.MAJOR.MINOR.REVISE
+app     = "app/hello"           # 恰一个(§3.2)
+core    = ">=0.1.0"
+stage   = "dev"                 # dev | release; CLI 覆盖(§7.5)
+
+[select]
+plugins = [
+  "platform/qemu-aarch64",
+]
+
+[budget]
+ram_kib   = 64
+stack_kib = 16
+
+[lint]
+frozen_deps = "inherit"         # inherit(跟随 [product].stage) | allow | deny
+# 显式豁免: **M0 引导例外**(app 直调 platform; 1-03 §1 的 app/hello 行)。
+# 框住它的作用域, 使"还有几条例外"在评审时一眼可见。
+allow_edges = [
+  ["app/hello", "platform/qemu-aarch64"],
+]

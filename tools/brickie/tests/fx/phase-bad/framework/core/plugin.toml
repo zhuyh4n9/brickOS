@@ -1,0 +1,27 @@
+schema = 1
+
+[plugin]
+name        = "framework/core"
+plugin_type = "ability"
+api_type    = "native"
+lang        = "c"
+subkind     = "framework"
+phase       = "core"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+[[dep]]
+name  = "service/late"
+range = "*"
+kind  = "init"
+
+
+
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

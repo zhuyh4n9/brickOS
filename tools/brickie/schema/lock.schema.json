@@ -1,0 +1,78 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "brickie.lock — v0.1 锁定文件(BRV-D2: 单条记录形状)",
+  "description": "形状由本文件定义(contract §7.3 只说'见 lock.schema.json')。**v0.1 是弱校验**: 顶层与各节都没有 required —— 锁的字段集仍在定型(checklist W-17 'lock 是否含冻结代'未裁定), 收紧会把手写/早期 core 的产物误判成 schema 错。已知形态: `schema` + `[lock]{profile, plugins[], units[]}`(+ 实现可加的 `[lock.product]`); 跨字段不变量(版本单调、闭包完整性)由 core 报码。",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "schema": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "protocol": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "lock": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "profile": {
+          "type": "string",
+          "enum": ["dev", "release"]
+        },
+        "product": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "name": {"type": "string"},
+            "version": {"type": "string"},
+            "stage": {
+              "type": "string",
+              "enum": ["dev", "release"]
+            }
+          }
+        },
+        "plugins": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "name": {"type": "string"},
+              "version": {"type": "string"},
+              "compat_gen": {"type": "integer", "minimum": 0}
+            }
+          }
+        },
+        "units": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "id": {"type": "string"},
+              "provider": {"type": "string"},
+              "unit": {"type": "string"},
+              "api_iface": {
+                "type": "string",
+                "enum": ["native", "runtime_adapter", "third_party"]
+              },
+              "version": {"type": "string"},
+              "compat_gen": {"type": "integer", "minimum": 0},
+              "hash": {"type": "string"},
+              "hash_scope": {
+                "type": "string",
+                "enum": ["decl", "sym"]
+              },
+              "truth": {
+                "type": "string",
+                "enum": ["decl", "header"]
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,27 @@
+schema = 1
+
+[plugin]
+name        = "service/consumer"
+plugin_type = "ability"
+api_type    = "native"
+lang        = "c"
+subkind     = "service"
+phase       = "late"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+[[dep]]
+name  = "service/x15"
+range = ">=2.0.0"
+kind  = "runtime"
+
+
+
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

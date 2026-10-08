@@ -1,0 +1,88 @@
+{
+  "command": "iface list",
+  "data": {
+    "count": 5,
+    "units": [
+      {
+        "api_iface": "native",
+        "compat_gen": 0,
+        "file": "app/hsm/plugin.toml",
+        "form": "api",
+        "freeze_state": "unfrozen",
+        "hash": "sha256:90f0dcc23b73ae1374bcb34631ce1392ec700f27422d1bca9958adc862c09c2d",
+        "hash_short": "90f0dcc23b73",
+        "id": "app/hsm#hsm",
+        "provider": "app/hsm",
+        "published": false,
+        "status": "experimental",
+        "unit": "hsm",
+        "version": "0.1.0.0"
+      },
+      {
+        "api_iface": "native",
+        "compat_gen": 0,
+        "file": "iface/hsm-api/plugin.toml",
+        "form": "api",
+        "freeze_state": "unfrozen",
+        "hash": "sha256:af9aa66ec1e703ebe7add9fb9c90d92e2073d6746d21e611486349f103da0794",
+        "hash_short": "af9aa66ec1e7",
+        "id": "iface/hsm-api#hsm-api",
+        "provider": "iface/hsm-api",
+        "published": false,
+        "status": "experimental",
+        "unit": "hsm-api",
+        "version": "0.1.0.0"
+      },
+      {
+        "api_iface": "native",
+        "compat_gen": 0,
+        "file": "platform/qemu-aarch64/plugin.toml",
+        "form": "api",
+        "freeze_state": "unfrozen",
+        "hash": "sha256:ac26b2f92dbb17ee8445570ef4dc5d94cee816b0e700d12e65f5deaee656c284",
+        "hash_short": "ac26b2f92dbb",
+        "id": "platform/qemu-aarch64#qemu-aarch64",
+        "provider": "platform/qemu-aarch64",
+        "published": false,
+        "status": "experimental",
+        "unit": "qemu-aarch64",
+        "version": "0.1.0.0"
+      },
+      {
+        "api_iface": "native",
+        "compat_gen": 0,
+        "file": "sched/coop/plugin.toml",
+        "form": "api",
+        "freeze_state": "unfrozen",
+        "hash": "sha256:fa976aa0d190e6b88ce749db0d042ba3df016ceacc07c677a7cb60280482503a",
+        "hash_short": "fa976aa0d190",
+        "id": "sched/coop#coop",
+        "provider": "sched/coop",
+        "published": false,
+        "status": "experimental",
+        "unit": "coop",
+        "version": "0.1.0.0"
+      },
+      {
+        "api_iface": "native",
+        "compat_gen": 0,
+        "file": "service/crypto/plugin.toml",
+        "form": "api",
+        "freeze_state": "frozen",
+        "hash": "sha256:4876b2696f65ffb2d478602c4222d689c8d39201618fb7810ab92208956c2e85",
+        "hash_short": "4876b2696f65",
+        "id": "service/crypto#crypto",
+        "provider": "service/crypto",
+        "published": false,
+        "status": "frozen",
+        "unit": "crypto",
+        "version": "0.1.0.0"
+      }
+    ]
+  },
+  "diagnostics": [],
+  "exit_code": 0,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

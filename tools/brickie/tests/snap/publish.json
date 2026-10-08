@@ -1,0 +1,62 @@
+{
+  "command": "iface publish",
+  "data": {
+    "changes": [
+      {
+        "entry": "f",
+        "from": null,
+        "kind": "ADDED",
+        "name": "f",
+        "note": "首次发布: 建档",
+        "status": "",
+        "to": "f"
+      }
+    ],
+    "compat_gen": 0,
+    "compat_gen_changed": false,
+    "dependents": {
+      "direct": [],
+      "transitive": [],
+      "unsatisfied": []
+    },
+    "files_planned": [
+      "api/iface/service/a/a.toml",
+      "api/iface/CHANGELOG.md",
+      "brickie.lock"
+    ],
+    "freeze_state": "unfrozen",
+    "from": "0.1.0.0",
+    "hash": "sha256:03c394cc333d0d95d0e974082f38f80df097f388c9d7c762251b74b0659f4846",
+    "hash_short": "03c394cc333d",
+    "id": "service/a#a",
+    "noop": false,
+    "published": true,
+    "report": {
+      "dependents": {
+        "direct": [],
+        "transitive": [],
+        "unsatisfied": []
+      }
+    },
+    "strict_params": false,
+    "to": "0.1.0.0",
+    "verdict": "green",
+    "version": "0.1.0.0",
+    "version_change": {
+      "from": "0.1.0.0",
+      "reasons": [
+        "首次发布: 建档, 不推进任何段(裁定 S-8)"
+      ],
+      "to": "0.1.0.0"
+    }
+  },
+  "diagnostics": [],
+  "exit_code": 0,
+  "protocol": 1,
+  "status": "ok",
+  "written": [
+    "api/iface/service/a/a.toml",
+    "api/iface/CHANGELOG.md",
+    "brickie.lock"
+  ]
+}

@@ -1,6 +1,7 @@
 #include "text.h"
 
 #include <cctype>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 
@@ -77,9 +78,10 @@ bool render(const std::string &tpl, const Vars &vars, const std::string &tplName
             return false;
         }
         for (char c : key) {
-            bool ok = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '_';
+            bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
+                      (c >= '0' && c <= '9') || c == '_';
             if (!ok) {
-                err = tplName + ": 占位符键非法 `" + key + "`(只允许 [A-Z0-9_])";
+                err = tplName + ": 占位符键非法 `" + key + "`(只允许 [A-Za-z0-9_])";
                 return false;
             }
         }
@@ -90,6 +92,53 @@ bool render(const std::string &tpl, const Vars &vars, const std::string &tplName
         }
         out += it->second;
         i = close + 2;
+    }
+    return true;
+}
+
+bool parseMode(const std::string &text, std::string &canonical) {
+    // 只接受八进制文本: 3 位("755")或 4 位("0644")。空串 / 非八进制 / 过长一律拒。
+    if (text.size() < 3 || text.size() > 4) return false;
+    unsigned value = 0;
+    for (char c : text) {
+        if (c < '0' || c > '7') return false;
+        value = value * 8 + static_cast<unsigned>(c - '0');
+    }
+    if (value > 07777u) return false;
+    char buf[8];
+    std::snprintf(buf, sizeof(buf), "%04o", value);
+    canonical = buf;
+    return true;
+}
+
+bool safeRelPath(const std::string &path, std::string &err) {
+    if (path.empty()) {
+        err = "路径为空";
+        return false;
+    }
+    if (path[0] == '/') {
+        err = "不允许绝对路径(`" + path + "`)";
+        return false;
+    }
+    if (path.find('\\') != std::string::npos) {
+        err = "不允许反斜杠路径分隔符(`" + path + "`)";
+        return false;
+    }
+    std::size_t i = 0;
+    while (true) {
+        std::size_t end = path.find('/', i);
+        std::string seg =
+            path.substr(i, end == std::string::npos ? std::string::npos : end - i);
+        if (seg.empty()) {
+            err = "不允许空路径段(`//` 或结尾 `/`): `" + path + "`";
+            return false;
+        }
+        if (seg == "." || seg == "..") {
+            err = "不允许 `.`/`..` 路径段: `" + path + "`";
+            return false;
+        }
+        if (end == std::string::npos) break;
+        i = end + 1;
     }
     return true;
 }

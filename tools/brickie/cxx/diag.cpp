@@ -43,6 +43,16 @@ void Diags::env(std::string message, std::string hint) {
     items_.push_back(std::move(d));
 }
 
+void Diags::usageAt(std::string file, std::string message, std::string hint) {
+    Diag d;
+    d.severity = Severity::Error;
+    d.file = std::move(file);
+    d.message = std::move(message);
+    d.hint = std::move(hint);
+    d.code.clear();
+    items_.push_back(std::move(d));
+}
+
 void Diags::coded(std::string code, Severity sev, std::string target, std::string file,
                   std::string message, std::string hint) {
     Diag d;

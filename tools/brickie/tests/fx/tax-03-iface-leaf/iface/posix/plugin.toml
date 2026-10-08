@@ -1,0 +1,22 @@
+schema = 1
+
+[plugin]
+name        = "iface/posix"
+plugin_type = "interface"
+api_type    = "native"
+lang        = "c"
+phase       = "late"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+
+
+
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

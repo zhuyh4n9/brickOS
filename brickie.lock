@@ -1,0 +1,33 @@
+# brickie:generated
+# brickie.lock — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+
+[lock]
+profile = "dev"
+
+[lock.product]
+name = "brickos-prototype"
+version = "0.1.0.0"
+stage = "dev"
+
+[[lock.plugins]]
+name = "app/hello"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "platform/qemu-aarch64"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.units]]
+id = "platform/qemu-aarch64#plat"
+provider = "platform/qemu-aarch64"
+unit = "plat"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:199307d2638401c2507d174a0febc79b7926eee63b98594847d49d5e04b8043b"
+hash_scope = "decl"
+truth = "decl"

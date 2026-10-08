@@ -1,4 +1,4 @@
-# {{PLUGIN_NAME}}
+# {{name}}
 
 > 插件骨架, 由 `brickie new` 生成一次。之后**由人维护**。
 
@@ -9,10 +9,10 @@
 | 项 | 值 |
 |---|---|
 | 插件类别 `plugin_type` | `interface` |
-| `api_type` | `{{API_TYPE}}` |
-| 语言 `lang` | `c`(v0.1 只交付 c) |
-| 初始相位 `phase` | `{{PHASE}}`(由 plugin_type/subkind 推导, `1-01` §6.2) |
-| 初始版本 | `{{VERSION}}` = `COMPAT_GEN.MAJOR.MINOR.REVISE` = `0.1.0.0` |
+| `api_type` | `{{api_type}}` |
+| 语言 `lang` | `{{lang}}`(v0.1 只交付 c) |
+| 初始相位 `phase` | `{{phase}}`(由 plugin_type/subkind 推导, `1-01` §6.2) |
+| 初始版本 | `{{version}}` = `COMPAT_GEN.MAJOR.MINOR.REVISE` |
 
 字段语义见 `docs/4-plugin/4-03-plugin-manifest.md`; v0.1 schema 见
 `docs/2-toolchain/brickie/brickie-v0.1.md` §8.1。
@@ -24,12 +24,12 @@
 
 ```sh
 brickie check                       # 声明面完备性检查(组合期校验)
-brickie dep add {{PLUGIN_NAME}} <dep>       # 声明结构依赖
-brickie iface publish {{PLUGIN_NAME}}       # 发布接口面 → hash + 版本推进
+brickie dep add {{name}} <dep>       # 声明结构依赖
+brickie iface publish {{name}}       # 发布接口面 → hash + 版本推进
 brickie gen                         # 从 plugin.toml 重建 build/gen/**; --check 只比对
 ```
 
-`build/gen/{{PLUGIN_NAME}}/plugin_desc.c` 是**生成物**, 不要手改 —— 改 `plugin.toml`, 再重建。
+`build/gen/{{name}}/plugin_desc.c` 是**生成物**, 不要手改 —— 改 `plugin.toml`, 再重建。
 
 ## 边界
 

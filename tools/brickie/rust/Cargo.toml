@@ -1,0 +1,24 @@
+# brickie-core — L0 模型 + L1 求解/版本/接口引擎(Rust)
+#
+# 依赖纪律(§9.3): 只允许极浅依赖集, 且锁版本进库(Cargo.lock)。
+# 本 crate **不引入 clap / serde derive**: 信封与 JSON 由 serde_json::Value 手写,
+# 声明面解析用 toml::Value 手写 —— 判定一律在 Rust 侧, 见 docs/contract.md。
+[package]
+name = "brickie-core"
+version = "0.1.0"
+edition = "2021"
+license = "WTFPL"
+description = "brickie v0.1 L0/L1 Rust 核心: 声明面模型 + 版本/区间 + 分类学 + 生成计划"
+build = "build.rs"
+
+[[bin]]
+name = "brickie-core"
+path = "src/main.rs"
+
+[dependencies]
+toml = "0.8"
+serde_json = "1"
+sha2 = "0.10"
+
+[profile.release]
+opt-level = 2

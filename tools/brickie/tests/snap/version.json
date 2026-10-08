@@ -1,0 +1,31 @@
+{
+  "command": "version",
+  "data": {
+    "deps": [
+      {
+        "name": "toml",
+        "version": "0.8"
+      },
+      {
+        "name": "serde_json",
+        "version": "1"
+      },
+      {
+        "name": "sha2",
+        "version": "0.10"
+      }
+    ],
+    "languages": [
+      {
+        "name": "rust"
+      }
+    ],
+    "protocol": 1,
+    "version": "0.1.0"
+  },
+  "diagnostics": [],
+  "exit_code": 0,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

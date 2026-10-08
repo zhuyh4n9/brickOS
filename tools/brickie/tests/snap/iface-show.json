@@ -1,0 +1,71 @@
+{
+  "command": "iface show",
+  "data": {
+    "compat_gen": 0,
+    "declaration_hash": "sha256:4876b2696f65ffb2d478602c4222d689c8d39201618fb7810ab92208956c2e85",
+    "entries": [
+      {
+        "kind": "func",
+        "layout": null,
+        "name": "crypto_hash",
+        "ops": null,
+        "sig": "int(const uint8_t*, size_t, uint8_t*)",
+        "status": "frozen",
+        "value": null
+      },
+      {
+        "kind": "macro",
+        "layout": null,
+        "name": "BR_MAX",
+        "ops": null,
+        "sig": null,
+        "status": "frozen",
+        "value": "16"
+      }
+    ],
+    "freeze_state": "frozen",
+    "hash_scope": "decl",
+    "id": "service/crypto#crypto",
+    "not_abi": true,
+    "published": false,
+    "snapshot_hash": null,
+    "source": "declaration",
+    "status": "frozen",
+    "truth": "decl",
+    "unit": {
+      "api_iface": "native",
+      "compat_gen": 0,
+      "declaration_freeze_state": "frozen",
+      "declaration_hash": "sha256:4876b2696f65ffb2d478602c4222d689c8d39201618fb7810ab92208956c2e85",
+      "file": "service/crypto/plugin.toml",
+      "form": "api",
+      "freeze_state": "frozen",
+      "hash_scope": "decl",
+      "id": "service/crypto#crypto",
+      "provider": "service/crypto",
+      "published": false,
+      "reexport_of": [],
+      "snapshot_freeze_state": null,
+      "snapshot_hash": null,
+      "status": "frozen",
+      "symbols": [],
+      "truth": "decl",
+      "unit": "crypto",
+      "version": "0.1.0.0"
+    },
+    "version": "0.1.0.0"
+  },
+  "diagnostics": [
+    {
+      "code": "BRV-MF-0001",
+      "file": "service/crypto/plugin.toml",
+      "severity": "info",
+      "span": "export[0]",
+      "target": "service/crypto"
+    }
+  ],
+  "exit_code": 0,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

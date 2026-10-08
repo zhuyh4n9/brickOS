@@ -1,0 +1,23 @@
+# {{name}} — 产品声明面(人写; **产品级唯一真值**, BRV-D4 / §8.2)
+#
+# 由 `brickie init` 生成一次, 之后**由人维护** —— brickie 不覆盖人写文件(§9.1.1)。
+# 计划由 `brickie-core plan-init` 给出, 内容由 `brickie-gen render` 渲染(contract §4/§6)。
+schema = {{schema}}
+
+[product]
+name    = "{{name}}"
+version = "{{version}}"       # COMPAT_GEN.MAJOR.MINOR.REVISE
+app     = "{{app}}"           # 唯一 APP 插件的目录(通常 app/<name>)
+core    = ">=1.0.0"           # core range 固定 3 段(§7.4)
+stage   = "dev"               # dev | release(profile 默认值, CLI 可覆盖)
+
+[select]
+plugins = []                  # 产品选中的插件(闭包根); 由人按 §8.2 增删
+
+[budget]
+ram_kib   = 512
+stack_kib = 16
+
+[lint]
+frozen_deps = "inherit"       # inherit | allow | deny
+allow_edges = []

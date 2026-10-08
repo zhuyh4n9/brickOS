@@ -1,0 +1,69 @@
+{
+  "command": "check",
+  "data": {
+    "plugin": null,
+    "scope_results": {
+      "deps": {
+        "errors": 1,
+        "infos": 0,
+        "scope": "deps",
+        "warnings": 0
+      },
+      "iface": {
+        "errors": 0,
+        "infos": 1,
+        "scope": "iface",
+        "warnings": 0
+      },
+      "priv": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "priv",
+        "warnings": 0
+      },
+      "tax": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "tax",
+        "warnings": 0
+      }
+    },
+    "scopes": [
+      "deps",
+      "iface",
+      "tax",
+      "priv"
+    ],
+    "summary": {
+      "closure": {
+        "plugins": 2,
+        "ram_kib": 0,
+        "stack_kib": 0
+      },
+      "errors": 1,
+      "infos": 1,
+      "profile": "release",
+      "warnings": 0
+    }
+  },
+  "diagnostics": [
+    {
+      "code": "BRV-MF-0001",
+      "file": "service/consumer/plugin.toml",
+      "severity": "info",
+      "span": "compat.requires_iface[0]",
+      "target": "service/consumer"
+    },
+    {
+      "code": "BRV-VER-0004",
+      "file": "service/consumer/plugin.toml",
+      "severity": "error",
+      "span": "compat.requires_iface[0]",
+      "target": "service/consumer"
+    }
+  ],
+  "exit_code": 1,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

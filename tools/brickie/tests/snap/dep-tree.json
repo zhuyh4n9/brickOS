@@ -1,0 +1,69 @@
+{
+  "command": "dep tree",
+  "data": {
+    "kind": "all",
+    "nodes": {
+      "app/hsm": {
+        "deps": [
+          {
+            "kind": "runtime",
+            "name": "iface/hsm-api",
+            "phase": null,
+            "range": "*"
+          }
+        ],
+        "file": "app/hsm/plugin.toml",
+        "phase": "app"
+      },
+      "iface/hsm-api": {
+        "deps": [
+          {
+            "kind": "runtime",
+            "name": "service/crypto",
+            "phase": null,
+            "range": "*"
+          }
+        ],
+        "file": "iface/hsm-api/plugin.toml",
+        "phase": "late"
+      },
+      "platform/qemu-aarch64": {
+        "deps": [],
+        "file": "platform/qemu-aarch64/plugin.toml",
+        "phase": "core"
+      },
+      "sched/coop": {
+        "deps": [
+          {
+            "kind": "init",
+            "name": "platform/qemu-aarch64",
+            "phase": null,
+            "range": "*"
+          }
+        ],
+        "file": "sched/coop/plugin.toml",
+        "phase": "core"
+      },
+      "service/crypto": {
+        "deps": [
+          {
+            "kind": "init",
+            "name": "sched/coop",
+            "phase": null,
+            "range": "*"
+          }
+        ],
+        "file": "service/crypto/plugin.toml",
+        "phase": "late"
+      }
+    },
+    "roots": [
+      "app/hsm"
+    ]
+  },
+  "diagnostics": [],
+  "exit_code": 0,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

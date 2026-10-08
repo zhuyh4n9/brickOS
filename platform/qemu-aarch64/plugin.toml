@@ -1,0 +1,93 @@
+# platform/qemu-aarch64 — 插件声明面(人写; **插件级唯一真值**, BRV-D4)
+#
+# 由 `brickie new platform platform/qemu-aarch64` 生成骨架后填入真实内容;
+# 之后由人维护 —— brickie 不覆盖人写文件(§8.4)。
+# 本件还清了 WORKAROUND(br-wa-entry-001) 的第 ② 条: "本目录收敛为插件
+# platform/qemu-aarch64(带 BR_PLUGIN 描述符 + manifest)"。
+schema = 1
+
+[plugin]
+name        = "platform/qemu-aarch64"
+plugin_type = "platform"
+api_type    = "native"          # 平台抛 native 面(§3.1)
+lang        = "c"
+phase       = "core"            # 第 ② 个完成点 = CORE(platform 有 init; §7.2 判例)
+version     = "0.1.0.0"         # COMPAT_GEN.MAJOR.MINOR.REVISE(§5.2)
+summary     = "QEMU virt (aarch64): reset/向量表/link.ld + PL011 早期 console + arch timer"
+license     = "WTFPL"
+
+# ---- 资源 ----(platform 的 [[res]] 同时是该 kind 的"平台容量", 裁定 R-6)
+[[res]]
+kind     = "ram"
+used_kib = 4
+notes    = "向量表 + 静态数据(无堆)"
+[[res]]
+kind     = "stack"
+used_kib = 4
+notes    = "EL1 早期栈(link.ld 里的 .stack 段)"
+
+[compat]
+core       = ">=0.1.0"          # 对 core 的版本依赖(range 固定 3 段)
+api_rev    = 1
+hash_scope = "decl"             # v0.1 只允许 decl(§6.6)
+truth      = "decl"             # 与 hash_scope 成对(V-11)
+abi_id     = ""                 # v0.1 占位; v0.6 由工具链指纹填充
+
+[iface.typedefs]
+br_u64  = "uint64_t"
+br_bool = "bool"
+
+# ---- 导出面: 平台契约(interface 单元 `platform/qemu-aarch64#plat`)----
+[[export]]
+name         = "plat"
+api_iface    = "native"         # 必须等于 [plugin].api_type(TAX-0016)
+form         = "api"            # 本插件自有的面
+version      = "0.1.0.0"
+compat_gen   = 0                # v0.1 期间恒 0(§14: 无合法冻结)
+freeze_state = "unfrozen"
+# 由人从快照 `api/iface/platform/qemu-aarch64/plat.toml` **抄回**(§9.1.1: 机器不改人写文件);
+# 与快照不等 ⇒ `BRV-IFACE-0012` 红(V-11④: hash 是同一真值的两处记录)。
+hash         = "sha256:199307d2638401c2507d174a0febc79b7926eee63b98594847d49d5e04b8043b"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_plat_early_init"
+sig  = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plat_name"
+sig  = "const char* (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plat_isa"
+sig  = "const char* (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plat_ticks_freq"
+sig  = "br_u64 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plat_ticks_now"
+sig  = "br_u64 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plat_park_forever"
+sig  = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plat_unexpected_exception"
+sig  = "void (br_u64)"
+
+# ---- 特权面(§3.4)----
+[privileged]
+level = "P4"                    # machine: MMU/页表/早期 console 属 platform
+[[privileged.resources]]
+irq          = [33]             # QEMU virt 的 PL011 UART0 = SPI 33
+dma_channels = []
+pins         = []
+device_names = ["pl011"]
+
+[build]
+sources  = ["src/*.c", "src/*.S"]
+includes = ["include"]

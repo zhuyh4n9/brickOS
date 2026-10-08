@@ -1,0 +1,28 @@
+schema = 1
+
+[plugin]
+name        = "platform/qemu-aarch64"
+plugin_type = "platform"
+api_type    = "native"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+
+[compat]
+core       = ">=1.0.0"
+hash_scope = "decl"
+truth      = "decl"
+
+
+
+[[res]]
+kind = "ram"
+used_kib = 8192
+[[res]]
+kind = "stack"
+used_kib = 64
+
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]
