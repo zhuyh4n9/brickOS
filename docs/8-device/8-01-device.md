@@ -281,7 +281,7 @@ const br_flash_ops *br_flash_get(const char *name, void **priv);
 | R-S4 | 风险 | 框架件边界漂移——*-core 是"插件身份 + core 纪律", 警惕往框架件里塞策略(会胖成小内核); golden 面审查是防线 |
 | O-S2 | 开放 | NAND: 对接 cdev-core flash 子型后, 坏块管理/OOB 需在其上叠加 bbm/FTL 层(v2+)——子型 ops 是否够用待真实硬件验证 |
 | O-S4 | 开放 | flash 子型若膨胀(NAND OOB)可在 cdev-core 内扩展或对称拆出 flash-core(依赖 cdev-core)——真实需求出现再定 |
-| O-S5 | 开放 | **netdev(v2.0 网络栈前置)**: D20 子分类模型给出答案空间——**netdev-core 作为第三个子分类框架**(依赖 dev-core, 对称 cdev/bdev); `service/lwip` 对接之; v2.0 设计前定(`docs/1-architecture/1-03-roadmap.md` v2.0 插件清单 ★) |
+| O-S5 | 开放 | **netdev(v2.0 网络栈前置)**: D20 子分类模型给出答案空间——**netdev-core 作为第三个子分类框架**(依赖 dev-core, 对称 cdev/bdev); `service/lwip` 对接之; v2.0 设计前定(`docs/1-architecture/1-03-roadmap.md` v2.0 插件清单 ★)。**前置分析见 [`8-02`](8-02-netdev-porting-gap.md)**: 移植边界 = `netif`(lwIP `ethernetif.c` 的两个函数), 真正缺口是 netdev-core 的 ops 形状 + 平台 virtio-mmio 数据 + lwip 的 `api_type` 归类 |
 | O-S6 | 开放 | **PM 调用方(v2)**: suspend/resume 的统一调用方——service/pm 经 dev-core 注册表枚举, 或平台 PM 流程; 与 sched-tt/低功耗 idle 的组合语义(挂起顺序/失败回滚) |
 | O-S7 | 开放 | **形态 B(无 VFS)的类型依赖成本**: dev-core 的 `open_file` 钩子签名引用 `br_file_ops`(vfs-core 类型)⇒ 不选 vfs-core 的组合仍会拉进该头文件(仅类型, 无 init/call 依赖, §2)。选项: (a) 接受——头文件级类型依赖不进镜像; (b) 钩子做成可选面(条件编译/弱声明); (c) 钩子下沉到 cdev-core(dev-core 零 vfs 类型)。取舍取决于形态 B 的真实裁剪收益(§1.2) |
 | O-S8 | 开放 | **形态 C 的组合期可见性**: standalone 器件不入注册表 ⇒ 设备名唯一性与类契约合规无从校验(资源冲突仍由 manifest 覆盖)。是否需要"轻注册"(仅入册供校验、不上行 VFS→形态 B)作为 C 的推荐升级路径, 待真实组合评审后定 |
