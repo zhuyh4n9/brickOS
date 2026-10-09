@@ -28,7 +28,7 @@
 core 提供**三个池(TLSF 堆 / contig 池 / 页池, CA-7/CA-8)+ MMU 接口 + DMA 约定**; 虚拟内存政策 = v1 恒等映射(属性隔离)/ v2 重定位 / vx MPU(v0.4 评审反转后的政策, 主文档 §4.3)。
 
 已有决策(待深化时继承):
-- **TLSF 堆**: `br_malloc/calloc/realloc/free`(3-01 §6); `sbrk` 挂接 svc-posix libc stub
+- **TLSF 堆**: `br_malloc/calloc/realloc/free`(3-01 §6); `sbrk` 挂接 runtime/posix libc stub
 - **per-plugin arena**: v1 统计(`br_heap_usage`), v2 归属分配 + memleak 记账(5-01 §4)
 - **DMA**(CA-6): `br_dma_buf_t` 含 dma_addr, v1 恒等下 == vaddr(为 v2 重定位预留形状)
 - **br_mm**: region 表(静态)、map/unmap 签名 v1 起定稿(R4; 升格 frozen 走 D15)、cache 维护(`br_mm_cache_flush/invalidate`, 驱动 DMA 前后)

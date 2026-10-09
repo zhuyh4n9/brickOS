@@ -56,7 +56,7 @@
 | 项 | 理由 |
 |---|---|
 | `br_` / `BR_` / `.br_*`(OS 符号 / 宏 / 链接段) | D16 的 OS 命名部分; 全库契约 + 原型代码已用(实测 836 / 223 / 18 处) |
-| OS 级 `br-*` golden 组名(`br-sched` / `br-mem` / `br-mm` / `br-irq` / `br-svc` / `br-devcore` / `br-cdevcore` / `br-vfscore` / `br-bdevcore` / `br-svcposix` / `br-crypto` / `br-keyring` / `br-pic`) | 是 **API / golden 组名**, 不是工具家族 |
+| OS 级 `br-*` golden 组名(`br-sched` / `br-mem` / `br-mm` / `br-irq` / `br-svc` / `br-devcore` / `br-cdevcore` / `br-vfscore` / `br-bdevcore` / `br-posix` / `br-crypto` / `br-keyring` / `br-pic`) | 是 **API / golden 组名**, 不是工具家族 |
 | 决策号 `BR-D*` / `BRV-D*` / `BRV-Q*` 与错误码 `BRV-<域>-NNNN` | **已分配标识符**: 跨文档引用 + 错误码将进 CI/测试。重编号收益为零、风险实打实。若日后要统一前缀, 单独立一条 ADR |
 | `comment/**`(评审存档: `Design/comment/**` 与 `docs/2-toolchain/brickie/comment/**`) | 历史存档按仓库规矩**原样保留旧名**(见 `comment/README.md` 的"历史存档, 正文原样保留旧名与旧前缀"); 旧名对照由本 ADR 承担。**唯一例外**: 存档内指向被改名正文的**相对链接指针**已修复(`../../../br-tool-v0.1.md` → `../../../brickie-v0.1.md`, 3 处), 链接**文字**仍保留旧路径(叙述不变, 只修指针) |
 | `br-wa-*`(WORKAROUND 欠债编号)与 `prototype-v0.1.0/**` | 属 `brickOS-prototype-v0.1.0` 分支; `br-wa-*` 是 OS 级欠债编号, 不改(该分支的 CLI 引用见 §7) |

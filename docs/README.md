@@ -31,10 +31,12 @@
 | | | [`7-02-bdev.md`](7-storage/7-02-bdev.md) 块设备(堆叠/分区/page cache) | 成文 |
 | | | [`7-03-concrete-fs.md`](7-storage/7-03-concrete-fs.md) 具体文件系统(tmpfs/devfs/littlefs/EROFS) | 成文 |
 | 8 | **device**(设备域) | [`8-01-device.md`](8-device/8-01-device.md) 设备体系与三种组合形态(形态 A/B/C)/ 子分类 / 驱动契约(SD-2~14) | 成文 |
+| | | [`8-02-netdev-porting-gap.md`](8-device/8-02-netdev-porting-gap.md) **netdev 与网络驱动移植: 差距分析**(O-S5 的前置; 移植边界 = netif) | 分析稿 |
 | 9 | **app**(应用) | [`9-01-app.md`](9-app/9-01-app.md) 单 APP 模型/入口/生命周期 | 骨架 |
 | | | [`9-02-hsm-sample.md`](9-app/9-02-hsm-sample.md) **HSM 完整样例**(v1.x/M5, D24–D26: 第二产品域纵向切片 + 域支撑矩阵/资产边界) | 成文 |
 | 10 | **interface management** | [`10-01-interface.md`](10-interface/10-01-interface.md) 接口插件(严格叶子/再导出) | 骨架 |
-| 11 | **service**(自研与三方服务) | [`11-01-service.md`](11-service/11-01-service.md) svc-posix/trace/lwip/三方移植 | 骨架 |
+| 11 | **service**(自研与三方服务) | [`11-01-service.md`](11-service/11-01-service.md) runtime/posix/trace/lwip/三方移植 | 骨架 |
+| | | [`11-02-runtime-posix-subset.md`](11-service/11-02-runtime-posix-subset.md) **runtime/posix 可支持接口清单(现状对账)**: 按原型今天的 native 面逐族列 TR-A/B/C/D 档 + 前置清单(P-1…P-9) + 最小切片 S1–S6 | 成文(对账) |
 
 **引用写法**: 跨文档引用用**文件号**(如 `3-01 §13.4`、`docs/8-device/8-01-device.md`), 不要只写名字——章节调整后名字不变而号会变, 号是唯一身份。
 

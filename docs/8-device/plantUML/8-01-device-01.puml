@@ -1,7 +1,7 @@
 @startuml
 skinparam componentStyle rectangle
 
-[svc-posix] as PXP
+[runtime/posix] as PXP
 [fs/tmpfs\nrootfs(D21)] as TMP
 [fs/devfs\n/dev 设备节点(D21)] as DFS
 [littlefs] as LF

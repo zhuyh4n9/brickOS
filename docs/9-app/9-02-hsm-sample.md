@@ -111,7 +111,7 @@
 | `io/virtio-blk` | I/O | `/data` 介质(QEMU bdev + littlefs 适配) |
 | `service/trace` | Service | 热路径事件(含 HSM 命令/拒绝/审计探针) |
 
-> **明确不选**: `iface-posix` 与 `svc-posix` **不在**本样例组合内——HSM 的 APP 面走 `iface-pkcs11`(需要零开销直通 native 时选 `iface-min`; A-2, 见 `brickie` v0.1 §13.2), 不需要 POSIX 运行时; 这正是**接口面可裁剪**的证据(§10)。若某客户的 host 侧工具链要求 POSIX 面, 加回二者即可, 服务层零改动。
+> **明确不选**: `iface-posix` 与 `runtime/posix` **不在**本样例组合内——HSM 的 APP 面走 `iface-pkcs11`(需要零开销直通 native 时选 `iface-min`; A-2, 见 `brickie` v0.1 §13.2), 不需要 POSIX 运行时; 这正是**接口面可裁剪**的证据(§10)。若某客户的 host 侧工具链要求 POSIX 面, 加回二者即可, 服务层零改动。
 
 **新增(v1.x / M5)**:
 

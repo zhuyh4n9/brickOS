@@ -48,6 +48,11 @@
 | 原型基线 | 分支 `brickOS-prototype-v0.1.0` @ **`9471fc6`** | 中断框架 Stage 1 + GICv3(`0ab1ecd`)、内存映射/堆/调试插件(**同一个提交** `9471fc6`)、`brickie` v0.1 组合期工具 + platform 插件化(`b55e1cf`) |
 | **本篇对账对象** | 分支 `brickOS-prototype-v0.x.0` @ **`1d60a15`** | **相对基线只多 1 个提交**: `brickie` 构建族 + 插件管理器 + 调度框架/`sched/coop` + 同步原语(112 files, +13787/−761) |
 
+> ⚠ **读法(2026-xx 补注)**: 本文是**某个提交坐标上的快照**, §3 的 ❌/◐ 只对该坐标成立。该坐标之后原型又落了
+> 数刀(各有 ADR): **ADR-0011**(`sched/rr` 时间片抢占 + 中断下半部/工作队列)、**ADR-0012**(文件表 `framework/file-table` + errno 与内核逐值对齐)、
+> **ADR-0013**(VFS 符号链接与硬链接)、**ADR-0014**(POSIX 运行时 `runtime/posix`)、**ADR-0015**(该运行时的改名与 `runtime` 命名空间)。
+> ⇒ 本文 §3.1 的"接口"行、§3.2 插件清单、§3.6/§3.7 的若干 ❌ **已被上述几刀部分关闭**; 要读"现在长成什么样"请看 `1-03` §1 的插件清单与各 ADR, **不要**把本文的 ❌ 当现值。
+
 原型自己按域留了 7 篇决策记录, 与本篇的对应关系见 **附录 A**。
 
 ### 0.2 实况记录的纪律
@@ -336,7 +341,7 @@
 | **int** | IRQ 框架 + **bottom half(work queue)** | ◐ | Stage 1 ✅(`[IRQCONF] 67/0`); **bh ❌**(`br_work_submit` 缺席; SLOW 级联域连带不可用) |
 | **sched** | `sched-coop` | ◐ | coop ✅(含 coop 语义锚点 `TC-TASK-101`、`sched_class` 的组合期执法); **tickless ❌ → 100 ms 周期 tick**; **"恰 1 个 scheduler" 无组合期门禁**(O-20) |
 | **插件管理** | 依赖版本区间 + 拓扑排序 + **环检测硬错误** + 描述符 v2 | ✅(组合期 + 运行期) | 组合期(闭包/区间/相位/分类学)在 `brickie-core`; 运行期(段枚举/Kahn/相位机/首败即停)在 core。**细节待回灌**(O-7/O-8) |
-| **接口** | native API + **svc-posix(D18)** + `iface-posix` 薄皮肤 + `iface-min` | ❌ | native API 面 47/48 已落; **但三件接口/运行时件(`svc-posix`/`iface-posix`/`iface-min`)全无**, 且"皮肤再导出"机制(`1-01` §7.3)在原型里**没有运行实例** |
+| **接口** | native API + **runtime/posix(D18)** + `iface-posix` 薄皮肤 + `iface-min` | ❌ | native API 面 47/48 已落; **但三件接口/运行时件(`runtime/posix`/`iface-posix`/`iface-min`)全无**, 且"皮肤再导出"机制(`1-01` §7.3)在原型里**没有运行实例** |
 | **框架件** | `dev-core` + `cdev-core` + `bdev-core` + `vfs-core`(D19/D20) | ❌ | 四件全无; `8-01` 的三种组合形态与 `7-01` 的四层 ops **没有一行实现** |
 | **三方移植** | sqlite 双模式移植(移植性验证) | ❌ | 未开始; **这条是"战略语境"里最重的一件**(架构的生死线), 却排在 M2 之后 |
 | **存储** | VFS + **tmpfs rootfs + devfs(/dev)**(D21)+ block 层 + littlefs | ❌ | 全部未开始; `/dev` 不存在 ⇒ 设备与文件两条链都没有落点 |
@@ -360,7 +365,7 @@
 | `io/uart-pl011` | M0(轮询)/M2(tty) | ◐ | **能力在, 插件不在**: PL011 早期轮询 console 在 platform 插件目录内; 中断 tty 未做 |
 | `io/virtio-blk` | M2 | ❌ | 未做 ⇒ 无设备驱动样例 |
 | `fs/littlefs` | M2 | ❌ | 未做 ⇒ 无"落盘"证据 |
-| `svc-posix` | M2 | ❌ | 未做 ⇒ `fd`/`stdio`/`pthread` 全无 |
+| `runtime/posix` | M2 | ❌ | 未做 ⇒ `fd`/`stdio`/`pthread` 全无 |
 | `service/trace` | M2 | ◐ | 同名插件在, 但**环在 core**(O-24): 无 "manifest 定尺寸"、无 MPSC 无锁写的公开口径 |
 | `service/dbg-bridge` | M3 | ◐ | 无 COBS/CRC16 成帧、无命令集、无 panic 独立命令通道; `dump`/`hexdump` 是"直写 console"的近似 |
 | `iface-posix` | M2 | ❌ | 未做 |
@@ -375,7 +380,7 @@
 |---|---|---|---|
 | **M0** | 启动链 + 插件管理; 验证 = hello + init 链打印 + **环检测用例** | ✅ | 达成: 相位轨迹逐插件打印; 组合期环检测(`tools/brickie/tests/fx/cycle/`)与运行期环路径 panic 都在 |
 | **M1** | sched-coop + native task API + **tickless timer** + **bottom half** | ◐ | task API ✅(7/7 能力); **tickless ❌**(O-18); **bh ❌**(O-19) |
-| **M2** | 框架件四件 + tmpfs/devfs + virtio-blk + littlefs + trace ring + svc-posix + sqlite 模式 A | ❌ | 只落了 trace ring 的 core 半边; **这是最大的一段空白**, 也是 §4 的咽喉 |
+| **M2** | 框架件四件 + tmpfs/devfs + virtio-blk + littlefs + trace ring + runtime/posix + sqlite 模式 A | ❌ | 只落了 trace ring 的 core 半边; **这是最大的一段空白**, 也是 §4 的咽喉 |
 | **M3** | bridge 最小集 + host 平台插件 + CLI + conformance 首版 | ◐ | CLI ✅(**超排期**, 含构建族)+ conformance 首版 ◐(8 套摘要但 id 漂移); **bridge ❌**; **host 平台插件 ❌** |
 | **M4**(v1.x 选配) | 首个真实 SoC + PMIC/GPIO 级联域驱动 | ❌ | 未做(QEMU 之外无平台) |
 | **M5**(v1.x) | HSM 完整样例(6 件插件 + `app/hsm`) | ❌ | `6-01` `TC-HSM-101…106` **一条未跑**; `9-02` 的 A1–A6 无证据 |
@@ -437,7 +442,7 @@
 | **v0.3** | **编译**(构建编排 + 描述符/头文件/链接脚本生成物) | ✅ **提前交付** | 演进序重排(O-4); 需回灌 §14 |
 | **v0.4** | **test**(conformance 运行器 + **host 平台**) | ◐ | `brickie test` + `tests/gates.toml` 已交付(且能力远超"运行器": 含日志判据/脚本门禁); **host 平台插件仍未落地**(§3.2 第 2 行) ⇒ 该阶的入口条件未满足 |
 | **v0.5** | **run**(host-native + QEMU 后端) | ◐ | `brickie run` 只有 **QEMU** 后端; host-native 后端未做(依赖 host 平台插件) |
-| **v0.6** | **兼容性检查**(golden / api-dump / abidiff / 版本矩阵)+ 框架件/`svc-posix` 面纳入冻结 | ❌ | 完全未开始; 且被 v0.2 的符号面真值缺席前置 |
+| **v0.6** | **兼容性检查**(golden / api-dump / abidiff / 版本矩阵)+ 框架件/`runtime/posix` 面纳入冻结 | ❌ | 完全未开始; 且被 v0.2 的符号面真值缺席前置 |
 | 三语言分层 + JSON 协议 | `brickie-v0.1.md` §9.1(BRV-D3) | ✅ | `protocol_version = 1` 启动握手 |
 | 分发形态 | v0.1 只承诺"POSIX 宿主 + `python3` ≥3.11 在位"; wheel/容器/静态链接顺延 v0.x(RV-14) | ◐ | 单文件自包含 ELF + 种子进库 ✅; **其余分发形态仍空** |
 | 自举 | ADR-0002/0004: 受治理的宿主编译器 + 种子 | ◐ | 种子 ✅(`prebuilts/seed/…`); **受治理的宿主编译器仍缺**(设计 ADR-0003 §5-2 未解) |
@@ -462,11 +467,11 @@ dev-core(设备注册表/命名/子分类协议)
    └── page cache(vx.0)
 vfs-core(挂载表/四层 ops)
    ├── fs/tmpfs(rootfs) + fs/devfs(/dev)
-   ├── svc-posix(fd/stdio) ── iface-posix ── 三方移植(sqlite 模式 A)
+   ├── runtime/posix(fd/stdio) ── iface-posix ── 三方移植(sqlite 模式 A)
    └── debug bridge 的 /dev/uart0 ── service/dbg-bridge(M3)
 ```
 
-**推论**: 没有 `vfs-core`, 就没有 `/dev`; 没有 `/dev`, 就没有 bridge 的通道、没有 `svc-posix` 的 fd、没有 sqlite 的落地 —— 于是 `1-03` §5 DoD 第 6 项(host 平台插件)、`br-wa-debug-002`、`br-wa-test-001` 的第三项(用例按 `6-01` 的 host 列打 PASS 行)都会被同一条链挡住。
+**推论**: 没有 `vfs-core`, 就没有 `/dev`; 没有 `/dev`, 就没有 bridge 的通道、没有 `runtime/posix` 的 fd、没有 sqlite 的落地 —— 于是 `1-03` §5 DoD 第 6 项(host 平台插件)、`br-wa-debug-002`、`br-wa-test-001` 的第三项(用例按 `6-01` 的 host 列打 PASS 行)都会被同一条链挡住。
 
 ### 4.2 建议的下一刀顺序(与 `1-03` §3 对齐)
 
@@ -476,7 +481,7 @@ vfs-core(挂载表/四层 ops)
 | 2 | **tickless 超时框架**(平台 timer 比较器 + 单次触发) | O-18; `1-03` §3 M1 的最后一条 | 调度框架已在 |
 | 3 | **bh / work queue**(`br_work_submit` + 白名单) | O-19; `TC-WORK-001…004`; SLOW 级联域(`TC-IRQ-102`) | 调度框架 + 同步原语已在 |
 | 4 | **`vfs-core` + `fs/tmpfs` + `fs/devfs` + `dev-core`/`cdev-core`** | `1-03` §1 的存储与框架件两行; `/dev` 通道 | 上面 3 条(M2 的定义) |
-| 5 | **`svc-posix` + `iface-min`/`iface-posix`** | 接口行; 删掉最后一条 `allow_edges`; 三方移植解锁 | 第 4 条 |
+| 5 | **`runtime/posix` + `iface-min`/`iface-posix`** | 接口行; 删掉最后一条 `allow_edges`; 三方移植解锁 | 第 4 条 |
 | 6 | **debug bridge + host 平台插件** | M3; ASan 白捡; DoD 第 6 项 | 第 5 条(`/dev/uart0`) |
 | 7 | **`br-wa-test-001` 对齐**(用例 id ↔ `6-01` + 补 `TC-*` 缺口) | §3.5 的 16 条; `6-01` 成为真判据 | 可与 1–3 并行 |
 | — | **设计侧并行**: 3-03/3-04/3-05/3-06/2-01 成文 + `6-01` 补 `TC-PLUG`/`TC-DBG` 组 + `brickie-v0.1.md` §14 回灌 | §3.3/§3.4/§3.7 的设计侧条目 | 三篇新 ADR 已给素材 |

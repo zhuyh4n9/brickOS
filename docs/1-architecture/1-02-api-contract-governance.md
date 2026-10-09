@@ -94,7 +94,7 @@ api/frozen/br-sched.txt        ← golden 文件(生成物, 勿手编)
 
 - CI: 构建产物 vs golden 做 diff。工具: libabigail `abidiff`(现成, 能看穿结构布局)或自研头文件解析
 - 规则: **删除/签名变更/布局变更 = 硬红; 新增 = 绿但强制同 PR 更新 golden**(评审者看见面在长大)
-- **v0.5(D18)**: `svc-posix` 的 POSIX 符号面是第二个被治理对象——同一 golden/门禁机制; POSIX 子集从"口头承诺"变成被测试的契约(子集清单成文, 未实现项在链接期暴露)
+- **v0.5(D18)**: `runtime/posix` 的 POSIX 符号面是第二个被治理对象——同一 golden/门禁机制; POSIX 子集从"口头承诺"变成被测试的契约(子集清单成文, 未实现项在链接期暴露)
 - **v0.6(D19)/v0.7(D20)**: 框架件(dev-core/cdev-core/vfs-core/bdev-core)的 API 面是第三类被治理对象——通用设备/字符/文件/块设备契约各自独立 golden(`br-devcore.txt`/`br-cdevcore.txt`/`br-vfscore.txt`/`br-bdevcore.txt`), 同一门禁机制
 
 **层 2 — 语义一致性套件(语义层): 抓"编过了但行为变了" + 执法 R1**

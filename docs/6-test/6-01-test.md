@@ -37,7 +37,7 @@
 
 | # | 不变量 | 依据 |
 |---|---|---|
-| **INV-1** | 阻塞 API 超时统一: 任何超时到期 → **`-ETIMEDOUT`**(`ZERO` = 即时超时, 同码; svc-posix 层再映射 POSIX 的 EAGAIN/EBUSY) | CA-4 |
+| **INV-1** | 阻塞 API 超时统一: 任何超时到期 → **`-ETIMEDOUT`**(`ZERO` = 即时超时, 同码; runtime/posix 层再映射 POSIX 的 EAGAIN/EBUSY) | CA-4 |
 | **INV-2** | **不早醒**: sleep/超时到期不早于期限; 晚到无上界承诺(统计上报, 不判红) | 3-01 §2.1 |
 | **INV-3** | ISR 白名单执法: 白名单外调用 = 静态扫描红 + debug 运行时断言 | CA-3 |
 | **INV-4** | 错误码 ∈ core 域负 errno 子集(扫描验证) | 3-01 §11(SD-10 core 域子集) |

@@ -132,7 +132,7 @@ C1 + C4 + C10 三条合起来决定: **v0.1 的交付重心是"求解器 + 版�
 
 | `api_type` | 定义 | **可抛出的接口分类**(§3.5) | 依赖许可(强约束; **仅对有面的提供方**) | v0.1 |
 |---|---|---|---|---|
-| `native` | 严格遵守 brickOS **native API** 规范, 不依赖任何 POSIX/三方基座 | **仅** `native` 接口 | **不允许依赖 `runtime_adapter` 的能力面**(如 `svc-posix`)——`kind = "type"` 的编译期类型边除外(§7.1) | 骨架生成 + 校验 |
+| `native` | 严格遵守 brickOS **native API** 规范, 不依赖任何 POSIX/三方基座 | **仅** `native` 接口 | **不允许依赖 `runtime_adapter` 的能力面**(如 `runtime/posix`)——`kind = "type"` 的编译期类型边除外(§7.1) | 骨架生成 + 校验 |
 | `runtime_adapter` | 为 `third_party` 提供接口支持的适配基座(如 POSIX 运行时) | **仅** `runtime_adapter` 接口 | **只允许**依赖 `native`(core / 框架件 / native ability); `kind = "type"` 的编译期类型边可指向 `third_party` 与 `native`(§7.1 的显式例外) | 校验可识别; 骨架模板预留 |
 | `third_party` | 携带上游源码的三方件(如 `service/sqlite`), 移植增量 = 适配层 | 可抛 `third_party` 接口(契约边界, §3.5); **能力优先经注册表发布**(BRV-Q13), 无 `[[export]]` 也完全合法 | 可依赖 `native`(能力)、`runtime_adapter`(基座)与 `third_party`; **不得被 `native` 提供方依赖其能力面**(可经注册表消费运行期能力, 见下) | 校验可识别; 骨架模板预留 |
 
@@ -145,7 +145,7 @@ C1 + C4 + C10 三条合起来决定: **v0.1 的交付重心是"求解器 + 版�
 
 > `native ↛ runtime_adapter` 这条禁则的**架构动机**: 保证"极小组合"(不链任何适配基座)永远可裁剪——`1-01` §7.5 的复用经济学。它把 `4-04` §3「调用依赖是否需要声明面」的答案锁在"**必须声明**"上: 一旦允许 native 悄悄调 POSIX, 裁剪承诺就失效。**该禁则在 v0.2 起还会投影到接口粒度**: native 插件不得 `require` 分类为 `runtime_adapter` 的接口单元(§3.5/§5.3)。
 >
-> **`type` 依赖的显式例外(与 `7-01`/`8-01` 白名单同源)**: 禁则约束的是**运行期能力面**。三类依赖里只有 `init`/`runtime` 会引入运行期耦合; `kind = "type"`(§7.1)只是"编译期需要头文件/类型可见", 不把提供方拉进组合的运行期依赖 ⇒ **`runtime_adapter` 允许对 `third_party` 声明 `type` 边**(判例: `svc-posix` 移植层需要 sqlite 的类型), 该边不进 `release` 的"未冻结接口"判定(§7.5 只作用于接口消费)。**禁止的是** `runtime_adapter` 对 `third_party` 声明 `init`/`runtime` 边(那会把上游件拖进极小组合); 三方件的能力面仍只经注册表消费(BRV-Q13), 不作为接口单元被依赖。
+> **`type` 依赖的显式例外(与 `7-01`/`8-01` 白名单同源)**: 禁则约束的是**运行期能力面**。三类依赖里只有 `init`/`runtime` 会引入运行期耦合; `kind = "type"`(§7.1)只是"编译期需要头文件/类型可见", 不把提供方拉进组合的运行期依赖 ⇒ **`runtime_adapter` 允许对 `third_party` 声明 `type` 边**(判例: `runtime/posix` 移植层需要 sqlite 的类型), 该边不进 `release` 的"未冻结接口"判定(§7.5 只作用于接口消费)。**禁止的是** `runtime_adapter` 对 `third_party` 声明 `init`/`runtime` 边(那会把上游件拖进极小组合); 三方件的能力面仍只经注册表消费(BRV-Q13), 不作为接口单元被依赖。
 
 ### 3.2 维度二: `plugin_type`(架构层级)
 
@@ -283,7 +283,7 @@ device_names = ["hsm0"]
 
 1. **接口单元 id 携带分类**: 单元 `<provider>#<unit>` 的解析结果里带 `api_iface` 字段, 随快照与 `--json` 一起输出(§6.1)。
 2. **依赖侧按分类判合法**: `requires_iface`(§5.3)引用一个单元时, 若无脑跨类消费则红 —— **`native` 插件不得 require 分类为 `runtime_adapter` 的接口单元**; 这正是 §3.1 的 `native ↛ runtime_adapter` 禁则在**接口粒度**上的投影(v0.2 起生效, 因为 v0.1 不扫描接口依赖)。
-3. **`skin` 边必须豁免 api_type 禁则**: `iface-posix`(runtime_adapter 皮肤)要依赖 `svc-posix`(runtime_adapter 基座), 若照搬"runtime_adapter 只许依赖 native"会被误杀。因此规则精确表述为: **`form = "api"` / `service` 的依赖边受 `api_type` 禁则约束; `form = "skin"` 的再导出边豁免**, 且豁免必须由 `reexport_of` 显式声明方能成立(不可隐式)。
+3. **`skin` 边必须豁免 api_type 禁则**: `iface-posix`(runtime_adapter 皮肤)要依赖 `runtime/posix`(runtime_adapter 基座), 若照搬"runtime_adapter 只许依赖 native"会被误杀。因此规则精确表述为: **`form = "api"` / `service` 的依赖边受 `api_type` 禁则约束; `form = "skin"` 的再导出边豁免**, 且豁免必须由 `reexport_of` 显式声明方能成立(不可隐式)。
 
 > **旗舰判例(域闭合的验收用例)**: `iface-pkcs11` 是 `plugin_type = interface` / `api_type = runtime_adapter` 的薄皮肤, 它再导出 `service/crypto#crypto` 与 `service/keyring#keyring` 两个单元 ⇒
 > - `reexport_of = ["service/crypto#crypto", "service/keyring#keyring"]`(**列表**容纳两个提供者, 缺口 b 关闭);
@@ -815,7 +815,7 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
 |---|---|---|
 | `sched-coop → platform/qemu-aarch64` | `platform.init` 在 **CORE** 完成(② = CORE); `sched-coop.init` 在 **CORE** 完成(② = CORE) | `CORE ≤ CORE` ✅ **不误杀** |
 | `service/* → framework/*`(服务 → 框架件) | Service 的 ② 在 **LATE**; 框架件 ② 在 **CORE**(非 Service ⇒ CORE) | `CORE ≤ LATE` ✅ |
-| `iface-posix → svc-posix`(皮肤 → 服务) | `iface-posix` ② 在 **LATE**; `svc-posix`(service)② 在 **LATE** | `LATE ≤ LATE` ✅ |
+| `iface-posix → runtime/posix`(皮肤 → 服务) | `iface-posix` ② 在 **LATE**; `runtime/posix`(service)② 在 **LATE** | `LATE ≤ LATE` ✅ |
 | 反例: `dev-core(phase=core) → sched-coop(phase=core)` 而 `dev-core` 又在 `sched-coop.early_init` 里被注册? | 该边不是 `init` 边(是运行期注册) ⇒ **规则不管**; 若硬写成 `init` 边, 两边同为 CORE ⇒ 被拓扑序决定, 不由相位报错 | ✅ |
 
 > **规则只覆盖"已声明"的 init 边**(关闭 `r1/01` P1-4 的覆盖边界): 未声明的隐式耦合(判例: trace 的调用链 —— 谁在 `init` 里悄悄用了尚未 `init` 的服务)**不在 v0.1 范围**, 由 v0.2 的符号级接口依赖扫描 + 源码静态分析接手(`1-01` §6.4-3 后半)。这句话必须写在规则旁边, 否则规则会被读成"相位问题已全解"。
@@ -835,9 +835,9 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
 
 三条硬禁则(v0.1 可全量执法): (1) `app` 不得依赖 `ability`/`platform`; (2) `native` 不得依赖 `runtime_adapter`; (3) `interface` 不得被 `app` 以外的任何插件依赖(严格叶子)。**第四条的精确形式**(不写成第四条硬禁则, 因为它由前三条导出): `native` 插件不得依赖 `api_type = "third_party"` 的插件(§3.1 表的"不得被 `native` 依赖")。
 
-> **"谁来消费三方件"的唯一解**: 上表把消费者收窄到 `ability` 一行 —— 与 `1-01` §7.6 的"由 native 包装件持有接口单元"一致。`svc-posix`(runtime_adapter)对 sqlite 只有 **`kind = "type"` 的编译期类型边**(§3.1 的显式例外); **运行期能力一律经注册表**(BRV-Q13), 不产生接口单元依赖。这条同时关闭 `r1/03` P0-3④(U-1: lwip/sqlite 的 `api_type` 归类)的争议面: `service/lwip`/`service/sqlite` 的 `plugin_type = ability`、`api_type = third_party`(携带上游源码), 它们是**消费者**而非被 native 依赖的提供者。
+> **"谁来消费三方件"的唯一解**: 上表把消费者收窄到 `ability` 一行 —— 与 `1-01` §7.6 的"由 native 包装件持有接口单元"一致。`runtime/posix`(runtime_adapter)对 sqlite 只有 **`kind = "type"` 的编译期类型边**(§3.1 的显式例外); **运行期能力一律经注册表**(BRV-Q13), 不产生接口单元依赖。这条同时关闭 `r1/03` P0-3④(U-1: lwip/sqlite 的 `api_type` 归类)的争议面: `service/lwip`/`service/sqlite` 的 `plugin_type = ability`、`api_type = third_party`(携带上游源码), 它们是**消费者**而非被 native 依赖的提供者。
 
-> **禁则 (2) 的两条精确化补充**(§3.5): (a) 在 v0.2 起, 它同时约束**接口粒度** —— `native` 插件不得 require `runtime_adapter` 分类的接口单元; (b) `form = "skin"` 的**再导出边豁免**该禁则(否则 `iface-posix` → `svc-posix` 被误杀), 豁免必须由 `reexport_of` 显式声明。
+> **禁则 (2) 的两条精确化补充**(§3.5): (a) 在 v0.2 起, 它同时约束**接口粒度** —— `native` 插件不得 require `runtime_adapter` 分类的接口单元; (b) `form = "skin"` 的**再导出边豁免**该禁则(否则 `iface-posix` → `runtime/posix` 被误杀), 豁免必须由 `reexport_of` 显式声明。
 
 > **框架件之间的特例**不写成通用规则: `cdev-core→dev-core`、`bdev-core→dev-core`、`cdev-core→vfs-core(类型)` 这类边由 `7-01`/`8-01` 的显式白名单承载(v0.1 以 `allow_edges` 清单形式内置), 否则通用规则会被迫放宽到无法执法。
 
@@ -885,9 +885,9 @@ v0.2+ truth="header"  头文件 = 声明真值, 构建产物 = 机器真值, 声
 - **与镜像 profile 的关系(须写明, 否则会被误读为同一件事)**: 本 profile = **组合期检查严格度**(工具侧); 既有 `release 构建`(`1-01` §13 `brickie build --release`; `3-02` IR-15/INV-C 的 debug=panic / release=trace)= **镜像内断言行为**。二者**不同轴**, 但**建议耦合**: `brickie build --release` 应**强制**以 `--profile release` 完成检查, 否则会出现"release 镜像由 dev 级检查放行"的漏洞。
 - **CI 落地**: dev 门禁全量跑; release 门禁**唯一多出的一条**就是 `--profile release` 的 `BRV-VER-0004`(加 §5.3.4 规则 3 的 `unfreezing` 阻断)。
 
-> **⚠ 由此照出一条必须补的排期空白**(评审发现的连带问题): "release 不允许依赖未冻结接口"把**冻结排期**变成 release 的**硬前置**, 而首版的 `3-01` §15 冻结计划**只覆盖 core native 组**(`br-sched`/`mem`/`mm`/`irq`/`svc`)。**框架件四件**(`br-devcore` 等, `3-01` §0 行 44 有文件名)、**svc-posix POSIX 面**(`br-svcposix.txt`, §0 行 45)、**crypto/keyring ops** 均**有治理声明却无冻结批次** ⇒ 任何依赖它们的 release 会被 `BRV-VER-0004` **永久阻断且无排期可解**。
+> **⚠ 由此照出一条必须补的排期空白**(评审发现的连带问题): "release 不允许依赖未冻结接口"把**冻结排期**变成 release 的**硬前置**, 而首版的 `3-01` §15 冻结计划**只覆盖 core native 组**(`br-sched`/`mem`/`mm`/`irq`/`svc`)。**框架件四件**(`br-devcore` 等, `3-01` §0 行 44 有文件名)、**runtime/posix POSIX 面**(`br-posix.txt`, §0 行 45)、**crypto/keyring ops** 均**有治理声明却无冻结批次** ⇒ 任何依赖它们的 release 会被 `BRV-VER-0004` **永久阻断且无排期可解**。
 >
-> **已回灌(原 A-18/A-19, 2026-xx 落定)**: `3-01` §15 冻结计划已补 **第四批(框架件四件, M2/M3 起分批)**、**第五批(`svc-posix`, M3)** 与**第六批(`crypto`/`keyring` ops, M5 随服务契约)**, 且明确**以接口单元为粒度**(A-16); `9-02` §6.2 的 **O-H7 已关闭**(crypto/keyring ops **入 golden**, 与框架件同级), `11-01` §3 对应开放问题已撤。⇒ 现行排期下 release **不再存在无解组合**。
+> **已回灌(原 A-18/A-19, 2026-xx 落定)**: `3-01` §15 冻结计划已补 **第四批(框架件四件, M2/M3 起分批)**、**第五批(`runtime/posix`, M3)** 与**第六批(`crypto`/`keyring` ops, M5 随服务契约)**, 且明确**以接口单元为粒度**(A-16); `9-02` §6.2 的 **O-H7 已关闭**(crypto/keyring ops **入 golden**, 与框架件同级), `11-01` §3 对应开放问题已撤。⇒ 现行排期下 release **不再存在无解组合**。
 
 ### 7.6 闭包求解(纯函数, 单测友好)
 
@@ -1113,7 +1113,7 @@ allow_edges = [                    # §7.3 的框架件白名单特例
 
 ### 8.3 插件名与目录(与 `4-02` §3 的接口)
 
-> **唯一口径(关闭 `r1/03` P0-7)**: 插件名 = `<namespace>/<short>`; **`namespace` 的正式枚举 = `app|iface|platform|sched|framework|io|fs|service`**(即**按 `plugin_type` + `subkind` 组织**)。**`ability` 不是 `namespace`** —— 它只保留一条通配读法(②(b))。首版的三套形态(`ability/crypto` / 裸 `crypto` / `service/crypto`)**统一到 `service/crypto`**: 它是 `plugin_type = "ability"` 的**服务**, 名字取 `subkind = service`(§0 的 `brickie new ability service/crypto` 已是此意)。
+> **唯一口径(关闭 `r1/03` P0-7)**: 插件名 = `<namespace>/<short>`; **`namespace` 的正式枚举 = `app|iface|platform|sched|framework|io|fs|service|runtime`**(即**按 `plugin_type` + `subkind` 组织**; `runtime` 见 §8.3 ① 的 2026-xx 追加)。**`ability` 不是 `namespace`** —— 它只保留一条通配读法(②(b))。首版的三套形态(`ability/crypto` / 裸 `crypto` / `service/crypto`)**统一到 `service/crypto`**: 它是 `plugin_type = "ability"` 的**服务**, 名字取 `subkind = service`(§0 的 `brickie new ability service/crypto` 已是此意)。
 
 - **名字契约**: `name` 匹配 `^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$`, **全局唯一**; 推荐形态 `<namespace>/<short>`。
 
@@ -1129,6 +1129,16 @@ allow_edges = [                    # §7.3 的框架件白名单特例
 | `io` | `ability` | `io` | `io/virtio-hsm` |
 | `fs` | `ability` | `fs` | `fs/tmpfs` |
 | `service` | `ability` | `service` | `service/crypto` |
+| `runtime` | `ability` | `service` | `runtime/posix`(2026-xx 追加; 见下) |
+
+> **`runtime` 这一行(2026-xx 追加)**: `namespace` 表达的是**定位**而不是类别 ——
+> `runtime/posix`(POSIX 运行时: fd/文件/线程/同步/时间/stdio 一整套)与 `service/crypto`
+> (单一能力)在 `plugin_type`/`subkind` 上**完全同类**(都是 `ability` + `service`, 因此
+> 相位都是 LATE), 但前者是"一整套运行时"、后者是"一个服务"。用一个单独的 `namespace`
+> 把前者从 `service/` 里分出来, 是为了让 `service/` 保持"能力服务"的读法。
+> ★ 代价: 这是**第一个** `namespace` 与 `subkind` **不一一对应**的行(`runtime` ⇒ `service`)。
+> 相位推导因此不能只看名字, 要按 `subkind` 走 —— 原型侧的 `namespace_subkind("runtime") = "service"`
+> 就是这么写的(原型 ADR-0015 §2.2; 那里的动机是"换 subkind 会把 init 从 LATE 掉到 CORE")。
 
 **② 两条兼容读法(合法; v0.1 不强制改名)**
 
@@ -1303,7 +1313,7 @@ brickie/                       # 工具自身(与 brickOS 插件树同级或作�
 | **RV-10** | 导出分类不变量的严格性可能与既有 Interface 语义冲突: `iface-posix` 之类的 runtime_adapter **皮肤**是否需要占用 `[[export]]` | 由不变量 3 的 `reexport_of` 承接; 若 `1-01` §7.3 的"再导出不转移所有权"在符号层无法表达为单元引用, 则回退为 v0.2 的符号级校验(A-11) |
 | **RV-11** | **跨 `COMPAT_GEN` 比较的心智诱惑**: 使用者会自然地认为"代大 = 更新", 从而写出跨代版本序判断 | §5.5 **明令**跨代比较无意义(字典序仅限同代内); 依赖**必须**精确匹配 ⇒ 求解器结构上不可能跨代比较; `brickie ver show` 输出显式标注"代不参与比较" |
 | **RV-12** | **`COMPAT_GEN` 与 `MAJOR` 可能同时变动**, 使用者难以判断"是接口破了还是产品翻代了" | 发布报告给出**分段理由**(§6.3 `reasons`); `brickie ver show` 分别显示"上次解冻事件"与"产品代际"; V-4 要求二者互不牵连的回归测试 |
-| **RV-13** | **冻结排期成为 release 的硬前置**(§7.5 连带结论): 框架件/svc-posix/crypto 面若长期无冻结批次, 其 release 会被 `BRV-VER-0004` **永久阻断** | **已关闭**: `3-01` §15 已补框架件四件 / `svc-posix` / `crypto`·`keyring` 三批(M2/M3/M5), `BRV-Q15` 已定(ops 入 golden); 过渡期仍可用 `[lint] frozen_deps = "allow"` **显式**放行(可评审的例外, 而非静默) |
+| **RV-13** | **冻结排期成为 release 的硬前置**(§7.5 连带结论): 框架件/runtime/posix/crypto 面若长期无冻结批次, 其 release 会被 `BRV-VER-0004` **永久阻断** | **已关闭**: `3-01` §15 已补框架件四件 / `runtime/posix` / `crypto`·`keyring` 三批(M2/M3/M5), `BRV-Q15` 已定(ops 入 golden); 过渡期仍可用 `[lint] frozen_deps = "allow"` **显式**放行(可评审的例外, 而非静默) |
 | **RV-14** | **分发形态未定**(wheel / manylinux / 跨发行版 ABI / 容器 / 静态链接 / Windows 全空) | v0.1 **只承诺**"POSIX 宿主 + 系统 `python3`(≥3.11)在位"这一种形态(宿主单文件自包含 ELF + `prebuilts/seed` 种子, §9.1 分发与协议版本 / BRV-D5 / ADR `0004`); **Windows/容器/静态链接顺延 v0.x**; 可验收的最小判据 = **单文件 ELF 在干净环境(无 `cc`/`cargo`/`nm`、无 `pip install`)能跑通 `brickie new`**(与 V-9 同环境); 协议侧由 `protocol_version` 握手兜底(不匹配 ⇒ 退出码 2)。(r1/03 P1-8) |
 
 ## 13. 与既有文档的接口与待对齐修订清单
@@ -1346,7 +1356,7 @@ brickie/                       # 工具自身(与 brickOS 插件树同级或作�
 | **A-15** | 依赖 `range` 表达式统一 3 段(旧写法 `">=1.0"`/`">=1.0.0"` 归一; 4 段非法) | `4-04` §2 / **`1-01` §7.7** / `1-02` §2.3 | `r1/05` X-3 | ✅(`1-01` §7.7 + `4-04` §1·§2 + `1-02` §2.3 层 3) |
 | **A-16** | **`COMPAT_GEN` 的粒度 = 接口/冻结批次单元**; 插件级取 `max(F_u)`, 且该值**仅**用于注册表/显示/结构依赖 | `3-01` §15 / `1-02` §2.6.4 / §3.2 | `r1/05` 4-F1b/8.1-3 | ✅(`3-01` §15 + `1-02` §2.6.4) |
 | **A-17** | `VER` 域错误码 7 个 + `IFACE-0009`/`IFACE-0010`(见 BRV-D8 编码表) | `BRV-D8`(本篇) | — | ✅(本篇自足) |
-| **A-18** | **冻结计划补齐非 core 组批次**: 框架件四件、`svc-posix` POSIX 面、`crypto`/`keyring` ops —— 以接口单元为粒度 | `3-01` §1 表 + §15 / `1-02` §2.3 层 1 / `7-01`/`7-02`/`8-01` 治理段 | `r1/05` 8.4-10 | ✅(已回灌 `3-01` §0/§1/§15 + 各域文档) |
+| **A-18** | **冻结计划补齐非 core 组批次**: 框架件四件、`runtime/posix` POSIX 面、`crypto`/`keyring` ops —— 以接口单元为粒度 | `3-01` §1 表 + §15 / `1-02` §2.3 层 1 / `7-01`/`7-02`/`8-01` 治理段 | `r1/05` 8.4-10 | ✅(已回灌 `3-01` §0/§1/§15 + 各域文档) |
 | **A-19** | 明确 `crypto`/`keyring` **ops 表入 golden**(关闭 `11-01` §3 开放问题与 `9-02` O-H7) | `11-01` §3 / `9-02` §6.2 O-H7 / `README` | `r1/05` 8.4-11 | ✅(已回灌 `11-01`/`9-02`; `BRV-Q15` 关闭) |
 | **A-20** | `frozen` 补 gloss: "**单向冻结(append-only 保护)**"; 明确"新增=轻量"与"新增免解冻"是同一规则 | `1-02` §2.1 | `r1/06` P2/S2-1 | ✅(已回灌 `1-02` §2.1) |
 | **A-21** | 段名 `frozen_version` → **`compat_gen`**(避免被读成"冻结时的版本"而诱导跨代比较) | 本篇全篇 / `r1/05` §3.1 | —— | ✅(本篇自足) |
@@ -1356,7 +1366,7 @@ brickie/                       # 工具自身(与 brickOS 插件树同级或作�
 | **A-25** | 冻结评审清单增"**冻结前应预留扩展槽**"(D22 的推广: 预留即免将来解冻) | `1-02` **§2.4** / `3-01` §15 | `r1/06` S5-5 | ✅(已回灌两处) |
 | **A-26** | **v0.1 `freeze` 只能生成"待升格提案"**的显式例外(因 `1-02` §2.6.2 要求 conformance 矩阵全绿, 而 test 排 v0.4) | `1-02` §2.6.2 / 本篇 §6.4 | — | ✅(已回灌 `1-02` §2.6.2) |
 | **A-27** | **v0.1 命令面 = §8.4 + §7.7 + §6.5 + §5.3.4 的 23 条叶子命令 + 2 条全局开关**; `new <plugin_type> <name>` 取**两个位置参数**(`2-02` 的 `new <kind>` 是草图); 该面的里程碑**前移到 v0.1** | `2-02` §5 命令面(改 `add`→`dep add`; 标 `show`/`env` 被 `dep closure`/`ver show` 取代; 补 `dep *`/`ver *`/`iface *`/`gen`/`new`/`init`)/ `2-02` §7 里程碑表(`new`/`init` 前移)/ `4-02` §2 第 6 项 | — | ✅(`2-02` §5 命令面 + §7 里程碑 + `4-02` §2 第 6 项; X-8 取"两种位置都接受") |
-| **A-28** | **运行期依赖"必须声明"的口径收口**(关闭 `r1/02` P0-1): 三类能力面依赖走 manifest 声明(`[[dep]]`), 运行期注册表取用**不产生依赖边**; 二者互不替代、互不豁免; `svc-posix` 与 `littlefs` 之间**没有直接符号面调用边**(走 vfs-core 契约)⇒ 无需声明该边, 但"零声明直调"不成立 | `1-01` §7.5 论证 4 / `4-04` §3 两行 | — | ✅(已回灌 `1-01` §7.5 论证 4 的四条展开 + `4-04` §3 的判据/判例/执行边界) |
+| **A-28** | **运行期依赖"必须声明"的口径收口**(关闭 `r1/02` P0-1): 三类能力面依赖走 manifest 声明(`[[dep]]`), 运行期注册表取用**不产生依赖边**; 二者互不替代、互不豁免; `runtime/posix` 与 `littlefs` 之间**没有直接符号面调用边**(走 vfs-core 契约)⇒ 无需声明该边, 但"零声明直调"不成立 | `1-01` §7.5 论证 4 / `4-04` §3 两行 | — | ✅(已回灌 `1-01` §7.5 论证 4 的四条展开 + `4-04` §3 的判据/判例/执行边界) |
 | **A-29** | **三语言分工是对 `2-02` BR-D3 的修订**(关闭 `r1/02` P1-6): `2-02` 倾向"Python 3 先行", 本篇定为 **L5 Python + L0/L1 Rust + L2 C++ 以 JSON over stdio 分进程**(§9.1/BRV-D3) | `2-02` §3 BR-D3 / §8 Q3 | — | ⬜(待把 BR-D3 的"Python 先行"改写为三语言分工; 见 checklist §4 的 `W-35`) |
 | **A-30** | **声明面 hash 的过渡真值独立登记**(关闭 `r1/02` P1-10): v0.1 的接口面真值 = 声明文件, 每个接口单元显式带 `truth`/`hash_scope`; 头文件真值的**目标态**与 v0.2 的**迁移门禁**(双算一致 + 条目不匹配 ⇒ 红)写明 | `1-02` §2.6.1 | — | ✅(已回灌 `1-02` §2.6.1 的四条过渡规则 + 本篇 §6.6/V-11) |
 
@@ -1371,7 +1381,7 @@ brickie/                       # 工具自身(与 brickOS 插件树同级或作�
 | v0.3 | **编译**(构建编排 + 描述符/头文件/链接脚本生成物) | M1/M2 | 构建后端选型(2-02 BR-D4) |
 | v0.4 | **test**(conformance 运行器, host 平台)+ **合法 `freeze` 解锁**(A-26 的例外解除) | M3 | host 平台插件(1-03 §5 第 6 项) |
 | v0.5 | **run**(host-native + QEMU 后端) | M2/M3 | BR-D6 target 抽象拍板 |
-| v0.6 | **兼容性检查**(golden / api-dump / abidiff / 版本矩阵)+ 框架件/`svc-posix` 面纳入冻结(**A-18 的落点**) | M3 | 构建产物符号表 + `abi_id` |
+| v0.6 | **兼容性检查**(golden / api-dump / abidiff / 版本矩阵)+ 框架件/`runtime/posix` 面纳入冻结(**A-18 的落点**) | M3 | 构建产物符号表 + `abi_id` |
 
 > **与需求方清单的对齐**: "编译/test/run/兼容性检查/接口依赖扫描检查"五件全部落在 v0.2–v0.6; 次序按"**声明面 → 符号面 → 构建面 → 运行面 → 门禁面**"的依赖方向排, 其中"接口依赖扫描检查"提前到 v0.2 是因为它是 v0.1 接口发布的**自然下一跳**(`hash_scope` 升级), 也是后续 golden 门禁的输入。
 >

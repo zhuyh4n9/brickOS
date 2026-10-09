@@ -10,7 +10,7 @@ package "Interface 插件 — 严格叶子: 除 APP 外没有任何插件依赖�
   [iface-pkcs11 …(域标准)] as IF_O
 }
 package "Service 层 — 服务间可声明依赖(init-DAG 无环)" as G_SVC {
-  [svc-posix] as SPX
+  [runtime/posix] as SPX
   [三方移植件(sqlite…)] as S3
   [lwIP / crypto / trace …] as SX
 }

@@ -75,7 +75,7 @@ VFS(vfs-core)              br_open 挂载表 · br_file_t / br_file_ops(7-01-vfs
 
 - 组成: `deviceXXX` + 对应 `*-core` + `dev-core` + `vfs-core` + `fs/devfs`(+ `fs/tmpfs` rootfs 可选)
 - 设备可见性: 以 **`/dev/<name>`** 出现; 打开/session 经子分类 **open_file 钩子**(cdev-core 的通用 `br_file_ops` 适配层)接入
-- 消费者: APP 经 Interface 插件——POSIX 面经 svc-posix fd 表(`iface-posix`), native `br_open` 面经 `iface-min`(A-2; 见 `brickie` v0.1 §13.2); **服务/框架件之间的 native 调用不受此约束**
+- 消费者: APP 经 Interface 插件——POSIX 面经 runtime/posix fd 表(`iface-posix`), native `br_open` 面经 `iface-min`(A-2; 见 `brickie` v0.1 §13.2); **服务/框架件之间的 native 调用不受此约束**
 - 适用: **POSIX 产品、需要"文件与设备同一命名空间/同一句柄"的产品**(SD-1 单路由的完整收益)
 - 代价: 链入 vfs-core + devfs; 每次打开多一层挂载表路由
 
@@ -129,7 +129,7 @@ VFS(vfs-core)              br_open 挂载表 · br_file_t / br_file_ops(7-01-vfs
 | **fs/devfs(/dev)** | **dev-core**(枚举注册表)+ cdev-core(钩子就绪)+ vfs-core(挂载) |
 | littlefs | **vfs-core** + cdev-core(flash 子型绑定)/ bdev-core(QEMU bdev 适配)+ fs/tmpfs(挂载点父目录) |
 | EROFS | vfs-core + bdev-core |
-| svc-posix | **vfs-core**(open/fd 的底层原语) |
+| runtime/posix | **vfs-core**(open/fd 的底层原语) |
 | uart / can / adc / gpio / display 驱动 | cdev-core(`br_cdev_register`) |
 | **virtio-hsm(HSM host 链路, v1.x/M5)** | **cdev-core**(`br_cdev_register`; 注册 `hsm0` → `/dev/hsm0`, 消费者 = `service/hsm-host`) |
 | **QSPI-NOR / NAND 驱动** | **cdev-core**(`br_flash_register`) |
@@ -232,7 +232,7 @@ const br_flash_ops *br_flash_get(const char *name, void **priv);
 
 - **阻塞语义**(SD-6): read/write 阻塞调用线程; 驱动内部异步(DMA + 信号量), 对外同步
 - **ISR 禁令**: 设备/存储域全部 API 禁止在 ISR 上下文调用(白名单为空)——静态检查执法(D10 双保险之一; conformance 矩阵 = R1 执法); core native 的白名单见 `docs/3-os-core/3-01-core-api-list.md` §11
-- **错误模型**(SD-10): int 返回, **负 errno**。SD-10 全集(两域并集) = `-EIO/-EAGAIN/-EINVAL/-ENOMEM/-ENODEV/-ENOTSUP/-EBUSY/-EEXIST/-ETIMEDOUT/-ENOSPC/-EROFS`, 各域取子集; **设备/存储域子集**: `-EIO/-ENODEV/-ENOSPC/-EINVAL/-ENOTSUP/-EBUSY/-EROFS`(core 域子集见 `docs/3-os-core/3-01-core-api-list.md` §11); svc-posix 直接取 `-ret` 作 errno(零转换)
+- **错误模型**(SD-10): int 返回, **负 errno**。SD-10 全集(两域并集) = `-EIO/-EAGAIN/-EINVAL/-ENOMEM/-ENODEV/-ENOTSUP/-EBUSY/-EEXIST/-ETIMEDOUT/-ENOSPC/-EROFS`, 各域取子集; **设备/存储域子集**: `-EIO/-ENODEV/-ENOSPC/-EINVAL/-ENOTSUP/-EBUSY/-EROFS`(core 域子集见 `docs/3-os-core/3-01-core-api-list.md` §11); runtime/posix 直接取 `-ret` 作 errno(零转换)
 - 并发: 设备 ops 由驱动自锁(v1 单锁即可); FS 侧并发 v1 未另行约定(单 APP + 驱动自锁)
 
 ## 5. ioctl 编码(SD-5: Linux 兼容)
@@ -268,7 +268,7 @@ const br_flash_ops *br_flash_get(const char *name, void **priv);
 | SD-2 | 设备子分类: dev-core=通用, cdev/bdev 为子分类框架; **flash = cdev 子型**(spi-nor/nand 对接 cdev-core) | littlefs 1:1 映射零胶水; flash 是字符型介质(无磁盘式扇区抽象); 新增子分类不动 dev-core |
 | SD-5 | ioctl 用 Linux 兼容 32 位编码 | 零学习成本; 可静态枚举 |
 | SD-6 | 对外同步阻塞 API; 驱动内部异步(DMA+信号量) | API 面最小; async 是 v2+ 优化 |
-| SD-10 | 错误 = 负 errno(SD-10 全集 + 各域子集, 设备域 7 码见 §4), svc-posix 零转换 | 单一错误空间 |
+| SD-10 | 错误 = 负 errno(SD-10 全集 + 各域子集, 设备域 7 码见 §4), runtime/posix 零转换 | 单一错误空间 |
 | SD-11 | **框架件归属(D19)**: file/open/VFS = vfs-core; 通用设备 = dev-core; bdev = bdev-core(依赖 dev-core); littlefs → vfs-core | 用户指定; core 第三次收缩; 框架件 = 插件身份(可裁剪) + core 纪律(golden/门禁)——**可裁剪的具体形态见 §1.2(形态 A/B/C)** |
 | SD-12 | **设备子分类框架化(D20)**: cdev-core 独立框架件(依赖 dev-core); spi-nor/nand → cdev-core(flash 子型); ~~vfs-core 依赖 dev-core + cdev-core~~ → **SD-13/D21 修订**: 撤销; netdev 的答案空间 = 第三个子分类框架(O-S5) | 用户指定; 通用/形状分离; 子分类对称可扩展 |
 | SD-13 | **设备接入 VFS(D21)**: fs/devfs 把 dev-core 注册表发布为 /dev 节点; 类 open_file 钩子(devfs 不依赖子分类形状); **vfs-core 纯化**(撤销设备路由, 依赖收缩到 core); fs/tmpfs 挂载为 rootfs("/") | Linux devtmpfs/rCore DeviceFS 同型; 单路由 = 单一语义; 用户指定 |

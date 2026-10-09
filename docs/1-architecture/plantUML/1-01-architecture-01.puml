@@ -83,7 +83,7 @@ title brickOS Architecture Overview
 
 package "L3 · 功能组合层" as L3 #ECEFF1 {
   package "3a · Service Plugins" as L3A #FFFFFF {
-    [svc-posix (POSIX\n运行时, fd 表主人)] as L3A1
+    [runtime/posix (POSIX\n运行时, fd 表主人)] as L3A1
     [三方移植\n(sqlite…)] as L3A2
     [lwIP\n] as L3A3
     [crypto\n] as L3A4

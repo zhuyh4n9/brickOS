@@ -92,15 +92,17 @@
 | int | IRQ 框架 + **bottom half(work queue)** —— v1 即首要延迟路径(coop 下=事件队列) |
 | sched | **sched-coop**(评审排序; 见下"顺序理由") |
 | 插件管理 | 依赖版本区间 + 拓扑排序 + **环检测硬错误** + 版本管理(描述符 v2) |
-| 接口 | native API(全 experimental, **完整清单: `docs/3-os-core/3-01-core-api-list.md`**)+ **svc-posix(D18: POSIX 运行时服务, fd/VFS/stdio/pthread 子集)** + iface-posix 薄皮肤 + iface-min |
+| 接口 | native API(全 experimental, **完整清单: `docs/3-os-core/3-01-core-api-list.md`**)+ **runtime/posix(D18: POSIX 运行时服务, fd/VFS/stdio/pthread 子集)** + iface-posix 薄皮肤 + iface-min |
 | 框架件 | **dev-core**(通用设备: 注册表/命名/语义/子分类协议)、**cdev-core**(字符设备 + flash 子型, 依赖 dev-core)、**bdev-core**(bdev 子分类, 依赖 dev-core)、**vfs-core**(br_file/br_open/挂载表)——D19/D20, `docs/8-device/8-01-device.md` §1/§3 |
-| 三方移植 | **sqlite 双模式移植作为移植性验证**(主文档 §7.6: 模式 A 直链 svc-posix 跑通, 模式 B native VFS 后端按需)——移植故事是架构的生死线(战略语境) |
+| 三方移植 | **sqlite 双模式移植作为移植性验证**(主文档 §7.6: 模式 A 直链 runtime/posix 跑通, 模式 B native VFS 后端按需)——移植故事是架构的生死线(战略语境) |
 | 存储 | VFS + **tmpfs rootfs + devfs(/dev)**(D21)+ block 层 + 可写 FS(littlefs, D17) |
 | debug | **trace 插件**(环形缓冲, 主文档 §11) + 最小 debug bridge(memread / trace 流) |
 | 工具 | CLI + manifest 校验 + **host 平台插件**(CI + 完整 ASan 白捡) |
 | 并发 | 单核 |
 
-**v1.0 插件清单(17 件 + 样例/测试 APP):**
+**v1.0 插件清单(18 件 + 样例/测试 APP):**
+
+> **2026-xx 两处增补**: ① `framework/file-table`(**fd 表**, ADR-0012 —— D18 说"fd 表 = POSIX 运行时的唯一主人", 原型把它按 D19 的"框架件 = 插件身份"抽成**框架件**, 单一主人规则不变); ② POSIX 运行时插件的名字从 `svc-posix` 改为 **`runtime/posix`**(新命名空间 `runtime`; 见 `brickie-v0.1` §8.3 ① 与 `4-02` §2)。
 
 | 插件 | 类别 | 职责 | 依赖 | 里程碑 |
 |---|---|---|---|---|
@@ -111,19 +113,20 @@
 | `cdev-core` | 框架件 | **字符设备子分类**: br_cdev_ops(含 **PM 钩子预留, D22**)+ flash 子型 br_flash_ops + open_file 实现(D20–D23) | dev-core + vfs-core(类型) | M2 |
 | `vfs-core` | 框架件 | **纯 VFS**(D21): br_file/br_open 挂载表·单路由/挂载表; **ops 四层分层(D23: super/inode/file/dentry 预留)+ lookup 链走查** | core | M2 |
 | `bdev-core` | 框架件 | bdev 子分类 + 几何 + 分区映射器(SD-9, v1.x) | dev-core | M2 |
+| `framework/file-table` | 框架件 | **fd 表**(ADR-0012): 小整数 → `br_file_t*`; 最小可用 fd / `dup`/`dup2` / "最后一个引用"判定。**零依赖**(只持指针不解引用) | core | M2 |
 | `fs/tmpfs` | FS | **rootfs(D21)**: RAM 文件系统, 挂 "/", 预建 /dev /data /tmp | vfs-core | M2 |
 | `fs/devfs` | FS | **/dev 设备节点(D21)**: 实时枚举 dev-core 注册表, open 经类钩子 | dev-core + cdev-core + vfs-core | M2 |
 | `io/uart-pl011` | I/O | PL011: 早期轮询 console(M0: platform 早期 console, 不注册设备)→ 中断 tty(M2: 注册 cdev) | —(M0)/cdev-core(M2) | M0(轮询)/M2(tty) |
 | `io/virtio-blk` | I/O | virtio-mmio 块设备(ISR→bh→信号量, `docs/7-storage/7-02-bdev.md` §5) | bdev-core | M2 |
 | `fs/littlefs` | FS | 可写 FS(D17): flash 子型绑定 + QEMU bdev 适配器 | vfs-core + cdev/bdev-core + fs/tmpfs | M2 |
-| `svc-posix` | Service | POSIX 运行时(D18): fd/stdio 子集 + libc stub(pthread 子集后置) | vfs-core | M2 |
+| `runtime/posix` | **运行时** | POSIX 运行时(D18): fd/VFS/stdio/pthread 子集 + libc stub; `errno = -ret` 零转换; cwd 与访问模式执法归它 | file-table + vfs-core | M2 |
 | `service/trace` | Service | 16B 事件环形缓冲(`docs/5-debug/5-01-debug.md`) | core | M2 |
 | `service/dbg-bridge` | Service | COBS/UART 最小命令集 + panic 独立通道 | vfs-core(/dev/uart0)+ trace | M3 |
-| `iface-posix` | Interface | 薄皮肤: 再导出 svc-posix + stdio/errno 接线 | svc-posix | M2 |
+| `iface-posix` | Interface | 薄皮肤: 再导出 runtime/posix + stdio/errno 接线 | runtime/posix | M2 |
 | `iface-min` | Interface | 极简别名层, 直通 native(`api_type = native`, `form = "api"`; 见 `1-01` §7.4 的皮肤分类表) | core | M2 |
 | `app/hello` + conformance | APP | 启动链演示(M0: 直接主循环, 不依赖 iface —— **M0 引导例外**, 此时 Interface 插件尚未交付)+ native API conformance 首版(M3, **用例目录: `docs/6-test/6-01-test.md`**) | —(M0)/iface(M3) | M0/M3 |
 
-注: 框架件、svc-posix 与 fs/tmpfs/fs/devfs 经**依赖闭包**自动进入组合(`brickie add` 无需显式列出; 挂载计划含 "/" 或 "/dev" 即拉入); sqlite(三方移植, 模式 A)在 M2 作为移植性验证件, 不属系统插件。
+注: 框架件、`runtime/posix` 与 fs/tmpfs/fs/devfs 经**依赖闭包**自动进入组合(`brickie add` 无需显式列出; 挂载计划含 "/" 或 "/dev" 即拉入); sqlite(三方移植, 模式 A)在 M2 作为移植性验证件, 不属系统插件。
 
 ### v1.x "walk+" — 真实平台(选配)+ HSM 完整样例
 
@@ -141,7 +144,7 @@
 | `iface-pkcs11` | Interface | **由 v2.0 前移**: 严格叶子薄皮肤, PKCS#11 子集适配 keyring + crypto | service/crypto + service/keyring | M5 |
 | `app/hsm` | APP | 密钥策略: 首启 provision / 策略表 / 命令节流 / 审计巡检 | iface-pkcs11(零开销路径由 iface-min 承接; A-2, 见 `brickie` v0.1 §13.2) | M5 |
 
-**M5 的复用量(即"组合即产品"的证据)**: 四件框架件 + `fs/tmpfs`/`fs/devfs`/`fs/littlefs` + `io/virtio-blk` + `service/trace` + `sched-coop` 全部**零改写**, 仅在 manifest 中选取; `iface-posix`/`svc-posix` **不在** HSM 组合内(接口可裁剪的证据)。M5 **不依赖 M4**(可在 QEMU 上独立交付); M4 若先行, 熵源契约缺口(9-02 §6.3 O-H1)可一并收口。
+**M5 的复用量(即"组合即产品"的证据)**: 四件框架件 + `fs/tmpfs`/`fs/devfs`/`fs/littlefs` + `io/virtio-blk` + `service/trace` + `sched-coop` 全部**零改写**, 仅在 manifest 中选取; `iface-posix`/`runtime/posix` **不在** HSM 组合内(接口可裁剪的证据)。M5 **不依赖 M4**(可在 QEMU 上独立交付); M4 若先行, 熵源契约缺口(9-02 §6.3 O-H1)可一并收口。
 
 > **与 §4"没有半个能力"的一致性(D25 自检)**: `service/crypto` 在 M5 **不是半成品**——它作为"密码服务"这个能力**完整进入 v1.x**(可用的算法子集 + 冻结的服务契约 + 注册表发布)。v2.0 增加的**不是它的另一半**, 而是**新算法与新后端**(ECC/RSA/ed25519/AEAD/硬件引擎); 消费者代码零改动。判据: 若 v2.0 的 crypto 工作全部取消, M5 的 HSM 样例仍然端到端成立(9-02 §11 A2–A4)——这正是"完整能力"的检验方式。
 
@@ -165,7 +168,7 @@
 |---|---|---|---|
 | `sched-preempt` | Scheduler | 抢占调度: 位图优先级队列 + PI 互斥(v2b: SMP 化) | core |
 | `service/crypto` | Service | **后端升级**(v1.x/M5 已交付契约与子集): 完整算法集 + ed25519(v3 鉴权的前置)+ 恒定时间加固 + 硬件后端 | core(契约同 v1.x) |
-| `service/lwip` ★ | Service | 网络栈: svc-posix socket 路由的实现方 | netdev 设备类 [?] |
+| `service/lwip` ★ | Service | 网络栈: runtime/posix socket 路由的实现方 | netdev 设备类 [?] |
 | `io/virtio-net` ★ | I/O | virtio-mmio 网卡 | dev-core(netdev) |
 | `fs/erofs` | FS | 只读压缩 FS + FS 级解压页缓存 | vfs-core + bdev-core |
 | `service/ramdump` | Service | fault handler 注册 + LZ4 捕获 + host 离线分析 | core fault 钩子 |
@@ -173,7 +176,7 @@
 注: `iface-pkcs11` 已由 **v1.x/M5 前移交付**(D24), 不再列于本版; v2.0 对它的影响仅限"底下 crypto 换后端"(契约与皮肤不变); v3 动态加载所需的 **ed25519 能力随本版 crypto 后端交付**(依赖链以重定位(v2)为绑定约束, 见 `docs/1-architecture/1-01-architecture.md` §12)。
 
 注(插件视角的 v2a/v2b): 上表全部插件属 **v2a**; **v2b(SMP)** 是 core/调度框架/锁语义改造, **不是新插件**; 重定位、memleak 记账同理; Rust 插件支持 = 工具链能力。
-★ **本轮补排**: 网络栈此前未显式出现在路线图(架构文档已引用——svc-posix socket 路由的实现方), 插件清单暴露的缺口; 前置设计: **netdev**——D20 子分类模型给出答案空间: **netdev-core 作为第三个子分类框架**(依赖 dev-core, 对称 cdev/bdev, `docs/8-device/8-01-device.md` O-S5), v2.0 设计前必须定。
+★ **本轮补排**: 网络栈此前未显式出现在路线图(架构文档已引用——runtime/posix socket 路由的实现方), 插件清单暴露的缺口; 前置设计: **netdev**——D20 子分类模型给出答案空间: **netdev-core 作为第三个子分类框架**(依赖 dev-core, 对称 cdev/bdev, `docs/8-device/8-01-device.md` O-S5), v2.0 设计前必须定。
 
 ### v3.0 "compose" — 时间触发 · 动态组合
 
@@ -231,7 +234,7 @@
 |---|---|---|
 | M0 | 启动链 + 插件管理 | hello + init 链打印 + **环检测用例**(故意造环看组合器报错) |
 | M1 | sched-coop + native task API + tickless timer + bottom half | 协作切换、sleep、work 提交/执行 |
-| M2 | 框架件四件(dev-core/cdev-core/vfs-core/bdev-core, D19/D20)+ **fs/tmpfs(rootfs)+ fs/devfs(/dev, D21)**+ virtio-blk + littlefs(flash 子型绑定 + QEMU bdev 适配)+ trace ring + **svc-posix(fd/stdio 子集)** | fd 落盘; **/dev 设备节点可 open**; trace 解码; **sqlite 模式 A 移植跑通(移植性验证)** |
+| M2 | 框架件四件(dev-core/cdev-core/vfs-core/bdev-core, D19/D20)+ **fs/tmpfs(rootfs)+ fs/devfs(/dev, D21)**+ virtio-blk + littlefs(flash 子型绑定 + QEMU bdev 适配)+ trace ring + **runtime/posix(fd/stdio 子集)** | fd 落盘; **/dev 设备节点可 open**; trace 解码; **sqlite 模式 A 移植跑通(移植性验证)** |
 | M3 | bridge 最小集 + host 平台插件 + CLI + conformance 首版 | **v1.0 完整化 + native API 冻结启动(D15)** |
 | M4(v1.x, 选配) | 首个真实 SoC platform 插件 + PMIC/GPIO **级联域驱动**(域 API 实战, `docs/3-os-core/3-01-core-api-list.md` §8.1) | 契约虚拟→真实迁移成本; 依战略语境**可降级为选配**(量产在成熟基座上) |
 | **M5(v1.x)** | **HSM 完整样例**(D24, 第二产品域纵向切片): M5 清单 6 件插件 + `app/hsm` + 复用 v1.0 全栈; 设计基线 `docs/9-app/9-02-hsm-sample.md` | **组合即产品**(增量只有 APP + manifest, 9-02 §11 A1)+ **置换证明**(调度器/密码后端/接口各换一次, 源码零改写)+ 策略与审计链闭环(A2–A4)+ TC-HSM 用例全绿(A6) |

@@ -8,7 +8,7 @@
 > v0.8: D21 设备接入 VFS——**所有设备经 /dev(devfs 插件)接入 VFS 管理**(Linux devtmpfs/rCore DeviceFS 同型); **fs/tmpfs 挂载为 rootfs("/")**; `br_open` 撤销裸名设备路由(单一挂载表路由, SD-1 修订); **vfs-core 纯化**(设备依赖移出); D20 协议扩展 open_file 钩子; 新插件 fs/tmpfs + fs/devfs(`docs/7-storage/7-03-concrete-fs.md` §2/§3)。
 > v0.7: D20 设备子分类框架化——dev-core 收缩为**通用设备**(注册表/命名/语义/子分类协议), 向下分 **cdev-core(字符, 含 flash 子型)**/**bdev-core(块)** 子分类框架; **spi-nor/nand 对接 cdev-core**; 框架件 3→4 件(§3/§4.5/§6.3/§7.2, `docs/8-device/8-01-device.md` §3)。
 > v0.6: D19 框架件拆分——设备/挂载注册表与 VFS/设备框架成为 **dev-core / vfs-core / bdev-core 插件**(§4.5, `docs/8-device/8-01-device.md` §1); 插件分类七类→八类(+框架件)——**该"八类"表述后来被 §6.3 收口为 `plugin_type`(四类)× `api_type`(三值)+ 派生 `subkind`(A-1)**; core 收缩为 native API + 服务注册表; 依赖宪法更新(§7.2)。
-> v0.5: D18 修正案——**POSIX 双角色拆分**: `svc-posix`(POSIX 运行时)从接口插件降为**普通服务**, 三方中间件(sqlite/curl 类)可声明依赖它; 接口插件成为**严格叶子**(仅被 APP 依赖); 依赖铁律重写为四条治理规则(§7.2); 依赖方向论证更新(§7.5); 移植双模式(§7.6)。
+> v0.5: D18 修正案——**POSIX 双角色拆分**: `svc-posix`(POSIX 运行时; **2026-xx 起实现名 = `runtime/posix`**)从接口插件降为**普通服务**, 三方中间件(sqlite/curl 类)可声明依赖它; 接口插件成为**严格叶子**(仅被 APP 依赖); 依赖铁律重写为四条治理规则(§7.2); 依赖方向论证更新(§7.5); 移植双模式(§7.6)。
 > v0.4: 吸收评审意见(用户手写笔记 `1-01-architecture-comment.md`, 仓库外、不随库分发): 战略语境与持久资产(§0); 虚拟内存政策反转——v1 恒等/v2 重定位/vx MPU(§4.3); 平台能力三层模式(§8); 插件依赖·版本·环管理深化(§6.5); 存储栈(§10); debug 基础设施(§11); D1 修订——v3 动态加载+鉴权(§12); D5/D6/D9/D10 落定; 版本路线图拆至 `docs/1-architecture/1-03-roadmap.md`, debug 细节拆至 `docs/5-debug/5-01-debug.md`。
 > v0.3: 接口插件化(D11), core 收缩为 native API + 注册表。
 > v0.2: D1–D4 决策; 调度策略插件化; QEMU 先行。
@@ -125,13 +125,13 @@
 | D15 | 冻结启动时机 | **M3(=v1.0 完整化)起分批冻结** | M0–M2 全部 API 留实验区 |
 | D16 | OS 命名 | **brickOS(积木)** | 符号前缀 `br_` / 宏 `BR_` / CLI `brickie`(与符号前缀解耦; ADR-0001) / 段名 `.br_*`; 避开 Unikraft `uk_*` 撞车; 原名 brickOS(七巧板)因命名冲突弃用(v0.11) |
 | D17 | v1.0 可写 FS | **littlefs 入 v1.0** | DA 日志/仪表配置需要落盘; 与 EROFS(v2)分工: littlefs=数据, EROFS=代码/资产 |
-| D18 | POSIX 双角色拆分 | **POSIX 运行时服务化(svc-posix); 接口插件成为严格叶子** | POSIX 实现=普通服务(open/read/pthread/socket 唯一实现, fd 表唯一主人, 实现于 native+注册表); 三方中间件可声明依赖它; 铁律"服务不得依赖接口"退役, 由四条治理规则取代(§7.2); iface-posix 保留为薄皮肤(再导出 + stdio/errno 接线, §7.4); 移植双模式(§7.6) |
-| D19 | 框架件拆分 | **能力框架成为插件: dev-core / vfs-core / bdev-core** | file/open/VFS 契约 = **vfs-core**; 设备相关接口 = **dev-core**; bdev 类 = **bdev-core(依赖 dev-core)**; 具体文件系统(littlefs)依赖 **vfs-core**; 派生: ~~vfs-core→dev-core(设备路由+适配)~~ → **D21 修订**: 该依赖已撤销, 设备路由改经 devfs/cdev-core 侧(见 D21); svc-posix→vfs-core; 框架件 = 插件身份(可裁剪) + core 纪律(golden/门禁); core 收缩为 native API + 服务注册表(§4.5); 详见 `docs/8-device/8-01-device.md` §1 |
+| D18 | POSIX 双角色拆分 | **POSIX 运行时服务化(*`svc-posix`*); 接口插件成为严格叶子**<br>**D18 修订(2026-xx)**: 该运行时插件的**名字**改为 `runtime/posix`(新增 `runtime` 命名空间; `plugin_type`/`subkind`/相位不变) —— 见 `4-02` §2 与 `brickie-v0.1` §8.3 ①; 决策本身(服务化/严格叶子/四条治理规则)不动 | POSIX 实现=普通服务(open/read/pthread/socket 唯一实现, fd 表唯一主人, 实现于 native+注册表); 三方中间件可声明依赖它; 铁律"服务不得依赖接口"退役, 由四条治理规则取代(§7.2); iface-posix 保留为薄皮肤(再导出 + stdio/errno 接线, §7.4); 移植双模式(§7.6) |
+| D19 | 框架件拆分 | **能力框架成为插件: dev-core / vfs-core / bdev-core** | file/open/VFS 契约 = **vfs-core**; 设备相关接口 = **dev-core**; bdev 类 = **bdev-core(依赖 dev-core)**; 具体文件系统(littlefs)依赖 **vfs-core**; 派生: ~~vfs-core→dev-core(设备路由+适配)~~ → **D21 修订**: 该依赖已撤销, 设备路由改经 devfs/cdev-core 侧(见 D21); runtime/posix→vfs-core; 框架件 = 插件身份(可裁剪) + core 纪律(golden/门禁); core 收缩为 native API + 服务注册表(§4.5); 详见 `docs/8-device/8-01-device.md` §1 |
 | D20 | 设备子分类框架化 | **dev-core = 通用设备, 向下分 cdev-core(字符)/bdev-core(块)子分类; spi-nor/nand 对接 cdev-core(flash 子型)** | dev-core 只管"是个设备"(注册表/命名/语义/子分类协议), 不定义 ops 形状; cdev-core 拥有 `br_cdev_ops` + flash 子型 `br_flash_ops`; 框架件 3→4 件; netdev 答案空间 = 第三个子分类框架(O-S5); 详见 `docs/8-device/8-01-device.md` §3 |
 | D21 | 设备接入 VFS + tmpfs rootfs | **所有设备经 /dev(devfs 插件)接入 VFS 管理; tmpfs 挂载为 rootfs("/")** | Linux devtmpfs/rCore DeviceFS 同型; `br_open` 单路由(挂载表, 撤销裸名设备路径——SD-1 修订); **vfs-core 纯化**(设备依赖移出, 依赖面收缩到 core); D20 协议扩展 **open_file 钩子**(子分类框架实现可文件化); 新插件 fs/tmpfs(rootfs)+fs/devfs(/dev); 挂载计划: tmpfs→/ → devfs→/dev → littlefs→/data, 挂载点缺失自动 mkdir; 详见 `docs/7-storage/7-03-concrete-fs.md` §2/§3/§6 |
 | D22 | 设备 ops 统一预留 | **所有设备类别 ops 预留 ioctl / suspend / resume(poll/close 由 cdev-core 通用 br_file_ops 适配层提供, devfs 经钩子取得)** | 动机 = D14: ops 布局入 golden, 后补字段 = 布局破坏——**预留即免破坏**; suspend/resume 为设备级 PM 钩子(v1 无统一调用方, v2 service/pm 经注册表枚举, O-S6); NULL → -ENOTSUP; 详见 `docs/8-device/8-01-device.md` §3 |
 | D23 | VFS ops 分层 | **super(fs 级)/ inode / file / dentry(预留)四层 ops, Linux 型** | **路径走查(lookup 链)在 vfs-core**; inode v1 瞬态(走查产物, free_inode 即弃——有 inode ops, 无 inode cache, SD-3 不变); `br_dentry_ops` 为 v2 dcache 预留(槽位先占, D14 同理); `br_file_ops` 增加 open(会话建立); D20 open_file 钩子演化为返回 {fops, fpriv}; littlefs inode = 路径前缀包装, devfs 根 inode = 注册表投影; 详见 `docs/7-storage/7-01-vfs.md` §2 |
-| D24 | HSM 完整样例入 v1.x(M5) | **第二产品域从"声明"变为"可运行样例"**: 新增 6 件插件(`io/virtio-hsm`、`service/crypto`、`service/keyring`、`service/hsm-host`、`service/seclog`、**`iface-pkcs11` 由 v2.0 前移**)+ 样例 APP `app/hsm` | **组合即产品**(增量只有 APP + manifest)/ **置换证明**(调度器 · 密码后端 · 接口各换一次, 插件源码零改写)/ 复用 v1.0 全栈(四件框架件 + vfs 栈 + trace)/ **不依赖 M4**(QEMU virtio-serial 对端); `iface-posix`/`svc-posix` 不在样例组合内(接口可裁剪); 里程碑 = 1-03 §3 M5; 设计基线 `docs/9-app/9-02-hsm-sample.md` |
+| D24 | HSM 完整样例入 v1.x(M5) | **第二产品域从"声明"变为"可运行样例"**: 新增 6 件插件(`io/virtio-hsm`、`service/crypto`、`service/keyring`、`service/hsm-host`、`service/seclog`、**`iface-pkcs11` 由 v2.0 前移**)+ 样例 APP `app/hsm` | **组合即产品**(增量只有 APP + manifest)/ **置换证明**(调度器 · 密码后端 · 接口各换一次, 插件源码零改写)/ 复用 v1.0 全栈(四件框架件 + vfs 栈 + trace)/ **不依赖 M4**(QEMU virtio-serial 对端); `iface-posix`/`runtime/posix` 不在样例组合内(接口可裁剪); 里程碑 = 1-03 §3 M5; 设计基线 `docs/9-app/9-02-hsm-sample.md` |
 | D25 | crypto 服务的版本策略 | **服务契约 v1.x(M5) 定稿; v2.0 只做后端与算法面扩展——契约不变** | v1.x = mbedTLS 算法子集(SHA-256 / HMAC-SHA256 / AES-CBC/CTR / DRBG; **不含 ed25519/TLS**)+ 服务面一次定稿; v2.0 = 完整算法集 + 恒定时间加固 + 硬件引擎后端; **算法实现一律引上游, 不自行实现密码原语**(风格纪律); v3 动态加载的**绑定约束是重定位(v2)**, 不是"crypto 服务是否存在"(§12); 遗留缺口: 熵源契约(O-H1); **ops 是否入 golden(O-H7)已关闭 = 入**(`api/frozen/br-crypto.txt`/`br-keyring.txt`, 冻结批次见 `3-01` §15 第六批) |
 | D26 | HSM 资产边界(诚实声明) | **v1.x 无内存隔离 ⇒ 资产保护 = 逻辑边界(密钥只经 keyring 不透明 handle 暴露)+ 落盘加密 + 物理封装/外置安全核假设; 不承诺抵抗同地址空间内的任意读** | 域支撑矩阵(§14.1)逐格写"有/无/部分", 缺口须有编号与版本归宿; 认证件策略(§12: 可完全不编入动态路径)照旧; "伪安全"叙事风险登记 R10; 威胁表详见 `docs/9-app/9-02-hsm-sample.md` §2.3 |
 
@@ -171,12 +171,12 @@
 
 要点:
 - **L3 可组合能力层 = 五个子层(3a–3e, 阅读序)**: 消费者(服务)→ 文件系统 → 契约中心(框架件)→ 实现者(驱动)→ 板级数据; 总图**只画层间单向流**——层内具体依赖/注册拓扑不进总图(避免拉宽), **详见 `docs/8-device/8-01-device.md` §1 依赖图**; 框架件是能力层枢纽: 驱动与 FS 向它注册/挂载, 服务经它取能力
-- **POSIX 有两个角色**(D18): 产品 API 皮肤(iface-posix, 薄, APP 面)与**移植基座**(svc-posix, 服务, 三方中间件的依赖对象)——一份实现, 两个身份
+- **POSIX 有两个角色**(D18): 产品 API 皮肤(iface-posix, 薄, APP 面)与**移植基座**(runtime/posix, 服务, 三方中间件的依赖对象)——一份实现, 两个身份
 - **框架件(D19/D20)**: dev-core(通用设备)/cdev-core(字符, 含 flash 子型——**spi-nor/nand 对接于此**)/bdev-core(块, 依赖 dev-core)/vfs-core(纯 VFS, D21)——能力基础设施以**插件形态**存在: 可按组合裁剪, 纪律同 core(golden/门禁), 详见 `docs/8-device/8-01-device.md` §1/§3
 - **设备接入 VFS(D21)**: 所有设备经 **/dev**(fs/devfs 插件, 实时枚举 dev-core 注册表)接入 VFS 管理; **fs/tmpfs 挂载为 rootfs("/")**——Linux devtmpfs/rCore DeviceFS 同型; 挂载计划: tmpfs→/ → devfs→/dev → littlefs→/data; 见 `docs/7-storage/7-03-concrete-fs.md` §2/§3/§6
 - **接口插件是严格叶子**: **除 APP 外**没有任何插件依赖它们 ⇒ 可替换性最大化
 - 能力插件不知道任何接口皮肤的存在——驱动向 dev-core/bdev-core 注册设备, FS 向 vfs-core 注册挂载, 服务向 core 服务注册表发布
-- svc-posix 是普通可选服务: 不选它, 极小组合照旧纯 native(与 D11 可裁剪性一致)
+- runtime/posix 是普通可选服务: 不选它, 极小组合照旧纯 native(与 D11 可裁剪性一致)
 
 ## 4. OS Core: 模块职责边界
 
@@ -264,7 +264,7 @@ br_irq_register / br_irq_enable / br_irq_lock
 (设备/文件/挂载访问 `br_open`/`br_file_*`/`br_bdev_*`/`br_flash_*` 归框架件契约, 见 `docs/7-storage/7-01-vfs.md` / `docs/8-device/8-01-device.md`; **native API 完整清单与签名: `docs/3-os-core/3-01-core-api-list.md`**)
 
 **留 core 的理由:** 服务注册表是插件间无环会合点(§7.2 单向流下服务/框架件层另有声明依赖); native API 是全部插件作者的编码对象。冻结纪律: `docs/1-architecture/1-02-api-contract-governance.md`(D12–D15)。
-**libc 挂接点:** picolibc/newlib 弱符号 stub 由 `svc-posix` 实现(D18); `sbrk` 指向 core 堆[?]。
+**libc 挂接点:** picolibc/newlib 弱符号 stub 由 `runtime/posix` 实现(D18); `sbrk` 指向 core 堆[?]。
 
 ## 5. Scheduler 插件 (D2 深化)
 
@@ -403,7 +403,7 @@ typedef struct {
 | **框架件(Framework)** | `ability` | `framework` | 依赖 core; 被驱动/FS/服务依赖; **框架件间单向**(cdev-core→dev-core 与 vfs-core, bdev-core→dev-core); 纪律同 core(golden/门禁) |
 | I/O | `ability` | `io` | 向 cdev-core / bdev-core 注册设备 |
 | FS | `ability` | `fs` | **依赖 vfs-core**, 注册挂载(D21: 设备经 devfs 接入 VFS) |
-| Service | `ability` | `service` | 向 core 服务注册表发布; **服务间可声明依赖(含 svc-posix 与框架件)** |
+| Service | `ability` | `service` | 向 core 服务注册表发布; **服务间可声明依赖(含 runtime/posix 与框架件)** |
 | Interface | `interface` | — | 仅被 APP 依赖; 可再导出**多个**提供者的单元(`reexport_of` 列表) |
 | APP | `app` | — | **仅经 Interface** 依赖 |
 
@@ -412,7 +412,7 @@ typedef struct {
 | `api_type` | 定义 | 可抛出的接口分类 |
 |---|---|---|
 | `native` | 严格遵守 brickOS native API 规范, 不依赖任何 POSIX/三方基座 | 仅 `native` |
-| `runtime_adapter` | 为 `third_party` 提供接口支持的适配基座(如 `svc-posix`、`iface-pkcs11` 一类皮肤) | 仅 `runtime_adapter` |
+| `runtime_adapter` | 为 `third_party` 提供接口支持的适配基座(如 `runtime/posix`、`iface-pkcs11` 一类皮肤) | 仅 `runtime_adapter` |
 | `third_party` | 携带上游源码的三方件(如 `service/sqlite`、`service/lwip`) | 仅 `third_party`(**可不抛**; 能力经注册表发布亦合法) |
 
 > **APP "仅经 Interface"(A-2 收敛)**: 本行原写"依赖 Interface(**或直调 native**)", 与 `9-01` 的"必须经 Interface"长期矛盾。**现取唯一口径: APP 只依赖 Interface 插件**; 需要"零开销直通 native"的场景由 `iface-min`(极薄别名层, §7.4)承接 —— 它把 native 面以 Interface 身份暴露, 于是"不直调 native"与"零开销"同时成立。`4-01` §2、`9-01`、`1-02` §1、`1-03` §1、`9-02`、`8-01` 的同口径表述按此同步。
@@ -470,13 +470,13 @@ v0.4 的铁律"能力插件永不依赖接口插件"是安全的**结构代理**
 
 > 源文件: [plantUML/1-01-architecture-02.puml](plantUML/1-01-architecture-02.puml)
 
-单向流语义: 箭头只许指向"更靠近 core"; 同类内部允许接口叠接口(再导出)、服务依赖服务(含 svc-posix 与框架件)、框架件间单向(cdev-core→dev-core 与 vfs-core, bdev-core→dev-core); **设备经 fs/devfs 接入 VFS, 挂载经 fs 插件接入**(D21)。
+单向流语义: 箭头只许指向"更靠近 core"; 同类内部允许接口叠接口(再导出)、服务依赖服务(含 runtime/posix 与框架件)、框架件间单向(cdev-core→dev-core 与 vfs-core, bdev-core→dev-core); **设备经 fs/devfs 接入 VFS, 挂载经 fs 插件接入**(D21)。
 
 | # | 规则 | 执法机制 |
 |---|---|---|
 | 1 | **单向流**: 依赖箭头只许从"靠近 APP"指向"靠近 core"; 接口插件是**严格叶子**(仅被 APP 依赖); 框架件(D19)位于服务/能力层底部, 被服务与驱动依赖, 框架件间单向 | 组合期依赖图方向校验 |
 | 2 | **init 依赖无环** | 拓扑排序硬错误, 报环路径(§6.5) |
-| 3 | **共享状态唯一主人**(fd 表=single owner) | D13 符号独占 + 状态归属声明 |
+| 3 | **共享状态唯一主人**(fd 表=single owner) | D13 符号独占 + 状态归属声明。**归属落在哪个插件由实现定**: fd 表 = `framework/file-table`(框架件), `runtime/posix` 是消费者 —— 原型 ADR-0012; 规则要保的是"恰一个主人", 不是"主人必须是那个服务" |
 | 4 | **符号命名空间独占** | D13 符号级碰撞检测(链接前) |
 
 **铁律退役的理由**: 它真正想保住的是无环/单主人/可裁剪三件事, 而这三件事规则 1–4 + manifest 闭包已完整覆盖; 同时它误伤了 POSIX 的"移植基座"角色——三方中间件(sqlite 类)无法声明依赖 POSIX 实现, 移植成本不可接受(§7.6)。native API 本就刻意 POSIX 形状化, "不得用 POSIX"实为字母规则而非架构规则。
@@ -488,7 +488,7 @@ v0.4 的铁律"能力插件永不依赖接口插件"是安全的**结构代理**
 - **导出面分类(不变量, A-11)**: 每个 `[[export]]` 表带 `api_iface`(接口分类)字段, 且**必须等于该插件的 `api_type`**; 分类取三值 `native` / `runtime_adapter` / `third_party`(与 `api_type` 同域闭合)。**三方件若不声明 `[[export]]`**, 其能力面不进接口治理(经注册表消费, 见 §7.6); 若声明, 只能取 `third_party` 分类。
 - **双层粒度(D13)**: manifest 模块级声明+版本(人读); 碰撞检测符号级(链接器符号表为唯一真值); 模块→符号映射由工具从头文件生成, CI 防漂移
 - **再导出**: 显式 `reexport_of` 声明(**列表**, 可含多个被再导出单元), 不转移所有权, 纯传递依赖; 被再导出单元的分类必须与皮肤自身的 `api_type` 相等 —— **`iface-pkcs11` 同时再导出 crypto 与 keyring 两个单元即是该字段必须为列表的判例**(D24/M5; 旧名 `reexports` 的映射见 `brickie` v0.1 §13.2 A-11)
-- **`skin` 边豁免依赖禁则**: 皮肤对提供者的再导出边**豁免**"按 `api_type` 判依赖方向"的禁则(否则 `iface-posix`→`svc-posix`、`iface-pkcs11`→`crypto`/`keyring` 会被误杀); 豁免必须由 `reexport_of` 显式声明方能成立, 不可隐式
+- **`skin` 边豁免依赖禁则**: 皮肤对提供者的再导出边**豁免**"按 `api_type` 判依赖方向"的禁则(否则 `iface-posix`→`runtime/posix`、`iface-pkcs11`→`crypto`/`keyring` 会被误杀); 豁免必须由 `reexport_of` 显式声明方能成立, 不可隐式
 - **共享状态唯一主人**: fd 表恰一个 owner, socket 类插件向 owner 注册 file_ops(VFS provider 模式)
 - **host 直通模式**: host 平台插件上 iface-posix 可直通宿主机 open(), APP 逻辑 CI 全速跑(`docs/5-debug/5-01-debug.md` §4 同源思路)
 
@@ -496,7 +496,7 @@ v0.4 的铁律"能力插件永不依赖接口插件"是安全的**结构代理**
 
 | 插件 | 内容 | 版本 |
 |---|---|---|
-| `iface-posix` | **薄皮肤**: 再导出 svc-posix 符号(D13 reexport, 不转移所有权)+ APP 面 stdio/errno 接线 | v1.0 |
+| `iface-posix` | **薄皮肤**: 再导出 runtime/posix 符号(D13 reexport, 不转移所有权)+ APP 面 stdio/errno 接线 | v1.0 |
 | `iface-min` | 极薄别名层, 直通 native API, 无 fd/errno 开销 | v1.0 |
 | `iface-pkcs11` | 域标准: 加密 token API, 适配 crypto + keyring Service; **一个皮肤同时再导出两个单元**(`reexport_of` 列表的判例) | **v1.x(M5, D24——原排 v2.0, 由 HSM 完整样例前移)** |
 
@@ -504,13 +504,13 @@ v0.4 的铁律"能力插件永不依赖接口插件"是安全的**结构代理**
 >
 > | 皮肤 | `api_type` | `[[export]]` 形态 | 理由 |
 > |---|---|---|---|
-> | `iface-posix` | `runtime_adapter` | `form = "skin"`, `reexport_of = ["service/svc-posix#<unit>"]` | 它**再导出** `svc-posix`(runtime_adapter 基座)的单元 ⇒ 分类必须与基座相等 |
+> | `iface-posix` | `runtime_adapter` | `form = "skin"`, `reexport_of = ["runtime/posix#<unit>"]` | 它**再导出** `runtime/posix`(runtime_adapter 基座)的单元 ⇒ 分类必须与基座相等 |
 > | `iface-min` | **`native`** | `form = "api"`, `api_iface = "native"` | 它**不**再导出任何插件单元 —— 它暴露的是**自己拥有的 native API 别名面**(编译期别名, 直通 core native) ⇒ 取 `native`; 若把它标成 `runtime_adapter`, 不变量 1 会因"抛 native 面"判红(`BRV-TAX-0016`), 而 `form="skin"` 又要求 `reexport_of` 非空(它没有可再导出的单元) |
 > | `iface-pkcs11` | `runtime_adapter` | `form = "skin"`, `reexport_of = ["service/crypto#crypto", "service/keyring#keyring"]`(**列表**) | 再导出两个服务单元 ⇒ 每项分类必须与皮肤自身相等 ⇒ `service/crypto`/`service/keyring` 的接口面取 `runtime_adapter`(见 `11-01` §1) |
 >
 > **一句话判据**: **"再导出别人的单元" ⇒ 分类随被再导出单元(必须相等); "暴露自己拥有的别名面" ⇒ 分类随该面的规范(native 别名面 = `native`)。** `iface-min` 属后者 —— 它正是 A-2 所说的"零开销合规出口"。
 
-POSIX 的**实现**在 `svc-posix`(Service 类, §3): fd 表 + VFS 路由 + pthread 映射 + libc stub, 实现于 native API + 注册表; socket 子系统路由到 net 服务。皮肤与基座一份实现、两个身份(D18)。
+POSIX 的**实现**在 `runtime/posix`(Service 类, §3): fd 表 + VFS 路由 + pthread 映射 + libc stub, 实现于 native API + 注册表; socket 子系统路由到 net 服务。皮肤与基座一份实现、两个身份(D18)。
 
 > 泛化: **接口插件不限于 OS API——任何域标准 API 都是一个插件**。存量代码按什么标准写, 就插什么皮肤。
 
@@ -520,16 +520,16 @@ POSIX 的**实现**在 `svc-posix`(Service 类, §3): fd 表 + VFS 路由 + pthr
 
 1. **谁实现谁**(不变): 标准 API 的一部分语义由中间件实现——POSIX sockets → lwIP, PKCS#11 → crypto。适配器必须同时看见"标准的语义"与"能力的机器", 只能坐在两者之间。
 2. **接口必须是严格叶子**(v0.5 强化): 除 APP 外没有任何插件依赖接口插件 ⇒ 皮肤可任意替换/裁剪, 且换皮肤永不重验服务。反向(服务依赖皮肤)则每换 API 皮肤都要重验中间件——验证经济学: 依赖箭头 = 重新验证的方向, 贵的(网络栈/crypto)必须待在箭头根部。
-3. **复用经济学**(v0.5 诚实版): native 编码的服务在任何组合可用; POSIX 编码的服务在**不带 svc-posix 的组合**中不可用——这是组合期可见的取舍(manifest 闭包), 不是运行期惊喜。极小组合照旧纯 native, 可裁剪性不变。
+3. **复用经济学**(v0.5 诚实版): native 编码的服务在任何组合可用; POSIX 编码的服务在**不带 runtime/posix 的组合**中不可用——这是组合期可见的取舍(manifest 闭包), 不是运行期惊喜。极小组合照旧纯 native, 可裁剪性不变。
 4. **两种绑定分离**(不变, **口径已收口 = `r1/02` P0-1**): **结构需求(三类"能力面"依赖)走 manifest 声明**; **运行机会走注册表晚绑定**。二者**不互相替代, 也不互相豁免**:
    - **声明面**: 只要一个插件要**调用另一个插件的函数/使用它的符号面**, 就必须在 `plugin.toml` 的 `[[dep]]` 里声明该边(`kind = "runtime"` 或 `"type"`); 这保证"极小组合可裁剪"的承诺可被组合期执法(§7.5 的复用经济学)。
    - **注册表面**: 插件在运行期**按名字**从 core 服务注册表取用能力(如 `service/seclog` 找 `crypto`、FS 找 bdev), 这是**运行机会合**, **不产生依赖边、不拉入闭包**。
-   - **所以 `svc-posix` 与 `littlefs` 的事实是**: 二者之间**没有直接的符号面调用边**(littlefs 通过 vfs-core 的 `br_file_ops` 契约工作、挂在挂载表上), 因此 `[[dep]]` 里**不需要** `littlefs → svc-posix` 这条边; "换 FS 零改动"来自**契约(vfs-core)不变**, **不是**来自"可以零声明地直接调别人"。
-   - **反例(必须红)**: 某插件在代码里直接调 `svc-posix` 的 `open()` 却不在 `[[dep]]` 里声明 `runtime` 边 ⇒ 组合期报"未声明的能力面依赖"(v0.1 靠声明面自洽性校验 + `--json` 诊断, v0.2 起由符号级扫描执法)。
+   - **所以 `runtime/posix` 与 `littlefs` 的事实是**: 二者之间**没有直接的符号面调用边**(littlefs 通过 vfs-core 的 `br_file_ops` 契约工作、挂在挂载表上), 因此 `[[dep]]` 里**不需要** `littlefs → runtime/posix` 这条边; "换 FS 零改动"来自**契约(vfs-core)不变**, **不是**来自"可以零声明地直接调别人"。
+   - **反例(必须红)**: 某插件在代码里直接调 `runtime/posix` 的 `open()` 却不在 `[[dep]]` 里声明 `runtime` 边 ⇒ 组合期报"未声明的能力面依赖"(v0.1 靠声明面自洽性校验 + `--json` 诊断, v0.2 起由符号级扫描执法)。
 
-**四分法**(v0.5): 能力(Service/I/O/FS)提供机器; **基座(svc-posix)提供"标准的运行时实现"供能力复用**; 皮肤(Interface)提供 APP 面的标准; 消费(APP)使用标准。谁想"用"标准 API, 谁就是 APP 类插件(测试/样例/工具同此)。
+**四分法**(v0.5): 能力(Service/I/O/FS)提供机器; **基座(runtime/posix)提供"标准的运行时实现"供能力复用**; 皮肤(Interface)提供 APP 面的标准; 消费(APP)使用标准。谁想"用"标准 API, 谁就是 APP 类插件(测试/样例/工具同此)。
 
-**附带红利**: POSIX 实现按服务边界自然分解——svc-posix-core(不需 net)与 svc-posix-sockets(依赖 net)可分开组合, API 面随能力面伸缩。
+**附带红利**: POSIX 实现按服务边界自然分解——**core 半**(fd/文件/线程, 不需 net)与 **sockets 半**(依赖 net)可分开组合, API 面随能力面伸缩。
 
 ### 7.6 三方中间件移植(双模式, D18 的落地)
 
@@ -537,7 +537,7 @@ POSIX 的**实现**在 `svc-posix`(Service 类, §3): fd 表 + VFS 路由 + pthr
 
 ```c
 /* service/sqlite/plugin.c — 移植的全部增量 */
-BR_PLUGIN(sqlite, .deps = (const br_dep_t[]){{"svc-posix", ">=1.0.0", BR_PHASE_LATE, 0}}, ...);  /* deps 形状见 §6.1/§7.7: {name, range, phase, compat_gen} 数组 */
+BR_PLUGIN(sqlite, .deps = (const br_dep_t[]){{"runtime/posix", ">=1.0.0", BR_PHASE_LATE, 0}}, ...);  /* deps 形状见 §6.1/§7.7: {name, range, phase, compat_gen} 数组 */
 /* range 固定 3 段; compat_gen 仅接口依赖携带, 结构依赖(init/runtime/type)不带 ⇒ 此处为 0 */
 static int sqlite_port_init(void) {
     sqlite3_config(SQLITE_CONFIG_MUTEX, &br_mutex_methods);  /* br_mutex */
@@ -549,19 +549,19 @@ static int sqlite_port_init(void) {
 
 | 模式 | 增量 | 上游同步 | 依赖面 | 适用 |
 |---|---|---|---|---|
-| A: os_unix.c 直链 svc-posix | ~0 | 替换 amalgamation 即升级 | svc-posix 子集 | 快速跑通(QEMU/host 验证) |
-| B: os_brick.c VFS 后端(~600 行) | 一次写作后稳定 | 同上, 后端不动 | 纯 native + vfs-core 框架件契约(`br_open`/`br_file_*`) | 裁剪/性能; **无 svc-posix 的极小组合也能用 sqlite** |
+| A: os_unix.c 直链 runtime/posix | ~0 | 替换 amalgamation 即升级 | runtime/posix 子集 | 快速跑通(QEMU/host 验证) |
+| B: os_brick.c VFS 后端(~600 行) | 一次写作后稳定 | 同上, 后端不动 | 纯 native + vfs-core 框架件契约(`br_open`/`br_file_*`) | 裁剪/性能; **无 runtime/posix 的极小组合也能用 sqlite** |
 
 - 模式 A 的 POSIX 子集需求(sqlite 视角): `pread/pwrite/ftruncate/unlink/stat/fstat/usleep/gettimeofday/pthread_mutex/mmap(可关)`; `fcntl(F_SETLK)` 咨询锁在**单 APP 下退化为进程内互斥**——语义文档化, 这是"单应用"红利
 - **移植成本从此是一个旋钮**: 快速路径(基座)与深度路径(native)都是一等公民
 - 战略呼应: 与 Unikraft 的 libc-as-library 移植模型对齐 ⇒ 原型期攒的三方移植件可平移到量产基座(持久资产原则)
 
 **新的诚实代价**(记录在案):
-1. svc-posix 成为引力中心——中间件自然滑向全 POSIX 编码, native API 使用萎缩(Unikraft 教训)。缓解: 一方服务 native-first 写进风格规范; svc-posix 在 manifest 显式可见
+1. runtime/posix 成为引力中心——中间件自然滑向全 POSIX 编码, native API 使用萎缩(Unikraft 教训)。缓解: 一方服务 native-first 写进风格规范; runtime/posix 在 manifest 显式可见
 2. 子集诚实义务——实现/未实现必须成文 + conformance 覆盖; 三方代码在链接期撞墙好过运行期
-3. 契约治理面 +1: svc-posix 的 POSIX 符号面进 golden/门禁体系(`docs/1-architecture/1-02-api-contract-governance.md` §2.3 同机制)
+3. 契约治理面 +1: runtime/posix 的 POSIX 符号面进 golden/门禁体系(`docs/1-architecture/1-02-api-contract-governance.md` §2.3 同机制)
 
-**svc-posix 的冻结批次**: `br-svcposix.txt` 的升格排期 = `docs/3-os-core/3-01-core-api-list.md` §15 **第五批**(非 core 组, M3; POSIX 子集清单成文且实现到位后)。这条是 release 的前置: `brickie check --profile release` 禁止依赖未冻结接口, 而三方中间件(如 sqlite 模式 A)对 svc-posix 是 `type`/`runtime` 结构依赖 ⇒ 不参与该判定; 真正受影响的是 `requires_iface` 侧消费 POSIX 符号面的插件。*(`brickie` v0.1 §7.5 的 A-18)*
+**runtime/posix 的冻结批次**: `br-posix.txt` 的升格排期 = `docs/3-os-core/3-01-core-api-list.md` §15 **第五批**(非 core 组, M3; POSIX 子集清单成文且实现到位后)。这条是 release 的前置: `brickie check --profile release` 禁止依赖未冻结接口, 而三方中间件(如 sqlite 模式 A)对 runtime/posix 是 `type`/`runtime` 结构依赖 ⇒ 不参与该判定; 真正受影响的是 `requires_iface` 侧消费 POSIX 符号面的插件。*(`brickie` v0.1 §7.5 的 A-18)*
 
 ### 7.7 版本区间与兼容声明
 
@@ -629,7 +629,7 @@ static int sqlite_port_init(void) {
 - **设备 ops 统一预留(D22)**: 所有设备类别 ops 预留 ioctl/suspend/resume(设备级 PM); poll/close 由 cdev-core 通用 br_file_ops 适配层提供(devfs 经钩子取得); 动机 = D14(ops 布局入 golden, 预留即免破坏)——详见 `docs/8-device/8-01-device.md` §3
 - **框架件归属(D19/D20)**: VFS = vfs-core(纯 VFS, 设备依赖已移出)、bdev 子分类 = bdev-core(**依赖 dev-core**)、**flash = cdev-core 子型(spi-nor/nand 对接 cdev-core)**; **littlefs 依赖 vfs-core**(另按介质绑定 cdev-core/bdev-core)——详见 `docs/8-device/8-01-device.md` §1/§3
 - **双设备类(SD-2)**: bdev(磁盘型: 扇区 read/write/flush)与 flash(raw flash: read/program/erase/sync)——littlefs 块接口天然是 flash 形态, 1:1 零胶水; QEMU 上经 bdev 适配器跑功能测试
-- **统一可打开模型(SD-1, D21 修订)**: 一切 = `br_file_t`; `br_open` **只走挂载表**(设备经 /dev 接入) ⇒ svc-posix fd 层设备/文件零特判
+- **统一可打开模型(SD-1, D21 修订)**: 一切 = `br_file_t`; `br_open` **只走挂载表**(设备经 /dev 接入) ⇒ runtime/posix fd 层设备/文件零特判
 - **block 层 API 可堆叠**: provider 同时可以是 consumer ⇒ page cache 插件成为"三明治"(上层看到同一 `br_bdev_ops`), VFS 与驱动**无感**(评审要求)
 - **page cache 约束**: 静态预算(manifest 定死)、无换页无回收——比 Linux 简单一个量级; 写穿优先; **必须转发 flush/barrier**(cache 不能吞 fsync); EROFS 特例: 缓存解压后的页比缓存原始块划算
 - **EROFS 选型理由**: 只读压缩、车规生态熟面孔、`mkfs.erofs` 工具链与 Linux 同源

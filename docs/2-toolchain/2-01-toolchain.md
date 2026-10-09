@@ -28,7 +28,7 @@
 - **组合期校验**(§6.4): init-DAG 环检测(硬错误)、资源冲突、设备名唯一、版本区间
 - **三层 CI 门禁**(1-02 §2.3): golden diff(abidiff)/ 语义 conformance 矩阵(×3 调度器)/ 版本矩阵
 - **host 平台插件**(1-03): CI 秒级单测 + 完整 ASan 直通
-- **golden 文件划分**(3-01 §1/§15): br-sched/mem/mm/irq/svc + 框架件四件 + svc-posix
+- **golden 文件划分**(3-01 §1/§15): br-sched/mem/mm/irq/svc + 框架件四件 + runtime/posix
 
 ## 2. 大纲(待成文)
 

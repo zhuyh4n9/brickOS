@@ -1,7 +1,7 @@
 @startuml
 skinparam componentStyle rectangle
 
-[APP / svc-posix\nopen/read/write(fd)] as TOP
+[APP / runtime/posix\nopen/read/write(fd)] as TOP
 [VFS = vfs-core 插件\nbr_open 挂载表·单路由 · v1.0] as VFS
 [fs/tmpfs — rootfs(D21)\nRAM FS, 挂 / 兜底] as TMP
 [fs/devfs — /dev 设备节点(D21)\n实时枚举 dev-core 注册表] as DFS

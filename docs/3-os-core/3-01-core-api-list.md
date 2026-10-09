@@ -2,7 +2,7 @@
 
 > 对应主文档 §4.5(native API + 服务注册表); 治理: `docs/1-architecture/1-02-api-contract-governance.md`; **这是 `docs/1-architecture/1-03-roadmap.md` §5 DoD 第 2 项的清单与详细设计部分**, 头文件草案随后。
 > 状态: **全部 `BR_API_EXPERIMENTAL`**(D15: M0–M2 随时可碎, M3 起分批升格 frozen 并进 golden)。
-> 范围: **core 拥有的 API**——框架件契约(`7-01-vfs`/`7-02-bdev`/`8-01-device`)与 svc-posix 符号面(D18)不在本清单。
+> 范围: **core 拥有的 API**——框架件契约(`7-01-vfs`/`7-02-bdev`/`8-01-device`)与 runtime/posix 符号面(D18)不在本清单。
 > 规模: **48 函数 + 3 静态定义宏**(CA-5: 面目标 ≤50, 余量 2)。
 > 详细设计约定: 以任务组为样例(§2.1/§2.2)——每组两小节: **语义规格**(每函数: 错误/阻塞/归属)+ **实现设计**(数据结构/不变量/竞态); "归属" = core / 调度插件 / platform(三层, 主文档 §4.1)。
 
@@ -43,13 +43,13 @@
 |---|---|---|---|
 | **native API(本清单)** | core | `br-sched/br-mem/br-mm/br-irq/br-svc.txt` | 本文 |
 | 框架件 API | dev-core / cdev-core / vfs-core / bdev-core | `br-devcore/br-cdevcore/br-vfscore/br-bdevcore.txt`(冻结批次见 §15 第四批) | `docs/7-storage/7-01-vfs.md`–`8-01` |
-| POSIX 符号面 | svc-posix | `br-svcposix.txt`(§15 第五批) | 主文档 §7 |
+| POSIX 符号面 | runtime/posix | `br-posix.txt`(§15 第五批) | 主文档 §7 |
 | 服务 ops 契约(HSM) | crypto / keyring | `br-crypto.txt` / `br-keyring.txt`(§15 第六批; O-H7 已关闭 = 入 golden) | `docs/11-service/11-01-service.md` / `docs/9-app/9-02-hsm-sample.md` §6.2 |
 | 插件元契约(描述符/生命周期) | core(plugin_manager) | —(冻结元契约) | 主文档 §6.1 |
 
-**刻意不在本清单上**(防面膨胀, 同样是契约): fd/文件/挂载(vfs-core)、设备/cdev/bdev/flash(dev-core/cdev-core/bdev-core)、POSIX 符号(svc-posix)、SMP 原语(v2: per-CPU/IPI)、async I/O(v2+)、per-plugin arena 归属分配(v2, memleak 记账 `docs/5-debug/5-01-debug.md` §4)。
+**刻意不在本清单上**(防面膨胀, 同样是契约): fd/文件/挂载(vfs-core)、设备/cdev/bdev/flash(dev-core/cdev-core/bdev-core)、POSIX 符号(runtime/posix)、SMP 原语(v2: per-CPU/IPI)、async I/O(v2+)、per-plugin arena 归属分配(v2, memleak 记账 `docs/5-debug/5-01-debug.md` §4)。
 
-> **"不在本清单"≠ "没有冻结批次"**: 框架件四件 / `svc-posix` POSIX 面 / `crypto`·`keyring` ops 的 golden 文件**已排期**(§15 第四/五/六批)——此前它们只有治理声明而无批次, 使依赖方的 `--profile release` 检查被永久阻断; 现批次到位, 其 API 面的详细规格仍以各域文档为准(`7-01-vfs`/`7-02-bdev`/`8-01-device`/`11-01-service`/`9-02-hsm-sample` §6.2)。
+> **"不在本清单"≠ "没有冻结批次"**: 框架件四件 / `runtime/posix` POSIX 面 / `crypto`·`keyring` ops 的 golden 文件**已排期**(§15 第四/五/六批)——此前它们只有治理声明而无批次, 使依赖方的 `--profile release` 检查被永久阻断; 现批次到位, 其 API 面的详细规格仍以各域文档为准(`7-01-vfs`/`7-02-bdev`/`8-01-device`/`11-01-service`/`9-02-hsm-sample` §6.2)。
 
 ## 1. API 总览(按 golden 分组)
 
@@ -61,7 +61,7 @@
 | `br-irq.txt` | 中断 + 级联域(§8) | 9 | lock/unlock | 基础五件第一批; 域四件随 M4 实现后冻结 |
 | `br-svc.txt` | 服务注册表(§9) | 2 | 无 | 第一批 |
 | `br-devcore.txt` / `br-cdevcore.txt` / `br-vfscore.txt` / `br-bdevcore.txt` | **框架件 API**(四件, §0; 纪律同 core, 治理见 1-02 §2.3 层 1) | 见各域文档 | 按域 | **第四批**(非 core 组; 每文件独立升格, M2/M3 起分批; 见 §15) |
-| `br-svcposix.txt` | **POSIX 符号面**(svc-posix, D18) | §0 见主文档 §7 | 无 | **第五批**(非 core 组; M3; 见 §15) |
+| `br-posix.txt` | **POSIX 符号面**(runtime/posix, D18) | §0 见主文档 §7 | 无 | **第五批**(非 core 组; M3; 见 §15) |
 | `br-crypto.txt` / `br-keyring.txt` | **服务 ops 契约**(HSM 服务组, D25) | §0 见 11-01 / 9-02 §6.2 | 无 | **第六批**(非 core 组; M5 随服务契约; **O-H7 已关闭 = 入 golden**; 见 §15) |
 
 ## 2. 任务与线程(br-sched 组)
@@ -171,7 +171,7 @@ int br_work_submit(void (*fn)(void *), void *arg);  /* ISR-safe; 队列满 → -
 /* ---- 字节堆(TLSF) ---- */
 void *br_malloc (size_t n);
 void *br_calloc (size_t n, size_t size);
-void *br_realloc(void *p, size_t n);       /* svc-posix 的 libc stub 需要 */
+void *br_realloc(void *p, size_t n);       /* runtime/posix 的 libc stub 需要 */
 void  br_free   (void *p);
 
 /* ---- 物理连续内存(CA-7): 独立 contig 池, 不走 TLSF 堆 ---- */
@@ -197,7 +197,7 @@ int br_heap_usage(size_t *used, size_t *total);   /* arena 记账/bridge 上报 
 
 - **三池划分**: platform region 表把 RAM 划为 heap / contig 池 / 页池, 比例 = manifest 预算(主文档 §6.4 资源总账)——静态组合下无运行时协商
 - per-plugin 归属分配(`br_malloc_a` 类) = **v2**(memleak 记账, `docs/5-debug/5-01-debug.md` §4), v1 只有全局堆 + heap_usage 统计
-- `sbrk` 挂接点: svc-posix 的 libc stub → 本组(主文档 §4.5)
+- `sbrk` 挂接点: runtime/posix 的 libc stub → 本组(主文档 §4.5)
 
 ## 7. MMU 与 cache(br-mm 组; 接口在 core, 构造在 ISA 库 + platform 数据, 主文档 §8)
 
@@ -309,7 +309,7 @@ const void *br_service_lookup(const char *name);              /* NULL = 不存�
 其余**全部 thread-only**——静态扫描执法(D10 双保险之一; conformance 矩阵 = R1 执法); 设备/存储域 API 白名单为空(`docs/8-device/8-01-device.md` §4)。
 **级联域子 handler 例外**: 契约随域类型——FAST 域子 handler 运行于 ISR 上下文(白名单纪律适用), SLOW 域子 handler 运行于线程上下文(bh 契约, §8.1)。
 
-**错误码**(SD-10 全集的 core 域子集; 全集与设备域子集见 `docs/8-device/8-01-device.md` §4): int 返回, 负 errno 子集 `-EIO/-EAGAIN/-EINVAL/-ENOMEM/-ENODEV/-ENOTSUP/-EBUSY/-EEXIST/-ETIMEDOUT`(末项 = 阻塞超时统一, INV-1/CA-4——`docs/6-test/6-01-test.md` 用例设计前置补入); svc-posix 取 `-ret` 作 errno。
+**错误码**(SD-10 全集的 core 域子集; 全集与设备域子集见 `docs/8-device/8-01-device.md` §4): int 返回, 负 errno 子集 `-EIO/-EAGAIN/-EINVAL/-ENOMEM/-ENODEV/-ENOTSUP/-EBUSY/-EEXIST/-ETIMEDOUT`(末项 = 阻塞超时统一, INV-1/CA-4——`docs/6-test/6-01-test.md` 用例设计前置补入); runtime/posix 取 `-ret` 作 errno。
 
 > **待收口(O-H8, v1.x/M5 提出)**: HSM 样例需要"权限类"错误码表达**策略拒绝**(用途位不符 / 超计数上限 / 禁止导出)——现有子集只有 `-EINVAL`/`-ENOTSUP` 等, 无 `-EPERM`。`docs/9-app/9-02-hsm-sample.md` §4.2 声明 HSM 域子集**新增 `-EPERM`**, 收口动作 = 并入本节与 `docs/6-test/6-01-test.md` INV-4 清单(先例同 `-ETIMEDOUT`: 用例设计前置暴露); 若核心域最终拒绝扩展, 样例退化为 `-EINVAL`。
 
@@ -364,7 +364,7 @@ extern const br_plugin_t __br_plugins_start[], __br_plugins_stop[];
 /* 边界符号由链接脚本 PROVIDE 定义(段名含 '.', 非 C 合法标识符, GNU ld 不自动生成 __start_/__stop_) */
 ```
 
-- 例外(需要真导出): svc-posix 的 POSIX 面(`BR_API` 同型导出, golden: `br-svcposix.txt`)、iface 再导出符号(10-01-interface 选型 [?])
+- 例外(需要真导出): runtime/posix 的 POSIX 面(`BR_API` 同型导出, golden: `br-posix.txt`)、iface 再导出符号(10-01-interface 选型 [?])
 
 ### 13.4 验证层: golden = 符号表真值
 
@@ -436,7 +436,7 @@ golden 文件划分(§1)= 分批冻结的最小单元。**冻结粒度 = 接口/
 - **第二批(M3 后, conformance 矩阵压测后)**: `br-sched`——任务/同步与调度器策略强耦合, 必须 `{当期已交付调度器} × 同一套语义测试` 全绿后升格(1-02 §2.3 层 2); v1.0(M3) 时点仅有 sched-coop, sched-preempt(v2.0)/sched-tt(v3.0) 交付后必须在其上追加矩阵行并保持全绿
 - **第三批(随实现批, M4 后)**: 级联域四件(`br-irq.txt` 增补)——真实 SoC 的 PMIC/GPIO 实战后冻结
 - **第四批(非 core 组 · 框架件四件, M2/M3 起分批)**: `br-devcore.txt` / `br-cdevcore.txt` / `br-vfscore.txt` / `br-bdevcore.txt`——这四件在 §0 已有治理声明(1-02 §2.3 层 1 的 v0.6/v0.7 条目), 但此前**没有冻结批次**, 使任何依赖它们的 `--profile release` 检查被 `BRV-VER-0004` **永久阻断**。冻结**以接口单元为粒度**(每文件独立升格), 随对应框架件的实现成熟分批(M2 起 dev-core/cdev-core, M3 起 vfs-core/bdev-core); 各域文档(`7-01-vfs`/`7-02-bdev`/`8-01-device`)的 API 面按此排期升格
-- **第五批(非 core 组 · POSIX 符号面, M3)**: `br-svcposix.txt`——POSIX 子集清单成文且实现到位后升格(1-02 §2.3 层 1 的 v0.5 条目); 子集"诚实义务"要求未实现项在链接期暴露
+- **第五批(非 core 组 · POSIX 符号面, M3)**: `br-posix.txt`——POSIX 子集清单成文且实现到位后升格(1-02 §2.3 层 1 的 v0.5 条目); 子集"诚实义务"要求未实现项在链接期暴露
 - **第六批(非 core 组 · 服务 ops 契约, M5 随服务契约)**: `br-crypto.txt` / `br-keyring.txt`——`service/crypto` 与 `service/keyring` 的 **ops 表入 golden**(关闭 `11-01` §3 开放问题与 `9-02` §6.2 O-H7): v2 换后端/加算法面**不得破坏消费者** ⇒ ops 布局稳定必须由 golden 强制。v1.x 两服务 API 标 `EXPERIMENTAL`, 随 M5 服务契约定稿升格
 
 > **框架件"纪律同 core"的落点**(1-01 §6.3 的"框架件…纪律同 core(golden/门禁)"由此获得承载方): 框架件的 API 面**走同一套**决策记录 + golden + 三层门禁流程, 只是**分组文件与冻结批次不同**; "纪律同 core"指流程同源, 不指"进 `br-*` core 分组"。

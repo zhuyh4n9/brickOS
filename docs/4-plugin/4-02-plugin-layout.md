@@ -24,7 +24,7 @@
 已有事实(散点, 待收口):
 
 - CLI 已暗示树内路径形态: `brickie add platform/qemu-aarch64 io/uart-pl011 fs/littlefs ...`(主文档 §13)——**按类别组织插件树**的读法**已定稿**(**顶层即 `namespace` 目录**; 见 §3 已答项与 `brickie-v0.1` §8.3 ④; r1/03 P0-7)
-- 插件名 = 全局身份: 依赖声明(deps.name)/注册表/描述符 `name` 字段(§6.1)共用; **名字的 `namespace` 集合 = `app|iface|platform|sched|framework|io|fs|service`**(每项 → `plugin_type`/`subkind` 的映射见 `brickie-v0.1` §8.3 ①), **`ability` 只作为"无更好的 namespace 时"的通配读法**(不在枚举里, 不是推荐形态; r1/03 P0-7)
+- 插件名 = 全局身份: 依赖声明(deps.name)/注册表/描述符 `name` 字段(§6.1)共用; **名字的 `namespace` 集合 = `app|iface|platform|sched|framework|io|fs|service|runtime`**(每项 → `plugin_type`/`subkind` 的映射见 `brickie-v0.1` §8.3 ①), **`ability` 只作为"无更好的 namespace 时"的通配读法**(不在枚举里, 不是推荐形态; r1/03 P0-7)
 - 符号纪律: `br_*` 为 core 独占; 插件自有符号带插件名前缀(§7.2 规则 4)
 - 描述符物理布局: `.br_plugins` 收集段 + `__br_plugins_start/__br_plugins_stop` 边界枚举(段名三处一致: 1-01 §6.1 / 3-01 §13.3 / 3-05 §2.2); **宏形态已定稿(A-3)**: `static const br_plugin_t`(近零导出面, CA-10) —— 本节原记录的"1-01 §6.1 非 static vs 3-01 §13.3 `static const`"矛盾已收敛到 `static const`, 1-01 §6.1 的展开式随之修订。`ver[4]` 字段与 `br_dep_t = {name, range, phase, compat_gen}` 同批定稿
 - 脚手架: `brickie new <plugin_type> <name>` 生成模板(4-01 §7 开放问题; **两个位置参数已裁定**: 类 + 名, 落点在本篇 §2 第 6 项; `2-02` 的 `new <kind>` 是草图)
@@ -36,7 +36,7 @@
 1. **目录布局**: 单插件目录内的文件组织(生成物已钉三件见下) [TODO: manifest 位置 / src / include(对外的暴露面?)/ test / conformance / 平台数据 / 文档]
    - **v0.1 已钉的三件**(生成器侧真值): `plugin.toml` 在插件根; 人对外的头文件在 `include/`; 生成物一律落仓库级 `build/gen/<plugin>/`(不落插件目录)
 2. **命名约定**: 插件名规则(字符集/大小写/长度); 目录名 ↔ 插件名 ↔ 符号前缀 ↔ 设备名(如涉)的一致性与推导 [TODO]
-   - v0.1 已定: `name` 匹配 `^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$`, **全局唯一**; 推荐形态 `<namespace>/<short>`, **`namespace` 集合 = `app|iface|platform|sched|framework|io|fs|service`**(与 `brickie-v0.1` §8.3 ① 一表定死); 旧的 `svc-posix`/`sched-coop`/`iface-min`/`dev-core` 等**均合法不改名**(只对新增插件给推荐形态 lint)
+   - v0.1 已定: `name` 匹配 `^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$`, **全局唯一**; 推荐形态 `<namespace>/<short>`, **`namespace` 集合 = `app|iface|platform|sched|framework|io|fs|service|runtime`**(与 `brickie-v0.1` §8.3 ① 一表定死); 旧的 `sched-coop`/`iface-min`/`dev-core`/`cdev-core`/`bdev-core`/`vfs-core` 等**裸名均合法不改名**(只对新增插件给推荐形态 lint)。★ `runtime` 是 **2026-xx 新增**的一个(`4-02` §2 与 `brickie-v0.1` §8.3 ① 同步; 见原型 ADR-0015)
    - **`ability` 只作通配读法**(r1/03 P0-7): `ability/<short>` **不在**上述枚举里, 仅当插件既非 `platform`、其 `subkind` 又难以判断时可用; `iface-*`/调度器/框架件/服务分别必须用 `iface/`/`sched/`/`framework/`/`service/`(或其既有裸名), 见 `brickie-v0.1` §8.3 ②
    - **名字与 `api_type` 无关**(r1/03 P0-7): `namespace` 表达的是 `subkind`(或 `app`/`interface`/`platform` 三个 `plugin_type`); 三方件 `service/sqlite` 的 `api_type = third_party` 只写在 `plugin.toml` 字段里, 不进名字(§1 分类学口径)
    - **目录名 = 插件名**: 物理路径最后一段 = `short`, **顶层一段 = `namespace`**(§3 已答; `brickie-v0.1` §8.3 ④)

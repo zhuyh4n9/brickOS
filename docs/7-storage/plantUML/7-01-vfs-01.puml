@@ -1,6 +1,6 @@
 @startuml
 participant "APP" as APP
-participant "svc-posix" as PX
+participant "runtime/posix" as PX
 participant "vfs-core 插件" as VF
 participant "littlefs inode_ops" as IN
 APP -> PX: open("/data/log.txt", O_WRONLY|O_CREAT)

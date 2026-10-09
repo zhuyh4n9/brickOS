@@ -54,12 +54,12 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 | **IO(驱动)**(`ability`, `subkind = io`) | 设备 ops 表(cdev/bdev/flash) | cdev-core / bdev-core | `8-01-device` §3/§6 | ISR/DMA 静态扫描 |
 | **FS**(`ability`, `subkind = fs`) | ops 四层(super/inode/file/dentry) | vfs-core(挂载) | `7-01-vfs` §2 / `7-03` | 掉电用例 |
 | **Service**(`ability`, `subkind = service`) | init + 运行时 + 注册表发布 | 服务 / 框架件 | `3-06` / `11-01` | 单一主人审查 |
-| **Interface**(`plugin_type = interface`) | 再导出皮肤(`reexport_of` 可含**多个**提供者单元) | svc-posix 等服务或 core(iface-min 直通) | `10-01-interface` | 叶子检查(无被依赖) |
+| **Interface**(`plugin_type = interface`) | 再导出皮肤(`reexport_of` 可含**多个**提供者单元) | runtime/posix 等服务或 core(iface-min 直通) | `10-01-interface` | 叶子检查(无被依赖) |
 | **APP**(`plugin_type = app`, 恰一) | main | **Interface(仅此一路; 零开销直通由 iface-min 承接)** | `9-01-app` | 启动链演示 |
 
 > **两处按 A-1/A-2 收敛**: ① 旧类名全部落位为 `plugin_type` + `subkind`(没有"第八个维度"); ② **APP 行原写"依赖 Interface(或直调 native)"已收敛为"仅经 Interface"** —— 需要零开销的 APP 依赖 `iface-min`(native 的薄别名层), 而不是越过接口层直调。
 >
-> **`api_type` 的读法**: 上表每行都可再叠加 `api_type` —— 携带上游源码的三方件(`service/sqlite`/`service/lwip`)是 `plugin_type = ability` + `api_type = third_party`; POSIX 基座 `svc-posix` 与域标准皮肤 `iface-pkcs11` 是 `api_type = runtime_adapter`。
+> **`api_type` 的读法**: 上表每行都可再叠加 `api_type` —— 携带上游源码的三方件(`service/sqlite`/`service/lwip`)是 `plugin_type = ability` + `api_type = third_party`; POSIX 基座 `runtime/posix` 与域标准皮肤 `iface-pkcs11` 是 `api_type = runtime_adapter`。
 
 (文档编号: 存储域 7-01–7-03 在 `7-storage`, 设备域 8-01 在 `8-device`, 3-03–3-05/3-06 在 `3-os-core`, 9-01 在 `9-app`, 10-01 在 `10-interface`, 11-01 在 `11-service`。)
 
@@ -92,7 +92,7 @@ manifest 声明(依赖 / 资源 / RAM 预算)
 - init 时序: 被依赖方(服务方)publish 在先、依赖方(消费方)lookup 在后(init-DAG 保证; 3-06-service-mgmt §1)
 - **共享状态单一主人**(§7.2): 跨服务共享表必须有唯一 owner(fd 表判例)
 - RAM 预算 manifest 声明(arena 记账, v2)
-- 三方移植先读 §7.6 双模式(模式 A 直链 svc-posix)
+- 三方移植先读 §7.6 双模式(模式 A 直链 runtime/posix)
 
 ## 6. 测试与合规(所有插件)
 
