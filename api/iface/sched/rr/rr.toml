@@ -1,0 +1,37 @@
+# brickie:generated
+# api/iface 快照 api/iface/sched/rr/rr.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "sched/rr#rr"
+provider = "sched/rr"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:2600c8855085bcf13b334b1a164fe7aa33a12dc7970dc705f12b744c82aa4eb2"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "func"
+name = "rr_early_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "rr_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "rr_start"
+sig = "int (void)"
+status = "experimental"

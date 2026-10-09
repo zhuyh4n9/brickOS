@@ -3,6 +3,13 @@
 > **协作式调度器(coop)**: FIFO 就绪队列 + 只在**显式点**换栈。core 拥有语义(线程状态机 /
 > 超时唤醒 / idle / 上下文切换 asm), 本插件只回答"下一个该跑谁"。
 > 声明面 `plugin.toml` 是唯一真值; 本 README 只写实现者要记住的东西。
+>
+> ★ **ADR-0011 起本件不再进 QEMU 镜像**(镜像改用 `sched/rr`: 时间片轮转抢占)。
+> 原因很实在: `br_sched_register()` 恰一次 ⇒ 一个镜像只能装一个调度器, 而那一刀真正要验的
+> 新机制(**IRQ 出口换栈**与**下半部**)只有 preempt 类调度器才用得上 —— 不换就等于
+> 那两条路径只在宿主上跑过。本件**留在树里**: `brickie check` 照旧校验它的声明面与
+> sched_class 组合, 宿主 `[[hosttest]] sched-test` 覆盖它的全部分界(含 `TC-TASK-101`)。
+> 换回镜像只需改 `product.toml [select].plugins` 里的一行。
 
 ## 能力面(填给 core 的 `br_sched_ops_t`, 见 `include/br/sched/coop.h`)
 

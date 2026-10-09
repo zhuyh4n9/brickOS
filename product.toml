@@ -27,7 +27,14 @@ stage   = "dev"                 # dev | release; CLI 覆盖(§7.5)
 #   (WORKAROUND br-wa-fs-001), 所以选择权仍显式写在产品侧。
 plugins = [
   "platform/qemu-aarch64",
-  "sched/coop",
+  # ★ ADR-0011: 镜像的调度器从 `sched/coop` 换成 `sched/rr`(时间片轮转抢占)。
+  #   为什么必须换: 本刀真正的新机制 = **IRQ 出口换栈**(core)与**下半部**(core),
+  #   而它们的唯一消费者就是"有时间片策略的调度器" —— 目标上没有它, 这两条路径
+  #   就只能靠宿主用例覆盖, 等于没在真实异常出口上验证过。
+  #   `sched/coop` **仍留在树里**: `brickie check` 照旧校验它的声明面与 sched_class
+  #   组合, 宿主 `sched-test` 覆盖它的全部分界(含"忙线程不被切走"的 TC-TASK-101)。
+  #   换回去只需改这一行(`br_sched_register` 恰一次 ⇒ 一次只能装一个调度器)。
+  "sched/rr",
   "service/dump",
   "fs/tmpfs",
   "fs/devfs",

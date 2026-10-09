@@ -11,6 +11,12 @@
  *   §11.2         调度接缝 br_sched_irq_epilogue(Stage 1 = 空实现)
  *   §14.1         thread-only 的运行期执法(设计侧由静态扫描 + conformance 执法)
  *
+ * ★ ADR-0011(本原型)**提前落下 Stage 2 的第一件: bottom half(bh)**:
+ *   §11.1 路径一(ISR → 延迟工作)、§12.4(BH 形态: 处理期间 mask 同线)、
+ *   §11.4.1(BH 形态下 `br_irq_disable` 的语义: 抑制而不取消、不重放)、IR-10(队满必须回滚)。
+ *   执行点 = **IRQ 出口(eoi 之后、ERET 之前)**, 由 core 的 workqueue(br_work.h)承载。
+ *   仍然**不做**: `BR_IRQ_DISPATCH_THREAD`(线程化 IRQ)与 §12.3 的动态升级 —— 置位忽略 + trace。
+ *
  * 本文件不含任何控制器型号名(§1.3); 所有硬件动作都经 br_pic_ops(br_pic.h)。
  */
 #include <br/core/br_error.h>
@@ -22,6 +28,8 @@
  * 本文件只在 IRQ 退出路径上**调用**它(调用点不动)。 */
 #include <br/core/br_sched.h>
 #include <br/core/br_trace.h>
+/* 下半部(ADR-0011): IRQ 出口把 bh 工作项取出来执行 —— 这是"ISR 最小工作"的落地方式。 */
+#include <br/core/br_work.h>
 
 #include "irq_internal.h"
 
@@ -113,9 +121,29 @@ br_irq_rt_t *br_irq_rt_of(br_u32 virq)
     return &s_rt[virq];
 }
 
-int br_irq_in_isr(void)
+br_bool br_irq_in_isr(void)
 {
-    return (s_cpu.isr_nest > 0u) ? 1 : 0;
+    return (s_cpu.isr_nest > 0u) ? BR_TRUE : BR_FALSE;
+}
+
+/*
+ * ★ ADR-0011: thread-only 的执法判据从"在 ISR 里"**收紧**为"在原子上下文里"。
+ *   为什么必须收紧: bh 跑在 IRQ 出口(`s_cpu.isr_nest` 已归零 ⇒ `br_irq_in_isr()` 为假),
+ *   但它仍在**关中断的异常出口**上 —— 在那里注册/使能中断或阻塞会让异常帧永不返回。
+ *   两者分开保留(而不是把 bh 也算进 `br_irq_in_isr`): 用例要能机械区分
+ *   "handler 真的不在 ISR 上下文里跑"(§9.4/§12.1 的判据), 那是 bh 存在的意义。
+ */
+br_bool br_irq_in_atomic(void)
+{
+    if (br_irq_in_isr() != 0) {
+        return BR_TRUE;
+    }
+    return (br_work_in_bh() != BR_FALSE) ? BR_TRUE : BR_FALSE;
+}
+
+br_u32 br_irq_lock_depth(void)
+{
+    return s_cpu.irq_depth;
 }
 
 /* =====================================================================
@@ -354,12 +382,14 @@ static void trace_prio_quantized(br_u32 virq, br_u8 prio, const br_pic_caps_t *c
 /*
  * thread-only 的运行期执法(§14.1)。
  * 设计侧这条禁令由"静态扫描 + conformance 矩阵"执法(ISR 白名单, CA-3);
- * 原型在此**额外**加一道运行期守卫: 在 ISR 内调用直接拒绝 -EINVAL。
- * 理由: 单线屏蔽的配置路径可能持有 core 内部锁, 在 ISR 内取用即自锁(§5.3)。
+ * 原型在此**额外**加一道运行期守卫: 在 ISR/bh 内调用直接拒绝 -EINVAL。
+ * 理由: 单线屏蔽的配置路径可能持有 core 内部锁, 在 ISR 内取用即自锁(§5.3);
+ * 而 bh 在关中断的异常出口上, register/enable 会让异常帧的返回路径不可预期。
+ * ★ ADR-0011: 判据 = `br_irq_in_atomic()`(ISR **或** bh), 不再只是 ISR。
  */
 static int direct_api_guard(br_u32 irq, br_irq_desc_t **out)
 {
-    if (br_irq_in_isr() != 0) {
+    if (br_irq_in_atomic() != BR_FALSE) {
         return BR_ERR(BR_EINVAL);
     }
     br_irq_desc_t *d = br_irq_desc_of(irq);
@@ -374,7 +404,7 @@ static int direct_api_guard(br_u32 irq, br_irq_desc_t **out)
 int br_irq_register(br_u32 irq, void (*isr)(void *), void *arg,
                     const br_irq_attr_t *attr)
 {
-    if (br_irq_in_isr() != 0) {
+    if (br_irq_in_atomic() != BR_FALSE) {
         return BR_ERR(BR_EINVAL);
     }
 
@@ -429,13 +459,18 @@ int br_irq_register(br_u32 irq, void (*isr)(void *), void *arg,
         if ((flags & BR_IRQ_F_PERCPU) != 0u && bound_percpu == BR_FALSE) {
             return BR_ERR(BR_EINVAL);
         }
-        /* Stage 1 无 bh ⇒ BH/THREAD 分发"置位不报错但忽略", trace 提示(§3.4/§12.2)。
-         * 这里同时把这两位从落库 flags 里清掉: 描述符不应声称一个 v0.1 不生效的形态。 */
-        if ((flags & (BR_IRQ_F_DISPATCH_BH | BR_IRQ_F_DISPATCH_THREAD)) != 0u) {
+        /*
+         * 分发形态(§12.1)。
+         *   DISPATCH_BH  —— ★ ADR-0011: **真的生效**(不再是"置位忽略"): 该线的 ISR 会被
+         *                    推迟到下半部执行, 位**留在**描述符 flags 里当作运行期真值。
+         *   DISPATCH_THREAD —— 仍未实现(线程化 IRQ 属 Stage 2, §12.1/§11.4):
+         *                    接受但忽略 + 留痕, 且从落库 flags 里清掉 —— 描述符不应声称
+         *                    一个本版本不生效的形态(§3.4)。
+         */
+        if ((flags & BR_IRQ_F_DISPATCH_THREAD) != 0u) {
             br_trace_emit(BR_TRACE_IRQ_DISPATCH_IGNORED, irq,
-                          (br_u64)(flags & (br_u32)(BR_IRQ_F_DISPATCH_BH |
-                                                    BR_IRQ_F_DISPATCH_THREAD)));
-            flags &= ~(br_u32)(BR_IRQ_F_DISPATCH_BH | BR_IRQ_F_DISPATCH_THREAD);
+                          (br_u64)BR_IRQ_F_DISPATCH_THREAD);
+            flags &= ~(br_u32)BR_IRQ_F_DISPATCH_THREAD;
         }
         if ((flags & BR_IRQ_F_STATS) != 0u && (BR_IRQ_STATS == 0)) {
             return BR_ERR(BR_ENOTSUP);       /* §3.4: 统计开关未开时置位 ⇒ -ENOTSUP */
@@ -510,10 +545,18 @@ int br_irq_register(br_u32 irq, void (*isr)(void *), void *arg,
     }
 
     /* ---- 最后落实注册(§14.1; 此时才置 isr, 上面的失败路径不会留下属主) ----
-     * hwirq/pic_id 在 br_irq_bindings_set 已填(§3.3 的绑定缓存), 此处不重复写。 */
+     * hwirq/pic_id 在 br_irq_bindings_set 已填(§3.3 的绑定缓存), 此处不重复写。
+     *
+     * ★ ADR-0011: flags 必须**并**而不是覆盖 —— 绑定表(bindings_set)可能已经把
+     *   `BR_IRQ_F_DISPATCH_BH`(静态声明的分发形态, §12.2 的默认载体)写进描述符,
+     *   而 attr 是另一处独立来源。覆盖会让"绑定表说 BH、attr 为空"的线静默退回 INLINE。 */
+    const br_u16 binding_flags =
+        (br_u16)(d->flags & (br_u16)(BR_IRQ_F_PERCPU | BR_IRQ_F_DISPATCH_BH));
+
     d->isr     = isr;
     d->arg     = arg;
-    d->flags   = (br_u16)(flags | (bound_percpu == BR_TRUE ? (br_u32)BR_IRQ_F_PERCPU : 0u));
+    d->flags   = (br_u16)((br_u16)flags | binding_flags |
+                          (bound_percpu == BR_TRUE ? (br_u16)BR_IRQ_F_PERCPU : (br_u16)0u));
     d->prio    = prio;
     d->trigger = trigger;
     d->sub     = 0u;                 /* 直连线: 域子号恒 0 */
@@ -624,13 +667,123 @@ void br_irq_storm_check(br_irq_desc_t *d)
 }
 
 /* =====================================================================
+ * 下半部(bh): BR_IRQ_F_DISPATCH_BH 的推迟、抑制与回滚(ADR-0011)
+ *
+ * 设计依据: `3-02` §11.1 路径一(ISR → 延迟工作 = work queue)、§12.4("处理期间屏蔽同线"
+ * 的骨架)、§11.4.1(BH 形态下 disable 的语义)、IR-10(提交失败必须回滚)。
+ *
+ * 执行点选择(必须说清, 因为它是本机制的全部): **eoi 之后、ERET 之前**。
+ *   (a) 已经 eoi ⇒ handler 跑多久都不会让本线停留在 Active(running priority 抬高 ⇒
+ *       全系统 IRQ 饥饿, §4.1.1/§5.3);
+ *   (b) 仍在异常上下文 ⇒ 不需要 worker 线程、不依赖调度器是否注册;
+ *   (c) 在 `br_sched_irq_epilogue()` **之前** ⇒ bh 里唤醒的线程能被同一次出口的抢占
+ *       决策看见(preempt 类调度器)。
+ * 代价(如实登记): bh 是**关中断**的 ⇒ 工作项必须短、禁阻塞(见 br_work.h 的契约)。
+ * ===================================================================== */
+
+br_bool br_irq_dispatch_is_bh(const br_irq_desc_t *d)
+{
+    if (d == BR_NULL) {
+        return BR_FALSE;
+    }
+    return ((d->flags & (br_u16)BR_IRQ_F_DISPATCH_BH) != 0u) ? BR_TRUE : BR_FALSE;
+}
+
+void br_irq_bh_note_defer(void)
+{
+    s_cpu.bh_deferred = sat_inc_u32(s_cpu.bh_deferred);
+}
+
+void br_irq_bh_note_drop(void)
+{
+    s_cpu.bh_dropped = sat_inc_u32(s_cpu.bh_dropped);
+}
+
+/* 描述符 → virq(池内下标; 防御性边界检查 —— 越界只可能来自 core 自己的 bug)。 */
+static br_u32 desc_virq(const br_irq_desc_t *d)
+{
+    const br_u32 v = (br_u32)(d - &s_desc[0]);
+
+    return (v < BR_IRQ_MAX) ? v : BR_IRQ_INVALID;
+}
+
+/*
+ * bh 工作项体: 在 bh 上下文里跑该线的 ISR, 然后放行硬件线。
+ *
+ * §11.4.1 的**抑制判定**就在这里: "已排队但尚未开始"的那一份, 派发前重新检查屏蔽态 ——
+ *   已 disable ⇒ **跳过 handler**(工作项仍被消费出队, 不占队列深度) + 计数 + 留痕;
+ *   **不补/不重放**(enable 之后不会偷偷把历史工作再跑一遍)。
+ * 在"drain 发生在同一个 IRQ 出口"的当前实现下, 这个窗口通常不可观测(线程插不进来);
+ * 但判定留着 —— 它是 §11.4.1 把 §6.3 的承诺从"ISR 不再被调用"收紧成"不再**开始**新的
+ * 调用"的落点, 也是"队列预算被超限、工作项跨中断停留"时的唯一正确行为。
+ */
+static void br_irq_bh_run(void *arg)
+{
+    br_irq_desc_t *d = (br_irq_desc_t *)arg;
+
+    if (d == BR_NULL || d->isr == BR_NULL) {
+        return;
+    }
+
+    const br_u32 virq = desc_virq(d);
+
+    if (d->depth > 0u) {
+        /* 抑制: 不调用 handler, 也**不放行**线(disable 的语义就是"保持屏蔽")。 */
+        s_cpu.suppressed_dispatch = sat_inc_u32(s_cpu.suppressed_dispatch);
+        br_trace_emit(BR_TRACE_IRQ_DISPATCH_SUPPRESSED, virq, 0u);
+        return;
+    }
+
+    d->isr(d->arg);
+    br_irq_pgm_unmask(d);          /* bh 窗口结束 ⇒ 放行(level 线会重新 assert 再来一轮) */
+}
+
+/*
+ * ISR 位置上的"分发决策": BH ⇒ mask 同线 + 提交工作项(INLINE 的调用点不经过这里)。
+ *
+ * 为什么要 mask: §12.4/§9.4 的骨架是"处理期间屏蔽同线" —— 否则 level 线会在 bh 还没跑
+ * 之前再次 assert, 同一线把静态队列刷爆。mask 是硬件动作(MMIO), 满足"能在 ISR 里做"
+ * 这条前提(与 SLOW 域 mask 父线同源)。
+ */
+static void br_irq_dispatch_defer(br_irq_desc_t *d, br_u32 virq)
+{
+    br_irq_pgm_mask(d);
+
+    if (br_work_submit(br_irq_bh_run, d) != 0) {
+        /*
+         * ★ IR-10 的同一条纪律: **提交失败必须回滚**。这里已做的动作是"mask 了同线",
+         *   不回滚就等于该线永久静默失效(且毫无报错) —— 最难查的一类故障。
+         *   回滚 = 放行(仅当逻辑上仍处放行态; disable 过就不该放行)。
+         *   level 线在放行后会立刻重新 assert ⇒ 事件不丢; edge 线会丢这一份
+         *   (§6.3 的诚实条款: 队列满时宁可有观测的丢失, 不可有静默的死锁)。
+         */
+        if (d->depth == 0u) {
+            br_irq_pgm_unmask(d);
+        }
+        br_irq_bh_note_drop();
+        br_trace_emit(BR_TRACE_IRQ_BH_DROP, virq, 0u);
+        return;
+    }
+
+    br_irq_bh_note_defer();
+    br_trace_emit(BR_TRACE_IRQ_BH_DEFER, virq, 0u);
+}
+
+/* =====================================================================
  * 中断入口(§5.2: ack → 分发 → ISR → **统一出口 eoi**; asm 桩调用)
  * ===================================================================== */
 
 void br_irq_enter(br_exc_frame_t *frame)
 {
-    /* v0.1 不使用异常帧(ISR 一律返回被打断的现场, 不切栈);
-     * Stage 2 的"IRQ 出口切栈"(§11.2)才会用到 frame 里的现场。 */
+    /*
+     * v0.1 不使用异常帧里的现场做**换栈**: ISR 一律返回被打断的现场。
+     * ★ ADR-0011 后的准确说法: IRQ 出口**会**换栈(preempt 调度器的抢占决策在
+     *   `br_sched_irq_epilogue()` 里), 但那个切换点是 **C 调用边界**
+     *   (`br_sched_switch_to` 保存 callee-saved + sp), 被抢占线程的现场仍完整地
+     *   停在本函数的栈帧上 —— 所以 vectors.S 只存 caller-saved 仍然成立
+     *   (见 vectors.S 文件头 P-IRQ-ASM 的"v2 注意义务"; 本实现不需要改那段汇编,
+     *   因为切栈不发生在 ERET 前的那几行汇编里)。
+     */
     (void)frame;
 
     br_irq_cpu_t *cpu = &s_cpu;
@@ -702,7 +855,16 @@ void br_irq_enter(br_exc_frame_t *frame)
     served_virq = virq;
     br_trace_emit(BR_TRACE_IRQ_ENTER, virq, (br_u64)hwirq);
 
-    d->isr(d->arg);                     /* ISR 契约: 最小工作 + 禁阻塞/malloc/持锁返回(§1.2) */
+    /*
+     * 分发决策(§12.1)。ISR 契约不变: 最小工作 + 禁阻塞/malloc/持锁返回(§1.2)。
+     *   INLINE ⇒ 就地执行(默认; 全部 platform 绑定线都是它);
+     *   BH     ⇒ mask 同线 + 提交工作项, 真正的 handler 在 **eoi 之后**的 bh 里跑。
+     */
+    if (br_irq_dispatch_is_bh(d) != BR_FALSE) {
+        br_irq_dispatch_defer(d, virq);
+    } else {
+        d->isr(d->arg);
+    }
 
     cpu->isr_nest--;
     cpu->curr_virq = BR_IRQ_NO_HANDLER;
@@ -744,6 +906,15 @@ EOI:
 #endif
     }
 
+    /*
+     * ---- 下半部(ADR-0011): 把 bh 工作项取出来执行 ----
+     * 位置就是全部设计: eoi 之后(不占 Active)、ERET 之前(不依赖 worker/调度器)、
+     * `br_sched_irq_epilogue()` 之前(bh 唤醒的线程能被同一次出口的抢占决策看到)。
+     * 单次预算 `BR_WORK_BH_BUDGET`: 无上限就等于"一条中断能把中断延迟拉成任意长"。
+     * 未执行完的余项留给下一次中断出口(本原型 tick = 100 ms ⇒ 排空上界可算)。
+     */
+    br_work_drain(BR_WORK_BH_BUDGET);
+
     br_sched_irq_epilogue();
 }
 
@@ -767,6 +938,9 @@ void br_irq_stats_get(br_u32 virq, br_irq_stat_t *out)
     out->flags          = 0u;
     out->prio           = 0u;
     out->trigger        = 0u;
+    out->bh_deferred        = 0u;
+    out->bh_dropped         = 0u;
+    out->suppressed_dispatch = 0u;
 
     br_irq_desc_t *d = br_irq_desc_of(virq);
     if (d == BR_NULL || d->pic_id < 0) {
@@ -783,9 +957,16 @@ void br_irq_stats_get(br_u32 virq, br_irq_stat_t *out)
     out->spurious_owned = s_cpu.spurious_owned;
     out->spurious_nocap = s_cpu.spurious_nocap;
 
-    /* drop 只对 SLOW 域成员有意义(§9.4), 而 SLOW 域在 Stage 1 被 domain_create 拒绝
-     * ⇒ v0.1 恒 0(域池是 irq_domain.c 的静态对象, 这里也不必跨 TU 取它)。 */
-    out->drop = 0u;
+    /* 下半部三项(ADR-0011): 同样在 CPU-local, v1 单核 ⇒ 即全局。
+     * ★ 它们是**本核累计值**(不是"该线的"), 读法与 spurious_* 一致 —— 查询任何已绑定
+     *   virq 都返回同一份快照。这样 bh 的证据不必依赖 trace 环(不丢、可反复读)。 */
+    out->bh_deferred         = s_cpu.bh_deferred;
+    out->bh_dropped          = s_cpu.bh_dropped;
+    out->suppressed_dispatch = s_cpu.suppressed_dispatch;
+
+    /* §9.4: drop 只对 SLOW 域成员有意义 ⇒ 从域对象里取(跨 TU 的只读访问器)。
+     * 直连线恒 0。 */
+    out->drop = br_irq_domain_drop_of(d);
 
     out->flags   = d->flags;
     out->prio    = d->prio;

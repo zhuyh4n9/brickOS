@@ -114,4 +114,18 @@ steps    = [
 ]
 expect   = "忙循环期间 victim 计数 == 0; yield 之后 == 1(无抢占是设计内行为)"
 sched    = ["coop"]
+# ★ ADR-0011: 镜像的调度器换成了 `sched/rr`(preempt)⇒ 这条 coop 判据在**目标上不再跑**
+#   (它会在 preempt 下必然变红 —— 那正是它与 `TC-TASK-102` 互为反面的意思)。
+#   它现在的腿是**宿主** `[[hosttest]] sched-test`(platform = host)。
+platform = ["host"]
+
+[[case]]
+id       = "TC-TASK-104"
+pre      = "TC-TASK-007 已跑过(I2 的可观测面; 两种调度器共享)"
+steps    = [
+    "读 br_sched_ready_count() 作为基线",
+    "create 一个线程 → 再读; 让它跑完(exit) → 再读; join 回收 → 再读",
+]
+expect   = "READY 者才在就绪结构里: +create 恰 +1, RUNNING/ZOMBIE 都不计入, join 后回到基线"
+sched    = ["coop", "rr"]
 platform = ["host", "qemu-aarch64"]

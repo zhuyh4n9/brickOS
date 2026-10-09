@@ -33,18 +33,24 @@ enum {
     BR_TRACE_IRQ_SUPPRESSED = 5,     /* a = virq(CAP_MASK=0 的软件抑制) */
     BR_TRACE_IRQ_STORM = 6,          /* a = virq, b = 窗口内计数 */
     BR_TRACE_IRQ_PRIO_QUANTIZED = 7, /* a = virq, b = (encoded << 8) | logical */
-    BR_TRACE_IRQ_DISPATCH_IGNORED = 8, /* a = virq, b = 绑定的静态 dispatch 值 */
+    BR_TRACE_IRQ_DISPATCH_IGNORED = 8, /* a = virq, b = 被忽略的分发形态(★ ADR-0011 后只剩 THREAD) */
     BR_TRACE_IRQ_UNLOCK_UNDERFLOW = 9, /* a = 多余额度(下溢护栏拦截) */
     /* 级联域 */
     BR_TRACE_IRQ_DEMUX = 10,          /* a = dom_id, b = 子位图 */
     BR_TRACE_IRQ_DEMUX_OVERFLOW = 11, /* a = dom_id(轮数用尽仍未读空) */
     BR_TRACE_IRQ_DOMAIN_ORPHAN = 12,  /* a = dom_id, b = sub(无属主 ⇒ 屏蔽) */
     BR_TRACE_IRQ_DOMAIN_DROP = 13,    /* a = dom_id(SLOW 域提交失败的推迟/丢弃) */
-    BR_TRACE_IRQ_DOMAIN_NOBH = 14,    /* a = 请求的 flags(Stage 1 无 bh ⇒ 拒绝 SLOW 域) */
+    BR_TRACE_IRQ_DOMAIN_NOBH = 14,    /* a = 请求的 flags(SLOW 域被拒时的原因; ADR-0011 后仅"bh 不可用") */
     /* fault 路径 */
     BR_TRACE_FAULT = 15,              /* a = EC, b = ESR_EL1 */
     BR_TRACE_FAULT_FIXUP = 16,        /* a = (br_u32)ELR, b = errno_val */
     BR_TRACE_FAULT_DOUBLE = 17,       /* a = in_fault(≥2) */
+    /* 下半部(bottom half; ADR-0011 —— 设计 3-02 §11.1/§11.4.1/§9.4) */
+    BR_TRACE_IRQ_BH_DEFER = 18,       /* a = virq(该线已推迟到 bh; 窗口内硬件线被 mask) */
+    BR_TRACE_IRQ_BH_DROP = 19,        /* a = virq(队满 ⇒ 回滚未提交; IR-10 的唯一失败路径) */
+    BR_TRACE_IRQ_DISPATCH_SUPPRESSED = 20, /* a = virq(派发时已 disable ⇒ 抑制 handler, 不重放) */
+    BR_TRACE_BH_CTX_VIOLATION = 21,   /* a = 违规 API 编号(bh 内调了阻塞/让出/退出) */
+    BR_TRACE_SCHED_PREEMPT = 22,      /* a = 0, b = 1 真的换栈 / 0 = 请求了但无需换 */
     BR_TRACE__COUNT
 };
 

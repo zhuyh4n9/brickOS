@@ -57,6 +57,11 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.plugins]]
+name = "sched/rr"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
 name = "service/backtrace"
 version = "0.1.0.0"
 compat_gen = 0
@@ -144,6 +149,17 @@ api_iface = "native"
 version = "0.1.4.0"
 compat_gen = 0
 hash = "sha256:3863fa62c2d559a6b3ca3e81fc5d99f75b188ec0b2203ddacf331cdfb92139a7"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "sched/rr#rr"
+provider = "sched/rr"
+unit = "rr"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:2600c8855085bcf13b334b1a164fe7aa33a12dc7970dc705f12b744c82aa4eb2"
 hash_scope = "decl"
 truth = "decl"
 

@@ -62,6 +62,9 @@ typedef struct br_irq_cpu {
     br_u32  storm_total;      /* 本核风暴事件累计(每次越过阈值 +1) */
     br_u32  spurious_owned;   /* 有硬件屏蔽能力却仍到达(真 bug 信号) */
     br_u32  spurious_nocap;   /* 无屏蔽能力时的预期丢弃(降级行为) */
+    br_u32  bh_deferred;      /* BH 形态: 成功推迟到下半部的次数(ADR-0011) */
+    br_u32  bh_dropped;       /* BH 形态: 队满 ⇒ 回滚未提交的次数(IR-10) */
+    br_u32  suppressed_dispatch; /* §11.4.1: 派发前已 disable ⇒ 抑制 handler 的次数 */
     br_u32  prev_fault_ec;    /* 上一次 fault 的 EC(§10.6 打印用) */
     br_u64  prev_fault_elr;   /* 上一次 fault 的 ELR */
 } br_irq_cpu_t;
@@ -84,7 +87,7 @@ struct br_irq_domain {
     br_u16 nwords;
     br_u8  id;             /* 域下标(域池) */
     br_u8  rsv;
-    br_u16 busy;           /* SLOW 域: demux 单飞(§9.4; Stage 1 不可达) */
+    br_u16 busy;           /* SLOW 域: demux 单飞(§9.4; ADR-0011 起可达) */
     br_u16 drop_count;     /* SLOW 域: 提交失败的推迟/丢弃计数 */
 };
 
@@ -100,9 +103,6 @@ br_irq_desc_t *br_irq_desc_of(br_u32 virq);
 
 /* 运行期计数表项 */
 br_irq_rt_t *br_irq_rt_of(br_u32 virq);
-
-/* 是否在 ISR 上下文(thread-only API 的运行期执法, 3-02 §14.1) */
-int br_irq_in_isr(void);
 
 /* ---- PIC 注册表(irq_pic.c) ---- */
 br_pic_t                *br_irq_pic(br_u32 pic_id);
@@ -121,7 +121,25 @@ void br_irq_pgm_unmask(br_irq_desc_t *d);
 /* ---- 风暴检测(irq_core.c; §8.3 的窗口化判据) ---- */
 void br_irq_storm_check(br_irq_desc_t *d);
 
+/* ---- 下半部(irq_core.c; §11.1/§12.4/ADR-0011) ---- */
+/* 该线的 ISR 是否被配置为推迟到 bh(BR_IRQ_F_DISPATCH_BH)。直连线与域成员都可能。 */
+br_bool br_irq_dispatch_is_bh(const br_irq_desc_t *d);
+
+/* 推迟/丢弃计数(CPU-local)。**两处推迟点共用一份真值**: 按线的分发(irq_core.c)
+ * 与 SLOW 域的 demux(irq_domain.c)—— 否则"到底推迟了几次"会有两个来源。 */
+void br_irq_bh_note_defer(void);
+void br_irq_bh_note_drop(void);
+
 /* ---- 域(irq_domain.c) ---- */
-void br_irq_demux_fast(br_irq_domain_t *dom);   /* ISR 上下文, §9.3 */
+/* 域 demux 主循环(§9.3)。**同一份代码服务两种上下文**:
+ *   FAST 域 = 父线 ISR 内直接调; SLOW 域 = 由 bh 工作项调(ADR-0011)。
+ * 上下文差异不在循环里, 只在**调用者**(这也是"SLOW 域的 ops->pending() 必须是
+ * 总线事务、绝不能在 ISR 里读"这条契约的落点: 循环本身两种上下文都能跑)。 */
+void br_irq_demux(br_irq_domain_t *dom);
+
+/* SLOW 域成员所属域的"提交失败次数"(§9.4 的 drop_count; 直连线 ⇒ 0)。
+ * 跨 TU 的只读访问器: 域对象是 irq_domain.c 的静态池, irq_core.c 的
+ * `br_irq_stats_get()` 经它取 `br_irq_stat_t.drop`。 */
+br_u32 br_irq_domain_drop_of(const br_irq_desc_t *d);
 
 #endif /* BR_IRQ_INTERNAL_H */

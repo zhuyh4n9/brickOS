@@ -31,6 +31,8 @@
 #define BR_BOARD_INTID_SGI_TEST      0u  /* SGI 0: 软件触发自检(§8.4)           */
 #define BR_BOARD_INTID_SGI_STORM     1u  /* SGI 1: 风暴用例载体                 */
 #define BR_BOARD_INTID_SGI_DOMAIN    2u  /* SGI 2: 假 FAST 级联域的父线         */
+#define BR_BOARD_INTID_SGI_SLOW      4u  /* SGI 4: 假 SLOW 级联域的父线(走 bh)  */
+#define BR_BOARD_INTID_SGI_BH        5u  /* SGI 5: BH 直连线(ISR 推迟到下半部)  */
 /* 刻意不绑定 INTID 3(SGI 3): "无属主却有硬件投递"的样本(TC-IRQ-008) */
 
 /*
@@ -42,7 +44,9 @@
  *            console, 中断未使用 —— 绑定在表里用于验证 SPI 的 mask/prio/readback 路径
  *   - SGI:   恒**边沿**(架构固定), prio 0xC0, 软件触发通道
  *   - DOMAIN_PARENT: SGI 2, 边沿, 假 FAST 域的父线(域成员在 virq 56.. 窗口)
- * dispatch 全为 INLINE: Stage 1 只接受内联分发(3-02 §1.1/§12.1)。
+ *   - DOMAIN_SLOW:   SGI 4, 边沿, 假 SLOW 域的父线 —— **demux 走下半部**(§9.4/ADR-0011)
+ *   - BH_LINE:       SGI 5, 边沿, **按线的 BH 分发**(ISR 被推迟到下半部; §12.4/ADR-0011)
+ * dispatch 除 BH_LINE 外全为 INLINE(§12.2: 默认载体是绑定表, 这里就是它的样子)。
  * pic_id = 0(EARLY 注册顺序里的第一个/唯一 PIC); dom_id = -1(直连, 不属任何域)。
  */
 static const br_irq_binding_t s_board_irq[BR_IRQ_BOARD_NR] = {
@@ -99,6 +103,31 @@ static const br_irq_binding_t s_board_irq[BR_IRQ_BOARD_NR] = {
         .prio     = 0xC0u,
         .trigger  = BR_IRQ_TRIG_EDGE_RISE,
         .dispatch = BR_IRQ_DISPATCH_INLINE,
+        .rsv      = {0u, 0u, 0u},
+    },
+    [BR_IRQ_DOMAIN_SLOW] = {
+        .virq     = BR_IRQ_DOMAIN_SLOW,
+        .pic_id   = 0u,
+        .flags    = 0u,
+        .hwirq    = BR_BOARD_INTID_SGI_SLOW,
+        .dom_id   = -1,
+        .prio     = 0xC0u,
+        .trigger  = BR_IRQ_TRIG_EDGE_RISE,
+        /* ★ 父线本身仍是 INLINE(域的分发形态由 `BR_IRQ_DOMAIN_F_SLOW` 决定, §9.4);
+         *   它之所以能在 ISR 里只做"mask + 提交", 正因为子状态寄存器不在这里读。 */
+        .dispatch = BR_IRQ_DISPATCH_INLINE,
+        .rsv      = {0u, 0u, 0u},
+    },
+    [BR_IRQ_BH_LINE] = {
+        .virq     = BR_IRQ_BH_LINE,
+        .pic_id   = 0u,
+        .flags    = 0u,
+        .hwirq    = BR_BOARD_INTID_SGI_BH,
+        .dom_id   = -1,
+        .prio     = 0xC0u,
+        .trigger  = BR_IRQ_TRIG_EDGE_RISE,
+        /* ★ 静态声明的分发形态(§12.2: 默认载体 = 绑定表 ⇒ 不占 RAM)。 */
+        .dispatch = BR_IRQ_DISPATCH_BH,
         .rsv      = {0u, 0u, 0u},
     },
 };

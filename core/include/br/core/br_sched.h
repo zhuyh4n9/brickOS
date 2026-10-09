@@ -122,8 +122,26 @@ br_bool br_sched_registered(void);
 BR_NORETURN void br_sched_run(void);
 
 /* IRQ 出口决策点(`core/src/irq/irq_core.c` 已经在 IRQ 退出路径上调用它)。
- * COOP 下可以是空动作; PREEMPT 在这里做"要不要切"。 */
+ * COOP 下它只扫到期表(不切栈 —— I4); PREEMPT 类调度器置了 need_resched(见
+ * `br_sched_request_resched`)时在这里**真的换栈**。 */
 void br_sched_irq_epilogue(void);
+
+/*
+ * 请求"本次中断出口做一次调度"(ADR-0011; ISR-safe)。**抢占的唯一入口**。
+ *
+ * 语义: 只置一个 need_resched 位(不切栈、不动就绪结构 —— I2 说 state 只有 core 改)。
+ * core 在 IRQ 出口(eoi 之后、ERET 之前)看到它, 就把**当前线程放回就绪结构(队尾)**、
+ * 按 `pick_next` 选下一个, 需要时 `br_sched_switch_to` 换栈。
+ *
+ * 谁该调: 有 tick 策略的调度器(如 `sched/rr` 的时间片用尽)。
+ * **COOP 永不调用它** ⇒ coop 的行为与 ADR-0006 那一刀逐字一致(无抢占)。
+ * 为什么用"置位 + core 统一执行"而不是让插件自己切: 换栈必须与"state 机 + 异常出口
+ * 顺序(eoi 之后)"绑在一起, 那是机制(core); 插件只回答"什么时候该换"。
+ */
+void br_sched_request_resched(void);
+
+/* need_resched 当前位置(观测/自检用; 消费点 = `br_sched_irq_epilogue`)。 */
+br_bool br_sched_resched_pending(void);
 
 /* 定时器 tick 的驱动点(平台 timer ISR 调): 推进内核时间基并唤醒到期线程,
  * 然后回调 `ops.on_tick`。 */
@@ -138,7 +156,11 @@ void br_sched_on_tick(br_time_t now);
  *   `-ETIMEDOUT`, 然后才挂等待链、开中断、调本函数。本函数入口若读到
  *   `wait_status == 0`, 就认为"在窗口里已经被 `br_sched_wake` 交接过了", 直接返回 0
  *   且**不置 BLOCKED / 不登记期限 / 不切栈** —— 这是丢掉"push 之后、真正阻塞之前"
- *   窗口的唯一手段。`wait_status` 是唯一握手位: 谁先写谁赢。 */
+ *   窗口的唯一手段。`wait_status` 是唯一握手位: 谁先写谁赢。
+ *
+ * ★ **bh 禁令**(ADR-0011): 下半部(bh)跑在关中断的异常出口上, **没有可回退的调度
+ *   上下文** ⇒ 在 bh 内调用本函数返回 `-EPERM`(不置状态、不切栈)。这是运行期执法,
+ *   不是纸面纪律。 */
 int br_sched_block_current(br_time_t abs_deadline);
 
 /* 把 t 变回 READY(ISR-safe: 只改状态 + 挂链, 不动栈)。

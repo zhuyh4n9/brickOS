@@ -285,8 +285,16 @@ int br_irq_bindings_set(const br_irq_binding_t *tbl, br_size_t n)
          * 无 CAP_MASK 的控制器由 br_irq_pgm_mask 自己跳过(§4.3 豁免)。 */
         br_irq_pgm_mask(d);
 
-        /* Stage 1 无 bh ⇒ 静态分发形态非 INLINE 时接受但忽略, 只留痕(§3.4/§12.2) */
-        if (b->dispatch != (br_u8)BR_IRQ_DISPATCH_INLINE) {
+        /*
+         * 分发形态(§12.2: 默认载体是**绑定表**(platform 数据, flash))。
+         *   INLINE ⇒ 常态(热路径直接调 ISR);
+         *   BH     ⇒ ★ ADR-0011: 折进运行期 flags 的 DISPATCH_BH 位当**真值**, 该线的
+         *            ISR 会被推迟到下半部执行(处理期间硬件线被 mask);
+         *   THREAD / 其它 ⇒ 仍未实现(线程化 IRQ 属 Stage 2)⇒ 接受但忽略 + 留痕(§3.4)。
+         */
+        if (b->dispatch == (br_u8)BR_IRQ_DISPATCH_BH) {
+            d->flags |= (br_u16)BR_IRQ_F_DISPATCH_BH;
+        } else if (b->dispatch != (br_u8)BR_IRQ_DISPATCH_INLINE) {
             br_trace_emit(BR_TRACE_IRQ_DISPATCH_IGNORED,
                           (br_u32)b->virq, (br_u64)b->dispatch);
         }

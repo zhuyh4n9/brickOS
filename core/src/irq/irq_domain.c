@@ -7,17 +7,21 @@
  *         子中断注册是**二段式**(create 域 → register_child), 无属主时 demux 里 mask
  *   §9.3  FAST demux 伪码: 轮询读空 + **显式 exhausted 标志**(不用 round == MAX_ROUND,
  *         否则"最后一轮读到空"会误报 overflow); core 在**子 handler 返回后** ack
- *   §9.4  SLOW 域: 需要 bh(下半部)才能读状态 ⇒ **Stage 1 无 bh ⇒ 不可用**。
- *         这是分期边界(§1.1.1 的两段计), 不是缺陷: SLOW 域 = Stage 2 的第一个消费者。
- *         故 br_irq_domain_create(SLOW) 直接 trace + 返回 NULL。
- *   §9.6  域事件: IRQ_DEMUX / IRQ_DEMUX_OVERFLOW / IRQ_DOMAIN_ORPHAN / IRQ_DOMAIN_NOBH
+ *   §9.4  SLOW 域: 状态读取需总线事务 ⇒ 父线 ISR 只做"mask 整线 + 单飞 + 提交 bh";
+ *         demux 在**下半部**执行, 完成后清 busy + 放行父线; **`br_work_submit` 失败是
+ *         这套方案唯一的死锁入口, 必须回滚**(IR-10)。
+ *         ★ ADR-0011: bh 已落地(core 的 workqueue)⇒ SLOW 域**可用**(此前直接返回 NULL)。
+ *   §9.6  域事件: IRQ_DEMUX / IRQ_DEMUX_OVERFLOW / IRQ_DOMAIN_ORPHAN / IRQ_DOMAIN_DROP /
+ *         IRQ_DOMAIN_NOBH(后者此后只在"bh 不可用"时出现)
  *
  * 上下文(INV-F): FAST 域的 demux 与子 handler 全在 ISR 内(纯寄存器访问);
- * SLOW 域在 bh/线程 —— Stage 1 不存在后者。
+ * SLOW 域的 demux 与子 handler 全在 **bh**(ADR-0011)—— 父线的状态寄存器只能在
+ * 那里读, 这正是 SLOW 域存在的理由。
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
 #include <br/core/br_trace.h>
+#include <br/core/br_work.h>
 
 #include "irq_internal.h"
 
@@ -38,6 +42,9 @@ static br_u32               s_dom_virq_next;   /* 域窗口切片的游标(§3.2
 /* 父线 ISR 的共享蹦床(§9.3/§9.4): arg = 域指针。static —— 只在本 TU 经函数指针使用,
  * 连 irq_internal.h 都不必声明(比 hidden 更 hidden)。 */
 static void br_irq_domain_parent_isr(void *arg);
+
+/* SLOW 域的 demux 工作项体(arg = 域指针): 在 **bh** 上下文执行(ADR-0011)。 */
+static void br_irq_domain_bh_demux(void *arg);
 
 /* 子描述符窗口: 从 core 描述符池切 [virq_base, virq_base + n_sub)(§3.2/§9.2) */
 static br_irq_desc_t *domain_sub_desc(const struct br_irq_domain *dom, br_u32 sub)
@@ -63,14 +70,17 @@ br_irq_domain_t *br_irq_domain_create(const char *name, br_u32 parent_irq,
         return BR_NULL;
     }
 
-    /* ★ §9.4 / §1.1.1 的分期边界: SLOW 域的状态读取需要总线事务(I2C/SPI)⇒
-     *   其存在前提就是 bh(下半部), 而 Stage 1 没有 bh。设计给了明确口径:
-     *   "SLOW 域在 Stage 1 不可用 —— 这不是缺陷, 而是分期边界的定义"。
-     *   ⇒ 这里拒绝并留痕(而不是"接受但永远不 demux", 那才是静默失效)。 */
+    /* ★ ADR-0011: SLOW 域的存在前提是 bh(下半部) —— core 的 workqueue 恒在
+     *   (`BR_WORKQ_DEPTH > 0`), 所以这一族**可用**。
+     *   下面这段"bh 被裁掉 ⇒ 拒绝 + 留痕"的守卫保留为**编译期**分支: 它是"分期边界"
+     *   的可执行表述 —— 将来若把 workqueue 裁剪成可选件(深度 0), 这里就是正确的降级点
+     *   (而不是"接受但永远不 demux"的静默失效, §9.4/§1.1.1)。 */
+#if BR_WORKQ_DEPTH == 0
     if ((flags & (br_u32)BR_IRQ_DOMAIN_F_SLOW) != 0u) {
         br_trace_emit(BR_TRACE_IRQ_DOMAIN_NOBH, flags, 0u);
         return BR_NULL;
     }
+#endif
 
     if (s_dom_n >= (br_u32)BR_IRQ_DOMAIN_MAX) {
         return BR_NULL;                     /* §9.2: 池满 ⇒ NULL(签名只能这么表达错误) */
@@ -160,10 +170,13 @@ br_irq_domain_t *br_irq_domain_create(const char *name, br_u32 parent_irq,
 }
 
 /* =====================================================================
- * FAST demux(§9.3; ISR 上下文)
+ * 域 demux 主循环(§9.3; FAST = ISR 上下文 / SLOW = bh 上下文, ADR-0011)
+ *
+ * 循环本身**与上下文无关** —— 这正是"SLOW 域的 ops->pending() 必须在非 ISR 上下文里
+ * 读状态寄存器"这条契约的落点: 换的不是循环, 是**调用者**。
  * ===================================================================== */
 
-void br_irq_demux_fast(br_irq_domain_t *dom)
+void br_irq_demux(br_irq_domain_t *dom)
 {
     if (dom == BR_NULL || dom->ops == BR_NULL || dom->ops->pending == BR_NULL) {
         return;
@@ -222,8 +235,33 @@ void br_irq_demux_fast(br_irq_domain_t *dom)
 }
 
 /* =====================================================================
- * 父线 ISR 蹦床(§9.3 FAST 直达 / §9.4 SLOW 转 bh)
+ * 父线 ISR 蹦床(§9.3 FAST 直达 / §9.4 SLOW 转 bh)+ SLOW 的 bh 工作项体
  * ===================================================================== */
+
+/*
+ * SLOW 域的 bh 工作项体(ADR-0011): 在**下半部**读状态位图 → 逐子 handler → ack,
+ * 然后清单飞 + 放行父线。
+ *
+ * 顺序即正确性:
+ *   1. 清 busy 必须**在放行父线之前**? —— 不。父线在 bh 期间是 mask 的, 不可能重入;
+ *      放行之后 level 线可能立刻重新 assert 并进入父线 ISR —— 那时 busy 必须已经是 0,
+ *      否则新的一轮会被"单飞"挡掉、而线已被放行 ⇒ 事件要等下一次 assert 才处理。
+ *      ⇒ 本实现: **先清 busy, 再放行**(顺序与 §9.4 的伪码一致)。
+ *   2. demux 本身按 §9.3 的轮询+exhausted 语义跑(读空为止或轮数用尽)。
+ */
+static void br_irq_domain_bh_demux(void *arg)
+{
+    br_irq_domain_t *dom = (br_irq_domain_t *)arg;
+
+    if (dom == BR_NULL) {
+        return;
+    }
+
+    br_irq_demux(dom);
+
+    dom->busy = 0u;
+    br_irq_pgm_unmask(br_irq_desc_of((br_u32)dom->parent_virq));
+}
 
 static void br_irq_domain_parent_isr(void *arg)
 {
@@ -233,23 +271,65 @@ static void br_irq_domain_parent_isr(void *arg)
     }
 
     if ((dom->flags & (br_u16)BR_IRQ_DOMAIN_F_SLOW) != 0u) {
-        /* Stage 1 不可达: SLOW 域在 create 期就被拒(见上)。保留这条诚实的守卫,
-         * 以免将来有人放宽 create 却忘了 bh 通道仍不存在。 */
-        br_trace_emit(BR_TRACE_IRQ_DOMAIN_NOBH, (br_u32)dom->flags, (br_u64)dom->id);
+        /*
+         * ---- §9.4: 父线 ISR 只做三件事: 单飞、mask 整线、提交 demux ----
+         * 为什么单飞: 父线虽然马上被 mask, 但"mask 之前已经 pending 的那一次"仍可能
+         * 进来(level 型 + 边沿敏感的控制器); 没有单飞就会为同一份状态排两次 demux。
+         * 为什么 mask 必须在提交**之前**: 否则 bh 还没读状态寄存器, 线又 assert,
+         * 队列被同一域刷爆(深度是静态预算)。
+         */
+        if (dom->busy != 0u) {
+            return;                     /* 已有一份 demux 在排队/在跑 */
+        }
+        dom->busy = 1u;
+        br_irq_pgm_mask(br_irq_desc_of((br_u32)dom->parent_virq));
+
+        if (br_work_submit(br_irq_domain_bh_demux, dom) != 0) {
+            /*
+             * ★ IR-10: **这套方案唯一的死锁入口**。父线已经被 mask, 若不立即回滚,
+             *   该域的**全部子中断永久静默失效**且没有任何报错。
+             *   回滚 = 清 busy + 放行父线 + 计数 + 留痕(§9.6 的 IRQ_DOMAIN_DROP)。
+             *   level 型状态寄存器在放行后立刻重新 assert ⇒ 事件不丢;
+             *   边沿/读清型会丢这一份(§6.3 的诚实条款)。
+             */
+            dom->busy = 0u;
+            dom->drop_count++;
+            br_irq_pgm_unmask(br_irq_desc_of((br_u32)dom->parent_virq));
+            br_irq_bh_note_drop();
+            br_trace_emit(BR_TRACE_IRQ_DOMAIN_DROP, (br_u32)dom->id, 0u);
+            return;
+        }
+
+        /* 推迟计数与按线的 BH 分发**共用一份真值**(br_irq_bh_note_defer 的注释)。 */
+        br_irq_bh_note_defer();
+        br_trace_emit(BR_TRACE_IRQ_BH_DEFER, (br_u32)dom->parent_virq, (br_u64)dom->id);
         return;
     }
 
-    br_irq_demux_fast(dom);
+    br_irq_demux(dom);
+}
+
+/* SLOW 域成员所属域的 drop_count(br_irq_stats_get 的只读访问器; §9.4)。 */
+br_u32 br_irq_domain_drop_of(const br_irq_desc_t *d)
+{
+    if (d == BR_NULL || d->dom_id < 0) {
+        return 0u;                      /* 直连线: 没有域, 也就没有域级丢弃 */
+    }
+    const br_u32 id = (br_u32)d->dom_id;
+    if (id >= (br_u32)BR_IRQ_DOMAIN_MAX) {
+        return 0u;
+    }
+    return (br_u32)s_dom[id].drop_count;
 }
 
 /* =====================================================================
  * 子中断 API(§14.1; 与直连族**双向互斥**的域侧; 全部 thread-only)
  * ===================================================================== */
 
-/* 域子 API 的公共前置: thread-only + dom/sub 边界 + 属主存在 */
+/* 域子 API 的公共前置: thread-only(ISR/bh 都拒) + dom/sub 边界 + 属主存在 */
 static int child_api_guard(br_irq_domain_t *dom, br_u32 sub, br_irq_desc_t **out)
 {
-    if (br_irq_in_isr() != 0) {
+    if (br_irq_in_atomic() != BR_FALSE) {
         return BR_ERR(BR_EINVAL);
     }
     if (dom == BR_NULL || dom->ops == BR_NULL) {
@@ -269,7 +349,7 @@ static int child_api_guard(br_irq_domain_t *dom, br_u32 sub, br_irq_desc_t **out
 int br_irq_register_child(br_irq_domain_t *dom, br_u32 sub,
                           void (*isr)(void *), void *arg, const br_irq_attr_t *attr)
 {
-    if (br_irq_in_isr() != 0) {
+    if (br_irq_in_atomic() != BR_FALSE) {
         return BR_ERR(BR_EINVAL);
     }
     if (dom == BR_NULL || dom->ops == BR_NULL || isr == BR_NULL) {
@@ -309,7 +389,9 @@ int br_irq_register_child(br_irq_domain_t *dom, br_u32 sub,
         if ((flags & BR_IRQ_F_PERCPU) != 0u) {
             return BR_ERR(BR_EINVAL);
         }
-        /* BH/THREAD: Stage 1 无 bh ⇒ 接受但忽略 + 留痕(§3.4); 落库时清掉这两位 */
+        /* 逐子的分发形态: **上下文由域类型决定**(FAST ⇒ ISR / SLOW ⇒ bh, ADR-0011),
+         * 子中断的 `DISPATCH_BH/_THREAD` 没有额外语义 ⇒ 置位即忽略 + 留痕, 落库时清掉
+         * (绝不静默: 静默会让"我明明请求了 bh"变成一个看不见的谎)。 */
         if ((flags & (BR_IRQ_F_DISPATCH_BH | BR_IRQ_F_DISPATCH_THREAD)) != 0u) {
             br_trace_emit(BR_TRACE_IRQ_DISPATCH_IGNORED, child_virq,
                           (br_u64)(flags & (br_u32)(BR_IRQ_F_DISPATCH_BH |

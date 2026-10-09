@@ -102,3 +102,7 @@
 ## service/memleak#memleak v0.1.1.0 (compat_gen=0)
 - hash: sha256:e0c8af553f57b1688e0962b7ed3df883b45923a839e1b693181a536f9470c526
 - 变更: REMOVED br_memleak_selftest
+
+## sched/rr#rr v0.1.0.0 (compat_gen=0)
+- hash: sha256:2600c8855085bcf13b334b1a164fe7aa33a12dc7970dc705f12b744c82aa4eb2
+- 变更: 首次发布(建档)

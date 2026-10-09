@@ -1,0 +1,92 @@
+# sched/rr — 时间片轮转(tround-robin)抢占调度器(plugin_type = ability, subkind = scheduler)
+#
+# 设计出处: `3-03-sched.md`(调度总纲: "语义在 core, 策略在插件")、
+#           `3-01-core-api-list.md` §5.1(br_sched_ops 注册点)/§2.1(coop 与 preempt 的分界:
+#           属性是建议, 语义归调度插件)、`3-02-int.md` §11.2(IRQ 出口的抢占接缝)/
+#           §11.3(v1 coop 的中断-调度语义 —— 本件正是"下一次中断出口即可能切换"的形态)。
+# 逐条裁定与证据: `docs/decisions/0011-round-robin-bh-workqueue.md`。
+#
+# ★ 与 sched/coop 的唯一差别: **时间片**。coop 只在显式点(yield/阻塞/退出)换栈;
+#   本件在每个 tick 上递减当前线程的时间片, 用尽即 `br_sched_request_resched()`,
+#   由 core 在 **IRQ 出口**完成换栈。于是"不 yield 的忙循环"会被切走 ——
+#   `TC-TASK-102` 就是这条的机械判据(coop 下的对应判据是 TC-TASK-101 的**反面**)。
+#
+# ★ 相位口径: `phase = "core"` 是**完成点**(第 ② 个, 由 subkind=scheduler 推导);
+#   但**注册**(`br_sched_register`)发生在 EARLY 相的 `rr_early_init()` 里 ——
+#   调度器必须在任何线程创建之前就位(3-01 §5.1 "EARLY 恰一次")。
+schema = 1
+
+[plugin]
+name        = "sched/rr"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "scheduler"
+# sched_kind 的三个合法值是 coop|preempt|tt(裁定 R-5: 显式字段优先于按名字推断)。
+# 本件是 preempt 形态的**时间片轮转**实例: 没有优先级(prio 仍被忽略), 只有时间片。
+sched_kind  = "preempt"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "时间片轮转(round-robin)抢占调度器: FIFO 就绪队列 + 每线程时间片; 用尽即在 IRQ 出口换栈"
+license     = "WTFPL"
+# 提供方自己: 它就是"preempt 语义"的来源, 因此声明 SAFE_PREEMPT(组合期校验只对
+# COOP_ONLY 的**消费者**做"必须有 coop 调度器"的检查)。
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "就绪队列 head/tail/len + ops 表(每线程私有尾 16 B: ready_next + 时间片 + 观测计数, 在 core 的 TCB 池里)"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+# ---- 类型别名表 ----
+[iface.typedefs]
+
+# ---- 结构依赖(init)----
+# 调度器本身不调 platform 的 API; 这条 init 边表达的是启动链的事实(3-01 §9):
+# platform 的 EARLY/PIC 就绪先于"调度器锁定的 CORE 相"。
+[[dep]]
+name  = "platform/qemu-aarch64"
+range = ">=0.1.0"
+kind  = "init"
+
+# ---- 导出面(单元 = 冻结与版本的基本粒度)----
+[[export]]
+name         = "rr"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = ""
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "rr_early_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "rr_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "rr_start"
+sig  = "int (void)"
+
+# ---- 特权面 ----
+# P3(core): 调度器做"**中断控制**"(3-01 §13.6 的 P3 行 —— 仅 ability.subkind=scheduler
+# 与 platform 可声明)。本插件经 core 的 `br_irq_lock/unlock` 用 L2 临界区保护就绪队列
+# (ISR 会在 tick 里唤醒线程 ⇒ 入队, 与线程侧的 pick_next 竞争)。
+[privileged]
+level = "P3"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

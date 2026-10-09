@@ -803,9 +803,23 @@ pub fn gen_plan(
     let tree = crate::model::load_tree(root);
     let mut d = tree.diags.clone();
     let mut out = Vec::new();
-    // 生成物数量 = 插件树里的插件数(**不**随 `--plugin` 过滤变化): 每个生成物都带同一个值,
-    // 于是弱符号 `br_plugin_gen_total` 任取一条都一致(见 ADR-0005 §2.4)。
-    let gen_total = tree.plugins.len() as u32;
+    // 生成物数量 = **会被编进镜像的**描述符数。每个生成物都带同一个值, 于是弱符号
+    // `br_plugin_gen_total` 任取一条都一致(见 ADR-0005 §2.4)。
+    //
+    // ★ 为什么是**闭包**而不是"插件树里的插件数": core 的 TC-PLUG-001 断言
+    //   "`.br_plugins` 段里的条数 == 本符号的值"。而 build 会**按闭包过滤生成物**
+    //   (见 build.rs 的 filter_gen_sources: 未选中的插件, 它的描述符不进镜像),
+    //   于是"树里的插件数"在有**未选中插件**的树里必然大于段条数 —— 那个断言会红。
+    //   生产里第一次撞上它是 sched/coop 与 sched/rr 共存、而产品只能选一个调度器
+    //   (ADR-0011)。⇒ 口径改为闭包大小: 它才是"镜像里有几条描述符"的真值。
+    //   没有 product.toml 的树(纯插件树校验, R-1)退回整棵树。
+    let gen_total = match &tree.product {
+        Some(prod) => {
+            let sol = crate::solver::solve(&tree, &prod.stage, false);
+            sol.closure.selected.len() as u32
+        }
+        None => tree.plugins.len() as u32,
+    };
     for p in &tree.plugins {
         if let Some(name) = &only {
             if &p.name != name {

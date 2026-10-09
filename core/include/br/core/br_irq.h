@@ -4,7 +4,8 @@
  * 权威设计: `docs/3-os-core/3-02-int.md`(机制/数据结构/不变量/分期);
  * 符号面与冻结计划: `docs/3-os-core/3-01-core-api-list.md` §8/§8.1/§15。
  *
- * 分期(3-02 §1.1): 本篇实现的是 **Stage 1**(调度器交付前, M0)——
+ * 分期(3-02 §1.1): 本篇实现 **Stage 1**(调度器交付前, M0)的机制,
+ * 并在 ADR-0011(本原型)里**提前落下 Stage 2 的第一件** —— **bottom half(bh)**:
  *   ① 中断号管理与抽象(§3)   ② PIC 抽象与能力降级(§4, 见 br_pic.h)
  *   ③ 生命周期(Pending/Active/Inactive, §5, 实现见 src/irq/irq_core.c)
  *   ④ fault 路径(同步异常分槽/分类/extable/panic, §10, 见 br_fault.h;
@@ -12,10 +13,12 @@
  *   ⑤ 优先级与抢占(§7)       ⑥ 屏蔽与使能三层(§6)
  *   ⑦ 触发方式(§8)           ⑧ 级联中断域(§9)
  *
- * Stage 2(§12/§13: 分发形态/负载均衡/亲和性/IPI)不在本篇: v1 无 bh、无线程。
- * ⇒ `BR_IRQ_DISPATCH_BH/_THREAD` 置位**不报错但忽略**(无 bh), 留 trace(§3.4)。
- *
- * ★ 全局约束(3-02 §1.3): **core 不含任何控制器型号名**。本头里不出现
+ * ★ **bh 已落地(ADR-0011)**: `BR_IRQ_F_DISPATCH_BH` 不再是"置位忽略", 而是真的
+ *   把该线的 ISR 推迟到下半部(workqueue, `br/core/br_work.h`)执行; SLOW 级联域
+ *   (其存在前提是 bh)随之可用。**仍未做**: `BR_IRQ_DISPATCH_THREAD`(专属/共享线程)
+ *   与 §12 的动态升级/§13 的亲和性与负载均衡(SMP, v2b)⇒ THREAD 置位**不报错但忽略**
+ *   并留 trace(§3.4), 那段注释不改。v1 coop/preempt 都**无线程化 IRQ**。
+ *   ★ 全局约束(3-02 §1.3): **core 不含任何控制器型号名**。本头里不出现
  *   "gic"/"pl011" 之类的字眼 —— 型号差异全在 ISA 层(br_pic.h 的填表)。
  */
 #ifndef BR_CORE_BR_IRQ_H
@@ -75,8 +78,12 @@
  *   用新头文件编译的插件在老 core 上悄悄失去它请求的属性)。 */
 #define BR_IRQ_F_SHARED          0x0001u  /* 共享线 = v1 非目标 ⇒ -ENOTSUP */
 #define BR_IRQ_F_PERCPU          0x0002u  /* 每核私有(PPI); 与硬件不符 ⇒ -EINVAL */
-#define BR_IRQ_F_DISPATCH_BH     0x0004u  /* Stage 2 分发到 bh; Stage 1 忽略 + trace */
-#define BR_IRQ_F_DISPATCH_THREAD 0x0008u  /* Stage 2 分发到线程; Stage 1 忽略 + trace */
+#define BR_IRQ_F_DISPATCH_BH     0x0004u  /* 该线分发到 bh(下半部)。★ ADR-0011 起**真的生效**:
+                                           * ISR 不在中断上下文里跑, 而是被推迟到
+                                           * workqueue(bh); 处理期间硬件线被 mask,
+                                           * handler 返回后放行(§12.4/§9.4 的骨架) */
+#define BR_IRQ_F_DISPATCH_THREAD 0x0008u  /* Stage 2: 分发到专属/共享线程; **仍未实现** ⇒
+                                           * 置位不报错但忽略 + trace(§3.4) */
 #define BR_IRQ_F_MIGRATABLE      0x0010u  /* v2b: 允许运行时迁移 */
 #define BR_IRQ_F_STATS           0x0020u  /* 该线开启统计(需 BR_IRQ_STATS) */
 #define BR_IRQ_F_NO_STORM_GUARD  0x0040u  /* 该线豁免风暴保护(已知合法高频线) */
@@ -133,8 +140,10 @@ void br_irq_unlock(br_irq_state_t st);
  * =====================================================================
  * v1 单层级联; 嵌套域与共享线是非目标。**父线必须是 PIC 直连线**(SLOW 域
  * 在 ISR 内 mask 父线的前提, 3-02 §9.4)。
- * Stage 1 的边界: FAST 域完整可用(纯 ISR 内); **SLOW 域不可用**(其存在前提是 bh,
- * 而 Stage 1 没有 bh)⇒ `br_irq_domain_create(..., BR_IRQ_DOMAIN_F_SLOW, ...)` 返回 NULL。
+ * ★ ADR-0011 后 **FAST 与 SLOW 都可用**: SLOW 域的 demux 走 core 的 workqueue
+ *   (`br/core/br_work.h`), 父线在提交前被 mask、demux 完成后放行(§9.4)。
+ *   只有"bh 不可用"(core 未提供 workqueue)时 `br_irq_domain_create(..., F_SLOW, ...)`
+ *   才返回 NULL —— 在 v0.2.0 的 core 里 bh 恒在, 故 SLOW 恒可用。
  */
 
 typedef struct br_irq_domain br_irq_domain_t;
@@ -150,11 +159,13 @@ typedef struct br_irq_domain_ops {
 } br_irq_domain_ops_t;
 
 #define BR_IRQ_DOMAIN_F_FAST 0x0u   /* 状态寄存器内存映射 ⇒ demux + 子 handler 在 ISR 上下文 */
-#define BR_IRQ_DOMAIN_F_SLOW 0x1u   /* 状态读取需总线事务 ⇒ demux 在 bh(Stage 2 才可用) */
+#define BR_IRQ_DOMAIN_F_SLOW 0x1u   /* 状态读取需总线事务 ⇒ demux 在 bh(下半部, ADR-0011 起可用)。
+                                     * ★ 子 handler 的上下文 = **bh 契约**(比设计的"线程上下文"
+                                     * 更严: 关中断、不可阻塞)。见 br_work.h 的文件头。 */
 
 /* 从域池分配域 + 子描述符窗口 + bitmap; 注册父线 ISR = 域 demux。
  * 返回 NULL(池满 / 父线非法或非直连 / n_sub 越界或窗口不足 / ops->pending 缺失 /
- * 请求 SLOW 而 Stage 1 无 bh)。 */
+ * 请求 SLOW 而 bh 不可用)。 */
 br_irq_domain_t *br_irq_domain_create(const char *name, br_u32 parent_irq,
                                       br_u32 n_sub, br_u32 flags,
                                       const br_irq_domain_ops_t *ops, void *priv);
@@ -200,7 +211,8 @@ int br_irq_bindings_set(const br_irq_binding_t *tbl, br_size_t n);
  * 6. 跨模块观测契约(不能 hidden: 消费方是 debug bridge / ramdump 插件, 3-02 §1.4)
  * ===================================================================== */
 
-/* 诊断快照(3-02 §14.4; 非热路径, 不进 golden 布局承诺) */
+/* 诊断快照(3-02 §14.4; 非热路径, 不进 golden 布局承诺)
+ * ★ ADR-0011 追加 bh 三项(append-only; 该结构明说不进 golden)。*/
 typedef struct {
     br_u32 count;          /* 进入次数(BR_IRQ_STATS; 关闭时恒 0) */
     br_u16 storm;          /* 当前窗口内该线计数(直接取 rt->storm, 不另存峰值) */
@@ -208,13 +220,27 @@ typedef struct {
     br_u32 spurious_owned; /* "有硬件屏蔽却仍到达" —— 真 bug 信号(§4.2) */
     br_u32 spurious_nocap; /* "无屏蔽能力时的预期丢弃" —— 降级行为(§4.2) */
     br_u32 drop;           /* SLOW 域提交失败次数(域成员, §9.4) */
-    br_u16 flags;          /* 描述符 flags 快照 */
+    br_u16 flags;          /* 描述符 flags 快照(★ 含 ADR-0011 后真正生效的 DISPATCH_BH 位) */
     br_u8  prio, trigger;
+    /* ---- 下半部(bh)三项: 本核累计, v1 单核 ⇒ 即全局(ADR-0011 §3) ---- */
+    br_u32 bh_deferred;        /* BH 形态: 成功推迟到下半部的次数 */
+    br_u32 bh_dropped;         /* BH 形态: 队满 ⇒ 回滚未提交的次数(IR-10) */
+    br_u32 suppressed_dispatch;/* §11.4.1: 派发前已 disable ⇒ 抑制 handler 的次数 */
 } br_irq_stat_t;
 
 /* ★ `spurious_owned`/`spurious_nocap` 在 CPU-local(3-02 §14.4), 故本调用返回的是
  *   **本核**的计数(v1 单核 ⇒ 即全局)。取不到(virq 越界/无绑定)⇒ out 清零。 */
 void br_irq_stats_get(br_u32 virq, br_irq_stat_t *out);
+
+/*
+ * 执行上下文查询(ADR-0011; §12.1 的三种形态在运行期的可观测面)。
+ *
+ * 为什么进对外头而不是 core 私有头: **域方言**要能自证"我的状态寄存器没有在 ISR 里被读"
+ * (`SLOW` 域存在的全部理由, §9.4), 而那是插件(platform/驱动)侧写的代码 —— 它拿不到
+ * core 私有头。`br_work_in_bh()` 同理(在 `br_work.h`)。
+ */
+br_bool br_irq_in_isr(void);        /* 在 ISR 体内(中断上下文) */
+br_bool br_irq_in_atomic(void);     /* ISR **或** bh —— thread-only API 的禁令范围 */
 
 /* =====================================================================
  * 7. core 内部符号(3-02 §1.4/§14.2: asm 桩调用与 M0 替身; **不导出**)
@@ -242,5 +268,14 @@ void br_irq_cpu_enable(void);
 /* 中断入口(asm 桩调用, 3-02 §5.2): ack → 分发 → ISR → 统一出口 eoi。 */
 struct br_exc_frame;
 void br_irq_enter(struct br_exc_frame *f);
+
+/*
+ * 当前 L2 临界区嵌套深度(ADR-0011 裁定 P-1)。**core 内部符号**(同样不进 golden):
+ * 调度框架在"新线程首次进入"时要判断"我是不是在一个 L2 临界区里被切过来的" ——
+ * 若是(深度 > 0), 说明有人在临界区里让出了 CPU(既有禁令), 那就**不动**中断状态;
+ * 若否(深度 == 0), 线程必须跑在"中断放开"的形态 —— 这一条在 preempt 调度器从
+ * **IRQ 出口**换栈(此刻 PSTATE.I == 1)时是必需的, 否则新线程会带着关中断一路跑下去。
+ */
+br_u32 br_irq_lock_depth(void);
 
 #endif /* BR_CORE_BR_IRQ_H */

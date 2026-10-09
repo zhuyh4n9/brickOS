@@ -20,11 +20,18 @@
  *       RUNNING ⇒ 不在队列; `pick_next` 只出队, 由 core 置 RUNNING。
  *   I3  `br_sched_wake(t)` 先写 `t->wait_status = 0`, 只有 `state == BLOCKED` 才挂回就绪队列
  *       (否则只写握手位)。超时扫描只碰 `state == BLOCKED` 且到期的线程。
- *   I4  **无抢占**(coop): 只在显式点(yield / block / exit / 首次调度)换栈;
- *       IRQ 出口(`br_sched_irq_epilogue`)不切栈(3-02 §11.2/§11.3)。
+ *   I4  **切换只发生在下列显式点**: yield / block / exit / 首次调度, **加上**——
+ *       ADR-0011 之后 —— **IRQ 出口的抢占**(仅当调度器置了 need_resched)。
+ *       COOP 从不置位 ⇒ 对 coop 而言 I4 的旧措辞(无抢占、IRQ 出口不切栈)逐字成立。
+ *       IRQ 出口的切换点在 C 调用边界(`br_sched_switch_to`), 被抢占线程的异常帧
+ *       完整地留在它自己的栈上 —— 见 `resched_from_irq()` 的长注释。
  *   I5  ICB 握手(ADR-0006 §3b, 与 F3 的 sync.c 对齐): `wait_status` 是唯一握手位 ——
  *       调用方在开窗前置 -ETIMEDOUT, wake 置 0, 超时置 -ETIMEDOUT;
  *       谁先写谁赢, 两种顺序收敛到同一结果(见 `br_sched_block_current`)。
+ *   I6  **bh 不是线程上下文**(ADR-0011): 下半部跑在关中断的异常出口上, 在它里面
+ *       阻塞/让出/退出都会让异常帧的返回路径丢失 ⇒ 三条路径都在运行期拒绝
+ *       (`br_sched_block_current` = -EPERM, `br_task_yield` = 拒绝 + 留痕,
+ *        `br_task_exit` = panic)。
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -32,7 +39,9 @@
 #include <br/core/br_log.h>
 #include <br/core/br_sched.h>
 #include <br/core/br_time.h>
+#include <br/core/br_trace.h>
 #include <br/core/br_types.h>
+#include <br/core/br_work.h>
 
 #include "sched_ctx.h"
 #include "sched_internal.h"
@@ -62,6 +71,13 @@ static br_thread_t         *s_all;        /* 全局 TCB 链(遍历/观测/超时
 static br_thread_t         *s_current;    /* 当前线程(单核; TPIDR_EL1 是 v2/SMP 的落点) */
 static const br_sched_ops_t *s_ops;
 static br_thread_t         *s_joiner[BR_TASK_MAX];  /* target → 它的 joiner(一次一个) */
+
+/*
+ * 抢占请求位(ADR-0011)。写点 = 调度插件的 tick 策略(`br_sched_request_resched`,
+ * ISR 内); 消费点 = IRQ 出口的 `resched_from_irq()`。**只有这一个位**
+ * (`volatile` 是给"ISR 写 / 出口读"这对上下文看的; 单核上它也不需要原子指令)。
+ */
+static volatile br_bool s_need_resched;
 
 /*
  * 宿主侧 idle 等待钩子(弱符号)。目标上根本没有这个符号: idle 直接发 `wfi`
@@ -436,6 +452,9 @@ BR_NORETURN void br_sched_run(void)
     }
 }
 
+/* IRQ 出口的抢占换栈(定义在本节末; 前置条件与安全性论证在定义处)。 */
+static void resched_from_irq(void);
+
 void br_sched_irq_epilogue(void)
 {
     if (s_ops == BR_NULL) {
@@ -445,10 +464,92 @@ void br_sched_irq_epilogue(void)
     /*
      * 到期扫描(与 on_tick 同一处方): 覆盖"非 timer 中断"的出口, 使超时唤醒不依赖
      * 具体是哪一个 IRQ 把 CPU 从 idle 里叫醒的。
-     * COOP 下**不在此切栈**(3-02 §11.2: Stage 1 = 空动作; v1 coop 只在显式点切换)。
-     * v2 preempt 在这里检查 need_resched 并切栈(必须在 eoi 之后、ERET 之前)。
+     * ★ 必须在抢占之前: 超时唤醒的线程要能被同一次出口的 pick_next 选中。
      */
     scan_timeouts(br_clock_now());
+
+    resched_from_irq();
+}
+
+/* ------------------------------------------------------------------ 抢占 */
+
+void br_sched_request_resched(void)
+{
+    s_need_resched = BR_TRUE;
+}
+
+br_bool br_sched_resched_pending(void)
+{
+    return s_need_resched;
+}
+
+/*
+ * IRQ 出口的抢占换栈(ADR-0011; 由 `br_sched_irq_epilogue` 调)。
+ *
+ * 前置(由调用点保证, 不是猜测): 在**异常上下文**里、已经 eoi、`irq_depth == 0`
+ * (INV-C 刚查过)、`PSTATE.I == 1`。
+ *
+ * ★ 为什么这样切是安全的(这是本机制唯一难懂的一处, 必须写死):
+ *   `from` 的现场被 `br_sched_switch_to` 保存为"callee-saved + sp" —— 而 sp 指向
+ *   **`br_irq_enter` 的栈帧**(异常帧在它下面)。于是被抢占的线程此后停在"IRQ 出口
+ *   的 C 代码里", 等它被再次选中时从 `br_sched_switch_to` 返回, 依次走完
+ *   `resched_from_irq` → `br_sched_irq_epilogue` → `br_irq_enter` → 汇编桩的
+ *   "恢复现场 + ERET"。⇒ **它自己的 ELR/SPSR 寄存器值一直躺在它自己的栈上的异常帧里**,
+ *   不需要在切换时保存到别处(单核上这些寄存器是全局的, 但它们只在"回到自己的桩"
+ *   那一刻才被读出来)。
+ *   ⇒ 因此 `switch.S` 只存 callee-saved 依然够, vectors.S 也不必改 —— 切栈点根本不在
+ *   那几行汇编里(与 vectors.S 文件头 P-IRQ-ASM-2 的"v2 注意义务"一致: 那条义务针对的是
+ *   "在 ERET 前用汇编切栈"的另一种实现)。
+ *
+ * ★ 新线程的首次进入另有一处必须补: 此刻 `PSTATE.I == 1`(还在异常处理里), 而新线程
+ *   的入口不经 ERET ⇒ 必须显式修正为"中断放开"。见 `br_sched_thread_entry`(裁定 P-1)。
+ */
+static void resched_from_irq(void)
+{
+    if (s_need_resched == BR_FALSE) {
+        return;
+    }
+    s_need_resched = BR_FALSE;
+
+    br_thread_t *cur = s_current;
+
+    /* 只在"当前线程还在跑"时才有抢占可言(block/exit 路径已把 state 改掉)。 */
+    if (s_ops == BR_NULL || cur == BR_NULL || cur->state != BR_TASK_RUNNING) {
+        return;
+    }
+
+    /*
+     * 把被抢占者放回就绪结构(队尾)。**这是 round-robin 的语义落点**:
+     * 时间片用尽 ⇒ 排到队尾等下一轮; `state` 仍由 core 改(I2)。
+     */
+    cur->state = BR_TASK_READY;
+    if (s_ops->thread_ready != BR_NULL) {
+        (void)s_ops->thread_ready(cur);
+    }
+
+    br_thread_t *to = (s_ops->pick_next != BR_NULL) ? s_ops->pick_next() : BR_NULL;
+
+    if (to == BR_NULL) {
+        /* 防御(插件坏了才会到): 刚把 cur 放进队列, pick_next 却说没人 —— 把 cur 摘出来
+         * 继续跑。绝不能"什么都不做": 那会让 cur 留在队列里却处于 RUNNING(违反 I2)。 */
+        if (s_ops->thread_block != BR_NULL) {
+            s_ops->thread_block(cur);
+        }
+        cur->state = BR_TASK_RUNNING;
+        br_trace_emit(BR_TRACE_SCHED_PREEMPT, 0u, 0u);
+        return;
+    }
+    if (to == cur) {
+        /* 只有自己可跑(pick_next 已把它摘出队列): 不切栈, 直接继续(与 switch_next 同构)。 */
+        cur->state = BR_TASK_RUNNING;
+        br_trace_emit(BR_TRACE_SCHED_PREEMPT, 0u, 0u);
+        return;
+    }
+
+    to->state = BR_TASK_RUNNING;
+    s_current = to;
+    br_trace_emit(BR_TRACE_SCHED_PREEMPT, 0u, 1u);   /* 证据: IRQ 出口真的换了栈 */
+    br_sched_switch_to(cur, to);        /* 回来 = 有人又把 cur 选出来了 */
 }
 
 void br_sched_on_tick(br_time_t now)
@@ -470,6 +571,16 @@ int br_sched_block_current(br_time_t abs_deadline)
 
     if (t == BR_NULL || s_ops == BR_NULL) {
         return BR_ERR(BR_EINVAL);
+    }
+    /*
+     * ★ bh 禁令(I6, ADR-0011): 下半部在关中断的异常出口上跑, 它**没有**可回退的调度
+     *   上下文 —— 若在这里阻塞, 异常帧永远不会返回(且 ISR 的 eoi 已完成, 表现为
+     *   "系统静默失去一条线")。运行期拒绝, 返回 -EPERM 而不是 -EINVAL:
+     *   参数没错, 上下文错了(调用方要能区分这两种 bug)。
+     */
+    if (br_work_in_bh() != BR_FALSE) {
+        br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 2u, 0u);
+        return BR_ERR(BR_EPERM);
     }
     if (t->state != BR_TASK_RUNNING) {
         return BR_ERR(BR_EINVAL);
@@ -535,6 +646,25 @@ br_u32 br_sched_ready_count(void)
 
 BR_NORETURN void br_sched_thread_entry(struct br_thread *t)
 {
+    /*
+     * ★ 裁定 P-1(ADR-0011): 新线程的首次进入必须把 L2 形态摆正。
+     *
+     * 问题: preempt 类调度器可能在 **IRQ 出口**选中一个"从没跑过"的线程
+     * (`resched_from_irq` → `br_sched_switch_to` → trampoline)。那一刻 `PSTATE.I == 1`
+     * (我们仍在异常处理里), 而新线程**不经 ERET** 进入 ⇒ 若不管, 它会带着关中断一路
+     * 跑下去: timer 再也不来 ⇒ 抢占与超时同时失效(而且没有任何报错)。
+     *
+     * 处置: `irq_depth == 0` ⇒ 线程的应然形态是"中断放开", 显式放行。
+     *   `irq_depth > 0` ⇒ **不动**(并且这不是"顺手修好"): 那意味着有人在 L2 临界区里
+     *   让出了 CPU —— 那是既有禁令(与 INV-C 同源), 此刻打开中断会把临界区撕开。
+     *   留痕而不改状态: 诚实失败优于静默地把中断打开。
+     */
+    if (br_irq_lock_depth() == 0u) {
+        br_irq_cpu_enable();
+    } else {
+        br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 1u, (br_u64)br_irq_lock_depth());
+    }
+
     if (t != BR_NULL && t->entry != BR_NULL) {
         t->entry(t->arg);               /* entry 正常返回 ⇒ 走下面, 不落野地址 */
     }
@@ -632,6 +762,16 @@ BR_NORETURN void br_task_exit(int code)
 {
     br_thread_t *t = s_current;
 
+    /*
+     * ★ bh 禁令(I6, ADR-0011): 从下半部结束一个线程没有任何正确的收尾方式 ——
+     *   它的异常帧还压在栈上, "切走"会让 ERET 永远不回来。设计的一贯口径是
+     *   "诚实失败优于静默降级" ⇒ panic(而不是假装退出成功)。
+     */
+    if (br_work_in_bh() != BR_FALSE) {
+        br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 3u, 0u);
+        br_panic("[sched] br_task_exit(): 不许在中断下半部(bh)里结束线程(ADR-0011 §4)");
+    }
+
     if (t == BR_NULL || s_ops == BR_NULL) {
         /* 不在线程上下文: 没有"退出"可言 —— 诚实停住(不伪造) */
         for (;;) {
@@ -661,6 +801,15 @@ BR_NORETURN void br_task_exit(int code)
 void br_task_yield(void)
 {
     if (s_current == BR_NULL || s_ops == BR_NULL) {
+        return;
+    }
+    /*
+     * ★ bh 禁令(I6, ADR-0011): 下半部里让出 CPU == 把异常出口的返回路径丢掉。
+     *   `br_task_yield` 是 void ⇒ 无法返回错误码, 故**拒绝执行 + 留痕**(不静默地
+     *   当成"让出成功": 调用者以为切换发生过, 而实际什么都没发生 —— 那也是一种谎)。
+     */
+    if (br_work_in_bh() != BR_FALSE) {
+        br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 4u, 0u);
         return;
     }
     if (s_current->state != BR_TASK_RUNNING) {

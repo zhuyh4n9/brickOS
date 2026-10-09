@@ -31,7 +31,12 @@
  *   TC-IRQ-019 最低优先级线也能被投递(PMR 的 init 义务, §7.1)
  *   TC-IRQ-022 extable 命中后 in_fault 已复位(第二次 fault 仍走正常修复路径)
  *   TC-IRQ-101 FAST 级联域: 分发/逐子 ack/无属主子中断被 mask
- *   TC-IRQ-102 SLOW 域: Stage 1 无 bh ⇒ 明确拒绝(分期边界, §1.1.1)
+ *   TC-IRQ-102 SLOW 级联域: demux 在 **bh**(状态寄存器从未在 ISR 里被读)——
+ *              ★ ADR-0011 前这条判"SLOW 被明确拒绝"; bh 落地后翻成"可用且真的在 bh 里"
+ *   TC-IRQ-015 **BH 直连线**(绑定表声明 DISPATCH_BH): handler 在 bh 上下文执行,
+ *              处理期间同线被 mask, 计数/留痕可观测
+ *   TC-IRQ-016 bh 内调 thread-only API ⇒ -EINVAL(原子上下文的运行期执法)
+ *   TC-IRQ-017 §11.4.1: 派发前已 disable ⇒ 抑制 handler(工作项仍被消费)、enable 不重放
  *   GIC-*      方言事实: EOImode/PRIbits/SPI 线数/绑定表(平台数据)核对
  */
 #include <br/core/br_irq.h>
@@ -40,6 +45,8 @@
 #include <br/core/br_fault.h>
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
+/* 下半部(ADR-0011): BH 用例要能显式驱动一次 drain, 并断言 handler 真的在 bh 上下文里。 */
+#include <br/core/br_work.h>
 
 #include <br/platform/br_plat.h>
 #include <br/platform/br_gicv3.h>
@@ -523,15 +530,280 @@ static void conf_storm(void)
                 "风暴之后系统继续运行(其他线正常投递)");
 }
 
-static void conf_domain_stage1_boundary(void)
+/* ------------------------------------------------------------------ 下半部(bh) */
+
+/*
+ * BH 直连线的 handler。**判据就写在它体内**: 它必须看到
+ *   - `br_irq_in_isr() == 0`  —— 真的不在中断上下文里(§12.1 的形态定义);
+ *   - `br_work_in_bh() != 0`  —— 真的在下半部里(ADR-0011 的上下文标志);
+ *   - `br_irq_in_atomic() != 0` —— 仍是"不许调 thread-only API"的原子上下文。
+ * 若哪天有人把 DISPATCH_BH 实现成"在 ISR 里照样直接调", 前两条会立刻红。
+ */
+static volatile br_u32 s_bh_count;
+static volatile int    s_bh_saw_isr;
+static volatile int    s_bh_saw_bh;
+static volatile int    s_bh_saw_atomic;
+static volatile int    s_bh_disable_rc = -12345;
+
+static void conf_bh_isr(void *arg)
 {
-    /* SLOW 域的存在前提是 bh(Stage 2); Stage 1 必须**明确拒绝**而不是假装支持 */
-    br_irq_domain_t *d = br_irq_domain_create("conf-slow", BR_IRQ_DOMAIN_PARENT, 3u,
-                                              BR_IRQ_DOMAIN_F_SLOW, &s_fake_ops, BR_NULL);
-    conf_report(d == BR_NULL, "TC-IRQ-102",
-                "SLOW 级联域在 Stage 1 被拒绝(返回 NULL)");
-    conf_report(conf_trace_has(BR_TRACE_IRQ_DOMAIN_NOBH), "TC-IRQ-102",
-                "拒绝原因留痕(TRACE_IRQ_DOMAIN_NOBH)");
+    s_bh_saw_isr    = (br_irq_in_isr() != BR_FALSE) ? 1 : 0;
+    s_bh_saw_bh     = (br_work_in_bh() != BR_FALSE) ? 1 : 0;
+    s_bh_saw_atomic = (br_irq_in_atomic() != BR_FALSE) ? 1 : 0;
+    s_bh_count++;
+    (void)arg;
+}
+
+/* (a) 的工作项体: 在 **bh** 里调 thread-only API ⇒ 必须被拒(bh ≠ 线程上下文)。 */
+static void conf_bh_disable_from_bh(void *arg)
+{
+    (void)arg;
+    s_bh_disable_rc = br_irq_disable(BR_IRQ_BH_LINE);
+}
+
+/*
+ * §11.4.1: "已排队但尚未开始"的工作项, 派发前若该线已被 disable ⇒ **跳过 handler**,
+ * 工作项仍被消费出队(不占队列深度), 且 enable 之后**不重放**。
+ *
+ * ★ 怎么让这个窗口**真的出现**(而不是只写在注释里)—— 用**耗尽本轮 drain 预算**这个
+ *   真实机制(`BR_WORK_BH_BUDGET` 就是它为生产路径准备的), 再加 `br_work_drain` 的
+ *   **非重入**性质(W3):
+ *
+ *     thread: submit(W1 = "触发该线")        → 队列 [W1]
+ *     thread: drain(max=1)                   → 取 W1 执行(此刻 s_in_bh = 真)
+ *       W1: trigger(该线)                     → SGI 立即投递(线程上下文里中断是开的)
+ *         IRQ 入口: ack → DISPATCH_BH → 提交 br_irq_bh_run(排到 W1 之后)
+ *                   出口 drain(BUDGET) → **非重入 ⇒ 返回 0, 工作项留在队列里**
+ *       W1 返回
+ *     thread: drain 循环到 ran == max(1)  ⇒ 退出, handler 那份**仍未派发**
+ *     thread: br_irq_disable(该线)          ← 合法(线程上下文)
+ *     thread: drain(8)                      → 取出 br_irq_bh_run
+ *       bh: 该线 depth > 0                  → **抑制分支命中**: 不调用 handler, 计数 +1
+ *
+ *   整条链条没有一处"为了测试而造的状态": 预算耗尽 + 线程侧 disable 都是生产里会发生的事,
+ *   而 §11.4.1 要回答的恰恰就是"那一份已经排队的怎么办"。
+ */
+static void conf_bh_trigger(void *arg)
+{
+    (void)arg;
+    (void)br_plat_irq_trigger(BR_IRQ_BH_LINE);
+}
+
+static void conf_bh_disable_then_dispatch(void)
+{
+    br_irq_stat_t st0, st1;
+
+    /* (a) bh 里调 thread-only API ⇒ 拒绝。这是"bh ≠ 线程上下文"的机械判据。 */
+    s_bh_count = 0u;
+    s_bh_disable_rc = -12345;
+
+    const int sub1 = br_work_submit(conf_bh_disable_from_bh, BR_NULL);
+    const br_u32 ran = br_work_drain(8u);      /* 显式 drain(等价于 IRQ 出口那次) */
+
+    br_irq_stats_get(BR_IRQ_BH_LINE, &st0);
+    br_log_info("[IRQCONF] info bh: submit(disable_in_bh)=%d drained=%u rc=%d suppressed=%u",
+                sub1, ran, s_bh_disable_rc, st0.suppressed_dispatch);
+
+    conf_report(sub1 == 0 && ran >= 1u && s_bh_disable_rc == BR_ERR(BR_EINVAL),
+                "TC-IRQ-016", "bh 内调 thread-only API(br_irq_disable)⇒ -EINVAL(原子上下文执法)");
+
+    /* (b) 抑制分支: 按上面的时序图构造"handler 那份已排队, 而该线已被 disable"。 */
+    (void)br_irq_enable(BR_IRQ_BH_LINE);       /* 前置: 线必须是放行态, 否则触发不到 */
+    s_bh_count = 0u;
+    s_bh_disable_rc = -12345;
+
+    const int sub2 = br_work_submit(conf_bh_trigger, BR_NULL);
+    const br_u32 ran_a = br_work_drain(1u);    /* ★ 预算 1: 让 handler 那份跨出这一轮 */
+
+    const int dis = br_irq_disable(BR_IRQ_BH_LINE);   /* 线程上下文 ⇒ 合法 */
+    const br_u32 ran_b = br_work_drain(8u);           /* 现在派发 ⇒ 该线已 disable */
+
+    br_irq_stats_get(BR_IRQ_BH_LINE, &st1);
+    br_log_info("[IRQCONF] info bh: submit(trigger)=%d ran_a=%u disable=%d ran_b=%u "
+                "handler_ran=%u suppressed=%u",
+                sub2, ran_a, dis, ran_b, s_bh_count, st1.suppressed_dispatch);
+
+    conf_report(sub2 == 0 && dis == 0 && s_bh_count == 0u &&
+                st1.suppressed_dispatch > st0.suppressed_dispatch,
+                "TC-IRQ-017",
+                "BH 形态: 派发前已 disable ⇒ handler 不被调用(工作项仍被消费, 计数 +1)");
+
+    conf_report(conf_trace_has(BR_TRACE_IRQ_DISPATCH_SUPPRESSED), "TC-IRQ-017",
+                "抑制留痕(TRACE_IRQ_DISPATCH_SUPPRESSED)");
+
+    /* (c) enable 不重放: 恢复放行之后, 那次被抑制的工作**不会**自己跑一遍(§11.4.1)。 */
+    s_bh_count = 0u;
+    (void)br_irq_enable(BR_IRQ_BH_LINE);
+    const br_u32 ran3 = br_work_drain(8u);
+    conf_report(ran3 == 0u && s_bh_count == 0u, "TC-IRQ-017",
+                "enable 之后不重放被抑制的工作(§11.4.1)");
+}
+
+static void conf_bh_direct_line(void)
+{
+    /* 该线的 DISPATCH_BH 来自**绑定表**(静态声明, §12.2), 注册时不该被 attr 覆盖掉。 */
+    const br_irq_attr_t attr = {
+        .prio = BR_IRQ_PRIO_DEFAULT, .trigger = BR_IRQ_TRIG_DEFAULT, .flags = 0u
+    };
+
+    const int r = br_irq_register(BR_IRQ_BH_LINE, conf_bh_isr, BR_NULL, &attr);
+    conf_report(r == 0, "TC-IRQ-015", "register(BH 直连线) -> 0");
+
+    br_irq_stat_t st;
+    br_irq_stats_get(BR_IRQ_BH_LINE, &st);
+    conf_report((st.flags & (br_u16)BR_IRQ_F_DISPATCH_BH) != 0u, "TC-IRQ-015",
+                "绑定表的 DISPATCH_BH 折进描述符 flags(静态分发形态 = 真值)");
+
+    conf_report(br_irq_enable(BR_IRQ_BH_LINE) == 0, "TC-IRQ-015", "enable(BH 线) -> 0");
+
+    s_bh_count    = 0u;
+    s_bh_saw_isr  = -1;
+    s_bh_saw_bh   = -1;
+    s_bh_saw_atomic = -1;
+
+    const br_u32 before_defer = st.bh_deferred;
+    (void)br_plat_irq_trigger(BR_IRQ_BH_LINE);
+
+    /* 中断出口(eoi 之后)会把 bh 取出来跑 ⇒ 这里等的是**那个**执行。 */
+    conf_report(conf_wait_count(&s_bh_count, 1u, 20000u) == 0, "TC-IRQ-015",
+                "BH 线的 ISR 被推迟到下半部执行(不是丢失)");
+    conf_report(s_bh_saw_isr == 0, "TC-IRQ-015",
+                "handler 里 br_irq_in_isr()==0(真的不在中断上下文)");
+    conf_report(s_bh_saw_bh == 1, "TC-IRQ-015",
+                "handler 里 br_work_in_bh()!=0(bh 上下文标志可见)");
+    conf_report(s_bh_saw_atomic == 1, "TC-IRQ-015",
+                "handler 里 br_irq_in_atomic()!=0(仍是 thread-only 禁令的适用范围)");
+
+    br_irq_stats_get(BR_IRQ_BH_LINE, &st);
+    conf_report(st.bh_deferred > before_defer, "TC-IRQ-015",
+                "CPU-local 计数 bh_deferred 递增(不依赖 trace 环)");
+    conf_report(conf_trace_has(BR_TRACE_IRQ_BH_DEFER), "TC-IRQ-015",
+                "推迟留痕(TRACE_IRQ_BH_DEFER)");
+
+    /* 处理期间屏蔽同线(§12.4): demux/handler 跑完后线必须已放行。 */
+    {
+        br_u32 hw = 0u;
+        int en = 0;
+        const int g1 = br_plat_irq_hwirq(BR_IRQ_BH_LINE, &hw);
+        const int g2 = (g1 == 0) ? br_gicv3_readback_enabled(hw, &en) : -1;
+        conf_report(g1 == 0 && g2 == 0 && en != 0, "TC-IRQ-015",
+                    "bh 结束后硬件线已放行(处理期间 mask 同线的骨架)");
+    }
+
+    conf_bh_disable_then_dispatch();
+}
+
+/* ------------------------------------------------------------------ 级联域 */
+
+/*
+ * SLOW 域的"假 PMIC": 它的状态寄存器**只能在 bh 里读** —— 这是 SLOW 域存在的全部理由
+ * (总线事务, §9.4)。为了把这条性质变成**机械判据**, 方言的 `pending()` 在 ISR 上下文里
+ * 被调用时直接置 `s_slow_violation`, 并返回"无位"; 用例断言 demux 真的在 bh 里发生。
+ */
+static volatile br_u32 s_slow_pending_seen;   /* 被读过几次 */
+static volatile int    s_slow_violation;      /* 1 = 有人在 ISR 上下文里读状态 */
+static volatile br_u32 s_slow_child;
+static volatile int    s_slow_child_in_bh;
+static volatile br_u32 s_slow_pending;
+static br_irq_domain_t *s_slow_dom;
+
+static void slow_pending(void *priv, br_u32 *bits, br_size_t nwords)
+{
+    (void)priv;
+    for (br_size_t i = 0; i < nwords; i++) {
+        bits[i] = 0u;
+    }
+    if (br_irq_in_isr() != BR_FALSE) {
+        s_slow_violation = 1;      /* ★ 这个域的状态寄存器不许在 ISR 里读 */
+        return;
+    }
+    s_slow_pending_seen++;
+    bits[0] = s_slow_pending;
+}
+
+static void slow_child_isr(void *arg)
+{
+    (void)arg;
+    s_slow_child_in_bh = (br_work_in_bh() != BR_FALSE) ? 1 : 0;
+    s_slow_child++;
+    s_slow_pending = 0u;           /* "读清"型状态: 处理完即清 */
+}
+
+static const br_irq_domain_ops_t s_slow_ops = {
+    .pending = slow_pending,
+    .mask    = fake_mask,
+    .unmask  = fake_unmask,
+    .ack     = fake_ack,
+};
+
+/* 假域方言的影子状态复位(SLOW 用例自己用; 域池是 core 的静态对象, 用例只清自己的影子) */
+static void fake_reset(void)
+{
+    s_fake_pending    = 0u;
+    s_fake_masked     = 0u;
+    s_fake_ack_count  = 0u;
+}
+
+static void conf_domain_slow(void)
+{
+    fake_reset();
+
+    s_slow_pending_seen = 0u;
+    s_slow_violation    = 0;
+    s_slow_child        = 0u;
+    s_slow_child_in_bh  = -1;
+    s_slow_pending      = 0u;
+
+    /* §9.4 / §1.1.1: SLOW 域的存在前提是 bh —— ADR-0011 之后 bh 已落地, 它必须**可用**。 */
+    s_slow_dom = br_irq_domain_create("conf-slow", BR_IRQ_DOMAIN_SLOW, 4u,
+                                      BR_IRQ_DOMAIN_F_SLOW, &s_slow_ops, BR_NULL);
+    conf_report(s_slow_dom != BR_NULL, "TC-IRQ-102",
+                "SLOW 级联域可用(bh 已落地; 此前在 Stage 1 被拒绝)");
+
+    if (s_slow_dom == BR_NULL) {
+        return;
+    }
+
+    conf_report(br_irq_register_child(s_slow_dom, 1u, slow_child_isr, BR_NULL, BR_NULL) == 0,
+                "TC-IRQ-102", "register_child(sub=1) -> 0");
+    conf_report(br_irq_enable_child(s_slow_dom, 1u) == 0, "TC-IRQ-102", "enable_child(1)");
+    conf_report(br_irq_enable(BR_IRQ_DOMAIN_SLOW) == 0, "TC-IRQ-102",
+                "enable(父线: PIC 直连线)");
+
+    br_irq_stat_t st0, st1;
+    br_irq_stats_get(BR_IRQ_DOMAIN_SLOW, &st0);
+
+    s_fake_ack_count = 0u;
+    s_slow_pending   = (1u << 1);
+
+    (void)br_plat_irq_trigger(BR_IRQ_DOMAIN_SLOW);
+
+    conf_report(conf_wait_count(&s_slow_child, 1u, 20000u) == 0, "TC-IRQ-102",
+                "SLOW 域的子 handler 被调用(demux 经 bh 送达)");
+    conf_report(s_slow_child_in_bh == 1, "TC-IRQ-102",
+                "子 handler 运行在 bh 上下文(br_work_in_bh()!=0)");
+    conf_report(s_slow_violation == 0, "TC-IRQ-102",
+                "状态寄存器**从未**在 ISR 上下文里被读(INV-F: SLOW 域的全部理由)");
+    conf_report(s_slow_pending_seen > 0u, "TC-IRQ-102",
+                "pending() 真的被调用过(判据不是「什么都没发生」的空转)");
+    conf_report(s_fake_ack_count == 1u, "TC-IRQ-102",
+                "core 在子 handler 返回后 ack(逐子, §9.3)");
+    conf_report((s_fake_masked & (1u << 1)) == 0u, "TC-IRQ-102",
+                "demux 完成后子中断被放行(mask/unmask 配对完整)");
+
+    br_irq_stats_get(BR_IRQ_DOMAIN_SLOW, &st1);
+    conf_report(st1.bh_deferred > st0.bh_deferred, "TC-IRQ-102",
+                "父线 ISR 只做了「单飞 + mask + 提交」(计数在 CPU-local)");
+
+    /* 父线在 bh 之后必须已放行(否则该域静默失效 —— IR-10 要防的正是它)。 */
+    {
+        br_u32 hw = 0u;
+        int en = 0;
+        const int g1 = br_plat_irq_hwirq(BR_IRQ_DOMAIN_SLOW, &hw);
+        const int g2 = (g1 == 0) ? br_gicv3_readback_enabled(hw, &en) : -1;
+        conf_report(g1 == 0 && g2 == 0 && en != 0, "TC-IRQ-102",
+                    "bh 结束后父线已放行(无属主/提交失败都不会留下永久 mask)");
+    }
 }
 
 static void conf_domain_fast(void)
@@ -650,8 +922,9 @@ int br_plat_irq_conformance(void)
     conf_unlock_underflow();
     conf_spurious_unbound();
     conf_storm();
-    conf_domain_stage1_boundary();
+    conf_bh_direct_line();          /* ADR-0011: 按线的 BH 分发 + §11.4.1 抑制/不重放 */
     conf_domain_fast();
+    conf_domain_slow();             /* ADR-0011: SLOW 域 demux 走 bh */
     conf_domain_api_misuse();
     conf_stats();
 

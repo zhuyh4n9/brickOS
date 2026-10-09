@@ -1,0 +1,76 @@
+# sched/rr — conformance 用例(人写)
+#
+# 与 `br_sched_selftest()`(core/selftest/sched_selftest.c)打印的
+# `[TASKCONF] PASS/FAIL <id>` **一一对应**。★ 本件是 **preempt** 形态 ⇒ 套件会
+# **按 kind 分叉**: 跑共享用例 + `TC-TASK-102`(时间片抢占)与 `TC-TASK-103`
+# (L2 临界区内不发生抢占), 而 coop 的定义判据 `TC-TASK-101` 由 `sched/coop` 的
+# 用例表声明(同一批用例的**反面**)。
+#
+# v0.1 的红绿由 in-image 自检打 tag(宿主的 `rr-test` 是同一批用例的第二条腿);
+# 本文件是同一批用例的声明面形状(照 `6-01` §2 的字段契约: {id, pre, steps, expect,
+# sched, platform})。设计出处: `3-03-sched.md`、`3-01` §2/§5.1、`6-01` §3.1/§3.3、
+# `docs/decisions/0011-round-robin-bh-workqueue.md`。
+#
+# 共同前置: 调度器已注册(rr_early_init 已在 EARLY 相跑过), 当前线程非空
+# (`br_task_self() != BR_NULL`), 定时器已 armed(抢占的时间片以 tick 计)。
+schema = 1
+
+[[case]]
+id       = "TC-TASK-001"
+pre      = "rr 已注册(main 线程已物质化)"
+steps    = ["br_task_create(&t, attr, entry, NULL)", "读 br_task_state(t)", "br_task_join(t)"]
+expect   = "create 返回 0; state == READY; join 回收"
+sched    = ["rr"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-102"
+pre      = "定时器已 armed(时间片以 tick 计); 就绪队里有另一个线程"
+steps    = [
+    "create busy(不 yield, 循环直到看到 victim 的计数 > 0 或超时 600ms)",
+    "create victim(计数器 +1 后返回)",
+    "join(busy): busy 先跑, 期间定时器 tick 递减它的时间片",
+    "时间片(RR_SLICE_TICKS=2)用尽 ⇒ core 在 IRQ 出口换到 victim",
+]
+expect   = "busy **主动让出之前** victim 就已经跑过(时间片真的在抢占)"
+sched    = ["rr"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-103"
+pre      = "TC-TASK-102 已跑过"
+steps    = [
+    "create crit(在 br_irq_lock() 的 L2 临界区里待 400ms, 期间采样 victim 计数)",
+    "create victim(计数器 +1 后返回)",
+    "join(crit); crit 放开临界区并 br_task_yield()",
+]
+expect   = "临界区内 victim 一次都没跑(关中断 ⇒ 没有 IRQ 出口 ⇒ 无抢占); 放开后立刻能跑"
+sched    = ["rr"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TASK-104"
+pre      = "TC-TASK-007 已跑过"
+steps    = [
+    "读 br_sched_ready_count() 作为基线",
+    "create 一个线程 → 再读; 让它跑完(exit) → 再读; join 回收 → 再读",
+]
+expect   = "READY 者才在就绪结构里: +create 恰 +1, RUNNING/ZOMBIE 都不计入, join 后回到基线"
+sched    = ["coop", "rr"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TIME-001"
+pre      = "TC-TASK-104 已跑过"
+steps    = ["create 一个线程: t0 = br_clock_now(); br_task_sleep(2000us); 记差值", "join 它"]
+expect   = "返回 0 且实测间隔 >= 2000 us(不早醒; 晚到无上界 —— 目标上就是 tick 周期)"
+sched    = ["coop", "rr"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-TIME-003"
+pre      = "TC-TIME-002 已跑过"
+steps    = ["br_task_sleep(BR_TIMEOUT_INF)"]
+expect   = "== -EINVAL(裁定 G13: 相对睡眠没有「无限」的语义)"
+sched    = ["coop", "rr"]
+platform = ["host", "qemu-aarch64"]

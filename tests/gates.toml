@@ -63,23 +63,62 @@ sources  = [
 ]
 includes = ["core/include", "core/src", "core/src/mem", "core/src/mm", "tests/host"]
 
-# sched-test(宿主): 调度框架 + coop 的语义门禁。
+# sched-test(宿主): 调度框架 + **coop** 的语义门禁。
 # 切换层 `core/src/sched/switch.S` **只在 aarch64 编**(宿主是 x86-64)⇒ 用例自备
-# ucontext 版的 `br_sched_switch_to()` 与时钟/L2/日志/panic 桩; 见 tests/host/sched_test.c
-# 文件头的"层次切分"。判据两类: 宿主专用的 FIFO/block-wake/超时/sleep_until/idle,
-# 加上 core 的 `br_sched_selftest()`(TC-TASK-* / TC-TIME-* 真的 create/join/yield/sleep)。
+# ucontext 版的 `br_sched_switch_to()` 与时钟/L2/日志/panic 桩; 共享装置在
+# `tests/host/host_sched.c`(接口与理由见 host_sched.h), 本用例只放 coop 特有的判据。
+# 判据两类: 宿主专用的 FIFO/block-wake/超时/sleep_until/idle,
+# 加上 core 的 `br_sched_selftest()`(TC-TASK-* / TC-TIME-*, kind=coop ⇒ 跑 TC-TASK-101)。
+# ★ ADR-0011 之后镜像选的是 sched/rr ⇒ **本用例是 coop 的唯一腿**(含"忙线程不被切走"
+#   那条 coop/preempt 分界)。
 [[hosttest]]
 name     = "sched-test"
 # 与内存语义门禁同样的支持例程前置(编译器可能把整块清零降低成 memset)。
 depends  = ["string-test"]
 # 自检套件 `core/selftest/sched_selftest.c` 的理由同上面的 sync-test(宿主是主判据,
 # 套件已搬出 sched_core.c; 宿主上自检恒在)。
+# `core/src/work/work_core.c` 必须一起编: sched_core.c 的 bh 禁令与 host_sched.c 的
+# `br_irq_in_atomic()` 都引用 `br_work_in_bh()`。
+# `core/src/trace.c` 同理: ADR-0011 之后 sched_core.c 的抢占/bh 禁令都会留痕。
 sources  = [
-  "core/src/sched/sched_core.c", "core/src/string.c",
+  "core/src/sched/sched_core.c", "core/src/work/work_core.c",
+  "core/src/trace.c", "core/src/string.c",
   "core/selftest/sched_selftest.c",
-  "sched/coop/src/coop.c", "tests/host/sched_test.c",
+  "sched/coop/src/coop.c",
+  "tests/host/host_sched.c", "tests/host/sched_test.c",
 ]
 includes = ["core/include", "core/src", "core/src/sched", "sched/coop/include", "tests/host"]
+
+# rr-test(宿主): **sched/rr**(时间片轮转抢占)的语义门禁(ADR-0011)。
+# 与 sched-test 共用装置; 判据是"tick 驱动的抢占"这一族: AABB 交替序列 / 无 tick 不抢占 /
+# need_resched 的置位与消费, 加上 core 的 `br_sched_selftest()`(kind=preempt ⇒ 会跑
+# TC-TASK-102 时间片抢占与 TC-TASK-103 临界区不抢占)。
+[[hosttest]]
+name     = "rr-test"
+depends  = ["string-test"]
+sources  = [
+  "core/src/sched/sched_core.c", "core/src/work/work_core.c",
+  "core/src/trace.c", "core/src/string.c",
+  "core/selftest/sched_selftest.c",
+  "sched/rr/src/rr.c",
+  "tests/host/host_sched.c", "tests/host/rr_test.c",
+]
+includes = ["core/include", "core/src", "core/src/sched", "sched/rr/include", "tests/host"]
+
+# work-test(宿主): 下半部/工作队列的语义门禁(ADR-0011)。
+# 被测 = `core/src/work/work_core.c`(+ trace 环, 用来观察 bh 禁令的留痕);
+# 队列有界/FIFO/预算/非重入/bh 上下文与禁令 —— 目标上要构造"队列满"得靠中断风暴。
+# 带上 sched_core.c + trace.c: 前者提供 bh 内阻塞/让出的真实禁令路径, 后者是留痕的证据源。
+[[hosttest]]
+name     = "work-test"
+depends  = ["string-test"]
+sources  = [
+  "core/src/work/work_core.c", "core/src/sched/sched_core.c", "core/src/trace.c",
+  "core/src/string.c",
+  "sched/rr/src/rr.c",
+  "tests/host/host_sched.c", "tests/host/work_test.c",
+]
+includes = ["core/include", "core/src", "core/src/sched", "sched/rr/include", "tests/host"]
 
 # ⚠ **同名是刻意的**: `sync-test` / `sched-test` 在 `[[hosttest]]` 与 `[[gate]]` 里各有一条。
 #   同一个名字指的是"同一套用例的两种跑法" —— 宿主侧(秒级、能用 ucontext 造真阻塞)与
@@ -104,6 +143,8 @@ require   = [
   # 而中断/内存两套用例已搬到 selftest。这里直接钉 IRQCONF 的 SUMMARY ——
   # 比原判据更强(它同时断言"跑了 67 项"且"全绿", 原来那句只是 platform 的一句自述)。
   "\\[IRQCONF\\] SUMMARY pass=[0-9]+ fail=0 ",
+  # ★ ADR-0011: 下半部/工作队列的套件摘要(有界/FIFO/非重入/bh 禁令)。
+  "\\[WQCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[MEMCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[DBGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -119,6 +160,7 @@ forbid    = [
   "FATAL",
   "\\[PANIC\\]",
   "\\[IRQCONF\\] FAIL",
+  "\\[WQCONF\\] FAIL",
   "\\[MEMCONF\\] FAIL",
   "\\[DBGCONF\\] FAIL",
 ]
@@ -146,6 +188,10 @@ require_tags = [
   "TC-IRQ-010", "TC-IRQ-012", "TC-IRQ-013", "TC-IRQ-014", "TC-IRQ-016",
   "TC-IRQ-018", "TC-IRQ-019", "TC-IRQ-021", "TC-IRQ-022", "TC-IRQ-101",
   "TC-IRQ-102", "TC-IRQ-STATS",
+  # ★ ADR-0011 新增(下半部 bh): 015 = 按线的 BH 分发(handler 真的在 bh 上下文里);
+  #   017 = §11.4.1 的抑制 / 不重放。016 本来就在名单里, 本刀把它的判据从
+  #   "ISR 守卫"扩到"原子上下文(ISR **或** bh)守卫", tag 不变。
+  "TC-IRQ-015", "TC-IRQ-017",
 ]
 
 # dbg-test: 内存映射 + 调试插件两个摘要同时全绿, 且用例 tag 一个不缺。
@@ -274,15 +320,22 @@ require   = [
   # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[TASKCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  # ★ ADR-0011: 下半部在工作队列里的可观测证据(这一镜像是 preempt 调度器)。
+  "\\[WQCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
 forbid    = [
   "\\[TASKCONF\\] FAIL",
+  "\\[WQCONF\\] FAIL",
   "\\[PANIC\\]",
 ]
 require_tags = [
   "TC-TASK-001", "TC-TASK-002", "TC-TASK-003", "TC-TASK-004", "TC-TASK-005",
-  "TC-TASK-006", "TC-TASK-007", "TC-TASK-101",
+  "TC-TASK-006", "TC-TASK-007", "TC-TASK-104",
+  # ★ ADR-0011: 镜像的调度器是 sched/rr(preempt)⇒ 目标侧跑的是**抢占**那两条
+  #   (TC-TASK-102 时间片 / TC-TASK-103 临界区不抢占); coop 的反面判据 TC-TASK-101
+  #   由宿主的 sched-test(coop)覆盖 —— 两边各跑自己那一面, 没有一条被裁掉。
+  "TC-TASK-102", "TC-TASK-103",
   "TC-TIME-001", "TC-TIME-002", "TC-TIME-003",
 ]
 

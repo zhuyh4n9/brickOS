@@ -37,8 +37,9 @@
  */
 int br_plugin_selftest(void);   /* player: 插件管理器(段/拓扑/相位/APP 最后) */
 int br_service_selftest(void);  /* 服务注册表(发布/查找/错误码) */
-int br_sched_selftest(void);    /* 调度框架 + coop(真线程 create/yield/join/sleep) */
+int br_sched_selftest(void);    /* 调度框架 + 所选调度器(真线程 create/yield/join/sleep) */
 int br_sync_selftest(void);     /* 同步原语 + 时间(sync.c/sched_core.c 的等待面) */
+int br_work_selftest(void);     /* 下半部/工作队列(ADR-0011: 有界/FIFO/非重入/bh 禁令) */
 
 /* 对外只此一个入口(被 plugin_mgr 弱引用); 原型给 -Wmissing-prototypes。 */
 int br_core_selftest(void);
@@ -46,15 +47,16 @@ int br_core_selftest(void);
 int br_core_selftest(void)
 {
     /* 顺序: 先"静态组合是否正确"(插件管理器), 再 core 的运行期设施(服务表 → 调度 →
-     * 同步)。同步套件最后是因为它**真的创建线程并阻塞**, 会改变调度状态 —— 让它排在
-     * 调度套件之后, 免得前者的残留状态影响后者的判据(两个套件各自收尾复位, 但顺序
-     * 仍是廉价的确定性来源)。 */
+     * 同步 → 下半部)。同步套件排在调度之后是因为它**真的创建线程并阻塞**, 会改变调度
+     * 状态; 工作队列最后 —— 它不改调度状态, 但 case_wq_005 会刻意触发一次 bh 禁令的
+     * 留痕, 放在最后免得那条 trace 干扰别的用例的"有没有新事件"判断。 */
     int fails = 0;
 
     fails += br_plugin_selftest();
     fails += br_service_selftest();
     fails += br_sched_selftest();
     fails += br_sync_selftest();
+    fails += br_work_selftest();
 
     return fails;
 }

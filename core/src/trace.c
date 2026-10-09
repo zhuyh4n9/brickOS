@@ -109,6 +109,12 @@ const char *br_trace_name(br_u32 id)
     case BR_TRACE_FAULT:                   return "fault";
     case BR_TRACE_FAULT_FIXUP:             return "fault_fixup";
     case BR_TRACE_FAULT_DOUBLE:            return "fault_double";
+    /* 下半部(ADR-0011) */
+    case BR_TRACE_IRQ_BH_DEFER:            return "irq_bh_defer";
+    case BR_TRACE_IRQ_BH_DROP:             return "irq_bh_drop";
+    case BR_TRACE_IRQ_DISPATCH_SUPPRESSED: return "irq_dispatch_suppressed";
+    case BR_TRACE_BH_CTX_VIOLATION:        return "bh_ctx_violation";
+    case BR_TRACE_SCHED_PREEMPT:           return "sched_preempt";
     default:                               return "?";
     }
 }
