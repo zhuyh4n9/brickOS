@@ -1,0 +1,23 @@
+# iface/min — 用例声明面(人写)
+#
+# 字段形状照 `6-01` §2 的用例表契约: {id, pre, steps, expect, sched, platform}。
+# ⚠ 骨架(v0.2 不消费): 真正跑起来的判据是**编译期与声明面**的两条:
+#   ① `brickie build`: 皮肤头被 APP 包含 ⇒ 三个空钩子/描述符进镜像;
+#   ② `brickie check` 的 deps 域: APP **直连 core 头** = 红(ADR-0020 的 A-2 收口)。
+schema = 1
+
+[[case]]
+id       = "TC-IFACE-MIN-001"
+pre      = "product 闭包含 app/hello 与 iface/min"
+steps    = ["读 iface/min 的 [[export]]", "核对 form = \"api\" 且 api_iface = plugin.api_type = native", "核对 [[dep]] 为空(直通 core)"]
+expect   = "直通单元面自洽(不变量 1); core 不是插件 ⇒ 不写 reexport_of"
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IFACE-MIN-002"
+pre      = "同上"
+steps    = ["扫 app/hello 的源码 #include", "核对不再出现 <br/core/...>", "核对日志/时钟标识只经 <iface/min/min.h> 与 <iface/posix/posix.h> 取得"]
+expect   = "APP 的包含面只有 Interface 皮肤(A-2); 直连 core 头会被 check/build 判红"
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]

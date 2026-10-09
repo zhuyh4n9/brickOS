@@ -207,6 +207,13 @@ pub struct Plugin {
     pub plugin_type: String,
     pub api_type: String,
     pub subkind: Option<String>,
+    /// `[plugin].symbol_prefix`: **钩子/描述符符号前缀覆盖**(可选)。
+    ///
+    /// 缺省 = 生成器按 `symbol_prefix(name_short)` 推导。但**不同命名空间可以共享 short**
+    /// (例如 `iface/posix` 与 `runtime/posix`, 或 `iface/posix` 这类皮肤), 推导值会撞成
+    /// 同一个 `posix_*` ⇒ 链接期重复符号。此字段让皮肤/同名插件显式给出唯一前缀
+    /// (如 `iface_posix_`)。
+    pub symbol_prefix: Option<String>,
     pub lang: String,
     pub phase: String,
     pub sched_class: String,
@@ -411,6 +418,12 @@ pub struct Product {
     pub select: Vec<String>,
     pub budget_ram_kib: Option<i64>,
     pub budget_stack_kib: Option<i64>,
+    /// `[kernel].hz`: 时钟节拍频率(Hz; 参考 Linux 的 `CONFIG_HZ`)。
+    ///
+    /// `None` = 未声明(或整表不在场) ⇒ **缺省 200**(5 ms 一拍)。
+    /// `brickie build` 把它转成 `-DBR_CFG_TICK_HZ=<hz>` 下发到**全部编译单元**
+    /// (core / 各插件 / 生成物), 于是"每秒多少次时钟中断"只有一处真值(ADR-0017)。
+    pub kernel_hz: Option<i64>,
     pub lint_frozen_deps: String,
     pub allow_edges: Vec<(String, String)>,
     /// `[build]`: 产品级构建策略(ADR-0004; `brickie build` 消费)。
@@ -472,6 +485,7 @@ impl Product {
             "stage": self.stage,
             "select": self.select,
             "budget": {"ram_kib": self.budget_ram_kib, "stack_kib": self.budget_stack_kib},
+            "kernel": {"hz": self.kernel_hz},
             "lint": {"frozen_deps": self.lint_frozen_deps, "allow_edges": edges},
             "selftest": {
                 "enabled": self.selftest_on(),
@@ -972,6 +986,20 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     p.subkind = opt_str(plugin, "subkind", &p.name, &file, "plugin", d);
     if let Some(sk) = &p.subkind {
         check_enum(d, &p.name, &file, "plugin", "subkind", sk, rules::SUBKINDS);
+    }
+    // 钩子/描述符符号前缀覆盖(可选; 见 Plugin::symbol_prefix 的说明)。
+    p.symbol_prefix = opt_str(plugin, "symbol_prefix", &p.name, &file, "plugin", d);
+    if let Some(sp) = &p.symbol_prefix {
+        if sp.is_empty() || !sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            d.shape(
+                "BRV-MF-0001",
+                &p.name,
+                &file,
+                "plugin.symbol_prefix",
+                format!("`symbol_prefix` 只允许 [A-Za-z0-9_], 且非空(收到 `{sp}`)"),
+                "它会成为 C 符号前缀(`<prefix>early_init` 等), 必须是合法标识符片段",
+            );
+        }
     }
     p.lang = req_str(plugin, "lang", &p.name, &file, "plugin", d).unwrap_or_default();
     if !p.lang.is_empty() {
@@ -1631,6 +1659,10 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
         prod.budget_ram_kib = opt_int(b, "ram_kib", &file, &file, "budget", d);
         prod.budget_stack_kib = opt_int(b, "stack_kib", &file, &file, "budget", d);
     }
+    // ---- [kernel](时钟节拍: 参考 Linux 的 CONFIG_HZ; ADR-0017) ----
+    if let Some(k) = opt_table(top, "kernel") {
+        prod.kernel_hz = opt_int(k, "hz", &file, &file, "kernel", d);
+    }
     if let Some(l) = opt_table(top, "lint") {
         prod.lint_frozen_deps = opt_str(l, "frozen_deps", &file, &file, "lint", d)
             .unwrap_or_else(|| "inherit".to_string());
@@ -1726,6 +1758,151 @@ fn scan_plugin_files(dir: &Path, out: &mut Vec<PathBuf>) {
             out.push(path);
         }
     }
+}
+
+// ------------------------------------------------------ 依赖闭包与 include 使用扫描
+
+/// 一个插件**声明依赖的传递闭包**(按名; 不含自身)。
+pub fn dep_closure(tree: &TreeLoad, name: &str) -> std::collections::BTreeSet<String> {
+    let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut stack: Vec<String> = vec![name.to_string()];
+    while let Some(cur) = stack.pop() {
+        let Some(p) = tree.by_name(&cur) else { continue };
+        for d in &p.deps {
+            if seen.insert(d.name.clone()) {
+                stack.push(d.name.clone());
+            }
+        }
+    }
+    seen
+}
+
+/// 一条"跨插件的 `#include`"(消费者源码里出现、属于另一个被选插件的头)。
+#[derive(Clone, Debug)]
+pub struct IncludeUse {
+    pub consumer: String,
+    pub provider: String,
+    pub header: String,
+    /// 相对 `root` 的源文件路径(诊断落点)。
+    pub file: String,
+}
+
+/// 扫描被选插件源码(`src/` + `include/`)里的 `#include`, 映射到**全树**里提供该头的
+/// 插件(消费者只扫被选插件; 提供方映射不看闭包, 见下)。
+///
+/// 为什么需要它(`-I` 收窄不够): 目标工具链自带 glibc 头, `#include <unistd.h>` 这类
+/// 常见名会被**系统头兜住** —— 收窄 `-I` 之后不会"找不到头", 而是静默改用 glibc 的
+/// 声明(裸机镜像里错误且危险)。文件系统层面的"头 → 提供方"映射与编译器搜索路径无关,
+/// 所以它是可靠判据(ADR-0018)。
+///
+/// 局限(如实声明): 逐行识别 `#include`, **不解析注释** —— 注释里写的 `#include` 也会
+/// 被算进来。当前全树没有这种误报; 真出现时把注释改写即可。
+pub fn cross_plugin_includes(
+    root: &Path,
+    tree: &TreeLoad,
+    selected: &std::collections::BTreeSet<String>,
+) -> Vec<IncludeUse> {
+    // (include 目录相对 root, 拥有者插件名) —— **全树**映射: 一个头的"归属"与它是否
+    // 在本产品的闭包里无关。若只看被选插件, "include 了闭包外插件的头"这种最严重的情形
+    // 反而漏报(而它恰恰是 glibc 兜底最容易掩盖的)。
+    let mut inc_owner: Vec<(String, String)> = Vec::new();
+    for p in &tree.plugins {
+        if let Some(b) = &p.build {
+            for inc in &b.includes {
+                inc_owner.push((format!("{}/{}", p.dir, inc), p.name.clone()));
+            }
+        }
+    }
+
+    let mut out: Vec<IncludeUse> = Vec::new();
+    for p in &tree.plugins {
+        if !selected.contains(&p.name) {
+            continue;
+        }
+        for f in plugin_source_files(root, p) {
+            let Ok(text) = fs::read_to_string(root.join(&f)) else { continue };
+            for h in scan_include_names(&text) {
+                // core 头: core **不是插件**(没有 provider#unit), 但"APP 直连 core 头"是
+                // A-2 的禁则(ADR-0020 / 设计 1-01 §7.3)⇒ 用合成 provider `"core"` 记录下来,
+                // 由调用方按**消费者类别**判(app 才违规; core 是内核面, 其它插件不受限)。
+                if h.starts_with("br/core/") {
+                    out.push(IncludeUse {
+                        consumer: p.name.clone(),
+                        provider: "core".to_string(),
+                        header: h.clone(),
+                        file: f.clone(),
+                    });
+                    continue;
+                }
+                for (dir, owner) in &inc_owner {
+                    if owner == &p.name {
+                        continue; // 自己的头
+                    }
+                    if root.join(dir).join(&h).is_file() {
+                        out.push(IncludeUse {
+                            consumer: p.name.clone(),
+                            provider: owner.clone(),
+                            header: h.clone(),
+                            file: f.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// 插件的源文件(`src/**` 与 `include/**` 里的 `.c/.h/.S`), 相对 `root`。
+fn plugin_source_files(root: &Path, p: &Plugin) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for base in ["src", "include"] {
+        collect_source_files(&root.join(&p.dir).join(base), root, &mut out);
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn collect_source_files(dir: &Path, root: &Path, out: &mut Vec<String>) {
+    let Ok(entries) = fs::read_dir(dir) else { return };
+    let mut items: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    items.sort();
+    for path in items {
+        if path.is_dir() {
+            collect_source_files(&path, root, out);
+        } else {
+            let ext = path.extension().and_then(|s| s.to_str()).unwrap_or("");
+            if matches!(ext, "c" | "h" | "S") {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+}
+
+/// 从一段 C 源码里抽取 `#include <…>` / `#include "…"` 的头名。
+fn scan_include_names(text: &str) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for line in text.lines() {
+        let l = line.trim_start();
+        let Some(rest) = l.strip_prefix('#') else { continue };
+        let rest = rest.trim_start();
+        let Some(rest) = rest.strip_prefix("include") else { continue };
+        let rest = rest.trim_start();
+        let close = if rest.starts_with('<') {
+            '>'
+        } else if rest.starts_with('"') {
+            '"'
+        } else {
+            continue;
+        };
+        if let Some(end) = rest[1..].find(close) {
+            out.push(rest[1..1 + end].to_string());
+        }
+    }
+    out
 }
 
 /// 加载整棵插件树(裁定 R-1: 无 `product.toml` 时校验整棵树)。

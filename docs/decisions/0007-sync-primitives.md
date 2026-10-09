@@ -188,6 +188,10 @@ cond 的唤醒记账、spinlock 这四个字在设计里根本没有出现过**�
      `sleep(1000 us)` 实测 **99.5 ms** —— 都约等于一个 tick。这符合 `3-01` INV-2
      ("不早醒, 晚到无上界"), 但**"按最近期限装弹比较器"的 tickless 机制没有做** ——
      本原型不是 tickless, 是周期 tick 扫描。
+      > ★ **后续(ADR-0017)**: tick 周期不再是写死的 100 ms —— 它 = `1/HZ`,
+      > `HZ` 由 `product.toml [kernel].hz` 配置(缺省 200 ⇒ 5 ms)。上面那组 QEMU 实测
+      > 是**100 ms tick 时代**的记录(≈ 一个 tick); 缺省配置下同型实测 ≈ 一个 5 ms
+      > tick + 请求值。性质(分辨率 = 一个 tick)不变。
   2. **优先级继承 / PI 字段未做**。设计 `3-03` 把 PI 归 preempt/v2; `br_mutex_t.owner` 只是
      为诊断(与将来的 PI)保留的位置, v0.2 的 coop 下没有优先级反转的调度后果。
   3. **`br_work_submit` / bottom-half 未做**。它属工作队列/Stage 2, 与 `br_sem_give` 的

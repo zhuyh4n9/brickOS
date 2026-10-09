@@ -167,15 +167,21 @@ dump 会排到四个服务**之前**(而它要转调它们的 selftest)⇒ "编�
 不依赖别的插件先 init(逐个核对过)。platform 的 `early_init` 由管理器显式排第一,
 不靠拓扑序。
 
-### 2.10 APP 直调的两条边: 一条删掉, 一条保留
+### 2.10 APP 直调的两条边: 一条删掉, 另一条后来也删掉(ADR-0016)
 
 * `app/hello → service/dump`(**删掉了**): 调试域一致性用例与启动快照搬进 dump 的 LATE
   `init`, 所以 `product.toml [lint].allow_edges` 里 `["app/hello", "service/dump"]`
   这条 M0 豁免**可以删**(见 §4 遗留项: 由主控执行)。
-* `app/hello → platform/qemu-aarch64`(**保留**): APP 的 MainLoop 要读平台身份
-  (`br_plat_name`/`br_plat_isa`)与心跳计数(`br_plat_timer_ticks`, `irq_ticks=` 那条
-  门禁判据的取值来源)。设计 §7.3 的表里 app ✗ platform, 所以这条仍是**已登记的 M0
-  引导例外**; 它的正解是 `iface-min`(M2)或"平台把心跳发布成服务", 都在本刀范围外。
+* `app/hello → platform/qemu-aarch64`(**本 ADR 作成时保留, 后由 ADR-0016 删除**):
+  当时 APP 的 MainLoop 要读平台身份(`br_plat_name`/`br_plat_isa`)与心跳计数
+  (`br_plat_timer_ticks`, `irq_ticks=` 那条门禁判据的取值来源), 而设计 §7.3 的表里
+  app ✗ platform ⇒ 它是**已登记的 M0 引导例外**, 正解当时写作 `iface-min`(M2)或
+  "平台把心跳发布成服务"。
+  ⇒ **后续状态**(`docs/decisions/0016-core-timer-heartbeat.md`): 心跳计数**收归 core**
+  (`br_clock_tick_notify()` / `br_clock_tick_count()`, platform 的 timer ISR 每拍通知),
+  平台身份日志改由 platform 自己的 `qemu_aarch64_start()` 打 ⇒ APP 的 `[[dep]]` 与
+  `allow_edges` 的最后一条同时删除, **豁免表清空**。ADR-0016 用的是 core 接口而不是
+  服务注册表(与原文的"发布成服务"不同形态, 理由见该 ADR §2)。
 
 ## 3. 设计缺口与逐条裁定
 
@@ -254,7 +260,9 @@ dump 会排到四个服务**之前**(而它要转调它们的 selftest)⇒ "编�
    (`br_task_sleep` 的接线归 F2 的调度接线步骤)。
 2. `br-wa-boot-001` 的"日志/trace 直写 console/RAM 环, 未经服务注册表"**仍是欠债**
    (`br-wa-debug-002` 的 bridge 也仍欠)。
-3. `app/hello → platform/qemu-aarch64` 的 M0 引导例外**仍在**(见 2.10)。
+3. ~~`app/hello → platform/qemu-aarch64` 的 M0 引导例外**仍在**(见 2.10)~~
+   ⇒ **后由 ADR-0016 归还**: 心跳计数收归 core、平台身份日志归 platform 自己打
+   ⇒ `[[dep]]` 与 `allow_edges` 一起清空(本 ADR 作成时的状态已不成立)。
 4. 管理器头部的"core.init 代做"(时钟/日志)是**权宜**: 设计没有独立的 `core.init`
    入口, 本刀把这一格塞进管理器并写进 2.6。真正的落点应是 `core.init` 独立函数
    (由 `start.S` 调, 或由平台入口调)。
@@ -279,6 +287,8 @@ dump 会排到四个服务**之前**(而它要转调它们的 selftest)⇒ "编�
   同时同步源码里的欠债标记(`WORKAROUND` 加括号的那种形式; 见 §5 第 6 条)。
 * `product.toml [lint].allow_edges`: 删 `["app/hello", "service/dump"]`
   (**保留** `["app/hello", "platform/qemu-aarch64"]` —— 理由见 2.10)。
+  ★ **后续(ADR-0016)**: 心跳计数收归 core 之后, `["app/hello", "platform/qemu-aarch64"]`
+  也删掉了 —— `allow_edges` 现在是**空表**。
 * `platform/qemu-aarch64/src/irq_conf.c` / `mm_conf.c`: 把"由 `br_core_main` 调用"
   改成"由 platform 的 start() 调用"。
 * `core/include/br/core/br_plugin.h`: 把 ADR 文件名改成 `0005-plugin-manager.md`。

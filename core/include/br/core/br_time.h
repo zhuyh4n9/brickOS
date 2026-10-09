@@ -54,6 +54,56 @@ br_u64 br_clock_freq_hz(void);
 br_u64 br_clock_ticks_per_ms(void);
 
 /*
+ * ---- 时钟节拍频率(产品配置; 参考 Linux 的 CONFIG_HZ)----
+ *
+ * 语义: **每秒产生多少次时钟中断**。每 HZ 分之一秒, platform 的 timer ISR 调一次
+ * `br_clock_tick_notify()`, core 的 tick 计数(= jiffies 口径)因此以 HZ 为节拍前进;
+ * 缺省 200 ⇒ 5 ms 一拍。
+ *
+ * ★ 值来自 `product.toml` 的 `[kernel].hz`, 由 `brickie build` 转成
+ *   `-DBR_CFG_TICK_HZ=<hz>` 下发到全部编译单元(ADR-0017) —— 于是"每秒多少次时钟中断"
+ *   只有一处真值: platform 的装弹周期与 core 的 jiffies 读同一个宏。
+ *   下面的 `#ifndef` 是**不经过 brickie 的编译**(宿主用例 / 单文件自检)的回退,
+ *   取与产品缺省相同的 200。
+ *
+ * 上限 100000 是编译期守卫(见 `_Static_assert`): 再高的话周期会截断成 0。
+ */
+#ifndef BR_CFG_TICK_HZ
+#define BR_CFG_TICK_HZ 200u
+#endif
+_Static_assert((BR_CFG_TICK_HZ) >= 1u && (BR_CFG_TICK_HZ) <= 100000u,
+               "BR_CFG_TICK_HZ 越界: 合法范围 1..100000(product.toml [kernel].hz)");
+/* 一拍的长度(us)。非整除的 HZ 向下取整(实际频率略高于 HZ, 每拍误差 < 1 us)。 */
+#define BR_CFG_TICK_PERIOD_US (1000000u / (BR_CFG_TICK_HZ))
+
+/* 上面配置的节拍频率(Hz); 日志/用例的单一取值点(定义在 core/src/time.c)。 */
+br_u32 br_clock_tick_hz(void);
+
+/*
+ * ---- IRQ 心跳计数(core 拥有; platform 的 timer ISR 每拍通知)----
+ *
+ * ★ 为什么要收进 core: 计数器原先住在 platform 插件里, 消费者(APP)为了读它就得
+ *   `#include <br/platform/br_plat.h>` —— 那在声明面留下一条 `app → platform` 的
+ *   运行期边, 而设计 `1-01` §8 的三层模式与 `3-01` §13.6 的特权分级都要求 APP 只当
+ *   **P0 消费者**(它没有"中断控制"能力, 也就不该认识平台插件的接口)。
+ *   ⇒ 口径反过来: **platform 每拍通知 core, core 持有计数**, 消费者只读 core 接口。
+ *   platform 一侧只保留 `br_clock_tick_notify()` 这一个写入口(在它的 timer ISR 里调)。
+ *
+ * ISR 安全: `br_clock_tick_notify()` 只做一次自增(无锁/无日志/无分配), 可在中断上下文
+ * 调用。`br_clock_tick_count()` 是只读快照, 任意上下文可调。
+ *
+ * 与设计的关系: `3-01` §4 的时间组只有 `br_clock_now` / `br_deadline_from_now` ——
+ * 本对是**原型扩展**(登记在 `docs/decisions/0016-core-timer-heartbeat.md`), 它要还的是
+ * `WORKAROUNDS.md` 的 `br-wa-boot-001` ②("APP 直读平台身份/心跳"), 不是新增通用能力。
+ *
+ * 容量: `br_u32` ⇒ 缺省 200 Hz 下 2^32 拍 ≈ 248 天不回绕(Linux 的 jiffies 同型)。
+ *   它是 **jiffies 口径**的诊断/节拍计数; 墙钟时间(微秒)请用 `br_clock_now()`,
+ *   不要从 tick 数反推时间。tick 差值比较用无符号回绕安全写法(Linux 老规矩)。
+ */
+void br_clock_tick_notify(void);
+br_u32 br_clock_tick_count(void);
+
+/*
  * 忙等延迟(**只忙等, 不是睡眠**; v0.2 起睡眠的正式入口是 `br_task_sleep()`)。
  * 无语义上的"可被唤醒", 不交出 CPU ⇒ 只适合"调度器还不存在"的窗口(platform
  * early_init)与 platform 内部件。保证**不早醒**(与 br_task_sleep 同一口径:

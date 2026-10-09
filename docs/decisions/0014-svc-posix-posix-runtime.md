@@ -47,6 +47,13 @@ ADR-0012 先落了它唯一无法绕过的地基 —— **fd 表**(`framework/fi
 `seekdir`/`scandir`、`exit`。**没有"写了但返回 -ENOTSUP"的假面** —— 唯一的例外是那几处
 POSIX **要求**存在、而本代确实语义不同的(逐条列在 §2.4)。
 
+> ★ **后续(ADR-0019)**: `pthread_key_*`、`rwlock`、`barrier` 以及 mutex attr / once /
+> 每线程 `errno` / `pthread_detach` **已补齐** —— 它们全部落在 `runtime/posix` 层内
+> (本件自己的"每线程记录"表足以承载 errno/TLS 槽位, 不必等 core 的通用槽位), 于是
+> 本节的 TR-C 边界收窄为: `printf` 家族 / `fork`·`exec` / 信号 / `gettimeofday` /
+> `mmap` / `pthread_cancel` / robust mutex / rwlock 同线程递归读。上段的
+> "`pthread_key_*`/`rwlock` 不做"按 ADR-0019 作废。
+
 ### 2.2 两条错误通道: 系统调用 `-1`+`errno` / pthread **返回错误号**
 
 POSIX 自己在这一点上不一致, 而混用通道的症状极隐蔽: 调用方写
@@ -73,7 +80,7 @@ core 与 vfs 的负 errno **就是**内核编号(ADR-0012 已用宿主 `<errno.h
 | 1 | `clock_gettime(CLOCK_REALTIME)` ⇒ **-ENOTSUP** | 没有墙钟源(`11-02` 的 P-1)。编一个"1970 年至今"的数字会让排序/超时静默错 | TC-POSIX-015 |
 | 2 | `pthread_cond_timedwait` 的绝对时刻按 **MONOTONIC** 解释 | 同上 —— 唯一可用的时基就是单调钟(POSIX 默认是 REALTIME) | 头注释 + ADR |
 | 3 | `getcwd` 缓冲不足 ⇒ `ERANGE`(不是 Linux 的 `ERANGE` 两种写法之一) | POSIX 允许 | TC-POSIX-010 |
-| 4 | `pthread_detach` ⇒ `ENOTSUP` | core 只有 `join` 一条回收 ZOMBIE 的路径; 假装成功会让 TCB 池悄悄漏光 | TC-POSIX-016 |
+| 4 | ~~`pthread_detach` ⇒ `ENOTSUP`~~ ⇒ **ADR-0019 起改为"惰性回收"**(detach 返回 0; 下一次 pthread 调用 join 掉已退出的 detached 线程) | 原理由: core 只有 `join` 一条回收 ZOMBIE 的路径; 假装成功会让 TCB 池悄悄漏光。现在语义成立、时机不精确(ADR-0019 §2.2) | TC-POSIX-026 |
 | 5 | `openat(真 dirfd)` ⇒ `ENOTSUP` | 由 fd 反查目录路径不可能(句柄可能已被 rename/unlink) | TC-POSIX-012 |
 | 6 | `fsync` 对 tmpfs ⇒ `ENOTSUP` 原样上传 | vfs 的 `fsync` 槽位是 BR_NULL; 假装"落盘了"会让那个判断失去依据 | 头注释 |
 

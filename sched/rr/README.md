@@ -33,8 +33,9 @@ core 里没有一处 `if (调度器是 rr)`。
 | `sleep_until` | 返回 0(接受登记) | 超时唤醒由 core 的 `wake_at` 表统一负责 |
 | `idle` | `BR_NULL` | 缺省走 core 的"关中断 → 检查 → WFI → 开中断"(3-02 §11.1) |
 
-时间片粒度: `RR_SLICE_TICKS = 2` 个**平台 tick**(本原型 tick = 100 ms)⇒ 一个线程连续跑
-200 ms 后被轮换。装载点选在 **`pick_next`**(被选中)而不是 `thread_ready`(进入就绪):
+时间片粒度: `RR_SLICE_TICKS = 2` 个**平台 tick**(tick = `1/HZ`; `HZ` 来自
+`product.toml [kernel].hz`, 缺省 200 ⇒ 5 ms)⇒ 缺省下一个线程连续跑 10 ms 后被轮换。
+装载点选在 **`pick_next`**(被选中)而不是 `thread_ready`(进入就绪):
 否则"每 yield 一次就白送一个整片"。
 
 ## core 侧的接缝(为什么本插件里没有一行切换代码)
@@ -61,8 +62,10 @@ timer ISR ──br_sched_on_tick──▶ scan_timeouts + rr_on_tick
 ## 契约与边界
 
 * **`prio` 仍被忽略**: 本件是"**同优先级**轮转"; 优先级/PI 属将来的 `sched-preempt`。
-* **时间片的粒度 = tick 周期**(100 ms): 一个刚被唤醒的高优先级线程最多等一个时间片
-  (≤200 ms); 需要更低延迟就用 `sched-preempt`(v2)。
+* **时间片的粒度 = tick 周期**(`1/HZ`, 缺省 5 ms): 一个刚被唤醒的高优先级线程最多
+  等一个时间片(缺省 ≤10 ms); 需要更低延迟就用 `sched-preempt`(v2)。
+  ★ 时间片以 **tick** 计(Linux 的 jiffies 口径), 所以它的墙钟长度随 `HZ` 缩放 ——
+  调 `[kernel].hz` 就是同时调"中断频率"与"时间片分辨率"(ADR-0017)。
 * **IRQ 出口换栈与 bh 的顺序**: IRQ 出口先跑下半部(`br_work_drain`), 再做抢占决策
   (`br_sched_irq_epilogue`)⇒ bh 里唤醒的线程能被**同一次出口**的抢占看到。
 * **不等于实时**: 没有 WCET 承诺; `TT_SAFE` 类插件的周期保证要等 `sched-tt`。

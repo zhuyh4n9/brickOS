@@ -64,9 +64,10 @@ int br_sched_selftest(void);
 #define BR_CONF_BUSY_ITERS  200000u
 
 /*
- * 抢占类用例的**时间口径**(TC-TASK-102/103): 目标上 tick = 100 ms, rr 的时间片 =
- * 2 tick = 200 ms ⇒ 忙循环必须跑得比它久才谈得上"被抢占"。取 600 ms:
- * "最多等 3 个时间片"仍没被切走就是红, 而不是靠运气。
+ * 抢占类用例的**时间口径**(TC-TASK-102/103): 判据是"几个时间片内被切走", 而墙钟长度
+ * 随产品配置的 HZ 变(`product.toml [kernel].hz`, 缺省 200 ⇒ tick = 5 ms、
+ * rr 时间片 = 2 tick = 10 ms; ADR-0017)。取 600 ms: 缺省配置下 ≈ 60 个时间片,
+ * 即使把 HZ 调到 100 也仍有 ~30 片 —— 这里要的是**远大于一片**的窗口, 不是精确时长。
  */
 #define BR_CONF_PREEMPT_WAIT_US 600000u
 #define BR_CONF_CRIT_US         400000u
@@ -438,7 +439,7 @@ static void case_time_002(void)
     /*
      * 判据用"实测耗时 < 1 ms"而不是 `d == 0`: 目标上 timer ISR 可能在两次读数之间
      * 落下(它是抢占的), 于是 d 会是几个 us —— 那与"立即返回"并不矛盾。
-     * 真正的反例是"被登记进超时表并切走", 那至少要等一个 tick(100 ms)。
+     * 真正的反例是"被登记进超时表并切走", 那至少要等一个 tick(`1/HZ`, 缺省 5 ms)。
      */
     br_log_info("[TASKCONF] TRACE sleep0 rc=%d elapsed_us=%lu", r, (br_u64)d);
     conf_result((r == 0) && (d < BR_US_PER_MS), "TC-TIME-002",

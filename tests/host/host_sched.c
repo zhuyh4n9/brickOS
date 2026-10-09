@@ -41,7 +41,7 @@ static br_u32    s_idle_calls;
 
 /* 自动 tick 源(见 host_sched.h): 默认关 ⇒ 既有用例的时钟语义逐字不变。 */
 #define HOST_CLOCK_STEP_US 50u       /* 每次读表推进的"真实时间"(要远小于 1 ms: TC-TIME-002 的判据是"两次读表 < 1 ms") */
-#define HOST_TICK_US       100000u   /* 一个 tick 周期(= 平台 timer 周期的量级) */
+#define HOST_TICK_US       100000u   /* 宿主用例自己的虚拟 tick; 与产品 [kernel].hz 解耦(判据在 tick 计数上) */
 
 static br_bool   s_auto_tick;
 static br_time_t s_since_tick;

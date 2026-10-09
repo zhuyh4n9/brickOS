@@ -165,6 +165,9 @@ require   = [
   "\\[WQCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[MEMCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[DBGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  # ★ ADR-0019: APP 侧的 POSIX 多线程样例(经 iface/posix 皮肤)。它证明"多线程在真镜像上
+  #   真的跑过且判据全绿", 而不是只靠 runtime/posix 自己的自检。
+  "\\[APPCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
   # 延时自检的判据行("... us: ok"): 它证明"不早醒"这条性质**被测过且通过**,
   # 而不只是"没出现失败字样"。
@@ -181,6 +184,12 @@ forbid    = [
   "\\[WQCONF\\] FAIL",
   "\\[MEMCONF\\] FAIL",
   "\\[DBGCONF\\] FAIL",
+  "\\[APPCONF\\] FAIL",
+]
+require_tags = [
+  # ADR-0019: 逐项点名 —— APP 的多线程用例被裁掉/没跑, 门禁即红。
+  "APP-PT-001", "APP-PT-002", "APP-PT-003", "APP-PT-004",
+  "APP-PT-005", "APP-PT-006", "APP-PT-007",
 ]
 
 # irq-test: **逐用例**门禁(裁掉用例也算红 —— 与 smoke 的分工就在这里)。
@@ -437,6 +446,10 @@ require_tags = [
   "TC-POSIX-006", "TC-POSIX-007", "TC-POSIX-008", "TC-POSIX-009", "TC-POSIX-010",
   "TC-POSIX-011", "TC-POSIX-012", "TC-POSIX-013", "TC-POSIX-014", "TC-POSIX-015",
   "TC-POSIX-016", "TC-POSIX-017", "TC-POSIX-018", "TC-POSIX-019", "TC-POSIX-020",
+  # ADR-0019: pthread 面补齐后的新用例(每线程 errno / mutexattr / once / rwlock /
+  # key(TLS) / detach 惰性回收 / attr+name / timed* 超时)。
+  "TC-POSIX-021", "TC-POSIX-022", "TC-POSIX-023", "TC-POSIX-024", "TC-POSIX-025",
+  "TC-POSIX-026", "TC-POSIX-027", "TC-POSIX-028",
 ]
 
 # ------------------------------------------------------------------ 构建后门禁

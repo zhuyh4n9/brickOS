@@ -18,6 +18,12 @@ plugins = []                  # 产品选中的插件(闭包根); 由人按 §8.
 ram_kib   = 512
 stack_kib = 16
 
+[kernel]
+# 时钟节拍频率(Hz; 参考 Linux 的 CONFIG_HZ): 每秒多少次时钟中断。
+# 缺省(不写) = 200 ⇒ 5 ms 一拍。brickie build 把它转成 -DBR_CFG_TICK_HZ 下发到
+# 全部编译单元 —— platform 的装弹周期与 core 的 jiffies 读同一个宏(ADR-0017)。
+hz = 200
+
 [lint]
 frozen_deps = "inherit"       # inherit | allow | deny
 allow_edges = []

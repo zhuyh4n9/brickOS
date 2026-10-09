@@ -56,7 +56,7 @@
 
 | 设计里的东西 | 本原型 |
 |---|---|
-| tickless("按最近期限装弹比较器") | ❌ 只做**周期 tick(100 ms)上的到期扫描** —— 分辨率就是 tick 周期 |
+| tickless("按最近期限装弹比较器") | ❌ 只做**周期 tick 上的到期扫描** —— 分辨率就是 tick 周期(`1/HZ`; `product.toml [kernel].hz`, 缺省 200 ⇒ 5 ms; ADR-0017) |
 | `sched-preempt`(v2.0) / PI 互斥 | ❌ 未做 |
 | `sched-tt`(v3.0, 调度表) | ❌ 未做 |
 | `br_work_submit` / bh | ❌ 未做(`3-01` §5 属后续刀) |

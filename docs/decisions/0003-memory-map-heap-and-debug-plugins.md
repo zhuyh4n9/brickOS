@@ -131,6 +131,9 @@
   `service/dump` 与 `platform/qemu-aarch64`, 两条都在 `product.toml [lint].allow_edges` 里
   **逐条列名豁免** —— 这是 `1-03 §1` 给的 **M0 引导例外**(iface-min 属 M2, 运行期插件管理器
   属 M0), 属 `WORKAROUND(br-wa-boot-001)` 的欠债, 不是静默放行。
+  ★ **后续**: `app → service/dump` 随 ADR-0010 删除(自检归 core), `app → platform`
+  随 **ADR-0016** 删除(心跳计数收归 core、平台身份日志归 platform 自己打)⇒
+  `allow_edges` 现在是**空表**。
 - **`service/*` 之间是合法边**(ability → ability): dump → {trace, backtrace, hexdump, memleak}
   四条 `[[dep]]` 都是真的调用边, `brickie check` 的 deps 域零错误。
 

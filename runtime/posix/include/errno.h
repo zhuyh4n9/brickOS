@@ -7,10 +7,12 @@
  *    编号逐字取自内核 `asm-generic/errno-base.h` / `errno.h`, 并由宿主门禁 `ft-test`
  *    拿宿主 `<errno.h>` 逐码对拍。
  *
- * ★ `errno` 是**全局变量**(不是宏、也不是 per-thread): 原型没有 per-thread 通用槽位
- *   (见 `11-02` 的 P-4), 而"单 APP + 少量线程"下全局 errno 的可见错误是"线程 A 的失败
- *   被线程 B 读走"。这是**已知欠账**, 登记在 ADR-0014; per-thread errno 与 `pthread_key_*`
- *   一起等 core 给出通用 TLS 槽位。
+ * ★ `errno` 是**宏**, 指向**每线程**槽位(v0.2 起): 槽位在本服务自己的线程记录里
+ *   (`runtime/posix/src/posix.c` 的 `svc_thread_t`), 由 `br_posix_errno()` 取地址。
+ *   于是"线程 A 的失败被线程 B 读走"这个全局 errno 的经典错误不再存在。core 仍没有
+ *   通用 TLS 槽位(`11-02` P-4), 但 pthread 层本来就有"每线程记录"表 ⇒ 不必动 core
+ *   (ADR-0019)。`pthread_key_*` 用的是同一张表的槽位。
+ *   ⚠ 因此**不能**再写 `extern int errno;` —— POSIX 本来就把 `errno` 规定成宏。
  *
  * ★ 用法照 POSIX: 函数失败返回 -1 并设 `errno`; 成功**不保证**清零 errno。
  */
@@ -19,8 +21,11 @@
 
 #include <br/core/br_error.h>
 
-/* errno 的载体(runtime/posix 插件里的一个全局 int —— 定义在 src/posix.c)。 */
-extern int errno;
+/* 每线程 errno 槽位的地址(定义在 src/posix.c; 未注册的线程会惰性登记一条记录)。 */
+int *br_posix_errno(void);
+
+/* POSIX 规定 `errno` 是可修改左值 ⇒ 宏展开成解引用。 */
+#define errno   (*br_posix_errno())
 
 /* ---- errno-base.h 全集(1–34)---- */
 #define EPERM        BR_EPERM

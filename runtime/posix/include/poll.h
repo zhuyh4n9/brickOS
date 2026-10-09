@@ -5,7 +5,7 @@
  *   (`br_file_poll`), 没人就绪就 `br_task_sleep` 一小片再查, 直到超时。
  *   与 `11-02` §2.1 的 TR-B 判定一致; `poll_attach`(真正的 wait-queue)是 v2 面,
  *   且设计明确要求它与 preempt **同期**(R-S1)。
- * ★ 因此**实际唤醒延迟 ≈ 一个 tick(100 ms)**, 不是 `poll` 的 timeout 值。
+ * ★ 因此**实际唤醒延迟 ≈ 一个 tick(`1/HZ`, 缺省 5 ms)**, 不是 `poll` 的 timeout 值。
  *   `timeout = 0` 是"只查一次"(立刻返回), `timeout < 0` 是"无限等"。
  */
 #ifndef BR_POSIX_POLL_H

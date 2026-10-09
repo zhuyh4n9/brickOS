@@ -127,6 +127,132 @@ static void *pt_worker(void *arg)
     return (void *)7L;                     /* 这个值必须经由 pthread_join 回到调用方 */
 }
 
+/* ---- 021: 每线程 errno + barrier ---- */
+static pthread_barrier_t s_bar21;
+static int               s_err21[2];
+
+static void *pt_errno_worker(void *arg)
+{
+    const int idx = (int)(br_intptr_t)arg;
+    errno = (idx == 0) ? ENOENT : EACCES;
+    (void)pthread_barrier_wait(&s_bar21);
+    s_err21[idx] = errno;              /* 另一线程已写过它的槽位 ⇒ 读到的必须还是自己的 */
+    (void)pthread_barrier_wait(&s_bar21);
+    return BR_NULL;
+}
+
+/* ---- 022: ERRORCHECK 的非属主解锁 ---- */
+static pthread_mutex_t s_m22;
+
+static void *pt_eperm_worker(void *arg)
+{
+    (void)arg;
+    return (void *)(br_intptr_t)pthread_mutex_unlock(&s_m22);
+}
+
+/* ---- 023: once(多线程只跑一次) ---- */
+static pthread_once_t  *s_once23_p;
+static int              s_once23_count;
+static void s_once23_fn(void) { s_once23_count++; }
+static void *pt_once_worker(void *arg)
+{
+    (void)arg;
+    (void)pthread_once(s_once23_p, s_once23_fn);
+    return BR_NULL;
+}
+
+/* ---- 024: rwlock(读者并发 / 写者独占) ---- */
+static pthread_rwlock_t s_rw24 = PTHREAD_RWLOCK_INITIALIZER;
+static pthread_mutex_t  s_rw24_stats = PTHREAD_MUTEX_INITIALIZER;
+static int              s_rw24_value;
+static int              s_rw24_active;
+static int              s_rw24_active_max;
+static int              s_rw24_bad;
+
+static void *pt_reader_worker(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < 2; i++) {
+        if (pthread_rwlock_rdlock(&s_rw24) != 0) {
+            s_rw24_bad = 1;
+            return BR_NULL;
+        }
+        (void)pthread_mutex_lock(&s_rw24_stats);
+        s_rw24_active++;
+        if (s_rw24_active > s_rw24_active_max) {
+            s_rw24_active_max = s_rw24_active;
+        }
+        (void)pthread_mutex_unlock(&s_rw24_stats);
+        usleep(10000u);                          /* 持读锁睡 ⇒ 另一个读者应能同时进来 */
+        (void)pthread_mutex_lock(&s_rw24_stats);
+        s_rw24_active--;
+        (void)pthread_mutex_unlock(&s_rw24_stats);
+        (void)pthread_rwlock_unlock(&s_rw24);
+    }
+    return BR_NULL;
+}
+
+static void *pt_writer_worker(void *arg)
+{
+    (void)arg;
+    for (int i = 0; i < 4; i++) {
+        if (pthread_rwlock_wrlock(&s_rw24) != 0) {
+            s_rw24_bad = 1;
+            return BR_NULL;
+        }
+        (void)pthread_mutex_lock(&s_rw24_stats);
+        if (s_rw24_active != 0) {
+            s_rw24_bad = 1;          /* 写者持锁时不许有活跃读者 */
+        }
+        s_rw24_value++;
+        (void)pthread_mutex_unlock(&s_rw24_stats);
+        (void)pthread_rwlock_unlock(&s_rw24);
+    }
+    return BR_NULL;
+}
+
+/* ---- 025: TLS key(隔离 + 析构) ---- */
+static pthread_key_t s_key25;
+static int           s_key25_dtors;
+
+static void s_key25_dtor(void *v) { s_key25_dtors += (int)(br_intptr_t)v; }
+
+static void *pt_key_worker(void *arg)
+{
+    const int idx = (int)(br_intptr_t)arg;
+    if (pthread_setspecific(s_key25, (void *)(br_intptr_t)(idx + 1)) != 0) {
+        return (void *)(br_intptr_t)(-1);
+    }
+    (void)pthread_yield();
+    const br_intptr_t got = (br_intptr_t)pthread_getspecific(s_key25);
+    return (void *)(br_intptr_t)((got == (br_intptr_t)(idx + 1)) ? 0 : -2);
+}
+
+/* ---- 026: detach(惰性回收) ---- */
+static int   s_det26_ran;
+static sem_t s_det26_gate;
+static void *pt_det_worker(void *arg) { (void)arg; s_det26_ran++; return BR_NULL; }
+/* 先卡在 sem 上 ⇒ 记录一定还在(不是 ZOMBIE), 于是"join detached ⇒ EINVAL"可判。 */
+static void *pt_det_gated(void *arg) { (void)arg; (void)sem_wait(&s_det26_gate); s_det26_ran++; return BR_NULL; }
+
+/* ---- 027: attr / name ---- */
+static br_u8 s_stack27[8192] BR_ALIGN(16);
+static sem_t s_name27_gate;
+static int   s_name27_ok;
+
+static void *pt_name_worker(void *arg)
+{
+    (void)arg;
+    (void)sem_wait(&s_name27_gate);
+    char buf[BR_PTHREAD_NAME_MAX];
+    if (pthread_getname_np(BR_NULL, buf, sizeof(buf)) != 0) {
+        return (void *)(br_intptr_t)(-1);
+    }
+    s_name27_ok = (strcmp(buf, "worker27") == 0) ? 1 : 0;
+    return BR_NULL;
+}
+
+
 /* ==================================================================== 用例 */
 
 int posix_selftest(void)
@@ -482,7 +608,8 @@ int posix_selftest(void)
         br_bool ok = (clock_gettime(CLOCK_MONOTONIC, &t1) == 0);
         ok = ok && (clock_gettime(CLOCK_MONOTONIC, &t2) == 0) && (t2.tv_sec >= t1.tv_sec);
         ok = ok && (clock_gettime(CLOCK_REALTIME, &t1) == -1) && (errno == ENOTSUP);
-        ok = ok && (clock_getres(CLOCK_MONOTONIC, &res) == 0) && (res.tv_nsec == 100000000L);
+        ok = ok && (clock_getres(CLOCK_MONOTONIC, &res) == 0) &&
+             (res.tv_nsec == (long)BR_POSIX_CLOCK_RES_NS);
 
         const br_time_t before = br_clock_now();
         req.tv_sec  = 0;
@@ -491,7 +618,7 @@ int posix_selftest(void)
         const br_time_t after = br_clock_now();
         ok = ok && (after >= before) && ((after - before) >= 1000u);    /* 不早醒 */
         ok = ok && (usleep(1000u) == 0) && (sleep(0u) == 0u);
-        pc(ok, "TC-POSIX-015", "MONOTONIC 单调; REALTIME ⇒ ENOTSUP; getres = 100 ms; nanosleep 不早醒");
+        pc(ok, "TC-POSIX-015", "MONOTONIC 单调; REALTIME ⇒ ENOTSUP; getres = 1/HZ(一拍); nanosleep 不早醒");
     }
 
     /* ---- TC-POSIX-016: pthread 线程 + retval 搬运 ---- */
@@ -511,9 +638,9 @@ int posix_selftest(void)
         ok = ok && (s_worker_ran == BR_TRUE) && (s_worker_value == 42);
         ok = ok && (pthread_equal(pthread_self(), pthread_self()) != 0);
         ok = ok && (pthread_yield() == 0);
-        ok = ok && (pthread_detach(t) == ENOTSUP);         /* 如实不支持 */
+        ok = ok && (pthread_detach(t) == ESRCH);            /* 已 join 的线程: 记录已回收 ⇒ ESRCH */
         ok = ok && (sem_destroy(&s_sem_req) == 0) && (sem_destroy(&s_sem_done) == 0);
-        pc(ok, "TC-POSIX-016", "pthread_create/join 带回 retval; sem 配对唤醒; detach ⇒ ENOTSUP");
+        pc(ok, "TC-POSIX-016", "pthread_create/join 带回 retval; sem 配对唤醒; join 后 detach ⇒ ESRCH");
     }
 
     /* ---- TC-POSIX-017: pthread 互斥量 / 条件变量(**错误号通道**: 不设 errno) ---- */
@@ -603,6 +730,194 @@ int posix_selftest(void)
         ok = ok && (stat("/posixconf_no_such_file", BR_NULL) == -1);
         ok = ok && (unlink(BR_NULL) == -1);
         pc(ok, "TC-POSIX-020", "errno 编号 = 内核; strerror; 空参/非法 fd 的契约错误码");
+    }
+
+    /* ---- TC-POSIX-021: barrier + 每线程 errno ---- */
+    {
+        pthread_t a = BR_NULL;
+        pthread_t b = BR_NULL;
+        s_err21[0] = -1;
+        s_err21[1] = -1;
+        br_bool ok = (pthread_barrier_init(&s_bar21, BR_NULL, 2u) == 0);
+        ok = ok && (pthread_create(&a, BR_NULL, pt_errno_worker, (void *)(br_intptr_t)0) == 0);
+        ok = ok && (pthread_create(&b, BR_NULL, pt_errno_worker, (void *)(br_intptr_t)1) == 0);
+        ok = ok && (pthread_join(a, BR_NULL) == 0);
+        ok = ok && (pthread_join(b, BR_NULL) == 0);
+        ok = ok && (s_err21[0] == ENOENT) && (s_err21[1] == EACCES);
+        ok = ok && (pthread_barrier_destroy(&s_bar21) == 0);
+        pc(ok, "TC-POSIX-021", "barrier 两方同步 + 每线程 errno 隔离(各写各的槽位)");
+    }
+
+    /* ---- TC-POSIX-022: RECURSIVE / ERRORCHECK / 非属主解锁 ---- */
+    {
+        pthread_mutexattr_t ma;
+        pthread_mutex_t     rec;
+        pthread_mutexattr_t ea;
+        pthread_mutex_t     ec;
+        pthread_t           w = BR_NULL;
+        void               *r = BR_NULL;
+        int                 ty = -1;
+        br_bool ok = (pthread_mutexattr_init(&ma) == 0);
+        ok = ok && (pthread_mutexattr_settype(&ma, PTHREAD_MUTEX_RECURSIVE) == 0);
+        ok = ok && (pthread_mutexattr_gettype(&ma, &ty) == 0) && (ty == PTHREAD_MUTEX_RECURSIVE);
+        ok = ok && (pthread_mutex_init(&rec, &ma) == 0);
+        ok = ok && (pthread_mutex_lock(&rec) == 0) && (pthread_mutex_lock(&rec) == 0);
+        ok = ok && (pthread_mutex_unlock(&rec) == 0) && (pthread_mutex_unlock(&rec) == 0);
+        ok = ok && (pthread_mutex_destroy(&rec) == 0);
+        ok = ok && (pthread_mutexattr_destroy(&ma) == 0);
+
+        ok = ok && (pthread_mutexattr_init(&ea) == 0);
+        ok = ok && (pthread_mutexattr_settype(&ea, PTHREAD_MUTEX_ERRORCHECK) == 0);
+        ok = ok && (pthread_mutex_init(&ec, &ea) == 0);
+        ok = ok && (pthread_mutex_lock(&ec) == 0);
+        ok = ok && (pthread_mutex_lock(&ec) == EDEADLK);        /* 同线程重锁 */
+        s_m22 = ec;                                            /* 借一个线程做"非属主解锁" */
+        ok = ok && (pthread_create(&w, BR_NULL, pt_eperm_worker, BR_NULL) == 0);
+        ok = ok && (pthread_join(w, &r) == 0) && ((br_intptr_t)r == EPERM);
+        ok = ok && (pthread_mutex_unlock(&ec) == 0);
+        ok = ok && (pthread_mutex_destroy(&ec) == 0);
+        ok = ok && (pthread_mutexattr_destroy(&ea) == 0);
+        pc(ok, "TC-POSIX-022", "RECURSIVE 重入计数; ERRORCHECK 自锁 EDEADLK + 非属主解锁 EPERM");
+    }
+
+    /* ---- TC-POSIX-023: once(多线程只跑一次) ---- */
+    {
+        pthread_once_t once = PTHREAD_ONCE_INIT;
+        pthread_t t1 = BR_NULL;
+        pthread_t t2 = BR_NULL;
+        pthread_t t3 = BR_NULL;
+        s_once23_count = 0;
+        s_once23_p = &once;
+        br_bool ok = (pthread_create(&t1, BR_NULL, pt_once_worker, BR_NULL) == 0);
+        ok = ok && (pthread_create(&t2, BR_NULL, pt_once_worker, BR_NULL) == 0);
+        ok = ok && (pthread_create(&t3, BR_NULL, pt_once_worker, BR_NULL) == 0);
+        ok = ok && (pthread_join(t1, BR_NULL) == 0) && (pthread_join(t2, BR_NULL) == 0) &&
+             (pthread_join(t3, BR_NULL) == 0);
+        ok = ok && (s_once23_count == 1);
+        pc(ok, "TC-POSIX-023", "pthread_once: 三个线程并发 ⇒ init 恰一次");
+    }
+
+    /* ---- TC-POSIX-024: rwlock(读者并发 / 写者独占) ---- */
+    {
+        pthread_t r1 = BR_NULL;
+        pthread_t r2 = BR_NULL;
+        pthread_t wr = BR_NULL;
+        s_rw24_value      = 0;
+        s_rw24_active     = 0;
+        s_rw24_active_max = 0;
+        s_rw24_bad        = 0;
+        br_bool ok = (pthread_create(&r1, BR_NULL, pt_reader_worker, BR_NULL) == 0);
+        ok = ok && (pthread_create(&r2, BR_NULL, pt_reader_worker, BR_NULL) == 0);
+        ok = ok && (pthread_create(&wr, BR_NULL, pt_writer_worker, BR_NULL) == 0);
+        ok = ok && (pthread_join(r1, BR_NULL) == 0) && (pthread_join(r2, BR_NULL) == 0) &&
+             (pthread_join(wr, BR_NULL) == 0);
+        ok = ok && (s_rw24_bad == 0) && (s_rw24_value == 4);
+        ok = ok && (s_rw24_active_max >= 2);            /* 两个读者确实同时持锁 */
+        pc(ok, "TC-POSIX-024", "rwlock: 读者并发(active_max>=2)、写者独占、4 次写全部生效");
+    }
+
+    /* ---- TC-POSIX-025: TLS key(隔离 + 退出析构) ---- */
+    {
+        pthread_key_t key;
+        pthread_t     a = BR_NULL;
+        pthread_t     b = BR_NULL;
+        void         *ra = BR_NULL;
+        void         *rb = BR_NULL;
+        s_key25_dtors = 0;
+        br_bool ok = (pthread_key_create(&key, s_key25_dtor) == 0);
+        s_key25 = key;
+        ok = ok && (pthread_create(&a, BR_NULL, pt_key_worker, (void *)(br_intptr_t)0) == 0);
+        ok = ok && (pthread_create(&b, BR_NULL, pt_key_worker, (void *)(br_intptr_t)1) == 0);
+        ok = ok && (pthread_join(a, &ra) == 0) && (pthread_join(b, &rb) == 0);
+        ok = ok && ((br_intptr_t)ra == 0) && ((br_intptr_t)rb == 0);
+        ok = ok && (s_key25_dtors == 3);                /* (0+1) + (1+1) */
+        ok = ok && (pthread_key_delete(key) == 0);
+        pc(ok, "TC-POSIX-025", "pthread_key_*: 每线程值隔离; 线程退出跑析构(值 1+2)");
+    }
+
+    /* ---- TC-POSIX-026: detach(惰性回收) ---- */
+    {
+        pthread_t      t = BR_NULL;
+        pthread_t      normal = BR_NULL;
+        pthread_t      d[3];
+        pthread_attr_t da;
+        void          *r = BR_NULL;
+        s_det26_ran = 0;
+        br_bool ok = (sem_init(&s_det26_gate, 0, 0u) == 0);
+        ok = ok && (pthread_attr_init(&da) == 0);
+        ok = ok && (pthread_attr_setdetachstate(&da, PTHREAD_CREATE_DETACHED) == 0);
+        ok = ok && (pthread_create(&t, &da, pt_det_gated, BR_NULL) == 0);   /* 卡在 gate 上 */
+        ok = ok && (pthread_attr_destroy(&da) == 0);
+        ok = ok && (pthread_join(t, &r) == EINVAL);     /* join detached ⇒ EINVAL(记录还在) */
+        ok = ok && (sem_post(&s_det26_gate) == 0);      /* 放它跑完并退出 */
+        for (int i = 0; i < 3; i++) {
+            ok = ok && (pthread_create(&d[i], BR_NULL, pt_det_worker, BR_NULL) == 0);
+            ok = ok && (pthread_detach(d[i]) == 0);
+        }
+        for (int i = 0; i < 8; i++) {
+            (void)pthread_yield();                      /* 让 detached 线程跑完退出 */
+        }
+        usleep(20000u);
+        ok = ok && (pthread_create(&normal, BR_NULL, pt_det_worker, BR_NULL) == 0);
+        ok = ok && (pthread_join(normal, BR_NULL) == 0);
+        ok = ok && (s_det26_ran == 5);                  /* gated + 3 detached + normal 都跑过 */
+        ok = ok && (sem_destroy(&s_det26_gate) == 0);
+        pc(ok, "TC-POSIX-026", "attr DETACHED / detach ⇒ 0、join detached ⇒ EINVAL; 后续 pthread 调用惰性回收不耗尽 TCB");
+    }
+
+    /* ---- TC-POSIX-027: attr(stack/detachstate/guardsize) + 线程名 ---- */
+    {
+        pthread_attr_t a;
+        pthread_t      t = BR_NULL;
+        void          *st = BR_NULL;
+        size_t         ss = 0u;
+        size_t         gs = 0u;
+        int            ds = -1;
+        br_bool ok = (pthread_attr_init(&a) == 0);
+        ok = ok && (pthread_attr_setstack(&a, s_stack27, sizeof(s_stack27)) == 0);
+        ok = ok && (pthread_attr_getstack(&a, &st, &ss) == 0) && (st == s_stack27) &&
+             (ss == sizeof(s_stack27));
+        ok = ok && (pthread_attr_setdetachstate(&a, PTHREAD_CREATE_JOINABLE) == 0);
+        ok = ok && (pthread_attr_getdetachstate(&a, &ds) == 0) && (ds == PTHREAD_CREATE_JOINABLE);
+        ok = ok && (pthread_attr_setguardsize(&a, 4096u) == 0);
+        ok = ok && (pthread_attr_getguardsize(&a, &gs) == 0) && (gs == 4096u);
+        s_name27_ok = 0;
+        ok = ok && (sem_init(&s_name27_gate, 0, 0u) == 0);
+        ok = ok && (pthread_create(&t, &a, pt_name_worker, BR_NULL) == 0);
+        ok = ok && (pthread_setname_np(t, "worker27") == 0);
+        ok = ok && (sem_post(&s_name27_gate) == 0);
+        ok = ok && (pthread_join(t, BR_NULL) == 0);
+        ok = ok && (s_name27_ok == 1);
+        char self_name[BR_PTHREAD_NAME_MAX];
+        ok = ok && (pthread_getname_np(BR_NULL, self_name, sizeof(self_name)) == 0);
+        ok = ok && (pthread_attr_destroy(&a) == 0) && (sem_destroy(&s_name27_gate) == 0);
+        pc(ok, "TC-POSIX-027", "attr get/set(stack/detachstate/guardsize) + setname/getname_np 往返");
+    }
+
+    /* ---- TC-POSIX-028: condattr 时基 + timed* 超时 ---- */
+    {
+        pthread_condattr_t ca;
+        pthread_cond_t     c;
+        pthread_mutex_t    m;
+        int                clk = -1;
+        int                ps = -1;
+        struct timespec    past;
+        past.tv_sec  = 0;
+        past.tv_nsec = 0;
+        br_bool ok = (pthread_condattr_init(&ca) == 0);
+        ok = ok && (pthread_condattr_setclock(&ca, CLOCK_REALTIME) == EINVAL);   /* 无墙钟 */
+        ok = ok && (pthread_condattr_setclock(&ca, CLOCK_MONOTONIC) == 0);
+        ok = ok && (pthread_condattr_getclock(&ca, &clk) == 0) && (clk == CLOCK_MONOTONIC);
+        ok = ok && (pthread_condattr_setpshared(&ca, PTHREAD_PROCESS_PRIVATE) == 0);
+        ok = ok && (pthread_condattr_getpshared(&ca, &ps) == 0) && (ps == PTHREAD_PROCESS_PRIVATE);
+        ok = ok && (pthread_cond_init(&c, &ca) == 0) && (pthread_mutex_init(&m, BR_NULL) == 0);
+        ok = ok && (pthread_mutex_lock(&m) == 0);
+        ok = ok && (pthread_cond_timedwait(&c, &m, &past) == ETIMEDOUT);
+        ok = ok && (pthread_mutex_timedlock(&m, &past) == ETIMEDOUT);   /* 已被自己持有 */
+        ok = ok && (pthread_mutex_unlock(&m) == 0);
+        ok = ok && (pthread_cond_destroy(&c) == 0) && (pthread_mutex_destroy(&m) == 0);
+        ok = ok && (pthread_condattr_destroy(&ca) == 0);
+        pc(ok, "TC-POSIX-028", "condattr clock(MONOTONIC 唯一) + cond/mutex timed* 超时 ⇒ ETIMEDOUT");
     }
 
     /* 收尾: 清掉自己造的东西(下一个用例从这里开始是干净的) */

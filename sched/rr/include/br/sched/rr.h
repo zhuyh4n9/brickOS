@@ -16,8 +16,8 @@
 #include <br/core/br_sched.h>
 #include <br/core/br_types.h>
 
-/* 时间片: 以**平台 tick** 为单位(本原型 tick = 100 ms; 见 platform 的
- * BR_BOARD_TIMER_PERIOD_US)。取 2 ⇒ 一个线程连续跑 200 ms 后被轮换。
+/* 时间片: 以**平台 tick** 为单位(tick = `1/HZ`; `product.toml [kernel].hz`, 缺省
+ * 200 ⇒ 5 ms; ADR-0017)。取 2 ⇒ 缺省下一个线程连续跑 10 ms 后被轮换(墙钟长度随 HZ 缩放)。
  * 为什么用 tick 而不是微秒: 递减发生在 `on_tick` 里, tick 就是它的自然粒度 ——
  * 用微秒只会逼出一个"读时钟做除法"的热路径, 而精度不会更好。 */
 #define RR_SLICE_TICKS 2u

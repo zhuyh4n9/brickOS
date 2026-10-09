@@ -35,19 +35,37 @@ truth      = "decl"
 abi_id     = ""
 
 # ---- 结构依赖 ----
-# 只剩一条: app → platform 的**运行期读**(平台身份 br_plat_name/br_plat_isa、
-# 心跳计数 br_plat_timer_ticks)。APP 不再直调任何一致性用例、也不再直调调试服务:
-#   - 中断/内存一致性用例 → platform 的 start();
-#   - 调试域一致性用例与启动快照 → service/dump 的 LATE init。
-# ⇒ 原先的 `app → service/dump` 那条 M0 豁免已可从 `product.toml [lint].allow_edges`
-# 删掉(仍需保留 app → platform 那条 —— 见 README 与本插件 README 的说明)。
-# 该边由 `product.toml [lint].allow_edges` 显式豁免 ⇒ 可评审的例外, 不是静默放行。
-# Interface 插件交付后(1-03 的 M2: iface-min), 本边应改为 app → iface → platform。
+# `app → iface/posix` + `app → iface/min`(**设计正解边**, 不是 M0 例外)。
+#   - APP 是 P0, **只能经 Interface** 用下层(设计 §7.3 / D18 / A-2)⇒ 方向表里
+#     `app → interface` ✅, 而 `app → ability`(`runtime/posix`)与"APP 直连 core 头"
+#     都被禁(后者由 ADR-0020 的扫描执法);
+#   - `iface/posix` 是零状态薄皮肤, 它的 `reexport_of` 指向 `runtime/posix#posix`
+#     ⇒ POSIX 实现仍只有一份(单一真值);
+#   - `iface/min` 是直通 core native 的极简别名皮肤(日志/时钟/tick/版本), 于是 APP
+#     连 `br_log_info` 与 `br_clock_now` 也不直接依赖 core 头(ADR-0020);
+#   - 有了这两条边, `product.toml [lint].allow_edges` 才能保持**空表**。
+# ★ 曾经的两条边与本条的区别: 原先的 `app → platform`(M0 引导例外, 已随 ADR-0016 删除)
+#   是"没有 Interface 时的权宜"; 这两条是"Interface 交付后的正路"。
+# ★ 编译期可见性(ADR-0018): 插件的包含面 = **声明依赖闭包** ⇒ APP 之所以能
+#   `#include <iface/posix/posix.h>` 与 `<iface/min/min.h>` 并间接拿到 POSIX/core 声明,
+#   正是因为这两条边; 未声明的跨插件 include 在 `brickie check`/`brickie build` 都会报错。
+# 只声明 **runtime** 边, 不声明 init 边: 相位单调规则里 `app` 的 ② **完成点 = CORE**
+# (只有 service 形(interface/ability.service)才是 LATE), 而两个皮肤都是 LATE
+# ⇒ `init` 边会被 TC-PLUG-003 判"提供方晚于消费方"(实测踩到)。顺序其实由既有的相规则
+# 保证: APP 的 start 被管理器**显式排到最后**, APP 线程又跑在 `br_sched_run()` 之后,
+# 那时 LATE 的 iface/posix、iface/min、runtime/posix 早已 init 完毕。
 [[dep]]
-name   = "platform/qemu-aarch64"
+name   = "iface/posix"
 range  = ">=0.1.0"
 kind   = "runtime"
-symbol = "br_plat_name"
+symbol = "usleep"          # 真实调用面(APP 还调 pthread_*/sem_*)
+
+# APP 的日志/时钟标识也只经 Interface 皮肤取得(core native 直通面; ADR-0020)。
+[[dep]]
+name   = "iface/min"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_log_info"
 
 [build]
 sources  = ["src/*.c"]

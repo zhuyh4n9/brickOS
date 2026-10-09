@@ -118,3 +118,19 @@
 ## runtime/posix#posix v0.1.0.0 (compat_gen=0)
 - hash: sha256:b8697b3ba530dd77f2f6ffb008a99774d7b839c8f57a1ebefdcfc150118becc8
 - 变更: 首次发布(建档)
+
+## iface-posix#posix-skin v0.1.0.0 (compat_gen=0)
+- hash: sha256:dbcb4aa6625b130554a0f34b057f8f352e96d2ce2dfe513f3bc436f1bcbb3100
+- 变更: 首次发布(建档)
+
+## runtime/posix#posix v0.1.1.0 (compat_gen=0)
+- hash: sha256:8f0496311e39ed366415a646bce221ebae7e51226efaab99456c2889a0c87574
+- 变更: ADDED br_posix_errno; ADDED pthread_attr_getdetachstate; ADDED pthread_attr_getguardsize; ADDED pthread_attr_getstack; ADDED pthread_attr_setdetachstate; ADDED pthread_attr_setguardsize; ADDED pthread_attr_t; ADDED pthread_barrier_destroy; ADDED pthread_barrier_init; ADDED pthread_barrier_t; ADDED pthread_barrier_wait; ADDED pthread_barrierattr_destroy; ADDED pthread_barrierattr_getpshared; ADDED pthread_barrierattr_init; ADDED pthread_barrierattr_setpshared; ADDED pthread_barrierattr_t; ADDED pthread_condattr_destroy; ADDED pthread_condattr_getclock; ADDED pthread_condattr_getpshared; ADDED pthread_condattr_init; ADDED pthread_condattr_setclock; ADDED pthread_condattr_setpshared; ADDED pthread_condattr_t; ADDED pthread_getname_np; ADDED pthread_getspecific; ADDED pthread_key_create; ADDED pthread_key_delete; ADDED pthread_key_t; ADDED pthread_mutex_timedlock; ADDED pthread_mutexattr_destroy; ADDED pthread_mutexattr_getprotocol; ADDED pthread_mutexattr_getpshared; ADDED pthread_mutexattr_gettype; ADDED pthread_mutexattr_init; ADDED pthread_mutexattr_setprotocol; ADDED pthread_mutexattr_setpshared; ADDED pthread_mutexattr_settype; ADDED pthread_mutexattr_t; ADDED pthread_once; ADDED pthread_once_t; ADDED pthread_rwlock_destroy; ADDED pthread_rwlock_init; ADDED pthread_rwlock_rdlock; ADDED pthread_rwlock_t; ADDED pthread_rwlock_timedrdlock; ADDED pthread_rwlock_timedwrlock; ADDED pthread_rwlock_tryrdlock; ADDED pthread_rwlock_trywrlock; ADDED pthread_rwlock_unlock; ADDED pthread_rwlock_wrlock; ADDED pthread_rwlockattr_destroy; ADDED pthread_rwlockattr_getkind_np; ADDED pthread_rwlockattr_getpshared; ADDED pthread_rwlockattr_init; ADDED pthread_rwlockattr_setkind_np; ADDED pthread_rwlockattr_setpshared; ADDED pthread_rwlockattr_t; ADDED pthread_setname_np; ADDED pthread_setspecific; CHANGED pthread_cond_t; CHANGED pthread_mutex_t
+
+## iface/posix#posix-skin v0.1.0.0 (compat_gen=0)
+- hash: sha256:7ccb8d3d4a6ef85aad5e08604d14102a635f19974fcad8f517a71537838ede2f
+- 变更: 首次发布(建档)
+
+## iface/min#min v0.1.0.0 (compat_gen=0)
+- hash: sha256:b19825c94836048a12d481d508f525d8c0b76f072ff044f4d7659f5f87a2cfa1
+- 变更: 首次发布(建档)

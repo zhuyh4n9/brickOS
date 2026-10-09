@@ -151,6 +151,8 @@ start.S(reset/BSS) → br_irq_cpu_init → br_plugin_manager_run()
 **仍在欠的(不要误报为已还)**
 1. `br-wa-boot-001` ②(APP 直读平台身份 ⇒ 一条 `allow_edges` 豁免)与 ③(日志/trace 直写
    console/RAM 环)仍欠 —— 前提分别是 M2 的 iface-min / M3 的 debug bridge。
+   ★ **后续**: ② 已由 **ADR-0016** 以 core 接口的形态还清(心跳计数收归 core、平台身份
+   日志归 platform 自己打 ⇒ `allow_edges` 清空), 不必再等 iface-min; ③ 仍欠。
 2. `br-wa-isa-001`: `mmu.c` 的页表构造仍暂居 platform 插件目录; 本刀只把"注册/激活"的
    边界划清, 没有把文件迁去 ISA 共享库。
 3. `br-wa-mem-001`: 池比例仍写死在 `memmap.c`, 没有 manifest 预算 → region 的生成链路。

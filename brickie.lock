@@ -47,6 +47,16 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.plugins]]
+name = "iface/min"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "iface/posix"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
 name = "io/uart-pl011"
 version = "0.1.0.0"
 compat_gen = 0
@@ -141,6 +151,39 @@ hash_scope = "decl"
 truth = "decl"
 
 [[lock.units]]
+id = "iface-posix#posix-skin"
+provider = "iface-posix"
+unit = "posix-skin"
+api_iface = "runtime_adapter"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:dbcb4aa6625b130554a0f34b057f8f352e96d2ce2dfe513f3bc436f1bcbb3100"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "iface/min#min"
+provider = "iface/min"
+unit = "min"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:b19825c94836048a12d481d508f525d8c0b76f072ff044f4d7659f5f87a2cfa1"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "iface/posix#posix-skin"
+provider = "iface/posix"
+unit = "posix-skin"
+api_iface = "runtime_adapter"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:7ccb8d3d4a6ef85aad5e08604d14102a635f19974fcad8f517a71537838ede2f"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
 id = "io/uart-pl011#uart-pl011"
 provider = "io/uart-pl011"
 unit = "uart-pl011"
@@ -178,9 +221,9 @@ id = "runtime/posix#posix"
 provider = "runtime/posix"
 unit = "posix"
 api_iface = "runtime_adapter"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
-hash = "sha256:b8697b3ba530dd77f2f6ffb008a99774d7b839c8f57a1ebefdcfc150118becc8"
+hash = "sha256:8f0496311e39ed366415a646bce221ebae7e51226efaab99456c2889a0c87574"
 hash_scope = "decl"
 truth = "decl"
 

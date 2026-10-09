@@ -6,7 +6,7 @@
 #   "POSIX 运行时服务"定位都靠它, 换 subkind 会把 init 掉到 CORE。
 #
 # 设计出处: `docs/1-architecture/1-01-architecture.md` §7(v0.5/D18: **POSIX 双角色拆分** ——
-# `runtime/posix` = 实现(普通服务), `iface-posix` = 薄皮肤; §7.6 三方移植双模式)、
+# `runtime/posix` = 实现(普通服务), `iface/posix` = 薄皮肤; §7.6 三方移植双模式)、
 # `docs/11-service/11-01-service.md` §1/§2(POSIX 运行时服务: fd 表主人 + `errno = -ret`)、
 # `docs/11-service/11-02-svc-posix-subset.md`(**覆盖清单**: TR-A/TR-B 是本件的范围)、
 # `docs/7-storage/7-01-vfs.md` §1/§4.1(fd 表项 = `br_file_t*`; `br_open` 是底层原语)。
@@ -22,7 +22,7 @@
 # ★ 相位: `phase = "late"` —— `ability` + `subkind = service` 的类别决定(brickie 的
 #   `is_service_like`), 不是自选项。runtime/posix 要在 core 的堆/调度/服务注册表就绪之后才 init。
 # ★ `api_type = "runtime_adapter"`: 它是"为 third_party 提供接口支持的适配基座"(§3.1 的分类
-#   定义)。`iface-posix` 将来以 `form = "skin"` + `reexport_of` 再导出本件的单元 —— 分类必须
+#   定义)。`iface/posix` 将来以 `form = "skin"` + `reexport_of` 再导出本件的单元 —— 分类必须
 #   与基座相等, 所以本件取 runtime_adapter 而不是 native。
 schema = 1
 
@@ -84,10 +84,10 @@ kind  = "runtime"
 api_iface    = "runtime_adapter"
 form         = "api"
 name         = "posix"
-version      = "0.1.0.0"
+version      = "0.1.1.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
-hash         = "sha256:b8697b3ba530dd77f2f6ffb008a99774d7b839c8f57a1ebefdcfc150118becc8"
+hash         = "sha256:8f0496311e39ed366415a646bce221ebae7e51226efaab99456c2889a0c87574"
 status       = "experimental"
 
 # ---- 打开标志(fcntl.h; Linux 数值) ----
@@ -181,12 +181,48 @@ name = "struct iovec"
 layout = "# {iov_base, iov_len}"
 [[export.entries]]
 kind = "type"
+name = "pthread_attr_t"
+layout = "# {stack_size, stack, detachstate, guard_size}"
+[[export.entries]]
+kind = "type"
 name = "pthread_mutex_t"
-layout = "# 包装 br_mutex_t(布局 = core 的 br_sync.h)"
+layout = "# {br_mutex_t m, unsigned type, br_thread_t *owner, unsigned count}(type/owner/count 支撑 RECURSIVE/ERRORCHECK)"
+[[export.entries]]
+kind = "type"
+name = "pthread_mutexattr_t"
+layout = "# {unsigned type, int pshared, int protocol}"
 [[export.entries]]
 kind = "type"
 name = "pthread_cond_t"
-layout = "# 包装 br_cond_t(布局 = core 的 br_sync.h)"
+layout = "# {br_cond_t c, int clock}"
+[[export.entries]]
+kind = "type"
+name = "pthread_condattr_t"
+layout = "# {int clock, int pshared}"
+[[export.entries]]
+kind = "type"
+name = "pthread_rwlock_t"
+layout = "# {br_mutex_t m, br_cond_t c, unsigned readers, br_thread_t *writer, unsigned writers_waiting, int kind}"
+[[export.entries]]
+kind = "type"
+name = "pthread_rwlockattr_t"
+layout = "# {int kind, int pshared}"
+[[export.entries]]
+kind = "type"
+name = "pthread_barrier_t"
+layout = "# {br_mutex_t m, br_cond_t c, unsigned count, unsigned waiting, unsigned generation}"
+[[export.entries]]
+kind = "type"
+name = "pthread_barrierattr_t"
+layout = "# {int pshared}"
+[[export.entries]]
+kind = "type"
+name = "pthread_once_t"
+layout = "# {br_mutex_t m, volatile int done}"
+[[export.entries]]
+kind = "type"
+name = "pthread_key_t"
+layout = "# unsigned(索引到 runtime/posix 的线程记录槽位)"
 [[export.entries]]
 kind = "type"
 name = "sem_t"
@@ -368,6 +404,7 @@ kind = "func"
 name = "getegid"
 
 # ---- pthread ----
+
 [[export.entries]]
 kind = "func"
 name = "pthread_create"
@@ -406,6 +443,69 @@ kind = "func"
 name = "pthread_attr_setstack"
 [[export.entries]]
 kind = "func"
+name = "pthread_attr_getstack"
+[[export.entries]]
+kind = "func"
+name = "pthread_attr_setdetachstate"
+[[export.entries]]
+kind = "func"
+name = "pthread_attr_getdetachstate"
+[[export.entries]]
+kind = "func"
+name = "pthread_attr_setguardsize"
+[[export.entries]]
+kind = "func"
+name = "pthread_attr_getguardsize"
+[[export.entries]]
+kind = "func"
+name = "pthread_setname_np"
+[[export.entries]]
+kind = "func"
+name = "pthread_getname_np"
+[[export.entries]]
+kind = "func"
+name = "pthread_once"
+[[export.entries]]
+kind = "func"
+name = "pthread_key_create"
+[[export.entries]]
+kind = "func"
+name = "pthread_key_delete"
+[[export.entries]]
+kind = "func"
+name = "pthread_setspecific"
+[[export.entries]]
+kind = "func"
+name = "pthread_getspecific"
+[[export.entries]]
+kind = "func"
+name = "br_posix_errno"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutexattr_init"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutexattr_destroy"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutexattr_settype"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutexattr_gettype"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutexattr_setpshared"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutexattr_getpshared"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutexattr_setprotocol"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutexattr_getprotocol"
+[[export.entries]]
+kind = "func"
 name = "pthread_mutex_init"
 [[export.entries]]
 kind = "func"
@@ -418,7 +518,28 @@ kind = "func"
 name = "pthread_mutex_trylock"
 [[export.entries]]
 kind = "func"
+name = "pthread_mutex_timedlock"
+[[export.entries]]
+kind = "func"
 name = "pthread_mutex_unlock"
+[[export.entries]]
+kind = "func"
+name = "pthread_condattr_init"
+[[export.entries]]
+kind = "func"
+name = "pthread_condattr_destroy"
+[[export.entries]]
+kind = "func"
+name = "pthread_condattr_setclock"
+[[export.entries]]
+kind = "func"
+name = "pthread_condattr_getclock"
+[[export.entries]]
+kind = "func"
+name = "pthread_condattr_setpshared"
+[[export.entries]]
+kind = "func"
+name = "pthread_condattr_getpshared"
 [[export.entries]]
 kind = "func"
 name = "pthread_cond_init"
@@ -437,6 +558,72 @@ name = "pthread_cond_signal"
 [[export.entries]]
 kind = "func"
 name = "pthread_cond_broadcast"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlockattr_init"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlockattr_destroy"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlockattr_setkind_np"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlockattr_getkind_np"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlockattr_setpshared"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlockattr_getpshared"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlock_init"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlock_destroy"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlock_rdlock"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlock_tryrdlock"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlock_timedrdlock"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlock_wrlock"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlock_trywrlock"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlock_timedwrlock"
+[[export.entries]]
+kind = "func"
+name = "pthread_rwlock_unlock"
+[[export.entries]]
+kind = "func"
+name = "pthread_barrierattr_init"
+[[export.entries]]
+kind = "func"
+name = "pthread_barrierattr_destroy"
+[[export.entries]]
+kind = "func"
+name = "pthread_barrierattr_setpshared"
+[[export.entries]]
+kind = "func"
+name = "pthread_barrierattr_getpshared"
+[[export.entries]]
+kind = "func"
+name = "pthread_barrier_init"
+[[export.entries]]
+kind = "func"
+name = "pthread_barrier_destroy"
+[[export.entries]]
+kind = "func"
+name = "pthread_barrier_wait"
 
 # ---- semaphore ----
 [[export.entries]]
@@ -591,7 +778,7 @@ name = "getenv"
 [selftest]
 # ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = posix_selftest`。
 # 用例: TC-POSIX-001..020(自编号, 见 br-wa-test-001)。开关在 `product.toml [selftest]`。
-cases = 20
+cases = 28
 
 [build]
 sources  = ["src/*.c"]

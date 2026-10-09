@@ -1,0 +1,111 @@
+# brickie:generated
+# api/iface 快照 api/iface/iface/min/min.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "iface/min#min"
+provider = "iface/min"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:b19825c94836048a12d481d508f525d8c0b76f072ff044f4d7659f5f87a2cfa1"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "macro"
+name = "BR_PROTOTYPE_NAME"
+value = "\"brickOS-prototype\""
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_VERSION_STRING"
+value = "\"v0.1.0\""
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_US_PER_MS"
+value = "1000u"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_log_set_level"
+sig = "void (br_log_level_t)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_log_get_level"
+sig = "br_log_level_t (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_log_write"
+sig = "void (br_log_level_t, const char*, ...)"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "br_log_debug"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "br_log_info"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "br_log_warn"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "br_log_error"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_time_t"
+layout = "# = br_u64(微秒; 设计 3-01 CA-1)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_clock_now"
+sig = "br_time_t (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_clock_freq_hz"
+sig = "br_u64 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_clock_ticks_per_ms"
+sig = "br_u64 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_clock_tick_hz"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_clock_tick_count"
+sig = "br_u32 (void)"
+status = "experimental"

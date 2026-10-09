@@ -70,6 +70,18 @@
     }
    }
   },
+  "kernel": {
+   "type": "object",
+   "description": "时钟节拍频率(参考 Linux 的 CONFIG_HZ): 每秒多少次时钟中断。**表不在场/不写 hz** = 缺省 200(5 ms 一拍)。值由 brickie build 转成 -DBR_CFG_TICK_HZ 下发到全部编译单元(ADR-0017)。",
+   "additionalProperties": true,
+   "properties": {
+    "hz": {
+     "type": "integer",
+     "minimum": 1,
+     "description": "每秒时钟中断次数(Hz)。常见取值 100/200/250/1000; 上限由 br_time.h 的 _Static_assert 兜底。"
+    }
+   }
+  },
   "lint": {
    "type": "object",
    "additionalProperties": true,

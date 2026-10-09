@@ -75,6 +75,10 @@
       "app"
      ]
     },
+    "symbol_prefix": {
+     "type": "string",
+     "description": "钩子/描述符符号前缀覆盖(可选)。缺省按 name_short 推导; 不同命名空间共享 short 时(如 iface/posix 与 runtime/posix)必须显式给出唯一前缀。"
+    },
     "sched_class": {
      "type": "string",
      "enum": [

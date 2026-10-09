@@ -1,0 +1,83 @@
+# iface/posix — POSIX 薄皮肤(plugin_type = interface; 设计 D18 / 1-01 §7.4)
+#
+# 设计出处: `1-03` §1 的 v1.0 插件清单(iface-posix: "薄皮肤: 再导出 svc-posix +
+# stdio/errno 接线")、`1-01` §7.4(skin 分类: `form = "skin"` + `reexport_of`)、
+# §7.3(APP **仅经 Interface**; A-2 的收敛口径)、D18(POSIX 双角色拆分)。
+# 原型侧对应: 实现件名 `runtime/posix`(设计名 `svc-posix`, ADR-0015 改名), 单元 `posix`。
+# 命名空间: 本件落在 `iface/`(设计 `1-01` §8.3 的推荐形态), 因此 `name_short = posix`
+# 与 `runtime/posix` 重名 ⇒ 必须显式给 `symbol_prefix`(见下), 否则钩子符号撞车。
+#
+# ★ 本件是**严格叶子**: 只被 APP 依赖; 自己不拥有状态、不实现函数。它的"实现"就是
+#   把 `runtime/posix#posix` **再导出**成 Interface 面 —— 于是:
+#     - APP 只声明 `app → iface/posix`(方向表里的正解边, 不需要 allow_edges 例外);
+#     - POSIX 符号(usleep/pthread_*)仍由 runtime/posix 一个实现件提供(单一真值);
+#     - 声明级再导出由 `form = "skin"` + `reexport_of` 表达(§3.5 不变量 3), 不是靠注释。
+# ★ `api_type = "runtime_adapter"`: 不变量 1 要求 `[[export]].api_iface == [plugin].api_type`,
+#   不变量 3 要求它**等于被再导出单元的 api_iface** ⇒ 三者只能是 runtime_adapter。
+# ★ 相位: `interface` ⇒ service 形(1-01 §6.2/§9) ⇒ ② 完成点 = LATE; `phase = "late"`。
+schema = 1
+
+[plugin]
+name          = "iface/posix"
+plugin_type   = "interface"
+api_type      = "runtime_adapter"
+lang          = "c"
+phase         = "late"
+version       = "0.1.0.0"
+# ★ 与 runtime/posix 共享 short(`posix`)⇒ 显式覆盖符号前缀, 钩子/描述符用
+#   `iface_posix_*`(缺省推导会是 `posix_*`, 与 runtime/posix 重复定义, 链接期报错)。
+symbol_prefix = "iface_posix_"
+summary       = "POSIX 薄皮肤: 再导出 runtime/posix#posix(APP 只依赖 Interface)"
+license       = "WTFPL"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "皮肤无状态: 三个空钩子 + 一张转出的头文件面"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+# ---- 结构依赖 ----
+# 唯一一条: 本件是 skin, 真实实现在 runtime/posix(init 边同时表达"先 init 提供方",
+# 免得将来 skin 有了接线动作时忘记排序)。interface → ability 是方向表的合法边。
+[[dep]]
+name  = "runtime/posix"
+range = ">=0.1.0"
+kind  = "init"
+phase = "late"
+
+# ---- 类型别名表(IFACE-IR 规则 4): 本件不新增类型, 空 ----
+[iface.typedefs]
+
+# ---- 导出面: 一个 skin 单元 ----
+# 单元名取 `posix-skin`(而不是 `posix`): 单元 id 在闭包内必须**唯一**, 而
+# `runtime/posix#posix` 已经占用了 `posix`(check 的 iface 域 §2② 会报碰撞)。
+[[export]]
+name         = "posix-skin"
+api_iface    = "runtime_adapter"    # 不变量 1 + 3(runtime/posix#posix 也是这个分类)
+form         = "skin"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+# 由 `brickie iface publish iface/posix#posix-skin` 产出快照后, 把 hash 抄回这里
+# (§9.1.1: 机器不改人写文件; hash 是同一真值的两处记录)。
+hash         = "sha256:7ccb8d3d4a6ef85aad5e08604d14102a635f19974fcad8f517a71537838ede2f"
+status       = "experimental"
+reexport_of  = ["runtime/posix#posix"]
+# 皮肤"占有"的符号族(只有 skin 允许声明, §3.5 不变量 4); 权威声明是 `reexport_of`。
+symbols      = ["usleep", "pthread", "sem"]
+# 符号级清单暂不逐个声明: 提供方 runtime/posix 是 unfrozen/experimental, 快照 hash 是
+# decl 真值(§6.6); 逐个抄一遍只会制造第二处可漂移的声明。将来切 truth = "header"/sym 时再补。
+# [[export.entries]]
+# kind = "func"
+# name = "usleep"
+# sig  = "int (unsigned)"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

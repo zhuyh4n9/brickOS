@@ -16,6 +16,7 @@
  */
 #include <br/core/br_console.h>
 #include <br/core/br_log.h>
+#include <br/core/br_time.h>        /* br_clock_tick_hz / BR_CFG_TICK_PERIOD_US(节拍配置) */
 #include <br/board_irq.h>            /* BR_IRQ_TIMER(绑定表里的 virq) */
 #include <br/platform/br_mmu.h>
 #include <br/platform/br_plat.h>
@@ -55,7 +56,8 @@ int qemu_aarch64_init(void)
 
 /*
  * START 相(**全局开中断之后**, 设计 §6.2 的表): 设备与中断一起开跑。
- *   ① `br_plat_irq_start()`: 注册 timer PPI 的 ISR + 使能该线 + 装第一个 100 ms 期限
+ *   ① `br_plat_irq_start()`: 注册 timer PPI 的 ISR + 使能该线 + 装第一个期限
+ *      (`1/HZ`; `product.toml [kernel].hz`, 缺省 200 ⇒ 5 ms; ADR-0017)
  *      + 全局开中断(已在管理器里开过, 这里幂等) —— 这是"心跳"的开始。
  *
  * ★ 一致性用例不再在这里跑(ADR-0010): 中断/内存两套搬到本插件的 **selftest**
@@ -73,13 +75,20 @@ int qemu_aarch64_init(void)
  */
 int qemu_aarch64_start(void)
 {
+    /* 平台身份由 **platform 自己**报(原先由 APP 的启动横幅代读 `br_plat_name/isa` ——
+     * 那是一条 `app → platform` 的声明边, 已随 `br-wa-boot-001` ② 还清, 见
+     * `docs/decisions/0016-core-timer-heartbeat.md`)。START 相里平台先于 APP 跑,
+     * 因此这一行仍排在 APP 的横幅之前, 启动日志的读法与以前一致。 */
+    br_log_info("platform: %s (%s)", br_plat_name(), br_plat_isa());
+
     const int r = br_plat_irq_start();
     if (r != 0) {
         br_log_error("int: platform irq start failed: %d", r);
         return r;   /* 首败即停机由 plugin_manager 执行(裁定 G6) */
     }
-    br_log_info("int: timer PPI armed by platform (virq=%u INTID=%u, 100 ms)",
-                (br_u32)BR_IRQ_TIMER, 30u);
+    br_log_info("int: timer PPI armed by platform (virq=%u INTID=%u, %u Hz = %u us)",
+                (br_u32)BR_IRQ_TIMER, 30u, br_clock_tick_hz(),
+                (br_u32)BR_CFG_TICK_PERIOD_US);
     return 0;
 }
 

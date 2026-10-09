@@ -1,0 +1,135 @@
+# iface/min — core native API 的**极简别名皮肤**(plugin_type = interface)
+#
+# 设计出处: `1-03` §1 的 v1.0 清单 —— “`iface-min` | Interface | 极简别名层, 直通
+# native(`api_type = native`, `form = "api"`; 见 `1-01` §7.4 的皮肤分类表)”;
+# `1-01` §7.3(A-2: **APP 只依赖 Interface 插件**)。
+#
+# ★ 为什么需要它: 设计 D18/§7.3 的"A-2 收敛"决定 APP **只能**依赖 Interface 插件 ——
+#   连 core 的 native 面(日志/时钟)也要有一个 Interface 身份的转出面。否则 APP 为了
+#   `br_log_info` 就得 `#include <br/core/br_log.h>`, 那是一条"依赖 iface 层以下"的边。
+#   本件把 APP 用到的那一小撮 core native API **原样转出**(不新增实现、不改名),
+#   于是 APP 的 `[[dep]]` 只列 Interface 插件, 源码只 include 皮肤头。
+#
+# ★ 与 `iface/posix` 的分工:
+#   - `iface/posix`(form = "skin")再导出**另一个插件**的单元(runtime/posix#posix);
+#   - 本件(form = "api")直通 **core**(core 不是插件、没有 `provider#unit` 可再导出,
+#     所以不能写 `reexport_of`; `form = "api"` 是它的正确形态)。
+#   两者都是"薄": 皮肤里没有一行 core 实现。
+#
+# ★ 覆盖范围刻意**只到 APP 需要的那一面**(极简): 日志 + 时钟/tick + 版本标识。
+#   要更多 core API 时按需追加条目 + 在头里转出对应 core 头 —— 不做"core 全量别名"。
+schema = 1
+
+[plugin]
+name          = "iface/min"
+plugin_type   = "interface"
+api_type      = "native"
+lang          = "c"
+phase         = "late"
+version       = "0.1.0.0"
+# 显式前缀: short(`min`)推导成 `min_` 会与将来任何同名插件撞; 显式前缀可评审。
+symbol_prefix = "iface_min_"
+summary       = "core native 极简别名皮肤: 日志 / 时钟 / tick 计数 / 版本标识(APP 只依赖 Interface)"
+license       = "WTFPL"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "皮肤无状态: 三个空钩子 + 一张转出的 core 头"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+# ---- 结构依赖: 无(直通 core; core 不是插件, 没有 [[dep]] 可写) ----
+
+# ---- 类型别名表(IFACE-IR 规则 4): core 类型原样转出 ----
+[iface.typedefs]
+br_u64    = "unsigned long"
+br_u32    = "unsigned int"
+br_bool   = "int"
+br_time_t = "br_u64"
+
+# ---- 导出面: 一个直通单元 ----
+[[export]]
+name         = "min"
+api_iface    = "native"          # 不变量 1: 等于 [plugin].api_type
+form         = "api"             # 直通 core(不是 skin: 没有 provider#unit 可再导出)
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:b19825c94836048a12d481d508f525d8c0b76f072ff044f4d7659f5f87a2cfa1"
+status       = "experimental"
+
+# 版本标识(宏)
+[[export.entries]]
+kind  = "macro"
+name  = "BR_PROTOTYPE_NAME"
+value = "\"brickOS-prototype\""
+[[export.entries]]
+kind  = "macro"
+name  = "BR_VERSION_STRING"
+value = "\"v0.1.0\""
+[[export.entries]]
+kind  = "macro"
+name  = "BR_US_PER_MS"
+value = "1000u"
+
+# 日志(core 的格式化输出入口 + 四个等级宏)
+[[export.entries]]
+kind = "func"
+name = "br_log_set_level"
+sig  = "void (br_log_level_t)"
+[[export.entries]]
+kind = "func"
+name = "br_log_get_level"
+sig  = "br_log_level_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_log_write"
+sig  = "void (br_log_level_t, const char*, ...)"
+[[export.entries]]
+kind = "macro"
+name = "br_log_debug"
+[[export.entries]]
+kind = "macro"
+name = "br_log_info"
+[[export.entries]]
+kind = "macro"
+name = "br_log_warn"
+[[export.entries]]
+kind = "macro"
+name = "br_log_error"
+
+# 时钟与 tick 计数(APP 的心跳判据读数)
+[[export.entries]]
+kind = "type"
+name = "br_time_t"
+layout = "# = br_u64(微秒; 设计 3-01 CA-1)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_now"
+sig  = "br_time_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_freq_hz"
+sig  = "br_u64 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_ticks_per_ms"
+sig  = "br_u64 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_tick_hz"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_tick_count"
+sig  = "br_u32 (void)"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

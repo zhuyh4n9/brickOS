@@ -911,7 +911,7 @@ EOI:
      * 位置就是全部设计: eoi 之后(不占 Active)、ERET 之前(不依赖 worker/调度器)、
      * `br_sched_irq_epilogue()` 之前(bh 唤醒的线程能被同一次出口的抢占决策看到)。
      * 单次预算 `BR_WORK_BH_BUDGET`: 无上限就等于"一条中断能把中断延迟拉成任意长"。
-     * 未执行完的余项留给下一次中断出口(本原型 tick = 100 ms ⇒ 排空上界可算)。
+     * 未执行完的余项留给下一次中断出口(tick = `1/HZ`, 缺省 5 ms ⇒ 排空上界可算)。
      */
     br_work_drain(BR_WORK_BH_BUDGET);
 

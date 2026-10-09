@@ -31,15 +31,15 @@ fd 表的唯一主人在 **`framework/file-table`**(ADR-0012)。本件只 **消�
 | cwd | `chdir/getcwd`(相对路径归本服务, vfs 只认绝对路径) |
 | 时间 | `clock_gettime(MONOTONIC)/clock_getres/nanosleep/sleep/usleep` |
 | 进程身份 | `getpid/getppid/getuid/geteuid/getgid/getegid` |
-| pthread | `create/join/exit/self/equal/yield/detach/NULL-attr` + `mutex_*` + `cond_*` |
+| pthread | 线程 `create/join/exit/self/equal/yield/detach`; attr `init/destroy/set·get{stacksize,stack,detachstate,guardsize}`; `setname_np/getname_np`; `once`; key(TLS)`create/delete/setspecific/getspecific`; mutex + `mutexattr`(NORMAL/RECURSIVE/ERRORCHECK)+`timedlock`; cond + `condattr`(clock); `rwlock`(+attr, rd/wr/try/timed); `barrier`(+attr) |
 | semaphore | `sem_init/destroy/wait/trywait/timedwait/post/getvalue` |
 | stdio(**流层**) | `fopen/fdopen/fclose/fread/fwrite/fseek/ftell/rewind/fflush/feof/ferror/clearerr/fileno/setvbuf/fgets/fputs/fputc/fgetc/puts/putchar` |
 | string / stdlib | `str*/memchr/strerror` + `malloc/calloc/realloc/free/abs/labs/atoi/atol/abort/getenv` |
 
-**明确不做**(子集诚实义务 —— 不声明 = 链接期暴露, 见 `11-02` 的 TR-C/TR-D):
+**明确不做**(子集诚实义务 —— 不声明 = 链接期暴露, 见 `11-02` 的 TR-C/TR-D 与 ADR-0019 §4):
 `printf/scanf` 家族(libc 选型未拍)、`fork/exec/wait`、信号族、`gettimeofday/time`(无墙钟)、
-`mmap`(vfs 恒 `-ENOTSUP`)、`seekdir/telldir/scandir`、`pthread_key_*`/`rwlock`/`barrier`、
-`sem_open`、`exit/_exit`(无进程退出语义)。
+`mmap`(vfs 恒 `-ENOTSUP`)、`seekdir/telldir/scandir`、`pthread_cancel`/cleanup handler、
+robust mutex(`EOWNERDEAD`)、rwlock 的**同线程递归读**、`sem_open`、`exit/_exit`(无进程退出语义)。
 
 ## 三条承重口径
 
@@ -56,14 +56,14 @@ fd 表的唯一主人在 **`framework/file-table`**(ADR-0012)。本件只 **消�
 
 | 欠账 | 影响 | 还债动作 |
 |---|---|---|
-| **`errno` 是全局的** | 多线程下"线程 A 的失败被线程 B 读走" | 等 core 给出 per-thread 通用槽位(`11-02` 的 P-4) |
+| **`errno` 每线程** | **已解决**(ADR-0019): `errno` 是宏, 指向本插件线程记录里的槽位(`br_posix_errno()`) —— 不依赖 core 的通用槽位 | ~~等 core 给出 per-thread 通用槽位~~ ⇒ 层内线程记录表足够 |
 | **`st_ino/st_uid/st_gid/st_*time` 恒 0** | 依赖 inode 号去重 / 时间戳的代码拿不到值 | vfs 的 `br_stat_t` 补字段(append-only) |
 | **无墙钟** ⇒ `gettimeofday/time` 缺席, `CLOCK_REALTIME` ⇒ `-ENOTSUP` | 日期/超时(绝对时刻)无处安放 | 设计侧拍 Q-2(补纪元源 或 成文"纪元 = 启动") |
 | **`printf` 家族缺席** | 无格式化输出 | 先提炼一个 `vsnprintf`(core 里有三份私有子集可收敛), 再做 stdio |
 | **`pread/pwrite` 非原子** | 同 fd 并发 pread 会互相踩偏移 | vfs 的 `file_ops` 加 pread/pwrite 槽位(设计 Q-6) |
-| **`pthread_detach` ⇒ `-ENOTSUP`** | detach 型线程用不了 | core 加"无 join 回收"路径 |
+| **`pthread_detach` 是惰性回收** | 回收时机要等下一次 pthread 调用 | core 加"退出即回收"路径(`br_task_detach`); 届时本层改为直调(ADR-0019 §4.5) |
 | **无权限模型** ⇒ `chmod/chown/access` 是空操作(按用户裁定) | 调用方可能以为权限生效 | 设计侧拍 Q-7; 在那之前靠 ADR 与 README 显式声明 |
-| **消费者拿不到本插件的 include 路径** | 别的插件 `#include <unistd.h>` 链不上(include 路径按插件隔离) | 组合器把依赖方的 include 目录并入(工具侧改动) |
+| ~~**消费者拿不到本插件的 include 路径**~~ | **已解决**(ADR-0018): 编译期包含面 = 声明依赖闭包 ⇒ 声明 `[[dep]] runtime/posix`(或经 `iface/posix` 皮肤)的消费者拿得到 POSIX 头 | 工具侧已落地 |
 | `TC-POSIX-*` 是自编号 | 按 id 检索对不上设计用例表 | `br-wa-test-001`:`6-01` 需先补 POSIX 用例组 |
 
 ## 目录

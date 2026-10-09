@@ -198,6 +198,15 @@ struct Ctx {
     cflags: Vec<String>,
     asflags: Vec<String>,
     ldflags: Vec<String>,
+    /// 产品级**语义配置** → 编译期 define(当前唯一一项: `[kernel].hz` ⇒
+    /// `BR_CFG_TICK_HZ=<hz>`)。与 `[build].cflags` 分开: 前者是配置, 后者是通用标志
+    /// (ADR-0017)。下发到**全部**编译单元, 使"每秒多少次时钟中断"只有一处真值。
+    config_defines: Vec<String>,
+    /// 单元名 → 该单元的 include 目录(相对仓库根, 已排序去重)。
+    ///
+    /// **不再全局并集**: 每个编译单元只拿到 core + 自己 + **声明依赖闭包**的头目录
+    /// (ADR-0018)。未声明的依赖会在编译期以"头文件找不到"暴露, 而不是被全局 `-I` 掩盖。
+    unit_includes: BTreeMap<String, Vec<String>>,
     /// 工具名 → 候选(按序)。
     tools: BTreeMap<String, Vec<String>>,
     /// 工具名 → 解析结果(绝对路径或裸名)。
@@ -344,6 +353,15 @@ fn plugin_dir_of(name: &str) -> String {
     name.to_string()
 }
 
+/// 一个插件的 include 目录(相对仓库根): `[build].includes` 相对**插件根**展开。
+fn plugin_incs(p: &model::Plugin) -> Vec<String> {
+    let dir = plugin_dir_of(&p.name);
+    p.build
+        .as_ref()
+        .map(|b| b.includes.iter().map(|i| format!("{dir}/{i}")).collect())
+        .unwrap_or_default()
+}
+
 /// 解析 `.d` 文件(make 语法: `target: dep dep …`, 支持 `\` 续行)。
 fn parse_depfile(path: &Path, root: &Path) -> Vec<String> {
     let text = match fs::read_to_string(path) {
@@ -409,6 +427,25 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         );
         return Err(d);
     };
+
+    // ---- [kernel]: 时钟节拍频率(参考 Linux 的 CONFIG_HZ; ADR-0017) ----
+    // 缺省 200 Hz(5 ms 一拍)。这里把**产品配置**变成**编译期 define** 下发到全部单元:
+    // platform 的 timer 装弹周期与 core 的 jiffies 口径都读同一个 `BR_CFG_TICK_HZ`,
+    // 于是"每秒多少次时钟中断"只有一处真值。schema 已用 `minimum: 1` 拦明显非法的值,
+    // 这里再兜一次(组合期校验与构建可以分别调用)。
+    const DEFAULT_TICK_HZ: i64 = 200;
+    let tick_hz = prod.kernel_hz.unwrap_or(DEFAULT_TICK_HZ);
+    if tick_hz < 1 {
+        d.shape(
+            CODE_BUILD_SHAPE,
+            &prod.name,
+            "product.toml",
+            "kernel.hz",
+            format!("`[kernel].hz` 必须 ≥ 1(收到 {tick_hz})"),
+            "ADR-0017: HZ = 每秒时钟中断次数, 0/负数无意义; 缺省(不写) = 200",
+        );
+    }
+    let config_defines = vec![format!("BR_CFG_TICK_HZ={tick_hz}")];
 
     // ---- profile: `--profile` 覆盖 `[product].stage`(§7.5) ----
     let profile = req
@@ -639,6 +676,83 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         }
     }
 
+    // ---- 每单元的 include 面 = core + 自己 + **声明依赖闭包**(ADR-0018) ----
+    // 关键点: 不再把全树的 include 目录并成一个全局 `-I` 列表发给所有单元 —— 那会让
+    // "用了别家头却没声明 `[[dep]]`"静默编过(本刀之前的实况, 见 ADR-0018 §1)。
+    // 闭包按**声明边**算 ⇒ 未声明依赖 = 头文件找不到 = 编译期硬错误。
+    //   - 插件单元: core_includes + 自己的 includes + 传递依赖各插件的 includes;
+    //   - core(非插件): core_includes + **platform** 的头(core.init 阶段③依赖 platform
+    //     的数据与 ISA 头, `br_plat.h`/`br_mmu.h` 是设计内的 core→platform 方向);
+    //   - build/gen: core_includes + 全部被选插件的 include(生成物要包含各插件的锚头)。
+    let platform_incs: Vec<String> = tree
+        .plugins
+        .iter()
+        .filter(|p| p.plugin_type == "platform" && closure.selected.contains(&p.name))
+        .flat_map(plugin_incs)
+        .collect();
+    let mut unit_includes: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for u in &units {
+        let mut incs: Vec<String> = pb.core_includes.clone();
+        if u.name == "core" {
+            incs.extend(platform_incs.clone());
+        } else if u.name == "build/gen" {
+            incs.extend(u.includes.clone());
+        } else {
+            incs.extend(u.includes.clone());
+            for d in model::dep_closure(&tree, &u.name) {
+                if let Some(dp) = tree.by_name(&d) {
+                    incs.extend(plugin_incs(dp));
+                }
+            }
+        }
+        incs.sort();
+        incs.dedup();
+        unit_includes.insert(u.name.clone(), incs);
+    }
+
+    // ---- 声明与使用交叉校验: 未声明的跨插件 `#include` = **构建错误**(ADR-0018) ----
+    // `-I` 收窄是结构手段, 但目标工具链自带 glibc 头, `unistd.h` 这类常见名会被系统头
+    // 兜住(收窄后不报"找不到头", 而是静默改用 glibc 声明)⇒ 还必须显式把"源码 include
+    // 了别家的头"与声明面对齐。`check` 的 deps 域用同一个函数, 于是 build 与 check 同口径。
+    for u in model::cross_plugin_includes(&root, &tree, &closure.selected) {
+        // A-2(ADR-0020): APP 直连 core 头 = 构建错误; 其它插件不受限(见 check.rs 同处)。
+        if u.provider == "core" {
+            let is_app = tree
+                .plugins
+                .iter()
+                .any(|p| p.name == u.consumer && p.plugin_type == "app");
+            if !is_app {
+                continue;
+            }
+            d.shape(
+                CODE_BUILD_SHAPE,
+                &u.consumer,
+                &u.file,
+                "include",
+                format!(
+                    "`{}`(APP)直接 include 了 core 头 `{}`: APP 不许依赖 iface 层以下的接口",
+                    u.consumer, u.header
+                ),
+                "ADR-0020 / A-2: 经 Interface 皮肤取用(如 `<iface/min/min.h>`); 需要更多 core 面时在皮肤里追加条目",
+            );
+            continue;
+        }
+        if model::dep_closure(&tree, &u.consumer).contains(&u.provider) {
+            continue;
+        }
+        d.shape(
+            CODE_BUILD_SHAPE,
+            &u.consumer,
+            &u.file,
+            "include",
+            format!(
+                "`{}` include 了 `{}` 的头 `{}`, 但 `plugin.toml` 没有声明依赖(直接或传递)",
+                u.consumer, u.provider, u.header
+            ),
+            "ADR-0018: 编译期包含面 = 声明依赖闭包; 补 `[[dep]]` 或删掉这个 include",
+        );
+    }
+
     // ---- 标志 ----
     let cflags = if profile == "release" {
         let mut v = pb.cflags.clone();
@@ -772,6 +886,8 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         cflags,
         asflags,
         ldflags,
+        config_defines,
+        unit_includes,
         tools,
         resolved,
         tool_what,
@@ -878,17 +994,13 @@ impl Ctx {
             .unwrap_or_else(|| format!("@{name}"))
     }
 
-    /// 全部插件的 include 目录(核心本体也可能引用 platform 头, 见 br-wa-boot-001)。
-    fn all_includes(&self) -> Vec<String> {
-        let mut out: Vec<String> = Vec::new();
-        for u in &self.units {
-            for inc in &u.includes {
-                out.push(inc.clone());
-            }
-        }
-        out.sort();
-        out.dedup();
-        out
+    /// 一个编译单元的 include 目录(别名: `-I` 参数)。**按单元**取, 不再全局并集
+    /// —— 包含面 = 声明依赖闭包(ADR-0018), 见 `load_ctx` 的 `unit_includes`。
+    fn unit_includes_argv(&self, unit: &str) -> Vec<String> {
+        self.unit_includes
+            .get(unit)
+            .map(|v| v.iter().map(|i| format!("-I{i}")).collect())
+            .unwrap_or_default()
     }
 }
 
@@ -899,14 +1011,16 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
     let mut steps: Vec<Step> = Vec::new();
     let cc = ctx.tool("cc");
     let objcopy = ctx.tool("objcopy");
-    let includes: Vec<String> = ctx
-        .all_includes()
-        .iter()
-        .map(|i| format!("-I{i}"))
-        .collect();
     let arch_flags = ctx.target.arch_flags.clone();
     let arch_in_cflags = !arch_flags.is_empty();
     let arch_in_asflags = !arch_flags.is_empty();
+    // 产品级配置 define(`[kernel].hz` ⇒ `BR_CFG_TICK_HZ` 等): 对**每个 C 编译单元**都下发,
+    // 放在单元自己的 defines **之后** —— 语义配置由产品裁决(ADR-0017)。
+    let config_defines: Vec<String> = ctx
+        .config_defines
+        .iter()
+        .map(|d| format!("-D{d}"))
+        .collect();
 
     let mut srcs: Vec<(String, String)> = Vec::new(); // (src, unit)
     for u in &ctx.units {
@@ -920,6 +1034,8 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
         let obj = ctx.obj_of(src);
         let dep = ctx.dep_of(src);
         let is_asm = src.ends_with(".S") || src.ends_with(".s");
+        // 本单元的包含面(声明依赖闭包); 不是全局并集(ADR-0018)。
+        let includes = ctx.unit_includes_argv(unit);
         let mut argv: Vec<String> = vec![cc.clone()];
         if is_asm {
             if arch_in_asflags {
@@ -939,6 +1055,7 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
                 .unwrap_or_default();
             argv.extend(includes.clone());
             argv.extend(unit_defines);
+            argv.extend(config_defines.clone());
         }
         if is_asm {
             argv.extend(includes.clone());

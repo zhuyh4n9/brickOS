@@ -46,7 +46,7 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 | **框架件**(`framework/`) | `vfs-core`(纯 VFS)/ `dev-core`(通用设备注册表)/ `cdev-core`(字符设备 + 会话适配)/ **`file-table`(fd 表: 小整数 → `br_file_t*`, ADR-0012)** | `framework/*/src/*.c`(+ 各自的 `*_selftest.c`) |
 | **存储**(`fs/`) | `tmpfs`(**rootfs "/"**)、`devfs`(**/dev** 设备节点投影) | `fs/tmpfs/src/tmpfs.c` / `fs/devfs/src/devfs.c` |
 | **I/O**(`io/`) | `uart-pl011`: PL011 注册为 cdev ⇒ `/dev/uart0` | `io/uart-pl011/src/uart_pl011.c`(+ `uart_selftest.c`) |
-| **APP**(`app/hello` 插件) | MainLoop: 每秒打一行日志, 延时自带"不早醒"判据; 只**读**平台的心跳计数(纯 P0 消费者)。**不再驱动任何用例**(ADR-0010: 自检归 core) | `app/hello/src/main.c` |
+| **APP**(`app/hello` 插件) | **POSIX 多线程样例**(ADR-0019): APP 线程用 `pthread_create` 建, 先跑 `[APPCONF]` 多线程自判(barrier/mutex 计数/join retval/condvar/TLS key/detach/每线程 errno/rwlock/once/线程名), 再进每秒心跳日志("不早醒"判据); 只**读** core 的心跳计数 `br_clock_tick_count()`(纯 P0 消费者); POSIX 面**只经 Interface 皮肤 `iface/posix`** 取得(设计 §7.3/D18)。**不驱动插件自检**(ADR-0010: 自检归 core) | `app/hello/src/main.c` |
 | **POSIX 运行时**(`runtime/posix`, 设计名 `svc-posix`) | **D18 的实现半边**: fd/文件/目录/链接/线程/同步/时间/stdio 子集的 POSIX 面; `errno = -ret` 零转换; cwd 归它(vfs 只认绝对路径)。覆盖范围 = `11-02` 的 TR-A/TR-B; `printf`/信号/`fork`/`mmap` 明确不做 | `runtime/posix/**`(ADR-0014) |
 | **调试服务插件**(`service/*`) | `trace`(core 16B 事件环的唯一消费方)/ `backtrace`(x29 帧链捕获)/ `hexdump`(16 B/行契约格式)/ `memleak`(按归属标签出账)/ `dump`(现场编排 + `[DBGCONF]` 入口) | `service/*/src/*.c` |
 | **调度器**(`sched/`) | `rr`(**时间片轮转抢占**, 镜像选它): FIFO 就绪队列 + 每线程时间片, 用尽即请 core 在 IRQ 出口换栈; `coop`(协作式, 留树/宿主用例覆盖): 只在显式点换栈 | `sched/rr/src/rr.c` / `sched/coop/src/coop.c` |
@@ -75,7 +75,8 @@ ADR-0010 之后它们**全部**由 core 的**自检 pass** 统一驱动(在各�
 | `[SVCCONF]` 3 项 | 服务注册表: 发布 / 查找 / 错误码(`br_svc.h`) | `plugin-test` |
 | `[TASKCONF]` 14 + `[SYNCCONF]` 12 | 调度框架与所选调度器(真线程 create/yield/join/sleep; **按 `ops.kind` 分叉**: coop 跑 TC-TASK-101, rr 跑 TC-TASK-102/103) | `sched-test`/`sync-test` |
 | `[WQCONF]` 8 项 | **下半部/工作队列**(ADR-0011): 队列有界/FIFO/预算/非重入/bh 上下文与禁令(`TC-WQ-*`) | `sched-test`(宿主 `work-test` 是第二条腿) |
-| `[POSIXCONF]` 20 项 | **POSIX 面**(ADR-0014): fd/文件/目录/符号链接/硬链接/cwd/时间/pthread/stdio/errno —— 套件**只经 POSIX 头文件驱动**(一行 `br_*` 都不调), 因为要测的正是'面本身' | `posix-test` |
+| `[POSIXCONF]` 28 项 | **POSIX 面**(ADR-0014/0019): fd/文件/目录/符号链接/硬链接/cwd/时间/pthread(含每线程 errno/mutexattr/once/rwlock/barrier/key/detach)/stdio/errno —— 套件**只经 POSIX 头文件驱动**(一行 `br_*` 都不调), 因为要测的正是'面本身' | `posix-test` |
+| `[APPCONF]` 7 项 | **APP 侧多线程样例**(ADR-0019): 经 `iface/posix` 皮肤用 POSIX; mutex 计数+barrier 起跑 / condvar 会合 / TLS key / detach / 每线程 errno / rwlock / once+线程名 | `smoke`(逐 tag 点名) |
 | `[VFSCONF]` 20 + `[DEVCONF]` 6 + `[CDEVCONF]` 8 + `[IOCONF]` 12 | 存储/设备域: 挂载表/走查链/文件面/目录面 + 设备注册表 + 会话适配 + PL011 经 `/dev/uart0` 往返 | `fs-test` |
 | `[FTCONF]` 11 项 | **文件表(fd 表)**(ADR-0012): 最小可用 fd / 表满 / 非法 fd / dup / dup2 顶替 / 最后一个引用判定 / errno 值域(`TC-FT-*`) | `plugin-test`(宿主 `ft-test` 是第二条腿, 含 `BR_E*` 与宿主 `<errno.h>` 逐码对拍) |
 
@@ -117,7 +118,7 @@ brickOS/
 ├── Makefile                     只编工具 + 镜像侧的过渡别名(真身 = brickie build)
 ├── README.md                    本文件
 ├── WORKAROUNDS.md               WORKAROUND 登记表(欠债清单)
-├── product.toml                 产品声明: app 选择 / 插件选择 / 预算 / M0 引导例外豁免
+├── product.toml                 产品声明: app 选择 / 插件选择 / 预算 / 时钟节拍(HZ) / M0 引导例外豁免
 ├── mk/
 │   └── host.mk                  宿主三元组 + 宿主产物目录(build/host/… 与 prebuilts/…)
 ├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 /
@@ -140,9 +141,13 @@ brickOS/
 │       ├── docs/contract.md     跨语言接口契约(唯一权威)
 │       ├── templates/           骨架模板(四类 × c)
 │       └── tests/               端到端用例
-├── app/hello/                   【APP 插件】M0 MainLoop(镜像唯一 app; M0 引导例外)
-│   ├── plugin.toml              人写 ← 插件级唯一真值
+├── app/hello/                   【APP 插件】MainLoop(镜像唯一 app; 下层一律经 iface 皮肤)
+│   ├── plugin.toml              人写 ← 插件级唯一真值([[dep]] iface/posix + iface/min)
 │   └── src/main.c               MainLoop(延时 + 日志 + 读心跳计数; 原 core/src/startup/main.c)
+├── iface/posix/                 【Interface 插件】POSIX 薄皮肤(ADR-0018): form = "skin",
+│                                reexport_of = runtime/posix#posix; 零状态(皮肤里没有函数体)
+├── iface/min/                   【Interface 插件】core native 极简别名皮肤(ADR-0020):
+│                                form = "api" 直通日志/时钟/tick/版本, APP 不再直连 core 头
 ├── core/                        【Core】内核本体(**不是插件**; 被 [compat].core 引用)
 │   ├── include/br/core/
 │   │   ├── br_types.h           基础类型(不用 <stdint.h>)
@@ -166,7 +171,7 @@ brickOS/
 │   │   └── br_main.h          【启动】core 启动入口契约: br_core_main() 四阶段链(ADR-0008)
 │   └── src/
 │       ├── log.c                格式化 + 等级过滤
-│       ├── time.c               时钟换算 + 忙等延时 + br_deadline_from_now
+│       ├── time.c               时钟换算 + 忙等延时 + br_deadline_from_now + IRQ 心跳计数(ADR-0016)
 │       ├── main.c               ★ core 启动入口: 四阶段启动链(main.c 的 br_core_main)
 │       ├── plugin/              插件管理器(扫段/拓扑/四相/自检 pass)+ 段边界符号
 │       ├── svc/                 服务注册表
@@ -210,7 +215,8 @@ brickOS/
 │   └── file-table/              **fd 表**(ADR-0012): 小整数 → br_file_t*, 最小可用 fd / dup / 最后一个引用
 │                                (零依赖: 只持指针不解引用 ⇒ 不把 vfs-core 拉进组合; runtime/posix 的底座)
 ├── runtime/                     【运行时插件】(ADR-0015: "整套运行时"单独一个命名空间)
-│   └── posix/                   **POSIX 运行时**(ADR-0014): include/ 是一整套 POSIX 头(unistd/fcntl/dirent/…)
+│   └── posix/                   **POSIX 运行时**(ADR-0014/0015/0019): include/ 是一整套 POSIX 头(unistd/fcntl/dirent/…)
+│                                pthread 面已补齐(每线程 errno / mutexattr / once / rwlock / barrier / key / 惰性 detach)
 │                                src/posix.c 只做翻译; fd 表主人在 framework/file-table
 ├── service/                     【服务插件】(trace / dump / backtrace / hexdump / memleak)
 ├── fs/                          【FS 插件】(依赖 vfs-core; 顶层 = namespace)
@@ -252,18 +258,29 @@ brickOS/
     └── tests/smoke.toml         用例骨架(v0.1 不消费; 已登记 TC-IRQ 梗概)
 ```
 
-跨层边现在只有**一条**(在 `product.toml [lint].allow_edges` 里列名豁免; 另两条已被
-ADR-0008/0010 消除 —— 见下):
+`product.toml [lint].allow_edges` 现在**是空的** —— 跨层边全部是方向表里的**合法边**,
+没有需要豁免的例外(历史上几条非法边分别被 ADR-0008/0010/0016/0018 处理):
 
 - **Platform Entry → Core**: `start.S` 只做 reset/BSS, 然后 `bl br_core_main()`
   (core 的四阶段启动链: ① 平台无关初始化 → ② platform 插件初始化 → ③ 堆 + 地址映射的
   建立 → ④ 插件相位驱动; 见 `docs/decisions/0008-core-main-boot-chain.md`);
+- **APP → Interface(`iface/posix` + `iface/min`)**: `app/hello` 用 POSIX(`usleep`/
+  `pthread_*`/`stdio`)与 core native(日志/时钟/tick/版本), 但**只经 Interface 皮肤**取得
+  声明(设计 `1-01` §7.3/D18: **APP 只依赖 interface**)。
+  `[[dep]] iface/posix` 与 `[[dep]] iface/min`(都 `kind = "runtime"`)是**正解边**(不是
+  allow_edges 例外); 两个皮肤都零状态: `iface/posix` 再导出 `runtime/posix#posix`,
+  `iface/min` 直通 core native ⇒ 实现仍只有一份。声明与使用的一致性由 ADR-0018 的
+  "包含面 = 声明依赖闭包"执法; **APP 直连 `<br/core/...>`**(iface 层以下)由 ADR-0020
+  在 `brickie check`/`brickie build` 两侧判红。见 [iface/posix/README.md](iface/posix/README.md)、
+  [iface/min/README.md](iface/min/README.md)、`docs/decisions/0018-…`、`docs/decisions/0020-…`。
 - ~~**APP → VFS(存储域总套件)**~~ ⇒ **ADR-0010 之后已删**: 自检改由 core 统一驱动,
-  APP 不再认识任何框架件 ⇒ `allow_edges` 回到**一条**(只剩下面的 app → platform)。
-- **APP → Platform**: `app/hello` 只直读平台身份与心跳(`br_plat_name()` / `br_plat_isa()` /
-  `br_plat_timer_ticks()`)—— 一致性用例的调用点 ADR-0010 之后全部搬走, APP 不再调任何
-  用例。这条边是 `product.toml [lint].allow_edges` 里**最后一条** M0 引导例外
-  (正解是 iface-min(M2))。
+  APP 不再认识任何框架件。
+- ~~**APP → Platform**~~ ⇒ **ADR-0016 之后已删**: `app/hello` 原先直读平台身份
+  (`br_plat_name()` / `br_plat_isa()`)与心跳计数(`br_plat_timer_ticks()`)。现在:
+  心跳计数**收归 core**(platform 的 timer ISR 每拍调 `br_clock_tick_notify()`, 计数由
+  core 持有, APP 读 `br_clock_tick_count()`); 平台身份日志改由 platform 自己的
+  `qemu_aarch64_start()` 打。⇒ `product.toml [lint].allow_edges` 的最后一条同时删除,
+  该表清空(见 `docs/decisions/0016-core-timer-heartbeat.md`)。
   `service/dump` 的 `br_dump_all()`/`br_dump_trace()` 曾是 APP 的另一个面, 现在也不在
   APP 里 —— 启动快照由 dump 自己的 LATE init 打(见 `service/dump/README.md`)。
 
@@ -464,6 +481,20 @@ grep 'SELFTEST\] SUMMARY' build/logs/smoke.log
 (而不是静默少跑一堆测试)。这是有意的绊线: 开关只该在"我真的不要测试"时关,
 而那一刻门禁本来就不该绿。
 
+**时钟节拍(CONFIG_HZ 口径, ADR-0017)**: `[kernel].hz` = **每秒多少次时钟中断**;
+缺省 200(整表不写 = 200)⇒ 5 ms 一拍。`brickie build` 把它转成 `-DBR_CFG_TICK_HZ`
+下发到**全部**编译单元 —— platform 的 timer 装弹周期与 core 的 jiffies
+(`br_clock_tick_count()`)读同一个宏 ⇒ "改频率"只改这一处:
+
+```toml
+# product.toml
+[kernel]
+hz = 200          # 每秒时钟中断次数; 缺省 200(5 ms 一拍); 合法 1..100000
+```
+
+判据: 日志里 platform 的 `int: timer PPI armed … N Hz = M us` 行与 MainLoop 的
+`irq_ticks` 增速同步变化(`irq_ticks` 每拍约 +HZ)。
+
 换交叉工具链前缀改**声明面**(这是 `br-wa-toolchain-001` 的还债口), 构建规则不动:
 
 ```bash
@@ -484,7 +515,7 @@ make print-cross-compile
 [    0.009748] INFO  vfs: mount / (root type=1)
 [    0.011129] INFO  vfs: mount /dev (root type=1)
 [    0.012543] INFO  devfs: /dev mounted (1 device(s) visible so far)
-[    0.032862] INFO  int: timer PPI armed by platform (virq=0 INTID=30, 100 ms)
+[    0.032862] INFO  int: timer PPI armed by platform (virq=0 INTID=30, 200 Hz = 5000 us)
 ...                                                                    ← START 相跑完; 下面是**自检 pass**(ADR-0010)
 [    0.030486] INFO  [SELFTEST] ---- plugin self-tests (START 之后, 调度器接管之前) ----
 [    0.075021] INFO  [DEVCONF] SUMMARY pass=6 fail=0 total=6
@@ -505,8 +536,8 @@ make print-cross-compile
 [    0.525079] INFO  [VFSCONF] SUMMARY pass=13 fail=0 total=13
 [    0.529387] INFO  [SELFTEST] SUMMARY plugins=14 ran=11 skipped=4 fails=0 errors=0
 [    0.530000] INFO  [PLUGIN] manager: 调度器已注册 ⇒ br_sched_run()
-[    1.033218] INFO  tick=1 uptime=1034999 us delay=1000054 us (>=1000000 us: ok) irq_ticks=9
-[    2.033521] INFO  tick=2 uptime=2035324 us delay=1000001 us (>=1000000 us: ok) irq_ticks=19
+[    1.115448] INFO  tick=1 uptime=1116597 us delay=1000504 us (>=1000000 us: ok) irq_ticks=137
+[    2.117419] INFO  tick=2 uptime=2118593 us delay=1001828 us (>=1000000 us: ok) irq_ticks=333
 ```
 
 几处值得看的证据: `identity map on (SCTLR=0x30d51825, ...)` 是 MMU 真的开了(读回 `SCTLR_EL1`);
@@ -515,7 +546,8 @@ make print-cross-compile
 `dbg: steady-state trace drained=40` 是**第 2 拍**才取走的 trace —— 里面是 timer PPI 在中断上下文
 落下的事件, 即"trace 在 ISR 里可用"的活证据。
 
-`irq_ticks` 每拍 +10 就是"timer PPI 的 ISR 真的在跑"的活证据(100 ms 心跳);
+`irq_ticks` 每拍约 **+HZ**(缺省 200)就是"timer PPI 的 ISR 真的在跑"的活证据
+(节拍 = `product.toml [kernel].hz` 的倒数, 缺省 5 ms 一拍; 见 ADR-0017);
 `make irq-test` 会把中断的 91 项用例逐条判红绿, `make dbg-test` 再判 `[MEMCONF]`/`[DBGCONF]` 两套,
 `make sched-test` 判 `[TASKCONF]`(含**时间片抢占**与 `[WQCONF]` 的下半部八项)。
 
@@ -545,7 +577,7 @@ v0.2.0 的欠债全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)** —— 本�
 |---|---|
 | `br-wa-fs-001` | **挂载点是代码常量**: `fs/tmpfs` 的 `/`、`fs/devfs` 的 `/dev` 写死在源码里, 而 `plugin.toml` 的 `[[mount]]` 只是**人读的声明面** —— 缺"manifest → 挂载计划"的生成链路(**两处真值**, 与 `br-wa-mem-001` 同源) |
 | `br-wa-io-001` | **PL011 是"轮询 cdev", 不是设计写的"中断 tty"**: 不开 UART 中断、阻塞 read 靠 `br_task_sleep` 轮询、无 tty 层(欠债在 ADR-0011 后**收窄**成"驱动侧还没用 bh 做 RX 唤醒" —— bh 本身已就位); 另: `SET_BAUD` 会连带改内核日志速率(与 platform 的早期 console 共用同一根 UART) |
-| `br-wa-boot-001` | **① 已还**(ADR-0008: 有了独立的 `core.init` 入口 —— 四阶段启动链)。**仍欠两件**: ② APP 仍直读平台身份(`br_plat_name/isa/timer_ticks`)⇒ 还剩一条 `allow_edges` 豁免; ③ 日志/trace 直写 console/RAM 环, 未经服务注册表(与 `br-wa-debug-002` 同源) |
+| `br-wa-boot-001` | **① 已还**(ADR-0008: 有了独立的 `core.init` 入口 —— 四阶段启动链)。**② 已还**(ADR-0016: 心跳计数收归 core `br_clock_tick_notify/count`、平台身份日志归 platform 自己打 ⇒ APP 的 `[[dep]]` 与 `allow_edges` 最后一条同时删除, 该表清空; 机制与台账原文的"发布成服务"不同, 属换形态还清)。**仍欠一件**: ③ 日志/trace 直写 console/RAM 环, 未经服务注册表(与 `br-wa-debug-002` 同源) |
 | `br-wa-isa-001` | **ISA 共享库这一层还没有独立存在**: GICv3 方言、异常向量桩、**4 KiB 页表构造(`mmu.c`)** 暂居 platform 插件目录(靠文件边界分层); 异常帧布局因 extable fixup 暂放 core |
 | `br-wa-toolchain-001` | 工具链用外部 gcc; 目标事实写在声明面(`product.toml` + platform 的 `[build.target]`), **工具候选序与解析在 `brickie-core`**(裁定 R-14) |
 | `br-wa-mem-001` | **三池比例写死在 platform 的 region 表里**(heap 1 MiB / contig 256 KiB / page 1 MiB / DMA 256 KiB / 保留 16 KiB), 未经 manifest 的 `[budget]`/`[[res]]` 生成 —— 编译编排**已落地**(`brickie build`), 仍欠的是 `budget → region` 的**生成链路** |
@@ -581,7 +613,7 @@ ADR-0015(改名 `runtime/posix` + 新增 `runtime` 命名空间)不改用例, �
 | `start.S` 的 reset/BSS | `1-01 §9` 启动序列 | 设计是 Platform **插件**的汇编; 此处随插件 `[build].sources` 编进镜像。reset/BSS 后只 `bl br_core_main()`, 编排权全在 core(ADR-0008; 旧的"APP 直调"已还清 `br-wa-entry-001`) |
 | `br_plat_early_init()` | `1-01 §9` 的 `platform.early_init`; `1-01 §8` 三层模式 | console + GICv3 PIC 注册 + 绑定表(§14.3 步 1–3)+ **region 表声明 + 页表 ops 注册**(池的认领与 MMU 激活归 core 的阶段 ③, 见 ADR-0008) |
 | `br_console_*` | `1-01 §8` console 双形态; `3-01 §10` 平台侧接口表 | 形态一致(轮询早期 console) |
-| `br_clock_now()` / `br_time_t` | `3-01 §4`(br-sched 组); `3-01 §14` CA-1(us) | 读数 + `br_deadline_from_now`; 超时表/唤醒已交付(ADR-0006 §3.3: **周期 tick 上的到期扫描**, 分辨率 = tick = 100 ms; tickless 的比较器装弹仍欠) |
+| `br_clock_now()` / `br_time_t` | `3-01 §4`(br-sched 组); `3-01 §14` CA-1(us) | 读数 + `br_deadline_from_now`; 超时表/唤醒已交付(ADR-0006 §3.3: **周期 tick 上的到期扫描**, 分辨率 = tick = `1/HZ`(`product.toml [kernel].hz`, 缺省 200 ⇒ 5 ms; ADR-0017); tickless 的比较器装弹仍欠)。**原型扩展**(ADR-0016): `br_clock_tick_notify()`/`br_clock_tick_count()` —— IRQ 心跳计数收归 core(设计 `3-01 §4` 无此对), 目的是让 P0 的 APP 不必直读 platform 接口 |
 | **`br_sched_ops` / `br_sched_run` / 线程面** | `3-01 §2/§5.1`; `3-03`(总纲) | ADR-0006: ops 成文表 + 分工(core 机制 / 插件策略); **ADR-0011 追加抢占接缝** `br_sched_request_resched` 与 **bh 禁令**(bh 内阻塞 `-EPERM`/让出拒绝/退出 panic)。偏离: 同步原语归 core(ADR-0006 §3.5)、`irq_epilogue` 是 core 内部函数(同 §2 裁定 S-2) |
 | **`sched/rr`(时间片轮转抢占)** | `3-01 §5.1` 的注册点 + `3-02 §11.2` 的 IRQ 出口接缝 | **ADR-0011 新增**: `on_tick` 递减时间片, 用尽请 core 在 IRQ 出口换栈(设计 `3-02 §11.2` 的接缝第一次真的切栈)。它与 `sched/coop` 是"同一套 core 机制换一个策略"的证据: 插件里**没有一行切换代码** |
 | **`br_work_submit` / 下半部 / workqueue** | `3-01 §5`(延迟工作 = bottom half; 队列深度静态、满 ⇒ `-EAGAIN`)+ `3-02 §11.1/§11.4.1/§12.4/§9.4/IR-10` | **ADR-0011 新增, 且归属偏离**: 设计把 work queue 放调度插件, 本原型按用户裁定**整体放 core**(理由见 ADR-0011 §3.1)。执行点 = IRQ 出口(eoi 之后、ERET 之前)⇒ 延迟**有界**(与设计 §11.3 的"无上界"相反, 是更强的承诺); 代价是 bh 上下文更严(关中断、禁阻塞)。三个消费者: 按线的 `DISPATCH_BH`、SLOW 域 demux、任意 ISR 的裸提交 |
@@ -590,7 +622,7 @@ ADR-0015(改名 `runtime/posix` + 新增 `runtime` 命名空间)不改用例, �
 | **插件自检(selftest)** | `6-01`(用例是交付物; §2 运行基建)+ `1-01 §6.2`(四相与"两个完成点") | ADR-0010: 测试搬进各插件 `src/*_selftest.c`, 由 core 的**自检 pass**在 START 之后统一驱动(描述符的 `selftest` 钩子); 开关 `product.toml [selftest]` 是**生成期**的(关掉 ⇒ 描述符 NO_HOOK + `core/selftest/` 不编译 ⇒ 测试代码被裁出镜像)。**自检不是第五相**(它没有依赖语义, 对所有插件在同一时刻发生) |
 | **测试入口不进 `[[export]]`** | ADR-0005 裁定 9(钩子是组合期契约) | 11 个 `*_conformance`/`*_selftest` 从各 `plugin.toml` 的 `[[export]]` 移除 ⇒ 改用例不再算接口变更(接口快照已重发)。测试需要的插件私有符号走 `<plugin>/src/<short>_internal.h`(在 `src/` 而非 `include/`, 因为 `include/` 下的一切都是对外面) |
 | **`framework/file-table`(fd 表)** | `11-01 §1`(D18: **fd 表 = 共享状态单一主人**判例)、`1-01 §7.2` 规则 3 + D19(框架件)、`3-06 §2`(三类共享状态主人)、`7-01 §1/§4.1`(fd 表项 = `br_file_t*`) | **ADR-0012**: 设计把 fd 表写作 `svc-posix` 的一部分(且当时那个插件未落地); 本原型按 D19 的口径把它**抽成框架件** —— 归属从"服务"移到"框架件", 但规则 3 要保的"恰一个主人"不变(全树只有它写表)。它**零依赖**(只持 `br_file_t*` 不解引用)⇒ `br_file_close` 写成"最后一个引用时回报句柄"由消费者调。errno 表随之从 20 码改为 **errno-base 整表 + generic 按需**, 并新增宿主逐码对拍 |
-| **`runtime/posix`(POSIX 运行时)** | `1-01` §7.2/§7.3/§7.4/§7.6(D18 双角色 + 依赖宪法 + 移植双模式)、`11-01` §1/§2、**`11-02`(覆盖清单 TR-A/TR-B)**、`7-01` §1/§4.1、`3-01` §2/§3/§4/§7 | **ADR-0014**(内容)/ **ADR-0015**(插件名与命名空间: 原名 `service/svc-posix`): 实现 `11-02` 的 TR-A/TR-B。三条承重口径: ① `errno = -ret` 零转换(ADR-0012 的对齐是前提); ② **两条错误通道**(系统调用 `-1`+`errno` / pthread 返回错误号); ③ 访问模式执法归本件(vfs 刻意不做, ADR-0009 §5 遗留项 5)。`chmod/chown/access` 按用户裁定是空操作(但 `access` 仍查存在性) |
+| **`runtime/posix`(POSIX 运行时)** | `1-01` §7.2/§7.3/§7.4/§7.6(D18 双角色 + 依赖宪法 + 移植双模式)、`11-01` §1/§2、**`11-02`(覆盖清单 TR-A/TR-B)**、`7-01` §1/§4.1、`3-01` §2/§3/§4/§7 | **ADR-0014**(内容)/ **ADR-0015**(插件名与命名空间: 原名 `service/svc-posix`)/ **ADR-0019**(pthread 面补齐 + 多线程样例): 实现 `11-02` 的 TR-A/TR-B。三条承重口径: ① `errno = -ret` 零转换(ADR-0012 的对齐是前提); ② **两条错误通道**(系统调用 `-1`+`errno` / pthread 返回错误号); ③ 访问模式执法归本件(vfs 刻意不做, ADR-0009 §5 遗留项 5)。`chmod/chown/access` 按用户裁定是空操作(但 `access` 仍查存在性)。ADR-0019 后: `errno` 是**宏**(每线程槽位), `pthread_detach` = 惰性回收 |
 | **符号链接与硬链接(vfs + tmpfs)** | `7-01` §2(inode ops 的 v2 预留槽位) | **ADR-0013(提前落地)**: 链接的**解析在 vfs**(目标可能是绝对/相对路径 ⇒ 只有掌握挂载表的人做得到; 用**重启**而非递归, 免得压穿 4 KiB 栈); tmpfs 的数据从节点字段变成**带引用计数的 `tmpfs_body_t`**(硬链接 = 两个名字共享一个体); 三个槽位按 append-only **追加在 `br_inode_ops` 表尾** |
 | **`br_error.h` 的 errno 值域** | `3-01 §11`(负 errno; 编号沿用 Linux)、`8-01 §4`(SD-10 各域子集) | **ADR-0012**: 值表与域子集分开 —— 值表**逐字抄内核**(`errno-base.h` 整表 1–34 + `errno.h` generic 按需), 域子集仍按 SD-10 分域成文。判据 = 宿主 `ft-test` 拿 `<errno.h>` 对拍 49 码(宿主/目标同用内核 `asm-generic` 编号 ⇒ 对目标同样成立) |
 | **`br_irq_*` 九件 + 域四件** | `3-01 §8/§8.1`(签名冻结)+ `3-02 §3–§9`(机制) | Stage 1 全量; `register/enable/disable` 的 thread-only 加了**运行期拒绝**(设计侧靠静态扫描), ADR-0011 起判据是"ISR **或** bh"(`br_irq_in_atomic`)。**`BR_IRQ_F_DISPATCH_BH` 真的生效**、**SLOW 域可用**(ADR-0011); 新增三个查询面(`br_irq_in_isr`/`br_irq_in_atomic`/`br_irq_lock_depth`)与 `br_irq_stat_t` 的 bh 三项 |
@@ -605,7 +637,7 @@ ADR-0015(改名 `runtime/posix` + 新增 `runtime` 命名空间)不改用例, �
 | **`framework/{vfs-core,dev-core,cdev-core}`** | `7-01`(§1 SD-1/§2 SD-15/§3 SD-7)、`8-01`(§1 框架件归属与形态 A/B/C、§2 注册表与 open_file 钩子、§3 子分类与 D22 预留)、`1-01` §4.5(D19) | 三件的依赖方向**逐条照 §7.3/`8-01` §1.3**: `cdev-core→dev-core`(init)、`cdev-core→vfs-core`(type)、`dev-core→vfs-core`(**type** —— 写成 runtime 会推翻形态 B); `vfs-core` 的 deps **为空**(D21 撤销设备路由后的纯 VFS)。增量: `br_inode_t` 加 `fpriv`、补路径级便捷面与 `br_open_err`、补 5 个存储域错误码(见 ADR-0009 §3) |
 | **`fs/{tmpfs,devfs}`** | `7-03`(§2 tmpfs rootfs / §3 devfs 设备节点 / §6 挂载计划) | tmpfs 挂 "/" 并预建 `/dev /data /tmp`; devfs 把 dev-core 注册表**实时投影**为节点(打开经类 open_file 钩子)⇒ `/dev/uart0` 可 `br_open`。两件的挂载点是**代码常量**(`[[mount]]` 声明面工具侧尚未消费)⇒ `br-wa-fs-001` |
 | **`io/uart-pl011`** | `1-03 §1`(M0 轮询 console → **M2 注册 cdev**)、`8-01` §6(驱动编写者契约)、§5(ioctl 编码) | v1 交付**注册 cdev + 轮询式会话**(`/dev/uart0` 可开/读/写/ioctl/poll + 严格独占); **不开 UART 中断**(bh 已在 ADR-0011 就位, 欠的是驱动侧还没用它做 RX 唤醒)⇒ `br-wa-io-001`。与 platform 的 `console_pl011.c` 是同一硬件的两种**设计内**形态(后者是 panic 通道, 不能注册设备) |
-| **`service/{trace,backtrace,hexdump,memleak,dump}`** | `1-03 §1`(v1.0 插件清单: `service/trace`)+ `5-01`(§1 trace / §2 bridge / §3 ramdump 捕获集 / §4 memleak) | `service/trace` 与清单同名; 另四件是本次补的调试服务(6-01 尚无 `TC-DBG-*` 组, 属回灌项); 调用点靠 `product.toml` 的两条 M0 引导例外(`br-wa-boot-001`) |
+| **`service/{trace,backtrace,hexdump,memleak,dump}`** | `1-03 §1`(v1.0 插件清单: `service/trace`)+ `5-01`(§1 trace / §2 bridge / §3 ramdump 捕获集 / §4 memleak) | `service/trace` 与清单同名; 另四件是本次补的调试服务(6-01 尚无 `TC-DBG-*` 组, 属回灌项); 调用点**不再经 APP** —— 调试域用例归 core 的 selftest pass(ADR-0010), `allow_edges` 现为空(ADR-0016 删掉最后一条, 见 `br-wa-boot-001`) |
 | **`tests/host/mem_test.c` + `make mem-test`** | `1-03` 的"host 平台插件: CI 秒级 + ASan 白捡" | 完整 host 平台插件未落地; 本原型先做到"内存实现编成宿主可执行跑算法压测"(无需交叉工具链/QEMU) |
 | **`board_irq.h`** | `3-02 §3.1`(IR-2 生成头) | 走设计明示的**退路**: platform 导出静态头(brickie v0.1 不生成该头, 属 2-01 的 O-4) |
 
@@ -642,8 +674,11 @@ ADR-0015(改名 `runtime/posix` + 新增 `runtime` 命名空间)不改用例, �
    `[[dep]]` 驱动。**仍欠的**: `sched-tt`(v3 调度表)、优先级/PI、SMP。
 
 ⇒ 于是剩下的主线其实是**同一条**: **插件管理器 / 阶段机 / 调度器**(它们互为前提)。
-这条主线**已经走通**(上面 4/7 两行); 下一段的主线变成"**服务化**"(平台身份/心跳进服务注册表,
-让 `product.toml` 的最后一条 `allow_edges` 豁免消失)与"**debug bridge**"(M3)。
+这条主线**已经走通**(上面 4/7 两行); 原先计划的下一段主线之一是"**服务化**"(平台身份/心跳
+进服务注册表, 让 `product.toml` 的最后一条 `allow_edges` 豁免消失)—— 这一项**已由
+ADR-0016 以 core 接口的形态解决**(心跳计数收归 core、身份日志归 platform 自己打,
+`allow_edges` 现在是空表; 没有引入服务注册表, 理由见该 ADR §2.5)。仍在的主线是
+"**debug bridge**"(M3)与真正的共享状态服务化(fd 表 / socket 表 / trace 环)。
 
 > **v0.2.0 现状补记(ADR-0008)**: 第 7 项已交付(插件管理器 + 相位机 + 调度器,
 > `br_sched_run()` 接管首次调度)。`br_core_main` **没有"被拆掉", 而是以"四阶段启动链"

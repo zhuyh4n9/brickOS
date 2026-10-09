@@ -139,6 +139,9 @@ pub fn run(req: &Request) -> Response {
     // ---- 域内诊断(带域标签) ----
     let mut scoped: Vec<(&'static str, Diag)> = sol.diags;
 
+    if scopes.iter().any(|s| s == SCOPE_DEPS) {
+        scoped.extend(deps_usage_checks(&root, &tree, closure));
+    }
     if scopes.iter().any(|s| s == SCOPE_IFACE) {
         scoped.extend(iface_checks(&tree, closure, &profile, &snaps));
     }
@@ -215,6 +218,67 @@ pub fn run(req: &Request) -> Response {
         "plugin": only,
     });
     Response::ok(summary_diags, data)
+}
+
+// ------------------------------------------------------------------ deps 域: 声明 ↔ 使用
+
+/// 源码 `#include` 了别家插件的头, 但 `plugin.toml` 没声明依赖(直接或传递)。
+///
+/// 与 `build` 用**同一份扫描**(`model::cross_plugin_includes`)—— 两处口径不能分叉。
+/// 为什么单靠 `-I` 收窄不够: 目标工具链的 glibc 头会兜住 `unistd.h` 这类常见名,
+/// 收窄后不是"找不到头"而是静默改用 glibc 声明(ADR-0018)。
+fn deps_usage_checks(
+    root: &std::path::Path,
+    tree: &TreeLoad,
+    closure: &solver::Closure,
+) -> Vec<(&'static str, Diag)> {
+    let mut out: Vec<(&'static str, Diag)> = Vec::new();
+    for u in model::cross_plugin_includes(root, tree, &closure.selected) {
+        // A-2(设计 1-01 §7.3 / D18; ADR-0020): **APP 不许直连 core 头**。core 是内核面,
+        // 其它插件本来就用它并直接 include `<br/core/...>`, 所以只有消费者是 app 才判违规。
+        if u.provider == "core" {
+            let is_app = tree
+                .plugins
+                .iter()
+                .any(|p| p.name == u.consumer && p.plugin_type == "app");
+            if !is_app {
+                continue;
+            }
+            out.push((
+                SCOPE_DEPS,
+                err(
+                    "BRV-MF-0001",
+                    &u.consumer,
+                    &u.file,
+                    "include",
+                    format!(
+                        "`{}`(APP)直接 include 了 core 头 `{}`: APP 不许依赖 iface 层以下的接口",
+                        u.consumer, u.header
+                    ),
+                    "ADR-0020 / A-2: 经 Interface 皮肤取用(如 `<iface/min/min.h>` 转出 br_log_*/br_clock_*), 或为该 core 面在皮肤里追加条目",
+                ),
+            ));
+            continue;
+        }
+        if model::dep_closure(tree, &u.consumer).contains(&u.provider) {
+            continue;
+        }
+        out.push((
+            SCOPE_DEPS,
+            err(
+                "BRV-MF-0001",
+                &u.consumer,
+                &u.file,
+                "include",
+                format!(
+                    "`{}` include 了 `{}` 的头 `{}`, 但 `plugin.toml` 没有声明依赖(直接或传递)",
+                    u.consumer, u.provider, u.header
+                ),
+                "ADR-0018: 编译期包含面 = 声明依赖闭包; 补 `[[dep]]` 或删掉这个 include(缺口代用 R-9: 无专属码)",
+            ),
+        ));
+    }
+    out
 }
 
 // ------------------------------------------------------------------ iface 域

@@ -65,6 +65,8 @@ pub struct PluginFacts<'a> {
     pub lang: &'a str,
     pub phase: &'a str,
     pub sched_class: &'a str,
+    /// 钩子/描述符符号前缀覆盖(见 `model::Plugin::symbol_prefix`); `None` = 按 short 推导。
+    pub symbol_prefix: Option<String>,
     pub version: &'a str,
     /// `[compat].api_rev`(缺省 1)。
     pub api_rev: i64,
@@ -263,7 +265,10 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     let ns = rules::name_namespace(f.name).to_string();
     let short = rules::name_short(f.name).to_string();
     let sub = f.subkind.unwrap_or("").to_string();
-    let sym = symbol_prefix(&short);
+    let sym = f
+        .symbol_prefix
+        .clone()
+        .unwrap_or_else(|| symbol_prefix(&short));
     let guard = include_guard(&ns, &short);
     let dtag = descriptor_tag(&short);
     let dsym = descriptor_symbol(&short);
@@ -634,6 +639,7 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         lang: &lang,
         phase,
         sched_class: "SAFE_PREEMPT",
+        symbol_prefix: None,
         version: "0.1.0.0",
         api_rev: 1,
         abi_id: String::new(),
@@ -735,6 +741,7 @@ pub fn plan_init(
         lang: &lang,
         phase: "app",
         sched_class: "SAFE_PREEMPT",
+        symbol_prefix: None,
         version: "0.1.0.0",
         api_rev: 1,
         abi_id: String::new(),
@@ -873,6 +880,7 @@ pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
         lang: &p.lang,
         phase: &p.phase,
         sched_class: &p.sched_class,
+        symbol_prefix: p.symbol_prefix.clone(),
         version: &p.version_raw,
         api_rev: p.compat.api_rev.unwrap_or(1),
         abi_id: p.compat.abi_id.clone().unwrap_or_default(),

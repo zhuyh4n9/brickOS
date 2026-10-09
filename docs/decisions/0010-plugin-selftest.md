@@ -198,11 +198,14 @@ enabled = "inherit"   # true | false | "inherit"（= 跟随 [product].stage: dev
 * 11 个测试入口**移出** `[[export]]`, 冻结面因此更干净。
 * APP 的 `start` 变回纯业务, **`allow_edges` 又回到一条**(`app → platform`)——
   ADR-0009 §2.5 那条存储域豁免随本刀删除。
+  ★ **后续(ADR-0016)**: 剩下的 `app → platform` 也已删除(心跳收归 core、平台身份日志归
+  platform 自己打)⇒ `allow_edges` 现在是**空表**; 本行描述的是本 ADR 作成时的状态。
 * 7 道 QEMU 门禁各加一条 `[SELFTEST] SUMMARY … fails=0 errors=0` 判据。
 
 **时序变化与实测(必须记录)**
 * platform 的 `[IRQCONF]`/`[MEMCONF]` 从"timer arm **之前**"变为"arm **之后**"。
-  风险是中断在用例执行期间投递(timer 每 100 ms 一次, 而用例是软件触发 SGI),
+  风险是中断在用例执行期间投递(timer 每 `1/HZ` 一次; 本刀实测 100 ms,
+  **ADR-0017 起**缺省 200 ⇒ 5 ms), 而用例是软件触发 SGI),
   可能扰动风暴窗口判据。**实测结论**: `irq-test`(21 个 tag)/`dbg-test`(33 个 tag)/
   `fs-test`(39 个 tag)与其余门禁全绿 ⇒ 判据在两种时序下都成立;
   本 ADR 记下这一条, 因为"它现在是绿的"不等于"两种时序等价"。

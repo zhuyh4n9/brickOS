@@ -36,7 +36,7 @@ platform = ["qemu-aarch64"]
 [[case]]
 id       = "plat-0004"
 pre      = "中断已全局放行; timer PPI(INTID 30)已 register+enable"
-steps    = ["br_plat_timer_start(100ms)", "等待 1s", "读 br_irq_stats_get(BR_IRQ_TIMER).count"]
+steps    = ["br_plat_timer_start(1/HZ, 缺省 5 ms)", "等待 1s", "读 br_irq_stats_get(BR_IRQ_TIMER).count"]
 expect   = "count 随时间增长(真实硬件中断投递), 无 panic/spurious"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]
@@ -81,7 +81,7 @@ id       = "plat-0007"
 pre      = "LATE 相已过、全局中断已开、START 相轮到 platform"
 steps    = [
   "qemu_aarch64_start(): br_plat_irq_start()(arm timer; 两套用例已搬到 qemu_aarch64_selftest, ADR-0010)",
-  "再 br_plat_irq_start(): 注册 timer PPI 的 ISR + 使能 + 装 100 ms 期限 + 全局开中断",
+  "再 br_plat_irq_start(): 注册 timer PPI 的 ISR + 使能 + 装 1/HZ 期限(缺省 5 ms) + 全局开中断",
   "核对 [PLUGIN] phase=start name=platform/qemu-aarch64 rc=0",
 ]
 expect   = "返回 0; `int: conformance ALL PASS` 与 `[MEMCONF] SUMMARY fail=0` 都在; irq_ticks 随后开始增长"

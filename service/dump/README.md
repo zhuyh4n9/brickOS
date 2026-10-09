@@ -90,7 +90,9 @@ flags/常量: `BR_DUMP_F_STRICT`(缺省, 未声明地址 ⇒ `-EINVAL`)、`BR_DU
   `dump_init()` / `dump_start()` 由 core 的插件管理器按相驱动(`dump_init()` 在 LATE 相,
   并在其中打一份启动快照)。**APP 不再直调 dump** —— `app/hello/plugin.toml` 已没有
   `service/dump` 的 `[[dep]]`, `product.toml [lint].allow_edges` 里那条
-  `["app/hello", "service/dump"]` M0 豁免也随 ADR-0010 删除(全库只剩 `app → platform`)。
+  `["app/hello", "service/dump"]` M0 豁免也随 ADR-0010 删除。最后一条
+  `app → platform` 随后由 ADR-0016 删掉(心跳收归 core、平台身份日志归 platform 自己打)
+  ⇒ **`allow_edges` 现在是空表**。
 - **init 顺序**: `plugin.toml` 对 trace/backtrace/hexdump/memleak 各有一条 `kind = "init"`
   的边 ⇒ plugin_manager 的拓扑序保证它们的 LATE init 在 `dump_init()` **之前**返回(没有
   这四条边, LATE 相顺序会退化成字典序, dump 会排到最前)。

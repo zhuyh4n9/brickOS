@@ -3,7 +3,7 @@
  *
  * 设计依据(设计仓库 `brickOS-Design`):
  *   - `1-01-architecture.md` §7(v0.5/D18: **POSIX 双角色拆分** —— `runtime/posix` 是实现
- *     (普通服务), `iface-posix` 是薄皮肤; §7.6 三方移植双模式);
+ *     (普通服务), `iface/posix` 是薄皮肤; §7.6 三方移植双模式);
  *   - `11-01-service.md` §1/§2(POSIX 运行时服务: fd 表主人 / `errno = -ret` 零转换);
  *   - `docs/decisions/0015-runtime-posix-rename.md`(**本插件为何叫 runtime/posix**);
  *   - `11-02-svc-posix-subset.md`(**本件的覆盖清单**: TR-A/TR-B 是实现范围, TR-C/TR-D
@@ -32,11 +32,12 @@
  *    write ⇒ EBADF"必须在这里有, 否则整个 POSIX 面就没有权限语义。
  *
  * ============================== 已知欠账(诚实清单) ==============================
- * 全部条目见 `docs/decisions/0014-…` §4。最要紧的四条:
- *   - `errno` 是**全局**的(缺 per-thread 通用槽位, `11-02` P-4);
+ * 全部条目见 `docs/decisions/0014-…` 与 `0019-…` §4。最要紧的四条:
+ *   - `errno` 已改为**每线程**(本层线程记录里的槽位, `__br_posix_errno()`);
  *   - `struct stat` 的 `st_ino/st_uid/st_gid/st_*time` **恒 0**(vfs 没有这些面);
  *   - `printf` 家族**不在本代**(TR-C: libc 选型未拍, `11-01` §3);
- *   - `pthread_detach` 返回 -ENOTSUP(core 只有 join 一条回收路径)。
+ *   - `pthread_detach` = **惰性回收**(下一次 pthread 调用时 join 掉已退出的 detached
+ *     线程; core 只有 join 一条回收路径, ADR-0019)。
  */
 #include <dirent.h>
 #include <errno.h>
@@ -77,10 +78,11 @@ int posix_start(void);
 #define SVC_THREAD_MAX      8u     /* 与 core 的 BR_TASK_MAX 对齐(core 是 TCB 池的真实上界) */
 #define SVC_LOCK_MAX        16u    /* 记录锁条目上界 */
 #define SVC_SELECT_MAX      16u    /* select 一次能管的 fd 数(nfds 上界) */
+#define SVC_KEY_MAX         PTHREAD_KEYS_MAX   /* TLS key 槽位数(与 pthread.h 一致) */
 
-/* `errno` 的载体。★ 全局(见文件头欠账); 名字就叫 `errno`, 于是 `extern int errno;`
- * 的第三方代码能直接链上 —— 这是 POSIX 面的"符号契约"部分。 */
-int errno;
+/* `errno` 现在**不是**一个全局 int: 它是 `errno.h` 里的宏, 指向每线程槽位
+ * (`__br_posix_errno()`, 实现见下面的 pthread 层)。定义全局 int 会让"线程 A 的失败
+ * 被线程 B 读走"复活, 而且与 POSIX"errno 是宏"的规定冲突。 */
 
 /* cwd: POSIX 概念, 归本服务(vfs 只认绝对路径, `7-01` §2)。始终以 '/' 开头。 */
 static char s_cwd[SVC_PATH_MAX] = "/";
@@ -1166,7 +1168,7 @@ int clock_getres(clockid_t id, struct timespec *ts)
         return svc_fail(BR_ERR(BR_ENOTSUP));
     }
     ts->tv_sec  = 0;
-    ts->tv_nsec = BR_POSIX_CLOCK_RES_NS;            /* 如实报 100 ms(周期 tick) */
+    ts->tv_nsec = BR_POSIX_CLOCK_RES_NS;            /* 如实报一拍 = 1/HZ(周期 tick) */
     return 0;
 }
 
@@ -1270,7 +1272,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms)
         if (deadline != BR_TIMEOUT_INF && br_clock_now() >= deadline) {
             return 0;
         }
-        /* 一小片再查。★ tickless 未落地 ⇒ 实际睡眠 ≈ 一个 tick(100 ms),
+        /* 一小片再查。★ tickless 未落地 ⇒ 实际睡眠 ≈ 一个 tick(`1/HZ`, 缺省 5 ms),
          *   所以"轮询间隔"取 10 ms 是**声明意图**, 不是承诺(P-2)。 */
         (void)br_task_sleep((br_time_t)10000u);
         if (deadline != BR_TIMEOUT_INF && br_clock_now() >= deadline) {
@@ -2013,20 +2015,44 @@ char *getenv(const char *name)
 
 /* ==================================================================== 层: pthread */
 
+/*
+ * 每线程记录。一条记录同时承载四件事(它们都是 POSIX 要求"每线程一份"的东西):
+ *   - **生命周期**: 与 core TCB 的对应 + `join` 的 retval + 自切栈的归属(文件头 ①②);
+ *   - **detach 标记**: 惰性回收的判据(文件头 ③);
+ *   - **errno 槽位**: `errno` 宏指向这里(文件头 ④);
+ *   - **TLS key 槽位**: `pthread_setspecific/getspecific` 落在这里(文件头 ⑤)。
+ *
+ * 主线程(以及任何不是 `pthread_create` 创建的线程)在**第一次需要时**惰性登记一条
+ * 记录 —— 于是"每线程 errno/TLS"对 APP 主线程同样成立, 不需要 core 的通用槽位。
+ */
 typedef struct {
     br_u32        used;
     br_thread_t  *t;
     void        *(*fn)(void *);
     void         *arg;
     void         *retval;
-    void         *stack;        /* 本服务切的栈(join 时归还) */
+    void         *stack;        /* 本服务切的栈(join/reap 时归还) */
     int           owns_stack;
+    int           detached;     /* PTHREAD_CREATE_DETACHED / pthread_detach() */
+    int           err_val;      /* 每线程 errno */
+    char          name[BR_PTHREAD_NAME_MAX];
+    void         *key_values[SVC_KEY_MAX];
 } svc_thread_t;
 
 static svc_thread_t s_threads[SVC_THREAD_MAX];
 
+/* key 注册表: 是否已用(位图)+ 析构函数。key 本身在进程内唯一(不随线程)。 */
+static br_u32 s_key_used;
+static void (*s_key_dtor[SVC_KEY_MAX])(void *);
+
+/* 极端情形(errno 在内核线程之外/记录表满)的兜底槽位: 保证 `errno` 永远是可写的左值。 */
+static int s_errno_fallback;
+
 static svc_thread_t *svc_thread_find(br_thread_t *t)
 {
+    if (t == BR_NULL) {
+        return BR_NULL;
+    }
     for (br_u32 i = 0u; i < (br_u32)SVC_THREAD_MAX; i++) {
         if (s_threads[i].used == 1u && s_threads[i].t == t) {
             return &s_threads[i];
@@ -2035,22 +2061,123 @@ static svc_thread_t *svc_thread_find(br_thread_t *t)
     return BR_NULL;
 }
 
+static void svc_thread_clear(svc_thread_t *rec)
+{
+    for (size_t i = 0u; i < sizeof(*rec); i++) {
+        ((unsigned char *)rec)[i] = 0u;
+    }
+}
+
+/* 当前线程的记录: 找不到就**惰性登记**一条(主线程/非 pthread 线程走这条路)。
+ * `br_task_self()` 还不可用(极早期)⇒ 返回 NULL, 调用方退化到兜底槽位。 */
+static svc_thread_t *svc_thread_self_rec(void)
+{
+    br_thread_t *self = br_task_self();
+    if (self == BR_NULL) {
+        return BR_NULL;
+    }
+    svc_thread_t *rec = svc_thread_find(self);
+    if (rec != BR_NULL) {
+        return rec;
+    }
+    for (br_u32 i = 0u; i < (br_u32)SVC_THREAD_MAX; i++) {
+        if (s_threads[i].used == 0u) {
+            rec = &s_threads[i];
+            svc_thread_clear(rec);
+            rec->used = 1u;
+            rec->t    = self;
+            svc_copy(rec->name, br_task_name(self), sizeof(rec->name));
+            return rec;
+        }
+    }
+    return BR_NULL;
+}
+
+/* 惰性回收: 把"已退出(ZOMBIE)且 detached"的线程 join 掉, 并还栈/清记录。
+ * 在**每一次进入 pthread 层**时调用(见 pthread.h 文件头 ③)。跳过当前线程自己。 */
+static void svc_reap_detached(void)
+{
+    br_thread_t *self = br_task_self();
+    for (br_u32 i = 0u; i < (br_u32)SVC_THREAD_MAX; i++) {
+        svc_thread_t *rec = &s_threads[i];
+        if (rec->used == 0u || rec->detached == 0 || rec->t == BR_NULL || rec->t == self) {
+            continue;
+        }
+        if (br_task_state(rec->t) != BR_TASK_ZOMBIE) {
+            continue;                               /* 还在跑 ⇒ 下次再说 */
+        }
+        int code = 0;
+        if (br_task_join(rec->t, &code) == 0) {
+            if (rec->owns_stack != 0 && rec->stack != BR_NULL) {
+                br_free(rec->stack);
+            }
+            svc_thread_clear(rec);
+        }
+    }
+}
+
+/* 线程退出时按 POSIX 语义跑 TLS 析构函数(最多 PTHREAD_DESTRUCTOR_ITERATIONS 轮,
+ * 因为析构函数可以再 setspecific)。 */
+static void svc_thread_run_key_dtors(void)
+{
+    svc_thread_t *rec = svc_thread_find(br_task_self());
+    if (rec == BR_NULL) {
+        return;
+    }
+    for (int iter = 0; iter < (int)PTHREAD_DESTRUCTOR_ITERATIONS; iter++) {
+        int called = 0;
+        for (br_u32 k = 0u; k < (br_u32)SVC_KEY_MAX; k++) {
+            if (rec->key_values[k] != BR_NULL && s_key_dtor[k] != BR_NULL) {
+                void *v = rec->key_values[k];
+                rec->key_values[k] = BR_NULL;
+                s_key_dtor[k](v);
+                called = 1;
+            }
+        }
+        if (called == 0) {
+            break;
+        }
+    }
+}
+
 /* 入口跳板: core 的 `br_task_create` 只传一个 `void*`, 于是"函数 + 参数 + 返回值的落点"
  * 都挂在记录上。返回值的搬运是 pthread 与 core 的**唯一**形状差异(见 pthread.h ②)。 */
 static void svc_thread_tramp(void *arg)
 {
     svc_thread_t *rec = (svc_thread_t *)arg;
     rec->retval = rec->fn(rec->arg);
+    svc_thread_run_key_dtors();                     /* POSIX: 线程退出跑 TLS 析构 */
     br_task_exit(0);
 }
+
+/* timespec(绝对时刻, MONOTONIC) → 相对微秒。过去时刻 ⇒ ZERO(trylock 语义)。 */
+static br_time_t svc_abstime_to_rel(const struct timespec *abstime)
+{
+    const br_u64 abs_us = ((br_u64)abstime->tv_sec * 1000000u) +
+                          ((br_u64)abstime->tv_nsec / 1000u);
+    const br_u64 now    = br_clock_now();
+    return (abs_us > now) ? (br_time_t)(abs_us - now) : BR_TIMEOUT_ZERO;
+}
+
+/* ==================================================================== errno */
+
+int *br_posix_errno(void)
+{
+    svc_thread_t *rec = svc_thread_self_rec();
+    return (rec != BR_NULL) ? &rec->err_val : &s_errno_fallback;
+}
+
+/* ==================================================================== 生命周期 */
 
 int pthread_attr_init(pthread_attr_t *a)
 {
     if (a == BR_NULL) {
         return svc_rc(BR_ERR(BR_EINVAL));
     }
-    a->stack_size = BR_POSIX_STACK_DEFAULT;
-    a->stack      = BR_NULL;
+    a->stack_size  = BR_POSIX_STACK_DEFAULT;
+    a->stack       = BR_NULL;
+    a->detachstate = PTHREAD_CREATE_JOINABLE;
+    a->guard_size  = 0u;
     return 0;
 }
 
@@ -2088,9 +2215,59 @@ int pthread_attr_setstack(pthread_attr_t *a, void *stack, size_t size)
     return 0;
 }
 
+int pthread_attr_getstack(const pthread_attr_t *a, void **stack, size_t *size)
+{
+    if (a == BR_NULL || stack == BR_NULL || size == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *stack = a->stack;
+    *size  = a->stack_size;
+    return 0;
+}
+
+int pthread_attr_setdetachstate(pthread_attr_t *a, int state)
+{
+    if (a == BR_NULL ||
+        (state != PTHREAD_CREATE_JOINABLE && state != PTHREAD_CREATE_DETACHED)) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->detachstate = state;
+    return 0;
+}
+
+int pthread_attr_getdetachstate(const pthread_attr_t *a, int *state)
+{
+    if (a == BR_NULL || state == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *state = a->detachstate;
+    return 0;
+}
+
+int pthread_attr_setguardsize(pthread_attr_t *a, size_t size)
+{
+    if (a == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    /* core 没有 guard 页(栈是调用方给的连续内存)⇒ 只记录, 不改行为。如实返回成功
+     * 会让 get 读回自己设的值; 想让调用方知道"没生效"就靠文档与这里的一句注释。 */
+    a->guard_size = size;
+    return 0;
+}
+
+int pthread_attr_getguardsize(const pthread_attr_t *a, size_t *size)
+{
+    if (a == BR_NULL || size == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *size = a->guard_size;
+    return 0;
+}
+
 int pthread_create(pthread_t *out, const pthread_attr_t *attr,
                    void *(*fn)(void *), void *arg)
 {
+    svc_reap_detached();
     if (out == BR_NULL || fn == BR_NULL) {
         return svc_rc(BR_ERR(BR_EINVAL));
     }
@@ -2109,14 +2286,18 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
     size_t      ssize = BR_POSIX_STACK_DEFAULT;
     void       *stack = BR_NULL;
     int         owned = 0;
+    int         detach = PTHREAD_CREATE_JOINABLE;
 
-    if (attr != BR_NULL && attr->stack != BR_NULL) {
-        stack = attr->stack;
-        ssize = attr->stack_size;
-    } else {
-        if (attr != BR_NULL && attr->stack_size != 0u) {
+    if (attr != BR_NULL) {
+        detach = attr->detachstate;
+        if (attr->stack != BR_NULL) {
+            stack = attr->stack;
+            ssize = attr->stack_size;
+        } else if (attr->stack_size != 0u) {
             ssize = attr->stack_size;
         }
+    }
+    if (stack == BR_NULL) {
         /* ★ 栈从 core 堆上切(POSIX 的签名里没有栈; 见 pthread.h ①) */
         stack = br_malloc((br_size_t)ssize);
         if (stack == BR_NULL) {
@@ -2132,12 +2313,15 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
     ta.prio       = 0u;
     ta.flags      = 0u;
 
+    svc_thread_clear(rec);
     rec->used       = 1u;
     rec->fn         = fn;
     rec->arg        = arg;
     rec->retval     = BR_NULL;
     rec->stack      = stack;
     rec->owns_stack = owned;
+    rec->detached   = (detach == PTHREAD_CREATE_DETACHED) ? 1 : 0;
+    svc_copy(rec->name, "pthread", sizeof(rec->name));
 
     br_thread_t *t = BR_NULL;
     const int rc = br_task_create(&t, &ta, svc_thread_tramp, rec);
@@ -2145,22 +2329,29 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
         if (owned != 0) {
             br_free(stack);
         }
-        rec->used = 0u;
+        svc_thread_clear(rec);
         return svc_rc(rc);
     }
-    rec->t  = t;
-    *out    = t;
+    rec->t = t;
+    *out   = t;
     return 0;
 }
 
 int pthread_join(pthread_t t, void **retval)
 {
+    svc_reap_detached();
     if (t == BR_NULL) {
         return svc_rc(BR_ERR(BR_ESRCH));
+    }
+    if (t == br_task_self()) {
+        return svc_rc(BR_ERR(BR_EDEADLK));
     }
     svc_thread_t *rec = svc_thread_find(t);
     if (rec == BR_NULL) {
         return svc_rc(BR_ERR(BR_ESRCH));          /* 从未创建 / 已被 join 过 */
+    }
+    if (rec->detached != 0) {
+        return svc_rc(BR_ERR(BR_EINVAL));         /* join detached 线程 = 未定义(glibc EINVAL) */
     }
     int       code = 0;
     const int rc   = br_task_join(t, &code);
@@ -2173,9 +2364,7 @@ int pthread_join(pthread_t t, void **retval)
     if (rec->owns_stack != 0 && rec->stack != BR_NULL) {
         br_free(rec->stack);                        /* 栈归谁切谁还 */
     }
-    for (size_t i = 0u; i < sizeof(*rec); i++) {
-        ((unsigned char *)rec)[i] = 0u;
-    }
+    svc_thread_clear(rec);
     return 0;
 }
 
@@ -2185,7 +2374,25 @@ void pthread_exit(void *retval)
     if (rec != BR_NULL) {
         rec->retval = retval;                       /* 让 join 还能取到 */
     }
+    svc_thread_run_key_dtors();
     br_task_exit(0);
+}
+
+int pthread_detach(pthread_t t)
+{
+    svc_reap_detached();
+    if (t == BR_NULL) {
+        return svc_rc(BR_ERR(BR_ESRCH));
+    }
+    svc_thread_t *rec = svc_thread_find(t);
+    if (rec == BR_NULL) {
+        return svc_rc(BR_ERR(BR_ESRCH));
+    }
+    if (rec->detached != 0) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    rec->detached = 1;
+    return 0;                                       /* 回收是惰性的(见文件头 ③) */
 }
 
 pthread_t pthread_self(void)
@@ -2200,26 +2407,211 @@ int pthread_equal(pthread_t a, pthread_t b)
 
 int pthread_yield(void)
 {
+    svc_reap_detached();
     br_task_yield();
     return 0;
 }
 
-int pthread_detach(pthread_t t)
+int pthread_setname_np(pthread_t t, const char *name)
 {
-    (void)t;
-    /* core 只有 join 一条回收路径(`br_task_join` 把 ZOMBIE 收回 TCB 池); 假装成功会让
-     * TCB 池悄悄漏光 —— 见 pthread.h ③。 */
-    return svc_rc(BR_ERR(BR_ENOTSUP));
+    svc_reap_detached();
+    if (t == BR_NULL) {
+        t = br_task_self();
+    }
+    svc_thread_t *rec = (t == br_task_self()) ? svc_thread_self_rec()
+                                              : svc_thread_find(t);
+    if (rec == BR_NULL) {
+        return svc_rc(BR_ERR(BR_ESRCH));
+    }
+    svc_copy(rec->name, name, sizeof(rec->name));
+    return 0;
+}
+
+int pthread_getname_np(pthread_t t, char *buf, size_t len)
+{
+    svc_reap_detached();
+    if (buf == BR_NULL || len == 0u) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    if (t == BR_NULL) {
+        t = br_task_self();
+    }
+    svc_thread_t *rec = (t == br_task_self()) ? svc_thread_self_rec()
+                                              : svc_thread_find(t);
+    if (rec == BR_NULL) {
+        return svc_rc(BR_ERR(BR_ESRCH));
+    }
+    svc_copy(buf, rec->name, len);
+    return 0;
+}
+
+/* ==================================================================== once */
+
+int pthread_once(pthread_once_t *once, void (*init)(void))
+{
+    svc_reap_detached();
+    if (once == BR_NULL || init == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    if (once->done != 0) {
+        return 0;                                   /* 无锁快路径(已完成后只读) */
+    }
+    const int rc = br_mutex_lock(&once->m);
+    if (rc != 0) {
+        return svc_rc(rc);
+    }
+    if (once->done == 0) {
+        init();                                     /* POSIX: init 不得递归同一 once */
+        once->done = 1;
+    }
+    (void)br_mutex_unlock(&once->m);
+    return 0;
+}
+
+/* ==================================================================== TLS key */
+
+int pthread_key_create(pthread_key_t *key, void (*destructor)(void *))
+{
+    svc_reap_detached();
+    if (key == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    for (br_u32 i = 0u; i < (br_u32)SVC_KEY_MAX; i++) {
+        if ((s_key_used & (1u << i)) == 0u) {
+            s_key_used |= (1u << i);
+            s_key_dtor[i] = destructor;
+            *key = i;
+            return 0;
+        }
+    }
+    return svc_rc(BR_ERR(BR_EAGAIN));               /* key 用尽 */
+}
+
+int pthread_key_delete(pthread_key_t key)
+{
+    svc_reap_detached();
+    if (key >= (pthread_key_t)SVC_KEY_MAX || (s_key_used & (1u << key)) == 0u) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    s_key_used &= ~(1u << key);
+    s_key_dtor[key] = BR_NULL;
+    return 0;
+}
+
+int pthread_setspecific(pthread_key_t key, const void *value)
+{
+    svc_reap_detached();
+    if (key >= (pthread_key_t)SVC_KEY_MAX || (s_key_used & (1u << key)) == 0u) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    svc_thread_t *rec = svc_thread_self_rec();
+    if (rec == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EAGAIN));
+    }
+    rec->key_values[key] = (void *)value;
+    return 0;
+}
+
+void *pthread_getspecific(pthread_key_t key)
+{
+    if (key >= (pthread_key_t)SVC_KEY_MAX || (s_key_used & (1u << key)) == 0u) {
+        return BR_NULL;
+    }
+    svc_thread_t *rec = svc_thread_self_rec();
+    return (rec != BR_NULL) ? rec->key_values[key] : BR_NULL;
+}
+
+/* ==================================================================== mutex */
+
+int pthread_mutexattr_init(pthread_mutexattr_t *a)
+{
+    if (a == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->type     = PTHREAD_MUTEX_NORMAL;
+    a->pshared  = PTHREAD_PROCESS_PRIVATE;
+    a->protocol = PTHREAD_PRIO_NONE;
+    return 0;
+}
+
+int pthread_mutexattr_destroy(pthread_mutexattr_t *a)
+{
+    (void)a;
+    return 0;
+}
+
+int pthread_mutexattr_settype(pthread_mutexattr_t *a, int type)
+{
+    if (a == BR_NULL ||
+        (type != PTHREAD_MUTEX_NORMAL && type != PTHREAD_MUTEX_RECURSIVE &&
+         type != PTHREAD_MUTEX_ERRORCHECK)) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->type = (unsigned)type;
+    return 0;
+}
+
+int pthread_mutexattr_gettype(const pthread_mutexattr_t *a, int *type)
+{
+    if (a == BR_NULL || type == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *type = (int)a->type;
+    return 0;
+}
+
+int pthread_mutexattr_setpshared(pthread_mutexattr_t *a, int pshared)
+{
+    if (a == BR_NULL ||
+        (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    /* 单地址空间: PROCESS_SHARED 可记录但没有跨进程语义(如实)。 */
+    a->pshared = pshared;
+    return 0;
+}
+
+int pthread_mutexattr_getpshared(const pthread_mutexattr_t *a, int *pshared)
+{
+    if (a == BR_NULL || pshared == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *pshared = a->pshared;
+    return 0;
+}
+
+int pthread_mutexattr_setprotocol(pthread_mutexattr_t *a, int protocol)
+{
+    if (a == BR_NULL || protocol != PTHREAD_PRIO_NONE) {
+        return svc_rc(BR_ERR(BR_ENOTSUP));          /* PI 属 v2(无优先级) */
+    }
+    a->protocol = protocol;
+    return 0;
+}
+
+int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *a, int *protocol)
+{
+    if (a == BR_NULL || protocol == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *protocol = a->protocol;
+    return 0;
 }
 
 int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr)
 {
-    (void)attr;
+    svc_reap_detached();
     if (m == BR_NULL) {
         return svc_rc(BR_ERR(BR_EINVAL));
     }
     const int rc = br_mutex_init(&m->m);
-    return (rc != 0) ? svc_rc(rc) : 0;
+    if (rc != 0) {
+        return svc_rc(rc);
+    }
+    m->type  = (attr != BR_NULL) ? attr->type : PTHREAD_MUTEX_NORMAL;
+    m->owner = BR_NULL;
+    m->count = 0u;
+    return 0;
 }
 
 int pthread_mutex_destroy(pthread_mutex_t *m)
@@ -2230,17 +2622,45 @@ int pthread_mutex_destroy(pthread_mutex_t *m)
 
 int pthread_mutex_lock(pthread_mutex_t *m)
 {
+    svc_reap_detached();
     if (m == BR_NULL) {
         return svc_rc(BR_ERR(BR_EINVAL));
     }
+    br_thread_t *self = br_task_self();
+
+    /* RECURSIVE: 已持有 ⇒ 只加计数(core 的 mutex 是普通互斥量, 直接再锁会自死锁)。 */
+    if (m->owner == self && m->count > 0u) {
+        if (m->type == PTHREAD_MUTEX_RECURSIVE) {
+            m->count++;
+            return 0;
+        }
+        if (m->type == PTHREAD_MUTEX_ERRORCHECK) {
+            return svc_rc(BR_ERR(BR_EDEADLK));
+        }
+        /* NORMAL: POSIX 说自锁是未定义 ⇒ 落到 core(core 会自死锁, 与 Linux NORMAL 同型) */
+    }
     const int rc = br_mutex_lock(&m->m);
-    return (rc != 0) ? svc_rc(rc) : 0;
+    if (rc != 0) {
+        return svc_rc(rc);
+    }
+    m->owner = self;
+    m->count = 1u;
+    return 0;
 }
 
 int pthread_mutex_trylock(pthread_mutex_t *m)
 {
+    svc_reap_detached();
     if (m == BR_NULL) {
         return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    br_thread_t *self = br_task_self();
+    if (m->owner == self && m->count > 0u) {
+        if (m->type == PTHREAD_MUTEX_RECURSIVE) {
+            m->count++;
+            return 0;
+        }
+        return svc_rc(BR_ERR(BR_EBUSY));            /* NORMAL/ERRORCHECK: 自持 ⇒ EBUSY */
     }
     /* core 的 `lock_to(ZERO)` = trylock: 忙 ⇒ **-ETIMEDOUT**(INV-1 的统一超时码)。
      * POSIX 的 trylock 要 EBUSY —— 这一处**必须**翻译, 否则调用方按 EBUSY 写的分支
@@ -2249,26 +2669,135 @@ int pthread_mutex_trylock(pthread_mutex_t *m)
     if (rc == BR_ERR(BR_ETIMEDOUT)) {
         return svc_rc(BR_ERR(BR_EBUSY));
     }
-    return (rc != 0) ? svc_rc(rc) : 0;
+    if (rc != 0) {
+        return svc_rc(rc);
+    }
+    m->owner = self;
+    m->count = 1u;
+    return 0;
+}
+
+int pthread_mutex_timedlock(pthread_mutex_t *m, const struct timespec *abstime)
+{
+    svc_reap_detached();
+    if (m == BR_NULL || abstime == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    br_thread_t *self = br_task_self();
+    if (m->owner == self && m->count > 0u) {
+        if (m->type == PTHREAD_MUTEX_RECURSIVE) {
+            m->count++;
+            return 0;
+        }
+        if (m->type == PTHREAD_MUTEX_ERRORCHECK) {
+            return svc_rc(BR_ERR(BR_EDEADLK));
+        }
+    }
+    const int rc = br_mutex_lock_to(&m->m, svc_abstime_to_rel(abstime));
+    if (rc == BR_ERR(BR_ETIMEDOUT)) {
+        return svc_rc(BR_ERR(BR_ETIMEDOUT));
+    }
+    if (rc != 0) {
+        return svc_rc(rc);
+    }
+    m->owner = self;
+    m->count = 1u;
+    return 0;
 }
 
 int pthread_mutex_unlock(pthread_mutex_t *m)
 {
+    svc_reap_detached();
     if (m == BR_NULL) {
         return svc_rc(BR_ERR(BR_EINVAL));
     }
+    br_thread_t *self = br_task_self();
+    if (m->type != PTHREAD_MUTEX_NORMAL) {
+        if (m->owner != self) {
+            return svc_rc(BR_ERR(BR_EPERM));        /* ERRORCHECK/RECURSIVE: 非属主解锁 */
+        }
+    }
+    if (m->type == PTHREAD_MUTEX_RECURSIVE && m->count > 1u) {
+        m->count--;
+        return 0;
+    }
+    m->count = 0u;
+    m->owner = BR_NULL;
     const int rc = br_mutex_unlock(&m->m);
     return (rc != 0) ? svc_rc(rc) : 0;
 }
 
+/* ==================================================================== cond */
+
+int pthread_condattr_init(pthread_condattr_t *a)
+{
+    if (a == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->clock   = CLOCK_MONOTONIC;
+    a->pshared = PTHREAD_PROCESS_PRIVATE;
+    return 0;
+}
+
+int pthread_condattr_destroy(pthread_condattr_t *a)
+{
+    (void)a;
+    return 0;
+}
+
+int pthread_condattr_setclock(pthread_condattr_t *a, int clock)
+{
+    if (a == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    /* 本代只有单调钟(P-1: 无墙钟)⇒ REALTIME 明确拒绝, 不假装支持。 */
+    if (clock != CLOCK_MONOTONIC) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->clock = clock;
+    return 0;
+}
+
+int pthread_condattr_getclock(const pthread_condattr_t *a, int *clock)
+{
+    if (a == BR_NULL || clock == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *clock = a->clock;
+    return 0;
+}
+
+int pthread_condattr_setpshared(pthread_condattr_t *a, int pshared)
+{
+    if (a == BR_NULL ||
+        (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->pshared = pshared;
+    return 0;
+}
+
+int pthread_condattr_getpshared(const pthread_condattr_t *a, int *pshared)
+{
+    if (a == BR_NULL || pshared == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *pshared = a->pshared;
+    return 0;
+}
+
 int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *attr)
 {
-    (void)attr;
+    svc_reap_detached();
     if (c == BR_NULL) {
         return svc_rc(BR_ERR(BR_EINVAL));
     }
     const int rc = br_cond_init(&c->c);
-    return (rc != 0) ? svc_rc(rc) : 0;
+    if (rc != 0) {
+        return svc_rc(rc);
+    }
+    c->clock = (attr != BR_NULL) ? attr->clock : CLOCK_MONOTONIC;
+    return 0;
 }
 
 int pthread_cond_destroy(pthread_cond_t *c)
@@ -2279,6 +2808,7 @@ int pthread_cond_destroy(pthread_cond_t *c)
 
 int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m)
 {
+    svc_reap_detached();
     if (c == BR_NULL || m == BR_NULL) {
         return svc_rc(BR_ERR(BR_EINVAL));
     }
@@ -2289,18 +2819,15 @@ int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m)
 int pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m,
                            const struct timespec *abstime)
 {
+    svc_reap_detached();
     if (c == BR_NULL || m == BR_NULL || abstime == BR_NULL) {
         return svc_rc(BR_ERR(BR_EINVAL));
     }
     /* ★ 绝对时刻按 **MONOTONIC** 解释: 本代没有墙钟(P-1), 于是"绝对时间"的唯一可用
      *   时基就是单调钟。POSIX 默认是 CLOCK_REALTIME ⇒ 这是一条**语义偏离**, 与
-     *   `clock_gettime(CLOCK_REALTIME) = -ENOTSUP` 是同一条事实的两面。 */
-    const br_u64 abs_us = ((br_u64)abstime->tv_sec * 1000000u) +
-                          ((br_u64)abstime->tv_nsec / 1000u);
-    const br_u64 now    = br_clock_now();
-    const br_time_t rel = (abs_us > now) ? (br_time_t)(abs_us - now) : BR_TIMEOUT_ZERO;
-
-    const int rc = br_cond_wait(&c->c, &m->m, rel);
+     *   `clock_gettime(CLOCK_REALTIME) = -ENOTSUP` 是同一条事实的两面; 用
+     *   `pthread_condattr_setclock(CLOCK_MONOTONIC)` 可把意图写进声明。 */
+    const int rc = br_cond_wait(&c->c, &m->m, svc_abstime_to_rel(abstime));
     if (rc == BR_ERR(BR_ETIMEDOUT)) {
         return svc_rc(BR_ERR(BR_ETIMEDOUT));      /* POSIX 的 ETIMEDOUT */
     }
@@ -2323,6 +2850,338 @@ int pthread_cond_broadcast(pthread_cond_t *c)
     }
     const int rc = br_cond_broadcast(&c->c);
     return (rc != 0) ? svc_rc(rc) : 0;
+}
+
+/* ==================================================================== rwlock */
+
+int pthread_rwlockattr_init(pthread_rwlockattr_t *a)
+{
+    if (a == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->kind    = PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP;
+    a->pshared = PTHREAD_PROCESS_PRIVATE;
+    return 0;
+}
+
+int pthread_rwlockattr_destroy(pthread_rwlockattr_t *a)
+{
+    (void)a;
+    return 0;
+}
+
+int pthread_rwlockattr_setkind_np(pthread_rwlockattr_t *a, int kind)
+{
+    if (a == BR_NULL ||
+        (kind != PTHREAD_RWLOCK_PREFER_READER_NP &&
+         kind != PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP)) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->kind = kind;
+    return 0;
+}
+
+int pthread_rwlockattr_getkind_np(const pthread_rwlockattr_t *a, int *kind)
+{
+    if (a == BR_NULL || kind == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *kind = a->kind;
+    return 0;
+}
+
+int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *a, int pshared)
+{
+    if (a == BR_NULL ||
+        (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->pshared = pshared;
+    return 0;
+}
+
+int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *a, int *pshared)
+{
+    if (a == BR_NULL || pshared == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *pshared = a->pshared;
+    return 0;
+}
+
+int pthread_rwlock_init(pthread_rwlock_t *rw, const pthread_rwlockattr_t *attr)
+{
+    svc_reap_detached();
+    if (rw == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    const int rm = br_mutex_init(&rw->m);
+    if (rm != 0) {
+        return svc_rc(rm);
+    }
+    const int rc = br_cond_init(&rw->c);
+    if (rc != 0) {
+        return svc_rc(rc);
+    }
+    rw->readers         = 0u;
+    rw->writer          = BR_NULL;
+    rw->writers_waiting = 0u;
+    rw->kind = (attr != BR_NULL) ? attr->kind
+                                 : PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP;
+    return 0;
+}
+
+int pthread_rwlock_destroy(pthread_rwlock_t *rw)
+{
+    (void)rw;
+    return 0;                                       /* 空操作(同 mutex/cond 的理由) */
+}
+
+/* 读锁的公共实现: `timeout` 为 BR_TIMEOUT_ZERO 时是 trylock。 */
+static int svc_rwlock_rdlock_to(pthread_rwlock_t *rw, br_time_t timeout)
+{
+    const int lk = br_mutex_lock(&rw->m);
+    if (lk != 0) {
+        return svc_rc(lk);
+    }
+    for (;;) {
+        const br_bool writer = (rw->writer != BR_NULL);
+        /* writer-preference: 有写者等待时新的读者让路(避免写者饿死)。
+         * ★ 不支持的边界: **同一线程递归读**在有写者等待时会自阻(如实登记, 见 pthread.h)。 */
+        const br_bool blocked =
+            writer || (rw->kind == PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP &&
+                       rw->writers_waiting > 0u);
+        if (!blocked) {
+            rw->readers++;
+            (void)br_mutex_unlock(&rw->m);
+            return 0;
+        }
+        if (timeout == BR_TIMEOUT_ZERO) {
+            (void)br_mutex_unlock(&rw->m);
+            return svc_rc(BR_ERR(BR_EBUSY));
+        }
+        const int w = br_cond_wait(&rw->c, &rw->m, timeout);
+        if (w == BR_ERR(BR_ETIMEDOUT)) {
+            (void)br_mutex_unlock(&rw->m);
+            return svc_rc(BR_ERR(BR_ETIMEDOUT));
+        }
+        if (w != 0) {
+            (void)br_mutex_unlock(&rw->m);
+            return svc_rc(w);
+        }
+    }
+}
+
+static int svc_rwlock_wrlock_to(pthread_rwlock_t *rw, br_time_t timeout)
+{
+    const int lk = br_mutex_lock(&rw->m);
+    if (lk != 0) {
+        return svc_rc(lk);
+    }
+    if (timeout == BR_TIMEOUT_ZERO) {
+        if (rw->writer == BR_NULL && rw->readers == 0u) {
+            rw->writer = br_task_self();
+            (void)br_mutex_unlock(&rw->m);
+            return 0;
+        }
+        (void)br_mutex_unlock(&rw->m);
+        return svc_rc(BR_ERR(BR_EBUSY));
+    }
+    rw->writers_waiting++;
+    for (;;) {
+        if (rw->writer == BR_NULL && rw->readers == 0u) {
+            rw->writers_waiting--;
+            rw->writer = br_task_self();
+            (void)br_mutex_unlock(&rw->m);
+            return 0;
+        }
+        const int w = br_cond_wait(&rw->c, &rw->m, timeout);
+        if (w == BR_ERR(BR_ETIMEDOUT)) {
+            rw->writers_waiting--;
+            (void)br_cond_broadcast(&rw->c);        /* 可能空出了一个读名额 */
+            (void)br_mutex_unlock(&rw->m);
+            return svc_rc(BR_ERR(BR_ETIMEDOUT));
+        }
+        if (w != 0) {
+            rw->writers_waiting--;
+            (void)br_mutex_unlock(&rw->m);
+            return svc_rc(w);
+        }
+    }
+}
+
+int pthread_rwlock_rdlock(pthread_rwlock_t *rw)
+{
+    svc_reap_detached();
+    if (rw == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    return svc_rwlock_rdlock_to(rw, BR_TIMEOUT_INF);
+}
+
+int pthread_rwlock_tryrdlock(pthread_rwlock_t *rw)
+{
+    svc_reap_detached();
+    if (rw == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    return svc_rwlock_rdlock_to(rw, BR_TIMEOUT_ZERO);
+}
+
+int pthread_rwlock_timedrdlock(pthread_rwlock_t *rw, const struct timespec *abstime)
+{
+    svc_reap_detached();
+    if (rw == BR_NULL || abstime == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    return svc_rwlock_rdlock_to(rw, svc_abstime_to_rel(abstime));
+}
+
+int pthread_rwlock_wrlock(pthread_rwlock_t *rw)
+{
+    svc_reap_detached();
+    if (rw == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    return svc_rwlock_wrlock_to(rw, BR_TIMEOUT_INF);
+}
+
+int pthread_rwlock_trywrlock(pthread_rwlock_t *rw)
+{
+    svc_reap_detached();
+    if (rw == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    return svc_rwlock_wrlock_to(rw, BR_TIMEOUT_ZERO);
+}
+
+int pthread_rwlock_timedwrlock(pthread_rwlock_t *rw, const struct timespec *abstime)
+{
+    svc_reap_detached();
+    if (rw == BR_NULL || abstime == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    return svc_rwlock_wrlock_to(rw, svc_abstime_to_rel(abstime));
+}
+
+int pthread_rwlock_unlock(pthread_rwlock_t *rw)
+{
+    svc_reap_detached();
+    if (rw == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    const int lk = br_mutex_lock(&rw->m);
+    if (lk != 0) {
+        return svc_rc(lk);
+    }
+    if (rw->writer == br_task_self()) {
+        rw->writer = BR_NULL;
+        (void)br_cond_broadcast(&rw->c);
+    } else if (rw->readers > 0u) {
+        rw->readers--;
+        if (rw->readers == 0u) {
+            (void)br_cond_broadcast(&rw->c);        /* 最后一个读者 ⇒ 唤醒写者 */
+        }
+    } else {
+        (void)br_mutex_unlock(&rw->m);
+        return svc_rc(BR_ERR(BR_EPERM));            /* 没持锁就解锁 */
+    }
+    (void)br_mutex_unlock(&rw->m);
+    return 0;
+}
+
+/* ==================================================================== barrier */
+
+int pthread_barrierattr_init(pthread_barrierattr_t *a)
+{
+    if (a == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->pshared = PTHREAD_PROCESS_PRIVATE;
+    return 0;
+}
+
+int pthread_barrierattr_destroy(pthread_barrierattr_t *a)
+{
+    (void)a;
+    return 0;
+}
+
+int pthread_barrierattr_setpshared(pthread_barrierattr_t *a, int pshared)
+{
+    if (a == BR_NULL ||
+        (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    a->pshared = pshared;
+    return 0;
+}
+
+int pthread_barrierattr_getpshared(const pthread_barrierattr_t *a, int *pshared)
+{
+    if (a == BR_NULL || pshared == BR_NULL) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    *pshared = a->pshared;
+    return 0;
+}
+
+int pthread_barrier_init(pthread_barrier_t *b, const pthread_barrierattr_t *attr,
+                         unsigned count)
+{
+    svc_reap_detached();
+    (void)attr;
+    if (b == BR_NULL || count == 0u) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    const int rm = br_mutex_init(&b->m);
+    if (rm != 0) {
+        return svc_rc(rm);
+    }
+    const int rc = br_cond_init(&b->c);
+    if (rc != 0) {
+        return svc_rc(rc);
+    }
+    b->count      = count;
+    b->waiting    = 0u;
+    b->generation = 0u;
+    return 0;
+}
+
+int pthread_barrier_destroy(pthread_barrier_t *b)
+{
+    (void)b;
+    return 0;
+}
+
+int pthread_barrier_wait(pthread_barrier_t *b)
+{
+    svc_reap_detached();
+    if (b == BR_NULL || b->count == 0u) {
+        return svc_rc(BR_ERR(BR_EINVAL));
+    }
+    const int lk = br_mutex_lock(&b->m);
+    if (lk != 0) {
+        return svc_rc(lk);
+    }
+    const unsigned gen = b->generation;
+    b->waiting++;
+    if (b->waiting == b->count) {
+        b->waiting = 0u;
+        b->generation++;
+        (void)br_cond_broadcast(&b->c);
+        (void)br_mutex_unlock(&b->m);
+        return PTHREAD_BARRIER_SERIAL_THREAD;       /* 恰好一个线程拿到 */
+    }
+    while (b->generation == gen) {
+        const int w = br_cond_wait(&b->c, &b->m, BR_TIMEOUT_INF);
+        if (w != 0) {
+            (void)br_mutex_unlock(&b->m);
+            return svc_rc(w);
+        }
+    }
+    (void)br_mutex_unlock(&b->m);
+    return 0;
 }
 
 /* ==================================================================== 层: semaphore */

@@ -74,3 +74,76 @@ platform = ["qemu-aarch64"]
 
 # 收尾口径: 用例自用的名字全部带 `selftest.` 前缀, 且用例结束前从表里移除
 # (br_service_selftest 的白盒动作) —— 不污染后续 dump 的注册表清单。
+
+# ---- ADR-0019: APP 侧 POSIX 多线程样例(经 iface/posix 皮肤; 门禁 = smoke 逐 tag 点名) ----
+
+[[case]]
+id       = "APP-PT-001"
+pre      = "APP 线程已创建且 iface/posix/runtime-posix 已 init"
+steps    = [
+    "三线程 + barrier 起跑: mutex 保护计数 3×500; pthread_barrier_init(4) 四方会合; join 的 retval 之和==6 且计数==1500",
+]
+expect   = "[APPCONF] PASS APP-PT-001 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "APP-PT-002"
+pre      = "APP 线程已创建且 iface/posix/runtime-posix 已 init"
+steps    = [
+    "condvar 会合: 工作线程 lock/就绪计数/cond_signal 后 cond_wait; 主线程等全部就绪后 broadcast 放行; 全部 join 成功",
+]
+expect   = "[APPCONF] PASS APP-PT-002 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "APP-PT-003"
+pre      = "APP 线程已创建且 iface/posix/runtime-posix 已 init"
+steps    = [
+    "TLS key: pthread_key_create(dtor)+每线程 setspecific/yield/getspecific 隔离; 退出析构之和==6; key_delete==0",
+]
+expect   = "[APPCONF] PASS APP-PT-003 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "APP-PT-004"
+pre      = "APP 线程已创建且 iface/posix/runtime-posix 已 init"
+steps    = [
+    "detach: attr DETACHED 建线程(卡 sem): join⇒EINVAL; 放行后 ran==1; 之后 pthread 调用惰性回收",
+]
+expect   = "[APPCONF] PASS APP-PT-004 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "APP-PT-005"
+pre      = "APP 线程已创建且 iface/posix/runtime-posix 已 init"
+steps    = [
+    "每线程 errno: 两线程各写 ENOENT/EACCES, barrier 后再读仍是各自的值",
+]
+expect   = "[APPCONF] PASS APP-PT-005 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "APP-PT-006"
+pre      = "APP 线程已创建且 iface/posix/runtime-posix 已 init"
+steps    = [
+    "rwlock: 两读者并发(active_max>=2)、写者独占(active==0 才进)、4 次写生效、无违例",
+]
+expect   = "[APPCONF] PASS APP-PT-006 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "APP-PT-007"
+pre      = "APP 线程已创建且 iface/posix/runtime-posix 已 init"
+steps    = [
+    "once + name: 三线程 pthread_once ⇒ 恰一次; setname_np('app-worker') 后 getname_np 读回一致",
+]
+expect   = "[APPCONF] PASS APP-PT-007 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+

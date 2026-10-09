@@ -1,0 +1,33 @@
+# iface/posix — 用例声明面(人写)
+#
+# 字段形状照 `6-01` §2 的用例表契约: {id, pre, steps, expect, sched, platform}。
+# ⚠ 骨架(v0.2 不消费): 真正跑起来的判据是**编译期与声明面**的两条:
+#   ① `brickie check` 的 deps 域: 未声明依赖 = 红(ADR-0018 的包含面收窄 + 使用扫描);
+#   ② `brickie check` 的 iface 域: `form = "skin"` 的 `reexport_of` 必须指向存在的单元,
+#      且分类相等(不变量 3)。
+# 本文件的案例待 M2 的接口依赖扫描(truth = "header")落地后再挂到门禁上。
+schema = 1
+
+[[case]]
+id       = "TC-IFACE-001"
+pre      = "product 闭包含 app/hello, iface/posix, runtime/posix"
+steps    = ["读 iface/posix 的 [[export]]", "核对 form = \"skin\" 且 reexport_of 非空", "核对 api_iface 与 plugin.api_type 相等"]
+expect   = "skin 单元面自洽(不变量 1 + 3); 被再导出单元 runtime/posix#posix 存在且分类相等"
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IFACE-002"
+pre      = "同上"
+steps    = ["扫 app/hello 的源码 #include", "逐个映射到提供方插件", "比对 app/hello 的声明依赖闭包"]
+expect   = "app/hello 的 POSIX 使用只经 iface/posix(直接声明), runtime/posix 在传递闭包内; 无未声明使用"
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IFACE-003"
+pre      = "同上"
+steps    = ["核对 iface/posix 与 runtime/posix 共享 name_short(posix)", "核对 plugin.toml 显式给出 symbol_prefix"]
+expect   = "钩子符号前缀为 iface_posix_(不是推导的 posix_), 与 runtime/posix 无重复定义"
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]

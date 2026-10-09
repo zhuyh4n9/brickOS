@@ -384,6 +384,9 @@ stack_kib = 16
 [lint]
 frozen_deps = "inherit"            # inherit | allow | deny
 allow_edges = [["framework/cdev-core","framework/dev-core"]]
+[kernel]
+hz = 200                           # 时钟节拍频率(Hz; 参考 Linux 的 CONFIG_HZ); 缺省(不写) = 200
+                                   # ⇒ 5 ms 一拍。brickie build 转成 -DBR_CFG_TICK_HZ 下发到全部编译单元(ADR-0017)
 
 [build]                            # ★ 产品级构建策略: 标志表 + 产物落点 + 核心本体源集合(ADR-0003 的 S1)
 core_sources  = ["core/src/*.c", "core/src/*/*.c"]   # 核心本体(**不是插件**)的源集合, 相对仓库根
@@ -499,6 +502,8 @@ post = ["check-string", "check-headers"]   # `brickie build` 成功后自动跑�
 | R-15 | 增量口径: "输入集合的内容戳"还是"argv 指纹 + 输入 mtime" | **argv 指纹 + 输入 (size, mtime)** 两条判据(与 make / ninja 同族); 上游要重建 ⇒ 下游显式传递重建 | `.d` 依赖文件是**构建的产物**(首次编译后才存在) ⇒ 按"输入集合算戳"会让头依赖永远多编一轮(实测踩到); 时间戳口径没有这个自指 |
 | R-16 | 门禁日志的红绿判据(require / forbid / PASS tag)归谁 | **判据在 core**(`judge` 命令按 `tests/gates.toml` 的正则判), L5 只收日志正文并执行 | "红绿"只能有一处真值; 否则文本输出、`--json` 与 CI 退出码会各判一次 |
 | R-17 | `plugin.toml [build]` / `product.toml [build]` 在 `§7.1` 里只有 `sources`/`includes` 两个字段, 表达不了完整编译事实 | 新增 `[build].defines`(插件级)与 `product.toml [build]` 的 `core_sources`/`core_includes`/`gen_sources`/`cflags`/`asflags`/`ldflags`/`obj_dir`/`[build.release].{cflags,asflags,ldflags}_extra`, 以及 platform 的整张 `[build.target]`/`[build.target.qemu]` | "怎么编"必须有**一处**声明面可写(否则又回到 Makefile 字面量); 形状已补进 `schema/*.schema.json` 与 §7.1/§7.2, 待回灌设计 §7.1/§7.2 |
+| R-18 | 产品级**语义配置**(第一项 = 时钟节拍 HZ)怎么进编译 | `product.toml [kernel].hz`(整数, 缺省 200)由 `brickie build` 转成 `-DBR_CFG_TICK_HZ=<hz>` 下发到**全部**编译单元(core/插件/生成物); 该 define 与通用 `cflags` 分开, 走 `config_defines` 通道 | 不给 `cflags` 写裸 `-D`: 语义键能被 `schema/product.schema.json` 校验(`integer` + `minimum: 1`), 而且"每秒多少次时钟中断"只有一处真值(core 的 jiffies 与 platform 的装弹周期读同一个宏; ADR-0017) |
+| R-19 | 声明依赖怎么变成**编译期事实**(此前 `-I` 是全局并集, 未声明的跨插件 `#include` 静默编过) | `build` 的每单元包含面 = `core_includes` + 自己 + **声明依赖传递闭包**内各插件的 includes(core 额外拿 platform 头; `build/gen` 拿全部被选插件的头); 另加**声明 ↔ 使用**交叉校验(扫源码 `#include` 映射到提供方, 不在声明闭包即报), `check` 的 deps 域与 `build` 同口径 | 只收窄 `-I` 不够: 目标工具链的 glibc 头会兜住 `unistd.h` 这类常见名(不是"找不到头"而是静默改用宿主 libc 声明)⇒ 必须有与编译器搜索路径无关的判据; 两处共用 `model::cross_plugin_includes()` 以免口径分叉(ADR-0018) |
 
 > **Rust 侧的补充裁定**: 求解/校验/接口引擎在实现中还被迫落笔了一批更细的口径
 > (S-1…S-19: 首次 publish = 建档不推进段、`closure` 不扫描 `requires_iface` 而 `check` 扫描、

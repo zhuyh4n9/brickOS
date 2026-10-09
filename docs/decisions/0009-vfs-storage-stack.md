@@ -266,5 +266,8 @@ lookup 链与名字空间变更还需要:
      `[[mount]]` 的形状(§3 裁定 5)。
 * `product.toml [lint].allow_edges`: 已追加 `["app/hello", "framework/vfs-core"]`(§2.5);
   它与 `app → platform` 一起应在 `iface-min` 落地后删除。
+  ★ **后续**: 存储域那条随 ADR-0010 删除(自检归 core); `app → platform` 那条由
+  **ADR-0016** 删除(心跳收归 core、平台身份日志归 platform 自己打)—— `allow_edges`
+  现在**为空**, 且没有等 `iface-min`(理由见 ADR-0016 §2.5)。
 * `br_plugin.h` 文件头引用的 ADR 文件名不一致(`0005-plugin-manager-and-scheduler.md`)——
   ADR-0008 §5 已记, 仍未改(冻结件归主控)。

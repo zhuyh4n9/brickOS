@@ -25,8 +25,10 @@
  * 1. 板级 INTID(唯一真值的注释在 br/board_irq.h; 这里只是把数字命名)
  * ===================================================================== */
 #define BR_BOARD_INTID_TIMER        30u  /* EL1 物理 timer(PPI; GIC INTID 30)   */
-/* 心跳周期: 100 ms —— 1 秒里 ~10 次中断, 日志上一眼可见"中断真的在跑" */
-#define BR_BOARD_TIMER_PERIOD_US    100000u
+/* 心跳周期 = **产品配置的一拍**(us): `product.toml [kernel].hz` 经 `-DBR_CFG_TICK_HZ`
+ * 进来, 缺省 200 ⇒ 5 ms(参考 Linux 的 CONFIG_HZ; ADR-0017)。1 秒里 ~HZ 次中断,
+ * 日志上一眼可见"中断真的在跑"。改频率只改产品声明面, 本文件不动。 */
+#define BR_BOARD_TIMER_PERIOD_US    BR_CFG_TICK_PERIOD_US
 #define BR_BOARD_INTID_UART0        33u  /* PL011 UART0(SPI 1 ⇒ INTID 32+1=33)  */
 #define BR_BOARD_INTID_SGI_TEST      0u  /* SGI 0: 软件触发自检(§8.4)           */
 #define BR_BOARD_INTID_SGI_STORM     1u  /* SGI 1: 风暴用例载体                 */
@@ -229,19 +231,23 @@ void br_plat_timer_stop(void)
  *   ADR-0008 之后 core.init 已是独立入口, 但这条"ISR 放哪"的裁定**未变**(core.init 不
  *   接管设备级 ISR 的注册)。
  * ------------------------------------------------------------------- */
-static volatile br_u32 s_timer_ticks;
-
 static void br_plat_timer_isr(void *arg)
 {
     (void)arg;
-    s_timer_ticks++;
+    /* 心跳计数归 **core**(还 `br-wa-boot-001` ②): platform 只"通知", 计数由 core 持有,
+     * 于是 APP 不必为了读一个诊断计数去认识 platform 插件的接口。
+     * 顺序: 先记账(计数)再推进时间/重装期限 —— 计数是"这一拍到了"的观测点。 */
+    br_clock_tick_notify();
     br_sched_on_tick(br_clock_now());
     br_timer_rearm(BR_BOARD_TIMER_PERIOD_US);
 }
 
 br_u32 br_plat_timer_ticks(void)
 {
-    return s_timer_ticks;
+    /* 平台侧访问口(接口面保留: 删除要走设计 §6.3 的 deprecated → 弃用周期 → REMOVED,
+     * 见 `docs/decisions/0016-core-timer-heartbeat.md`)。单一真值已在 core ⇒ 这里只是
+     * 转发, 不再有第二份计数。 */
+    return br_clock_tick_count();
 }
 
 int br_plat_irq_start(void)

@@ -515,7 +515,7 @@ static void conf_time_001(br_u32 *pass, br_u32 *fail, br_bool sched)
         prev = now;
     }
 
-    /* sleep 不早醒(实测; 100 ms tick ⇒ 请求 1000 us 会晚到约一个 tick) */
+    /* sleep 不早醒(实测; tick = 1/HZ, 缺省 5 ms ⇒ 请求 1000 us 会晚到约一个 tick) */
     const br_time_t t0 = br_clock_now();
     const int rc = br_task_sleep(1000u);
     const br_time_t dt = br_clock_now() - t0;

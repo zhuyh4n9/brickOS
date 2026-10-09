@@ -15,6 +15,10 @@
  * `br_task_sleep()` 真阻塞切换; 本文件的 `br_delay_*` 从此只是**忙等原语**
  * (当前全树无调用点, 保留给早期相/调试用)。
  * 设计里没有 br_delay_*(设计只有 br_task_sleep, 因为它必然阻塞切换)。
+ *
+ * 本文件另持有 **IRQ 心跳计数**(`br_clock_tick_notify` / `br_clock_tick_count`):
+ * platform 的 timer ISR 每拍通知, 计数归 core —— 这样 P0 的 APP 不必直读 platform
+ * 插件接口(还 `br-wa-boot-001` ②; 见 docs/decisions/0016-core-timer-heartbeat.md)。
  */
 #include <br/core/br_time.h>
 #include <br/platform/br_plat.h>
@@ -48,6 +52,38 @@ br_u64 br_clock_freq_hz(void)
 br_u64 br_clock_ticks_per_ms(void)
 {
     return s_ticks_per_ms;
+}
+
+/* ------------------------------------------------------------------ IRQ 心跳计数
+ *
+ * 单一真值在 core: platform 的 timer ISR 每拍调 `br_clock_tick_notify()`, 消费者
+ * (APP/服务/调试)读 `br_clock_tick_count()`。收进 core 的理由见 br_time.h 的注释与
+ * `docs/decisions/0016-core-timer-heartbeat.md` —— 一句话: 不让 P0 的 APP 为了读一个
+ * 诊断计数去认识 platform 插件的接口(还 `br-wa-boot-001` ②)。
+ *
+ * 无锁: 单核原型 + `volatile` 自增; 它与多核/PM 的形态(per-CPU 计数或原子)要到
+ * 设计的 PM/IPI 落地时再谈, 现在不假装。
+ *
+ * 节拍频率 = `BR_CFG_TICK_HZ`(来自 `product.toml [kernel].hz`, 缺省 200 ⇒ 5 ms 一拍;
+ * 见 ADR-0017)。platform 的 timer 装弹周期读同一份配置, core 这里只负责计数。
+ */
+static volatile br_u32 s_tick_count;
+
+void br_clock_tick_notify(void)
+{
+    s_tick_count++;
+}
+
+br_u32 br_clock_tick_count(void)
+{
+    return s_tick_count;
+}
+
+/* 配置的节拍频率(Hz)。宏由 `product.toml [kernel].hz` 经 `-DBR_CFG_TICK_HZ` 带进来
+ * (缺省 200, 见 br_time.h); 这里是它唯一的运行期读点。 */
+br_u32 br_clock_tick_hz(void)
+{
+    return (br_u32)BR_CFG_TICK_HZ;
 }
 
 br_time_t br_clock_now(void)

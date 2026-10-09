@@ -78,7 +78,14 @@ int br_plat_irq_init(void);
  */
 int br_plat_irq_start(void);
 
-/* 心跳计数(timer PPI 的 ISR 维护)。APP 只**读**这个计数 —— 于它仍是纯 P0 消费者。 */
+/* 心跳计数(timer PPI 的 ISR 维护)。
+ *
+ * ★ **单一真值在 core**: 平台的 ISR 每拍调 `br_clock_tick_notify()`, 计数由 core 持有,
+ *   所以本函数现在只是"读 core 的同一份计数"的转发口。消费者(尤其 P0 的 APP)请读
+ *   `br_clock_tick_count()`(`<br/core/br_time.h>`)—— APP 直读 platform 会在声明面留下
+ *   `app → platform` 的边, 而那条 M0 引导例外已还清(见
+ *   `docs/decisions/0016-core-timer-heartbeat.md`)。
+ *   本函数保留为**平台侧访问口**: 它的接口面不变(删除要走 §6.3 的 deprecated 周期)。 */
 br_u32 br_plat_timer_ticks(void);
 
 /* 停掉 timer(诊断/将来 PM 用)。 */

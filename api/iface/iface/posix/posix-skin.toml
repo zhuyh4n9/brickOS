@@ -1,0 +1,19 @@
+# brickie:generated
+# api/iface 快照 api/iface/iface/posix/posix-skin.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "iface/posix#posix-skin"
+provider = "iface/posix"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "runtime_adapter"
+form = "skin"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:7ccb8d3d4a6ef85aad5e08604d14102a635f19974fcad8f517a71537838ede2f"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false

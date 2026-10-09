@@ -61,7 +61,7 @@ static void host_check(br_bool ok, const char *tag, const char *what)
 
 #define HOST_STACK_BYTES  8192u
 #define HOST_STACK_SLOTS  8u
-#define TICK_US           100000u   /* 与平台 timer 周期同量级(判据不依赖这个数) */
+#define TICK_US           100000u   /* 宿主用例自己的虚拟 tick(与产品 [kernel].hz 解耦; 判据不依赖这个数) */
 
 static br_u8 s_stk[HOST_STACK_SLOTS][HOST_STACK_BYTES] BR_ALIGN(16);
 

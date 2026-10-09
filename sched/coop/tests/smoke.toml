@@ -83,7 +83,7 @@ platform = ["host", "qemu-aarch64"]
 id       = "TC-TIME-001"
 pre      = "TC-TASK-007 已跑过; 定时器已 armed(目标)或宿主 idle 钩子已安装"
 steps    = ["create 一个线程: t0 = br_clock_now(); br_task_sleep(2000us); 记 br_clock_now()-t0", "join 它"]
-expect   = "返回 0 且实测间隔 >= 2000 us(不早醒; 晚到无上界 —— 目标上就是 tick 周期 100 ms)"
+expect   = "返回 0 且实测间隔 >= 2000 us(不早醒; 晚到无上界 —— 目标上就是 tick 周期 1/HZ, 缺省 5 ms)"
 sched    = ["coop"]
 platform = ["host", "qemu-aarch64"]
 

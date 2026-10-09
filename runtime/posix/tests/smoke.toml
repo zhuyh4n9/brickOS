@@ -155,7 +155,7 @@ platform = ["qemu-aarch64"]
 id       = "TC-POSIX-015"
 pre      = "TC-POSIX-014 已过"
 steps    = [
-    "clock_gettime(MONOTONIC) 单调 / CLOCK_REALTIME⇒ENOTSUP / clock_getres==100 ms / nanosleep(1ms) 实际不早醒(>=1000us) / sleep(0)/usleep 返回成功",
+    "clock_gettime(MONOTONIC) 单调 / CLOCK_REALTIME⇒ENOTSUP / clock_getres==1/HZ(一拍) / nanosleep(1ms) 实际不早醒(>=1000us) / sleep(0)/usleep 返回成功",
 ]
 expect   = "[POSIXCONF] PASS TC-POSIX-015 ..."
 sched    = ["coop", "preempt"]
@@ -165,7 +165,7 @@ platform = ["qemu-aarch64"]
 id       = "TC-POSIX-016"
 pre      = "TC-POSIX-015 已过"
 steps    = [
-    "sem_init + pthread_create(默认栈从 core 堆切) / sem_post→sem_wait 配对唤醒 / 工作线程写入共享量 / pthread_join 的 retval == 入口返回值 / pthread_equal/yield / pthread_detach⇒ENOTSUP(错误号通道)",
+    "sem_init + pthread_create(默认栈从 core 堆切) / sem_post→sem_wait 配对唤醒 / 工作线程写入共享量 / pthread_join 的 retval == 入口返回值 / pthread_equal/yield / 已 join 的线程再 detach⇒ESRCH(错误号通道)",
 ]
 expect   = "[POSIXCONF] PASS TC-POSIX-016 ..."
 sched    = ["coop", "preempt"]
@@ -210,3 +210,84 @@ steps    = [
 expect   = "[POSIXCONF] PASS TC-POSIX-020 ..."
 sched    = ["coop", "preempt"]
 platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-021"
+pre      = "TC-POSIX-020 已过"
+steps    = [
+    "pthread_barrier_init(2)+两线程各 barrier_wait 两轮; 各线程 errno=自己的值, 会合之后读回仍是自己的(每线程槽位)",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-021 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-022"
+pre      = "TC-POSIX-021 已过"
+steps    = [
+    "mutexattr settype(RECURSIVE): 同线程两次 lock/unlock 计数正确; settype(ERRORCHECK): 重锁⇒EDEADLK、借另一线程解锁⇒EPERM",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-022 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-023"
+pre      = "TC-POSIX-022 已过"
+steps    = [
+    "三线程并发 pthread_once(&once, fn) ⇒ fn 恰执行一次(done 置位后走无锁快路径)",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-023 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-024"
+pre      = "TC-POSIX-023 已过"
+steps    = [
+    "rwlock: 两个读者持读锁睡眠(active_max>=2 ⇒ 真并发)、写者独占(读者为 0 才进)、4 次写全部生效且无违例",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-024 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-025"
+pre      = "TC-POSIX-024 已过"
+steps    = [
+    "pthread_key_create(dtor)+两线程 setspecific(各自值)+yield+getspecific 隔离; 退出时析构被调(值 1+2); key_delete⇒0",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-025 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-026"
+pre      = "TC-POSIX-025 已过"
+steps    = [
+    "attr setdetachstate(DETACHED) 建线程(卡在 sem 上): join⇒EINVAL; 放行后跑完; 再建 3 个 detach + 1 个 normal, 后续 pthread 调用惰性回收不耗尽 TCB(全部跑过)",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-026 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-027"
+pre      = "TC-POSIX-026 已过"
+steps    = [
+    "attr set/getstack(调用方栈)、set/getdetachstate、set/getguardsize; setname_np 后工作线程 getname_np 读回一致; 主线程 getname_np 可用",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-027 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-028"
+pre      = "TC-POSIX-027 已过"
+steps    = [
+    "condattr setclock(REALTIME)⇒EINVAL、setclock(MONOTONIC)+getclock; cond_timedwait(过去时刻)⇒ETIMEDOUT; mutex_timedlock(自持/过去时刻)⇒ETIMEDOUT",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-028 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+

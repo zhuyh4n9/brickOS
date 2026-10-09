@@ -9,11 +9,11 @@ NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 [unit_meta]
 api_iface = "runtime_adapter"
 form = "api"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
 freeze_state = "unfrozen"
 status = "experimental"
-hash = "sha256:b8697b3ba530dd77f2f6ffb008a99774d7b839c8f57a1ebefdcfc150118becc8"
+hash = "sha256:8f0496311e39ed366415a646bce221ebae7e51226efaab99456c2889a0c87574"
 hash_scope = "decl"
 truth = "decl"
 strict_params = false
@@ -146,14 +146,68 @@ status = "experimental"
 
 [[entry]]
 kind = "type"
+name = "pthread_attr_t"
+layout = "# {stack_size, stack, detachstate, guard_size}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
 name = "pthread_mutex_t"
-layout = "# 包装 br_mutex_t(布局 = core 的 br_sync.h)"
+layout = "# {br_mutex_t m, unsigned type, br_thread_t *owner, unsigned count}(type/owner/count 支撑 RECURSIVE/ERRORCHECK)"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_mutexattr_t"
+layout = "# {unsigned type, int pshared, int protocol}"
 status = "experimental"
 
 [[entry]]
 kind = "type"
 name = "pthread_cond_t"
-layout = "# 包装 br_cond_t(布局 = core 的 br_sync.h)"
+layout = "# {br_cond_t c, int clock}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_condattr_t"
+layout = "# {int clock, int pshared}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_rwlock_t"
+layout = "# {br_mutex_t m, br_cond_t c, unsigned readers, br_thread_t *writer, unsigned writers_waiting, int kind}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_rwlockattr_t"
+layout = "# {int kind, int pshared}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_barrier_t"
+layout = "# {br_mutex_t m, br_cond_t c, unsigned count, unsigned waiting, unsigned generation}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_barrierattr_t"
+layout = "# {int pshared}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_once_t"
+layout = "# {br_mutex_t m, volatile int done}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_key_t"
+layout = "# unsigned(索引到 runtime/posix 的线程记录槽位)"
 status = "experimental"
 
 [[entry]]
@@ -499,6 +553,111 @@ status = "experimental"
 
 [[entry]]
 kind = "func"
+name = "pthread_attr_getstack"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_attr_setdetachstate"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_attr_getdetachstate"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_attr_setguardsize"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_attr_getguardsize"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_setname_np"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_getname_np"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_once"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_key_create"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_key_delete"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_setspecific"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_getspecific"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_posix_errno"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutexattr_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutexattr_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutexattr_settype"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutexattr_gettype"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutexattr_setpshared"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutexattr_getpshared"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutexattr_setprotocol"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutexattr_getprotocol"
+status = "experimental"
+
+[[entry]]
+kind = "func"
 name = "pthread_mutex_init"
 status = "experimental"
 
@@ -519,7 +678,42 @@ status = "experimental"
 
 [[entry]]
 kind = "func"
+name = "pthread_mutex_timedlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
 name = "pthread_mutex_unlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_condattr_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_condattr_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_condattr_setclock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_condattr_getclock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_condattr_setpshared"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_condattr_getpshared"
 status = "experimental"
 
 [[entry]]
@@ -550,6 +744,116 @@ status = "experimental"
 [[entry]]
 kind = "func"
 name = "pthread_cond_broadcast"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlockattr_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlockattr_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlockattr_setkind_np"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlockattr_getkind_np"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlockattr_setpshared"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlockattr_getpshared"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlock_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlock_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlock_rdlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlock_tryrdlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlock_timedrdlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlock_wrlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlock_trywrlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlock_timedwrlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_rwlock_unlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_barrierattr_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_barrierattr_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_barrierattr_setpshared"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_barrierattr_getpshared"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_barrier_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_barrier_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_barrier_wait"
 status = "experimental"
 
 [[entry]]

@@ -14,6 +14,10 @@ stage   = "dev"                 # dev | release; CLI 覆盖(§7.5)
 [select]
 # 只列**直接选择**的插件; 其余经依赖闭包拉进来(能力经 `[[dep]]` 声明, 产品只做选择
 # —— BRV-D4 唯一真值)。本产品的闭包链:
+#   app/hello    → iface/posix(Interface 薄皮肤, ADR-0018)→ runtime/posix
+#                → iface/min  (core native 直通皮肤, ADR-0020; 日志/时钟/tick/版本)
+#                  ★ 两个 iface 皮肤刻意**不列**在下面: 都由 APP 的 `[[dep]]` 自动拉入
+#                    (与 framework/file-table 同款"闭包可读性"取舍)。
 #   service/dump → service/{trace,backtrace,hexdump,memleak}
 #   fs/devfs     → framework/{dev-core,cdev-core,vfs-core} + fs/tmpfs(挂载点父 FS)
 #   io/uart-pl011→ framework/{cdev-core,dev-core,vfs-core}
@@ -76,24 +80,30 @@ enabled = "inherit"
 ram_kib   = 64
 stack_kib = 16
 
+[kernel]
+# ============================================================ 时钟节拍(参考 Linux 的 CONFIG_HZ)
+# 每秒多少次时钟中断(Hz)。每 1/HZ 秒, platform 的 timer ISR 走一次:
+#   br_clock_tick_notify()(core 的 tick 计数 = jiffies 前进 1)
+#   → br_sched_on_tick()(扫到期超时 / 调度器 on_tick 递减时间片)
+#   → 重装下一个期限。
+# 缺省 200(本项不写 = 200)⇒ 5 ms 一拍。brickie build 把它转成 -DBR_CFG_TICK_HZ,
+# 下发到全部编译单元 —— 于是"每秒多少次中断"只有一处真值: platform 的装弹周期
+# 与 core 的 jiffies 读同一个宏(ADR-0017)。
+# 常见取值 100/200/250/1000; 合法范围 1..100000(br_time.h 的 _Static_assert 兜底)。
+hz = 200
+
 [lint]
 frozen_deps = "inherit"         # inherit(跟随 [product].stage) | allow | deny
-# 显式豁免: **M0 引导例外**(1-03 §1 的 app/hello 行)。按设计 §7.3, app 只许依赖
-# interface; 而 Interface 插件(iface-min)属 M2 —— 它还没落地, 所以 app 直读平台身份
-# (`br_plat_name/isa/timer_ticks`, 只为那两行启动日志)仍是一条例外。
-#
-# ★ 本刀**收窄**了这张豁免表: 以前有两条(`app→platform` 与 `app→service/dump`),
-#   因为 v0.1 的 APP 既是"启动器"又是"自检驱动"。现在插件管理器接管了全部 init/start
-#   (ADR-0005), dump 的一致性套件搬进了 `service/dump` 自己的 LATE init ⇒ `app→dump`
-#   这条非法边**消失**了(删掉它 `brickie check` 依然 0 错误 —— 这就是证据)。
-#   剩下的 `app→platform` 属 WORKAROUND(br-wa-boot-001) 的欠债; 豁免必须逐条列名,
-#   使"还有几条例外"一眼可见。
+# 显式豁免: **空**。设计 §7.3 的通则是 app 只许依赖 interface; 现在这条通则**已经能满足**:
+#   - `app/hello → iface/posix`(Interface 薄皮肤, ADR-0018)与 `app/hello → iface/min`
+#     (core native 直通皮肤, ADR-0020)都是方向表里的**合法边**, 不需要豁免;
+#   - APP 源码里也不再直连 iface 层以下(`<br/core/...>` 由 ADR-0020 的扫描判红);
+#   - 原先那条 M0 引导例外(`app → platform`: 平台身份/心跳)已随 ADR-0016 删除
+#     (心跳计数收归 core; 平台身份日志由 platform 自己打)。
+# ⇒ 本表保持空。判据不是"加了白名单所以不报", 而是**没有任何非法边**: 删空之后
+#   `brickie check` 仍 0 错误。而"声明 ↔ 使用"现在也交叉校验(ADR-0018): 用了别家插件的
+#   头却没声明依赖, 在 deps 域与 `brickie build` 都会报红。
 allow_edges = [
-  ["app/hello", "platform/qemu-aarch64"],
-  # ★ ADR-0010 之后**这条豁免已删**: 存储域总套件改由 core 的 selftest pass 驱动
-  #   (`br_plugin_manager_selftest`), APP 不再认识任何框架件 —— 全链路验证从
-  #   "消费者替所有人跑测试"变成"core 逐个驱动 + 用例自带判据"。
-  #   于是 `allow_edges` 又回到**一条**(app → platform), 那是 M0 引导例外里最后一条。
 ]
 
 [build]

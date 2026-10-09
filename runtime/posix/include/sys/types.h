@@ -55,4 +55,8 @@ typedef unsigned long id_t;
 #define SEEK_END  2
 #endif
 
+#ifndef NULL
+#define NULL  ((void*)0)
+#endif
+
 #endif /* BR_POSIX_SYS_TYPES_H */

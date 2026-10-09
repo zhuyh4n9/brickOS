@@ -138,6 +138,10 @@ br_irq_unlock(st);                     /* 醒来后重新 pick */
 0.0882 s → 0.1820 s)。这符合 INV-2(不早醒, 晚到无上界), 但**不要把它读成"tickless 已实现"**。
 ⇒ 遗留项 §6。
 
+> ★ **后续(ADR-0017)**: tick 周期不再是写死的 100 ms —— 它 = `1/HZ`, `HZ` 由
+> `product.toml [kernel].hz` 配置(缺省 200 ⇒ 5 ms)。本节的"超时分辨率 = tick 周期"
+> 这条**性质不变**, 变的只是缺省值(100 ms → 5 ms); tickless 仍欠。
+
 ### 3.4 阻塞接缝 = ICB 握手(I3/I5; 与 F3 的 ADR-0007 §2.6 共用一套措辞)
 
 问题: 同步原语要"关中断挂等待链 → 开中断 → 阻塞", 这中间有一个窗口 —— 如果唤醒
@@ -292,7 +296,7 @@ tick(100 ms)", 1 ms 阈值把两者分得很开。
 
 | # | 项 | 现状 |
 |---|---|---|
-| L1 | **tickless 的"按最近期限装弹"** | ❌ 只做周期 tick(100 ms)上的到期扫描 ⇒ 超时分辨率 = 100 ms |
+| L1 | **tickless 的"按最近期限装弹"** | ❌ 只做周期 tick 上的到期扫描 ⇒ 超时分辨率 = tick 周期(本刀实测 100 ms; **ADR-0017 起** tick = `1/HZ`, `product.toml [kernel].hz`, 缺省 200 ⇒ 5 ms) |
 | L2 | `sched-preempt`(v2.0)+ PI 互斥 | ❌ 未做; `br_sched_irq_epilogue` 已留好切栈位置与顺序约束 |
 | L3 | `sched-tt`(v3.0, 调度表) | ❌ 未做; `ops.sleep_until`/`on_tick` 槽位是它的落点 |
 | L4 | `br_work_submit` / bh(`3-01` §5) | ❌ 未做(ops 里刻意没有 `work_submit`, 见裁定 S-2) |
