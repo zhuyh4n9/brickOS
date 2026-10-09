@@ -27,6 +27,11 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.plugins]]
+name = "framework/file-table"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
 name = "framework/vfs-core"
 version = "0.1.0.0"
 compat_gen = 0
@@ -105,6 +110,17 @@ api_iface = "native"
 version = "0.1.1.0"
 compat_gen = 0
 hash = "sha256:683df2ce258eb70fb96849760f12e29b976aefbdb56212857ffd7d287c0de952"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "framework/file-table#filetable"
+provider = "framework/file-table"
+unit = "filetable"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:e02f50ee703d2e2836915efa5fae24f430ddbee029a7ef34a2f7a2fae3bcacac"
 hash_scope = "decl"
 truth = "decl"
 

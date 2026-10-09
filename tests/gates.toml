@@ -120,6 +120,24 @@ sources  = [
 ]
 includes = ["core/include", "core/src", "core/src/sched", "sched/rr/include", "tests/host"]
 
+# ft-test(宿主): **文件表(framework/file-table) + errno 值域**的门禁(ADR-0012)。
+# 为什么值得一条宿主用例: 表是**纯算法**(契约头明写"不解引用 br_file_t")—— 表满 /
+# dup2 顶替 / 最后一个引用 / 极端 fd 这些只有真实负载才碰得到的边界, 宿主上几毫秒全跑到,
+# 不必开 QEMU(与 mem-test / sync-test 的分工同型)。
+# ★ 它还兼任**errno 对拍**: 拿宿主 <errno.h> 逐码比 `br_error.h` 的每一个 BR_E* ——
+#   这是"errno 与 Linux kernel 保持一致"的可执行判据(宿主 x86-64 与目标 aarch64 共用
+#   内核 asm-generic 编号, 所以对目标同样成立)。
+# 源集合里带上 `src/ft_selftest.c`: in-image 套件(TC-FT-001..011)在宿主上**重跑同一份**,
+# 于是宿主与目标两条腿的判据同源, 不会各自漂。
+[[hosttest]]
+name     = "ft-test"
+sources  = [
+  "framework/file-table/src/file_table.c",
+  "framework/file-table/src/ft_selftest.c",
+  "tests/host/ft_test.c",
+]
+includes = ["core/include", "framework/file-table/include", "tests/host"]
+
 # ⚠ **同名是刻意的**: `sync-test` / `sched-test` 在 `[[hosttest]]` 与 `[[gate]]` 里各有一条。
 #   同一个名字指的是"同一套用例的两种跑法" —— 宿主侧(秒级、能用 ucontext 造真阻塞)与
 #   目标侧(真地址空间、真中断、真 tick)。于是 `brickie test sync-test` 会**两条都跑**,
@@ -293,16 +311,24 @@ require   = [
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[PLGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[SVCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  # ★ ADR-0012: 文件表(fd 表)的一致性套件。它与 PLGCONF/SVCCONF 同属"插件基础设施"
+  #   ——都跑在 core 的自检 pass 里, 所以挂在本门禁下而不是另开一次 QEMU。
+  #   宿主腿是独立的 `ft-test`(含 errno 与内核逐码对拍)。
+  "\\[FTCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
 forbid    = [
   "\\[PLGCONF\\] FAIL",
   "\\[SVCCONF\\] FAIL",
+  "\\[FTCONF\\] FAIL",
   "\\[PANIC\\]",
 ]
 require_tags = [
   "TC-PLUG-001", "TC-PLUG-002", "TC-PLUG-003", "TC-PLUG-002b",
   "TC-SVC-001", "TC-SVC-002", "TC-SVC-003",
+  # 文件表逐条点名(裁掉用例也算红 —— 与 smoke 的分工就在这里)。
+  "TC-FT-001", "TC-FT-002", "TC-FT-003", "TC-FT-004", "TC-FT-005", "TC-FT-006",
+  "TC-FT-007", "TC-FT-008", "TC-FT-009", "TC-FT-010", "TC-FT-011",
 ]
 
 # sched-test(QEMU): 调度框架 + coop 的端到端门禁。

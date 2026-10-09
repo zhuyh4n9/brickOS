@@ -1,0 +1,97 @@
+# brickie:generated
+# api/iface 快照 api/iface/framework/file-table/filetable.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "framework/file-table#filetable"
+provider = "framework/file-table"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:e02f50ee703d2e2836915efa5fae24f430ddbee029a7ef34a2f7a2fae3bcacac"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "macro"
+name = "BR_FT_MAX"
+value = "32u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_FT_NONE"
+value = "(-1)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_reset"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_count"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_fd_at"
+sig = "int (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_alloc"
+sig = "int (br_file_t*, br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_get"
+sig = "br_file_t* (int)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_get_flags"
+sig = "int (int, br_u32*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_set_flags"
+sig = "int (int, br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_release"
+sig = "int (int, br_file_t**)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_release_all"
+sig = "int (br_file_t**, br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_dup"
+sig = "int (int)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_ft_dup2"
+sig = "int (int, int, br_file_t**)"
+status = "experimental"

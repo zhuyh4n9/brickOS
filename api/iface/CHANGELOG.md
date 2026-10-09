@@ -106,3 +106,7 @@
 ## sched/rr#rr v0.1.0.0 (compat_gen=0)
 - hash: sha256:2600c8855085bcf13b334b1a164fe7aa33a12dc7970dc705f12b744c82aa4eb2
 - 变更: 首次发布(建档)
+
+## framework/file-table#filetable v0.1.0.0 (compat_gen=0)
+- hash: sha256:e02f50ee703d2e2836915efa5fae24f430ddbee029a7ef34a2f7a2fae3bcacac
+- 变更: 首次发布(建档)

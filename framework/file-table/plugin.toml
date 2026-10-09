@@ -1,0 +1,128 @@
+# framework/file-table — 文件表(fd 表)框架件(plugin_type = ability, subkind = framework)
+#
+# 设计出处: `docs/11-service/11-01-service.md` §1(D18: **fd 表 = 共享状态单一主人**判例)、
+# `docs/1-architecture/1-01-architecture.md` §7.2 规则 3(共享状态唯一主人)+ D19
+# (能力框架以插件形态存在 —— "框架件 = 插件的身份, core 的纪律")、
+# `docs/3-os-core/3-06-service-mgmt.md` §2(三类共享状态主人: fd 表 / socket 表 / trace 环)、
+# `docs/7-storage/7-01-vfs.md` §1/§4.1(fd 表项统一持有 `br_file_t*`; `br_open` 是它的底层原语)。
+# 逐条裁定与偏离: `docs/decisions/0012-file-table-and-errno.md`(本 manifest 是它的声明面)。
+#
+# ★ 依赖面(deps 为空是**设计结果**, 不是漏写): 本件只持有与比较 `br_file_t*`, 从头到尾
+#   **不解引用**它(前向声明即可) ⇒ 不把 vfs-core 拉进任何组合, 与 framework/vfs-core 同型。
+#   "谁负责 br_file_close"因此写成**回报句柄**的形态: 表管 fd, vfs-core 管文件。
+# ★ 相位: `phase = "core"` —— 类别决定的 ② 完成点(ability 且 subkind != service ⇒ CORE)。
+#   表是 BSS, EARLY 就能用; svc-posix(LATE)装标准流时它早已在场。
+schema = 1
+
+[plugin]
+name        = "framework/file-table"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "framework"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "文件表(fd 表): 小整数 → br_file_t* 的静态定长表 + 最小可用 fd / dup / 最后一个引用判定"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "32 槽 × 16 B = 512 B(句柄指针 + flags)+ 计数; 纯静态, 无堆分配"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+# ---- 类型别名表(sig 里用的名字 ↔ 底层 C 类型) ----
+[iface.typedefs]
+br_u32    = "uint32_t"
+br_bool   = "int"
+br_size_t = "size_t"
+
+# ---- 结构依赖: 无(见上面的"★ 依赖面") ----
+
+# ---- 导出面(单元 = 冻结与版本的基本粒度; 本件 = br-filetable.txt 的候选面) ----
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "filetable"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:e02f50ee703d2e2836915efa5fae24f430ddbee029a7ef34a2f7a2fae3bcacac"
+status       = "experimental"
+
+# 上界与哨兵(常量即契约的一部分: 消费者拿 BR_FT_MAX 报"表有多大")
+[[export.entries]]
+kind  = "macro"
+name  = "BR_FT_MAX"
+value = "32u"
+[[export.entries]]
+kind  = "macro"
+name  = "BR_FT_NONE"
+value = "(-1)"
+
+# 生命周期与观测
+[[export.entries]]
+kind = "func"
+name = "br_ft_reset"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_ft_count"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_ft_fd_at"
+sig  = "int (br_u32)"
+
+# 表操作
+[[export.entries]]
+kind = "func"
+name = "br_ft_alloc"
+sig  = "int (br_file_t*, br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_ft_get"
+sig  = "br_file_t* (int)"
+[[export.entries]]
+kind = "func"
+name = "br_ft_get_flags"
+sig  = "int (int, br_u32*)"
+[[export.entries]]
+kind = "func"
+name = "br_ft_set_flags"
+sig  = "int (int, br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_ft_release"
+sig  = "int (int, br_file_t**)"
+[[export.entries]]
+kind = "func"
+name = "br_ft_release_all"
+sig  = "int (br_file_t**, br_u32)"
+
+# dup 族(POSIX dup/dup2 的 1:1 底层)
+[[export.entries]]
+kind = "func"
+name = "br_ft_dup"
+sig  = "int (int)"
+[[export.entries]]
+kind = "func"
+name = "br_ft_dup2"
+sig  = "int (int, int, br_file_t**)"
+
+[selftest]
+# ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = file_table_selftest`。
+# 用例: TC-FT-001..011(自编号, 见 br-wa-test-001)。开关在 `product.toml [selftest]`
+# (关掉 ⇒ 本文件与 src/ft_selftest.c 一起不参与编译, 测试代码不进镜像)。
+cases = 11
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

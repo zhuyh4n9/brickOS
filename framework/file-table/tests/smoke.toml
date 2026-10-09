@@ -1,0 +1,151 @@
+# framework/file-table — conformance 用例(人写)
+#
+# 与 `file_table_selftest()`(src/ft_selftest.c)里的 TC-FT-001..011 一一对应
+# (该钩子在描述符里, 由 **core** 在全部 start() 之后统一驱动, ADR-0010):
+# 红绿由 in-image 套件打 `[FTCONF] PASS/FAIL`, 末尾 SUMMARY; 门禁 `plugin-test` 要求
+# `[FTCONF] SUMMARY pass=N fail=0` 且逐条点名 tag。本文件是同一批用例的**声明面骨架**,
+# 不是可执行形式(in-image 套件才是), 形状照 `6-01` §2 的字段契约。
+# 设计出处: `11-01` §1 / `1-01` §7.2 规则 3 / `7-01` §1; 裁定见 ADR-0012。
+#
+# ★ 本套件不需要 QEMU: 表不解引用 `br_file_t` ⇒ 用例用"互不相同的假指针"当句柄即可。
+#   宿主版是 `tests/host/ft_test.c`(门禁 `ft-test`), 它额外拿 <errno.h> 逐码对拍。
+schema = 1
+
+[[case]]
+id       = "TC-FT-001"
+pre      = "表已就绪(EARLY 之后即可用); 用例自备空表前置"
+steps    = [
+    "br_ft_reset() 后 br_ft_count() == 0",
+    "br_ft_alloc(<句柄 A>, BR_O_RDONLY) == 0(最小号从 0 起)",
+    "br_ft_count() == 1; br_ft_get(0) == A",
+    "br_ft_fd_at(0) == 0; br_ft_fd_at(1) == BR_FT_NONE(越界 ⇒ 哨兵)",
+]
+expect   = "[FTCONF] PASS TC-FT-001 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-002"
+pre      = "TC-FT-001 已过"
+steps    = [
+    "依次分配 A/B/C ⇒ fd 0/1/2",
+    "br_ft_release(1, NULL) == 0(fd 1 变空槽)",
+    "再分配 D ⇒ **1**(最小可用 fd, 不是 3); br_ft_get(1) == D",
+]
+expect   = "[FTCONF] PASS TC-FT-002 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-003"
+pre      = "TC-FT-002 已过"
+steps    = [
+    "填满 BR_FT_MAX 个槽; 再 br_ft_alloc ⇒ -EMFILE",
+    "br_ft_alloc(NULL, 0) ⇒ -EINVAL(空句柄不是合法文件)",
+    "两条失败都**不留副作用**: br_ft_count() 仍 == BR_FT_MAX, br_ft_get(0) 仍可读",
+]
+expect   = "[FTCONF] PASS TC-FT-003 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-004"
+pre      = "表里 fd 0 在场, fd 1 已被释放(空槽)"
+steps    = [
+    "br_ft_get(-1) / br_ft_get(BR_FT_MAX) / br_ft_get(<空槽>) ⇒ 全 BR_NULL",
+    "br_ft_get_flags(-1, &fl) / br_ft_get_flags(<空槽>, &fl) ⇒ 全 -EBADF",
+    "br_ft_set_flags(<空槽>, 0) ⇒ -EBADF; br_ft_release(<空槽>, NULL) ⇒ -EBADF",
+    "语义: 越界与空槽**同一个码** —— POSIX 不区分(区分了反而泄漏信息)",
+]
+expect   = "[FTCONF] PASS TC-FT-004 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-005"
+pre      = "TC-FT-004 已过"
+steps    = [
+    "br_ft_alloc(A, 0x21) 后 br_ft_get_flags(0, &got) == 0 且 got == 0x21(存与还)",
+    "br_ft_set_flags(0, 0x42) == 0; 再读 == 0x42(**整体替换**语义)",
+    "br_ft_get_flags(0, NULL) ⇒ -EINVAL",
+    "语义: 表不解释 flags, 只存与还; 解释权归 svc-posix",
+]
+expect   = "[FTCONF] PASS TC-FT-005 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-006"
+pre      = "TC-FT-005 已过"
+steps    = [
+    "独占句柄: br_ft_release(0, &last) == 0 且 last == <该句柄>(最后一个引用)",
+    "同一槽再 release ⇒ -EBADF, 且 last 被清成 BR_NULL",
+    "dup 出来的两个 fd: 释放一个 ⇒ last == BR_NULL(还有别的引用)",
+    "释放最后一个 ⇒ last == <该句柄>",
+]
+expect   = "[FTCONF] PASS TC-FT-006 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-007"
+pre      = "TC-FT-006 已过"
+steps    = [
+    "br_ft_dup(0) == 1(最小可用); br_ft_get(1) == br_ft_get(0)(同一 open file description)",
+    "两个 fd 的 flags 快照一致; br_ft_count() == 2",
+    "br_ft_dup(<空槽>) ⇒ -EBADF",
+]
+expect   = "[FTCONF] PASS TC-FT-007 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-008"
+pre      = "TC-FT-007 已过; fd0=A fd1=B fd2=C"
+steps    = [
+    "dup2(0, 2, &disp): disp == C(目标独占 ⇒ 回报被顶掉的句柄), fd2 == A",
+    "dup2(1, 2, &disp): disp == BR_NULL(A 仍被 fd0 引用 ⇒ 不回报), fd2 == B",
+    "dup2(1, 1, &disp) == 1 且 disp **未被改写**(dup2(f,f) 原地不动)",
+    "dup2(<空槽>, 0) / dup2(0, BR_FT_MAX) / dup2(0, -1) ⇒ 全 -EBADF, 表不变",
+]
+expect   = "[FTCONF] PASS TC-FT-008 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-009"
+pre      = "TC-FT-008 已过"
+steps    = [
+    "造 4 个 fd 但只有 2 个不同句柄(fd0/fd2 同 A, fd1/fd3 同 B)",
+    "br_ft_release_all(out, 1) ⇒ -ENOSPC 且**表不变**(br_ft_count() 仍 4)",
+    "br_ft_release_all(out, 4) ⇒ 2(按指针去重, 同一句柄只报一条)",
+    "表已清空: br_ft_count() == 0 且 br_ft_get(0) == BR_NULL",
+]
+expect   = "[FTCONF] PASS TC-FT-009 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-010"
+pre      = "无(纯编译期常量)"
+steps    = [
+    "BR_EINVAL==22 / BR_EBADF==9 / BR_EMFILE==24 / BR_ENFILE==23 / BR_ENOENT==2",
+    "BR_ENOTEMPTY==39 / BR_ENOTSUP==95 / BR_ETIMEDOUT==110 / BR_EACCES==13 / BR_ESPIPE==29",
+    "别名同值: BR_EOPNOTSUPP == BR_ENOTSUP; BR_EWOULDBLOCK == BR_EAGAIN",
+    "真值来源 = Linux 内核 errno-base.h / errno.h; 宿主 ft-test 拿 <errno.h> 逐码对拍",
+]
+expect   = "[FTCONF] PASS TC-FT-010 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-FT-011"
+pre      = "TC-FT-010 已过"
+steps    = [
+    "填满后最后一个成功分配 == BR_FT_MAX - 1(上界不越界)",
+    "br_ft_fd_at(k) == k(全满 ⇒ 严格升序); br_ft_fd_at(BR_FT_MAX) == BR_FT_NONE",
+    "满表 br_ft_reset() 返回 BR_FT_MAX(丢弃数 = 槽数 ⇒ 调用方能发现'有人忘了关')",
+]
+expect   = "[FTCONF] PASS TC-FT-011 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
