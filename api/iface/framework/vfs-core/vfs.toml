@@ -9,11 +9,11 @@ NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 [unit_meta]
 api_iface = "native"
 form = "api"
-version = "0.1.1.0"
+version = "0.1.2.0"
 compat_gen = 0
 freeze_state = "unfrozen"
 status = "experimental"
-hash = "sha256:fa92ffcd07657624972308e8c2d8a8625f206cd92275306711e8b9d1a33e7ff9"
+hash = "sha256:744bb3605fe427a7ad376dba45600552c14fbe44d8597459b9a0c81fff1ffb57"
 hash_scope = "decl"
 truth = "decl"
 strict_params = false
@@ -74,6 +74,12 @@ status = "experimental"
 
 [[entry]]
 kind = "macro"
+name = "BR_O_NOFOLLOW"
+value = "0x0200u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
 name = "BR_SEEK_SET"
 value = "0"
 status = "experimental"
@@ -110,6 +116,12 @@ status = "experimental"
 
 [[entry]]
 kind = "macro"
+name = "BR_INODE_SYMLINK"
+value = "3u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
 name = "BR_POLLIN"
 value = "0x01u"
 status = "experimental"
@@ -139,6 +151,18 @@ value = "0x0001u"
 status = "experimental"
 
 [[entry]]
+kind = "macro"
+name = "BR_STAT_NLINK"
+value = "0x0002u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_SYMLINK_MAX"
+value = "96u"
+status = "experimental"
+
+[[entry]]
 kind = "type"
 name = "br_file_ops_t"
 layout = "# {open, read, write, lseek, ioctl, fsync, poll, poll_attach, close}"
@@ -153,7 +177,7 @@ status = "experimental"
 [[entry]]
 kind = "type"
 name = "br_inode_ops_t"
-layout = "# {lookup, create, unlink, mkdir, rmdir, rename, getattr, setattr}"
+layout = "# {lookup, create, unlink, mkdir, rmdir, rename, getattr, setattr, symlink, readlink, link}"
 status = "experimental"
 
 [[entry]]
@@ -177,7 +201,7 @@ status = "experimental"
 [[entry]]
 kind = "type"
 name = "br_stat_t"
-layout = "# {valid, type, size}"
+layout = "# {valid, type, size, nlink}"
 status = "experimental"
 
 [[entry]]
@@ -302,8 +326,38 @@ status = "experimental"
 
 [[entry]]
 kind = "func"
+name = "br_fstat"
+sig = "int (br_file_t*, br_stat_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
 name = "br_stat"
 sig = "int (const char*, br_stat_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_lstat"
+sig = "int (const char*, br_stat_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_symlink"
+sig = "int (const char*, const char*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_readlink"
+sig = "int (const char*, char*, br_size_t)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_link"
+sig = "int (const char*, const char*)"
 status = "experimental"
 
 [[entry]]

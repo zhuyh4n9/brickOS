@@ -9,10 +9,14 @@
  *   `bl memcpy`, 于是 `-nostdlib` 链接直接红(`undefined reference to memcpy`)。
  *   所以本文件是**链接能否成立**的前提, 不是可有可无的加速件。
  *
- * 归属说明(为什么在 core 而不是 svc-posix):
- *   设计侧 POSIX 符号面归 svc-posix(D18), 但那属 M2/M3, 而 core 现在就要能链接。
+ * 归属说明(为什么在 core 而不是 runtime/posix):
+ *   设计侧 POSIX 符号面归 POSIX 运行时(D18; 本树里是 `runtime/posix` 插件, ADR-0015)。
+ *   ★ **本文件不会因为那个插件到位而消失** —— 原因是**相位**, 不是排期:
+ *   core 在 EARLY(还开着 MMU 建堆)就要 `memset` 控制块, 而 `runtime/posix` 是 LATE 相的
+ *   服务。符号归一(把 mem* 也搬进那个插件)在"core 早于服务"这条相位事实面前做不到 ——
+ *   这一条写在 ADR-0014 §4 的欠账里, 不是遗漏。
  *   本文件因此刻意**最小**: 只提供编译器会发射的那四个, 签名严格照 AAPCS64/标准 C,
- *   不导出任何别的 libc 名字(避免与将来 svc-posix 的符号面撞车; 到那时删掉本文件即可)。
+ *   不导出任何别的 libc 名字(其余 `str*` 归 `runtime/posix`, 两边不重叠)。
  *
  * 安全纪律(与 `-mstrict-align` 的关系): 本文件在**开 MMU 之前**也会被调用
  *   (`br_mem_init` 建控制块时要清零), 那时全部访存按 Device-nGnRnE 处理 ⇒

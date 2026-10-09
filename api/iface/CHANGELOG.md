@@ -110,3 +110,11 @@
 ## framework/file-table#filetable v0.1.0.0 (compat_gen=0)
 - hash: sha256:e02f50ee703d2e2836915efa5fae24f430ddbee029a7ef34a2f7a2fae3bcacac
 - 变更: 首次发布(建档)
+
+## framework/vfs-core#vfs v0.1.2.0 (compat_gen=0)
+- hash: sha256:744bb3605fe427a7ad376dba45600552c14fbe44d8597459b9a0c81fff1ffb57
+- 变更: ADDED BR_INODE_SYMLINK; ADDED BR_O_NOFOLLOW; ADDED BR_STAT_NLINK; ADDED BR_SYMLINK_MAX; ADDED br_fstat; ADDED br_link; ADDED br_lstat; ADDED br_readlink; ADDED br_symlink; CHANGED br_inode_ops_t; CHANGED br_stat_t
+
+## runtime/posix#posix v0.1.0.0 (compat_gen=0)
+- hash: sha256:b8697b3ba530dd77f2f6ffb008a99774d7b839c8f57a1ebefdcfc150118becc8
+- 变更: 首次发布(建档)

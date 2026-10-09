@@ -14,9 +14,9 @@
 | | |
 |---|---|
 | **是** | 表本身 + 它的语义(分配/查询/flags/释放/dup/dup2/退出清空) |
-| **不是** | POSIX 的 `open/read/write/…` —— 那是 **svc-posix** 的面 |
+| **不是** | POSIX 的 `open/read/write/…` —— 那是 **runtime/posix** 的面 |
 
-svc-posix 把二者接起来(**零转换**):
+runtime/posix 把二者接起来(**零转换**):
 
 ```c
 int open(const char *path, int flags, ...) {
@@ -74,12 +74,12 @@ int close(int fd) {
 
 - **`flags` 是每 fd 的快照**: 访问模式按 POSIX 是每 fd 的, 而 `O_APPEND`/`O_NONBLOCK` 属
   **open file description**(共享)。本件只存一份快照; 共享位的真值在 `br_file_t` 侧
-  (`br_file_flags`)与驱动里 ⇒ svc-posix 的 `F_SETFL` 要把共享位**同时**落到文件侧,
+  (`br_file_flags`)与驱动里 ⇒ runtime/posix 的 `F_SETFL` 要把共享位**同时**落到文件侧,
   不能只改本表。登记在 ADR-0012。
 - **`br_ft_set_flags` 是整体替换**(不是"只改状态位"): 一个能改访问模式的 setter 存在
   才是危险的 —— 要保留访问模式就自己按位并回来。
 - **没有 `F_DUPFD`(指定下限)**: 需要时用 `br_ft_dup2`, 或按 ADR 追加一个函数(面预算)。
-- **0/1/2 不是特殊槽**: 标准流由 svc-posix 在 init 里先装, 于是**自然**占住最小三个号 ——
+- **0/1/2 不是特殊槽**: 标准流由 runtime/posix 在 init 里先装, 于是**自然**占住最小三个号 ——
   不需要"保留段"这种额外机制。
 
 ## 一致性用例
@@ -110,5 +110,6 @@ tests/smoke.toml               ← 声明面用例骨架(与 in-image TC-FT-* �
 - `br-wa-test-001`: `TC-FT-001..011` 是**自编号** —— 设计 `6-01` 的用例表里没有文件表
   这一组。还债动作: 先补出 `6-01` 的用例组, 再把自编号改回正式编号(见根目录
   `WORKAROUNDS.md`)。
-- **还没有消费者**: svc-posix 未落地(`11-01` §2 第 1 项)⇒ 本件现在只由 `product.toml`
-  的 `[select]` 直接选中, 靠自检证明语义。svc-posix 到位后它转为**依赖闭包**成员。
+- **消费者已到位**(ADR-0014): `runtime/posix` 经 `[[dep]] kind = "init"` 依赖本件, 于是
+  它在 `product.toml` 里本可以只靠闭包进入。仍显式列着是刻意的 —— 见 `product.toml`
+  那一行的注释(让"文件表在 POSIX 运行时之外也有独立证据"这件事可读)。

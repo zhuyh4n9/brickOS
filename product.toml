@@ -36,10 +36,15 @@ plugins = [
   #   换回去只需改这一行(`br_sched_register` 恰一次 ⇒ 一次只能装一个调度器)。
   "sched/rr",
   "service/dump",
-  # ★ 文件表(fd 表, ADR-0012): **直接选中**而不是靠闭包 —— 它的消费者 svc-posix
-  #   (`11-01` §2 第 1 项)还没落地, 所以现在的证据来自它自己的 `[FTCONF]` 自检
-  #   (由 core 在全部 start 之后驱动)。svc-posix 到位后这一行可以删掉:
-  #   它会经 `service/svc-posix --init--> framework/file-table` 自动进闭包。
+  # ★ ADR-0014/0015: POSIX 运行时(runtime/posix)。它的闭包链:
+  #   runtime/posix → framework/{file-table, vfs-core} + platform/qemu-aarch64
+  #   ⇒ 直接列它一件, 其余两件框架件由 [[dep]] 自动拉入(所以下面那行可以省 —— 留着是为了
+  #     "文件表在 POSIX 运行时之外也有独立证据"这件事可读)。
+  "runtime/posix",
+  # ★ 文件表(fd 表, ADR-0012): runtime/posix 落地后**本行已是冗余**(它经上面的
+  #   `runtime/posix --init--> framework/file-table` 自动进闭包)。留着是刻意的:
+  #   它让"文件表在 POSIX 运行时之外也有独立证据"这件事在 `[select]` 里可读, 而且
+  #   POSIX 运行时被裁掉的产品(极小 native 组合)仍能单独带上 fd 表。删掉它 `check` 依然 0 错。
   "framework/file-table",
   "fs/tmpfs",
   "fs/devfs",

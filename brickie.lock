@@ -57,6 +57,11 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.plugins]]
+name = "runtime/posix"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
 name = "sched/coop"
 version = "0.1.0.0"
 compat_gen = 0
@@ -129,9 +134,9 @@ id = "framework/vfs-core#vfs"
 provider = "framework/vfs-core"
 unit = "vfs"
 api_iface = "native"
-version = "0.1.1.0"
+version = "0.1.2.0"
 compat_gen = 0
-hash = "sha256:fa92ffcd07657624972308e8c2d8a8625f206cd92275306711e8b9d1a33e7ff9"
+hash = "sha256:744bb3605fe427a7ad376dba45600552c14fbe44d8597459b9a0c81fff1ffb57"
 hash_scope = "decl"
 truth = "decl"
 
@@ -165,6 +170,17 @@ api_iface = "native"
 version = "0.1.4.0"
 compat_gen = 0
 hash = "sha256:3863fa62c2d559a6b3ca3e81fc5d99f75b188ec0b2203ddacf331cdfb92139a7"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "runtime/posix#posix"
+provider = "runtime/posix"
+unit = "posix"
+api_iface = "runtime_adapter"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:b8697b3ba530dd77f2f6ffb008a99774d7b839c8f57a1ebefdcfc150118becc8"
 hash_scope = "decl"
 truth = "decl"
 

@@ -1,0 +1,212 @@
+# runtime/posix — conformance 用例(人写)
+#
+# 与 `posix_selftest()`(src/posix_selftest.c)里的 TC-POSIX-001..020 一一对应:
+# 红绿由 in-image 套件打 `[POSIXCONF] PASS/FAIL`, 末尾 SUMMARY; 该钩子在描述符里, 由
+# **core** 在全部 start() 之后统一驱动(ADR-0010)。门禁 `posix-test` 要求摘要全绿且
+# **逐条点名**这 20 个 tag(裁掉一个用例也算红)。本文件是同一批用例的**声明面骨架**,
+# 不是可执行形式(in-image 套件才是), 形状照 `6-01` §2 的字段契约。
+#
+# ★ 本套件的纪律: **只经 POSIX 头文件驱动**(一行 br_* 都不调)。理由见 README —— 本插件的
+#   产出就是"POSIX 面", 用 native API 去测等于没测面本身。
+# 设计出处: `11-02-svc-posix-subset.md`(TR-A/TR-B 的范围) + ADR-0014。
+schema = 1
+
+[[case]]
+id       = "TC-POSIX-001"
+pre      = "START 相之后; rootfs 已挂 '/'"
+steps    = [
+    "open(O_RDWR|O_CREAT|O_TRUNC) / write 7 字节 / lseek(SET) / read 回 7 字节 / lseek(END)==7 / 越过 EOF 读⇒0 / close==0 / 二次 close⇒EBADF",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-001 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-002"
+pre      = "TC-POSIX-001 已过"
+steps    = [
+    "dup 出的 fd != 原 fd 且共享偏移(lseek 一个另一个看得见) / dup2 到已占用号⇒目标被顶替 / close 其中一个不影响另一个",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-002 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-003"
+pre      = "TC-POSIX-001 已过"
+steps    = [
+    "只读 fd 上 write⇒EBADF / 只写 fd 上 read⇒EBADF / 只读 fd 上 ftruncate⇒失败(本服务的 fd 层执法)",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-003 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-004"
+pre      = "TC-POSIX-003 已过"
+steps    = [
+    "pwrite(off=0) 后 lseek(CUR)==0(pwrite 不动偏移) / pread(off=0) 内容正确且偏移不变 / lseek(4) + writev 两段⇒4 / lseek(4) + readv 两段⇒4",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-004 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-005"
+pre      = "TC-POSIX-004 已过"
+steps    = [
+    "stat/lstat 一致且 S_ISREG / st_size==8 / fstat 与 stat 同长 / st_nlink==1 / stat(dir) ⇒ S_ISDIR",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-005 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-006"
+pre      = "TC-POSIX-005 已过"
+steps    = [
+    "mkdir 已存在⇒EEXIST / rename 旧名消失 / access 不存在⇒ENOENT / unlink 不存在⇒ENOENT / rmdir 非空⇒ENOTEMPTY / remove 文件⇒0",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-006 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-007"
+pre      = "TC-POSIX-006 已过"
+steps    = [
+    "symlink 建链⇒0, 重复⇒EEXIST / lstat 报 S_ISLNK 且 size=目标串长 / stat 跟随到目标 / readlink 回全长 / 经链接读=读目标 / O_NOFOLLOW⇒ELOOP / readlink(非链接)⇒EINVAL",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-007 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-008"
+pre      = "TC-POSIX-007 已过"
+steps    = [
+    "link⇒0, 两个名字 st_nlink==2 / 经一个名字改写内容, 另一个名字看得见 / unlink 一个名字后 nlink==1 且数据仍在",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-008 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-009"
+pre      = "TC-POSIX-008 已过"
+steps    = [
+    "opendir/readdir 到 NULL / 条目总数==3('.'+'..'+1 文件), DT_REG 恰 1 条, DT_DIR 恰 2 条 / opendir(不存在)⇒NULL / closedir==0",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-009 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-010"
+pre      = "TC-POSIX-009 已过"
+steps    = [
+    "getcwd 以 '/' 开头 / chdir 到 PT_BASE 后 getcwd 一致 / 相对路径建的文件出现在新 cwd / chdir('..') 回 '/' / chdir(不存在)⇒ENOENT / getcwd 缓冲过小⇒ERANGE",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-010 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-011"
+pre      = "TC-POSIX-010 已过"
+steps    = [
+    "chmod/chown/fchmod/fchown/umask 全返回 0(空操作; umask 返回旧值) / access(R|W|X) 恒 0 / access(不存在, F_OK)⇒ENOENT",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-011 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-012"
+pre      = "TC-POSIX-011 已过"
+steps    = [
+    "openat(AT_FDCWD, ...) 等价 open / openat(真 dirfd)⇒ENOTSUP / O_DIRECTORY 用在普通文件⇒ENOTDIR",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-012 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-013"
+pre      = "TC-POSIX-012 已过"
+steps    = [
+    "F_GETFL 反映打开模式 / F_SETFL 置 O_APPEND|O_NONBLOCK 可读回 / F_SETLK 取得写锁 / 另一 fd 的 F_GETLK 报 F_WRLCK / 冲突的 F_SETLK⇒EAGAIN / 解锁后 F_GETLK⇒F_UNLCK / F_SETLKW⇒ENOTSUP",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-013 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-014"
+pre      = "TC-POSIX-013 已过"
+steps    = [
+    "poll(普通文件, POLLIN, 0)==1 且 revents 含 POLLIN(驱动无 poll 槽位⇒恒就绪) / 非法 fd⇒POLLNVAL / 负 fd 被忽略 / select 复用同一实现且 FD_ISSET 正确",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-014 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-015"
+pre      = "TC-POSIX-014 已过"
+steps    = [
+    "clock_gettime(MONOTONIC) 单调 / CLOCK_REALTIME⇒ENOTSUP / clock_getres==100 ms / nanosleep(1ms) 实际不早醒(>=1000us) / sleep(0)/usleep 返回成功",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-015 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-016"
+pre      = "TC-POSIX-015 已过"
+steps    = [
+    "sem_init + pthread_create(默认栈从 core 堆切) / sem_post→sem_wait 配对唤醒 / 工作线程写入共享量 / pthread_join 的 retval == 入口返回值 / pthread_equal/yield / pthread_detach⇒ENOTSUP(错误号通道)",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-016 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-017"
+pre      = "TC-POSIX-016 已过"
+steps    = [
+    "PTHREAD_MUTEX_INITIALIZER 静态可用 / lock⇒0 / trylock 忙⇒**返回 EBUSY**(不是 -1) / unlock⇒0 / cond signal/broadcast 无等待者⇒no-op / destroy⇒0 / pthread_mutex_init 动态路径等价",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-017 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-018"
+pre      = "TC-POSIX-017 已过"
+steps    = [
+    "fopen('w+')/fwrite 12 字节/fflush/fseek/ftell==0 / fgets 逐行(含 '\n') / 读到尽头 fgetc⇒EOF 且 feof 置位 / clearerr 清标志 / fread 回读正确 / fclose==0 / 文件内容真的落盘",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-018 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-019"
+pre      = "TC-POSIX-018 已过"
+steps    = [
+    "strlen/strcmp/strncmp/strcpy/strcat/strchr/strrchr/memcmp/memchr 语义 / atoi(负数与带尾字符)/abs/labs / malloc/realloc/calloc(清零)/free / getenv⇒NULL",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-019 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-POSIX-020"
+pre      = "TC-POSIX-019 已过"
+steps    = [
+    "ENOENT==2/EBADF==9/EEXIST==17/EINVAL==22/ENOSPC==28/ENOTEMPTY==39/ELOOP==40/ENOTSUP==95/ETIMEDOUT==110/EAGAIN==11(内核编号) / strerror 名字与 UNKNOWN 兜底 / open(NULL)⇒EINVAL / read/close(非法 fd)⇒EBADF / stat(NULL)⇒-1 / unlink(NULL)⇒-1",
+]
+expect   = "[POSIXCONF] PASS TC-POSIX-020 ..."
+sched    = ["coop", "preempt"]
+platform = ["qemu-aarch64"]

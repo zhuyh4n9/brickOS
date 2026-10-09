@@ -11,15 +11,16 @@
  * ============================== 本件是什么, 不是什么 ==============================
  * **是**: 一张"小整数 → `br_file_t*`"的**静态定长表** + 它的全部语义
  *       (最小可用 fd / 表满 / 非法 fd / dup 共享 / 释放时判"最后一个引用")。
- * **不是**: POSIX 的 `open/read/write` —— 那些是 **svc-posix** 的面(svc-posix 把
+ * **不是**: POSIX 的 `open/read/write` —— 那些是 **runtime/posix** 的面(runtime/posix 把
  *       `open()` 映射成 `br_open_err()` + 本表的 `br_ft_alloc()`, 把 `close()` 映射成
  *       `br_ft_release()` + `br_file_close()`)。本件**只做表**, 不做文件的读写。
  *
- * ## 为什么 fd 表要独立成件(而不是留在 svc-posix 里)
- *   设计说"fd 表 = svc-posix 的唯一主人", 那条规则要保的是**单一主人**(规则 3),
+ * ## 为什么 fd 表要独立成件(而不是留在 runtime/posix 里)
+ *   设计说"fd 表 = svc-posix 的唯一主人"(设计侧的插件名, 本树里叫 `runtime/posix`,
+ *   见 ADR-0015), 那条规则要保的是**单一主人**(规则 3),
  *   不是"主人必须是 POSIX 服务"。把表抽成框架件之后:
  *     ① **主人更清楚了** —— 状态住在 `framework/file-table`, 它是全树唯一写 `s_slots`
- *        的地方; svc-posix 变成**消费者**, 不再自己揣一张表;
+ *        的地方; runtime/posix 变成**消费者**, 不再自己揣一张表;
  *     ② v2 的 **socket 表** 可以复用同一张表的语义(设计 `3-06` §2 把二者的主人问题
  *        并列), 而不必再写一遍"最小可用 fd / dup / 最后一个引用";
  *     ③ 表是**纯算法**(无设备、无 FS、无 POSIX), 于是能在宿主上把
@@ -40,7 +41,7 @@
  * ## 生命周期归属(为什么 `release` 要**回报**句柄)
  *   本件**不调用** `br_file_close()`: 那会把 vfs-core 变成一条真依赖, 也会让"表"越过
  *   自己的边界去管文件的生死。于是 `br_ft_release(fd, &last_file)` 在**最后一个引用
- *   消失时**把句柄交回调用方, 由 svc-posix 调 `br_file_close()`:
+ *   消失时**把句柄交回调用方, 由 runtime/posix 调 `br_file_close()`:
  *
  *       int close(int fd) {
  *           br_file_t *f = BR_NULL;
@@ -63,7 +64,7 @@ typedef struct br_file br_file_t;
 /* ==================================================================== 上界 */
 
 /* fd 槽数上界(编译期; 与 plugin.toml 的 `[[res]] ram` 对齐 —— 32 × 16 B = 512 B)。
- * POSIX 的 0/1/2(stdin/stdout/stderr)不是特殊槽: svc-posix 在 init 里先装三个
+ * POSIX 的 0/1/2(stdin/stdout/stderr)不是特殊槽: runtime/posix 在 init 里先装三个
  * 标准流, 于是它们**自然**占住最小三个号 —— 不需要"保留段"这种额外机制。 */
 #define BR_FT_MAX   32u
 
@@ -91,7 +92,7 @@ int br_ft_fd_at(br_u32 index);
  * 分配一个槽写下 `{file, flags}`, 返回**最小可用 fd**。
  *   `file == BR_NULL` ⇒ `-EINVAL`(空槽位不是"合法的空文件", 见下面的"在场判据")。
  *   表满 ⇒ `-EMFILE`(进程级 fd 用尽; `ENFILE` 是系统级的, 本件是单进程表)。
- *   `flags` 对本件是**不透明**的: 表不解释它, 只存与还(解释权归 svc-posix)。
+ *   `flags` 对本件是**不透明**的: 表不解释它, 只存与还(解释权归 runtime/posix)。
  */
 int br_ft_alloc(br_file_t *file, br_u32 flags);
 
@@ -134,7 +135,7 @@ int br_ft_release_all(br_file_t **out, br_u32 cap);
  * ★ flags 的两个身份(用的人必须知道): 访问模式是**每 fd**的(dup 出来的新 fd 不能因为
  *   共享就变成可写), 而 `O_APPEND`/`O_NONBLOCK` 按 POSIX 属**open file description**
  *   (共享)。本件只能存一份快照; "共享的那些位"由 `br_file_t` 侧(`br_file_flags`)与
- *   驱动自己保存 —— svc-posix 的 `F_SETFL` 应把共享位同时落到文件侧, 不要只改本表。
+ *   驱动自己保存 —— runtime/posix 的 `F_SETFL` 应把共享位同时落到文件侧, 不要只改本表。
  *   这是本件**已知的语义边界**, 登记在 `docs/decisions/0012-…`。
  */
 int br_ft_dup(int oldfd);

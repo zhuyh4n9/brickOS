@@ -1,0 +1,793 @@
+# brickie:generated
+# api/iface 快照 api/iface/runtime/posix/posix.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "runtime/posix#posix"
+provider = "runtime/posix"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "runtime_adapter"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:b8697b3ba530dd77f2f6ffb008a99774d7b839c8f57a1ebefdcfc150118becc8"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "macro"
+name = "O_RDONLY"
+value = "00000000"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_WRONLY"
+value = "00000001"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_RDWR"
+value = "00000002"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_ACCMODE"
+value = "00000003"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_CREAT"
+value = "00000100"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_EXCL"
+value = "00000200"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_TRUNC"
+value = "0001000"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_APPEND"
+value = "0002000"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_NONBLOCK"
+value = "0004000"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_DIRECTORY"
+value = "0200000"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "O_NOFOLLOW"
+value = "0400000"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "AT_FDCWD"
+value = "(-100)"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "S_IFMT"
+value = "0170000"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "S_IFREG"
+value = "0100000"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "S_IFDIR"
+value = "0040000"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "S_IFLNK"
+value = "0120000"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "struct stat"
+layout = "# {st_dev, st_ino, st_mode, st_nlink, st_uid, st_gid, st_rdev, st_size, st_blksize, st_blocks, st_atime, st_mtime, st_ctime}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "struct dirent"
+layout = "# {d_ino, d_off, d_reclen, d_type, d_name[256]}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "struct pollfd"
+layout = "# {fd, events, revents}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "struct timespec"
+layout = "# {tv_sec, tv_nsec}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "struct iovec"
+layout = "# {iov_base, iov_len}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_mutex_t"
+layout = "# 包装 br_mutex_t(布局 = core 的 br_sync.h)"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "pthread_cond_t"
+layout = "# 包装 br_cond_t(布局 = core 的 br_sync.h)"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "sem_t"
+layout = "# = br_sem_t(布局 = core 的 br_sync.h)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "open"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "openat"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "creat"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "close"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "read"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "write"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pread"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pwrite"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "lseek"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "dup"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "dup2"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fcntl"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fsync"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fdatasync"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "ftruncate"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "truncate"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "isatty"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "readv"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "writev"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "poll"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "select"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "stat"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "lstat"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fstat"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "mkdir"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "chmod"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fchmod"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "chown"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fchown"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "umask"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "access"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "unlink"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "rmdir"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "remove"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "rename"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "link"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "symlink"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "readlink"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "opendir"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "readdir"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "closedir"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "rewinddir"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "chdir"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "getcwd"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "clock_gettime"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "clock_getres"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "nanosleep"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "sleep"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "usleep"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "getpid"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "getppid"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "getuid"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "geteuid"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "getgid"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "getegid"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_create"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_join"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_exit"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_self"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_equal"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_yield"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_detach"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_attr_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_attr_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_attr_setstacksize"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_attr_getstacksize"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_attr_setstack"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutex_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutex_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutex_lock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutex_trylock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_mutex_unlock"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_cond_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_cond_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_cond_wait"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_cond_timedwait"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_cond_signal"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "pthread_cond_broadcast"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "sem_init"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "sem_destroy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "sem_wait"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "sem_trywait"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "sem_timedwait"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "sem_post"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "sem_getvalue"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fopen"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fdopen"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fclose"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fread"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fwrite"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fseek"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "ftell"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "rewind"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fflush"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "feof"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "ferror"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "clearerr"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fileno"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "setvbuf"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fgets"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fputs"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fputc"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "fgetc"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "puts"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "putchar"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strlen"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strcpy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strncpy"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strcat"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strncat"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strcmp"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strncmp"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strchr"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strrchr"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "memchr"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "strerror"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "malloc"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "calloc"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "realloc"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "free"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "abs"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "labs"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "atoi"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "atol"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "abort"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "getenv"
+status = "experimental"

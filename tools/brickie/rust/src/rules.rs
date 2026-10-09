@@ -13,7 +13,7 @@ use crate::diag::{Diag, Severity};
 pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "platform"];
 pub const API_TYPES: &[&str] = &["native", "runtime_adapter", "third_party"];
 pub const SUBKINDS: &[&str] = &["scheduler", "framework", "io", "fs", "service"];
-pub const NAMESPACES: &[&str] = &["app", "iface", "platform", "sched", "framework", "io", "fs", "service"];
+pub const NAMESPACES: &[&str] = &["app", "iface", "platform", "sched", "framework", "io", "fs", "service", "runtime"];
 pub const PHASES: &[&str] = &["early", "core", "late", "app"];
 pub const SCHED_CLASSES: &[&str] = &["SAFE_PREEMPT", "COOP_ONLY", "TT_SAFE"];
 pub const SCHED_KINDS: &[&str] = &["coop", "preempt", "tt"];
@@ -107,6 +107,9 @@ pub fn namespace_plugin_type(ns: &str) -> Option<&'static str> {
         "iface" => Some("interface"),
         "platform" => Some("platform"),
         "sched" | "framework" | "io" | "fs" | "service" => Some("ability"),
+        // `runtime`(ADR-0015): POSIX 运行时一类"整套运行时"插件。plugin_type 仍是
+        // `ability`(它是能力插件), 与 `service` 的区别只在**体量与定位**, 不在类别学。
+        "runtime" => Some("ability"),
         _ => None,
     }
 }
@@ -119,6 +122,9 @@ pub fn namespace_subkind(ns: &str) -> Option<&'static str> {
         "io" => Some("io"),
         "fs" => Some("fs"),
         "service" => Some("service"),
+        // `runtime/posix` 的 subkind 仍是 `service`: 相位推导(ability + service ⇒ LATE)
+        // 与 D18 的"POSIX 运行时**服务**"定位都靠它。见 ADR-0015 §2.2。
+        "runtime" => Some("service"),
         _ => None,
     }
 }

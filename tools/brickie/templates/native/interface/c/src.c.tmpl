@@ -3,7 +3,8 @@
  * 人写文件: 由 `brickie new` 生成一次, 之后由人维护(brickie 不覆盖)。
  * **描述符实例不在这里** —— 它在生成物 build/gen/{{name}}/plugin_desc.c(§8.4)。
  *
- * Interface 插件是严格叶子: 只被 APP 依赖; 可再导出 svc-posix 符号(`1-01` §7.3)。
+ * Interface 插件是严格叶子: 只被 APP 依赖; 可再导出 POSIX 运行时的符号
+ * (本树里 = `runtime/posix`, ADR-0015; `1-01` §7.3 的 `iface-posix` 就是这个形态)。
  * 再导出单元须声明 form="skin" + reexport_of(§3.5 不变量 3)。
  */
 #include "{{short}}/{{short}}.h"

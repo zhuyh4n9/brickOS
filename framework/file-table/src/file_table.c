@@ -35,7 +35,7 @@ int file_table_start(void);
 
 typedef struct ft_slot {
     br_file_t *file;    /* BR_NULL = 空槽(**这就是**在场判据) */
-    br_u32     flags;   /* 不透明: 表只存与还, 解释权归消费者(svc-posix) */
+    br_u32     flags;   /* 不透明: 表只存与还, 解释权归消费者(runtime/posix) */
 } ft_slot_t;
 
 static ft_slot_t s_slots[BR_FT_MAX];
@@ -380,8 +380,8 @@ int file_table_init(void)
 
 int file_table_start(void)
 {
-    /* START 相只留一行启动证据(表容量 + 已在场的 fd 数 —— 后者正常为 0, 因为
-     * 安装标准流(0/1/2)是 svc-posix 的 init 干的事, 还没落地)。 */
+    /* START 相只留一行启动证据(表容量 + 已在场的 fd 数 —— 后者正常为 0: 本件不装
+     * 标准流, 而 `runtime/posix` **也刻意不装**(v1 没有进程模型, ADR-0014 §2.9)。 */
     br_log_info("file-table: cap=%u fd slots, %u open", (br_u32)BR_FT_MAX, br_ft_count());
     return 0;
 }

@@ -25,8 +25,12 @@
 #include <br/vfs/br_vfs.h>
 
 /* 规范化路径缓冲的上界(生产实现里的 `BR_VFS_PATH_MAX`)。自检要造路径缓冲 ⇒ 需要它;
- * 暴露的是**容量常量**而不是缓冲本身, 所以没有共享可变状态的隐患。 */
-#define BR_VFS_PATH_MAX_INTERNAL  64u
+ * 暴露的是**容量常量**而不是缓冲本身, 所以没有共享可变状态的隐患。
+ * ★ ADR-0013 把它从 64 抬到 128(符号链接拼接要放得下)—— **必须与 `br_vfs.c` 的同名常量
+ *   逐字一致**: 下面那张内部视图是**靠布局等价**强转出来的, 两处一旦不等, 自检读到的就是
+ *   错位的字节(实测踩过: 只改了生产侧, TC-VFS-002 立刻红且现象是"所有挂载都指向 /")。
+ *   现在这条一致性由生产侧的 `_Static_assert(sizeof(vfs_mount_t) == sizeof(...))` 执法。 */
+#define BR_VFS_PATH_MAX_INTERNAL  128u
 
 /* 内存比较(生产实现是 static vfs_mem_eq)。自检用它做"读回的字节与写入的一致"的判据 ——
  * 无 libc 环境里没有 memcmp 可借(插件不跨件借 core/string.c 的符号)。 */
@@ -37,7 +41,7 @@ br_bool br_vfs_internal_mem_eq(const void *a, const void *b, br_size_t n);
  * 用途: TC-VFS-002 逐条遍历挂载表, 核对"路径 → 匹配结果 = 自己"。 */
 typedef struct vfs_mount_internal {
     br_bool            used;
-    char               path[64];    /* BR_VFS_PATH_MAX */
+    char               path[BR_VFS_PATH_MAX_INTERNAL];
     br_u32             len;
     const br_fs_ops_t *ops;
     void              *priv;

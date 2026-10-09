@@ -47,6 +47,7 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 | **存储**(`fs/`) | `tmpfs`(**rootfs "/"**)、`devfs`(**/dev** 设备节点投影) | `fs/tmpfs/src/tmpfs.c` / `fs/devfs/src/devfs.c` |
 | **I/O**(`io/`) | `uart-pl011`: PL011 注册为 cdev ⇒ `/dev/uart0` | `io/uart-pl011/src/uart_pl011.c`(+ `uart_selftest.c`) |
 | **APP**(`app/hello` 插件) | MainLoop: 每秒打一行日志, 延时自带"不早醒"判据; 只**读**平台的心跳计数(纯 P0 消费者)。**不再驱动任何用例**(ADR-0010: 自检归 core) | `app/hello/src/main.c` |
+| **POSIX 运行时**(`runtime/posix`, 设计名 `svc-posix`) | **D18 的实现半边**: fd/文件/目录/链接/线程/同步/时间/stdio 子集的 POSIX 面; `errno = -ret` 零转换; cwd 归它(vfs 只认绝对路径)。覆盖范围 = `11-02` 的 TR-A/TR-B; `printf`/信号/`fork`/`mmap` 明确不做 | `runtime/posix/**`(ADR-0014) |
 | **调试服务插件**(`service/*`) | `trace`(core 16B 事件环的唯一消费方)/ `backtrace`(x29 帧链捕获)/ `hexdump`(16 B/行契约格式)/ `memleak`(按归属标签出账)/ `dump`(现场编排 + `[DBGCONF]` 入口) | `service/*/src/*.c` |
 | **调度器**(`sched/`) | `rr`(**时间片轮转抢占**, 镜像选它): FIFO 就绪队列 + 每线程时间片, 用尽即请 core 在 IRQ 出口换栈; `coop`(协作式, 留树/宿主用例覆盖): 只在显式点换栈 | `sched/rr/src/rr.c` / `sched/coop/src/coop.c` |
 | **Core**(内核本体, 不是插件) | **中断框架 Stage 1 + 下半部**: 号空间/描述符池、生命周期(ack→ISR→eoi 单出口)、三层屏蔽、优先级语义、级联域(**FAST 与 SLOW**)、fault/extable、最小 trace 环; **按线的 BH 分发**与 **IRQ 出口的 workqueue drain**(ADR-0011) | `core/src/irq/*.c`, `core/src/work/work_core.c`, `core/src/{panic,trace}.c` |
@@ -74,7 +75,8 @@ ADR-0010 之后它们**全部**由 core 的**自检 pass** 统一驱动(在各�
 | `[SVCCONF]` 3 项 | 服务注册表: 发布 / 查找 / 错误码(`br_svc.h`) | `plugin-test` |
 | `[TASKCONF]` 14 + `[SYNCCONF]` 12 | 调度框架与所选调度器(真线程 create/yield/join/sleep; **按 `ops.kind` 分叉**: coop 跑 TC-TASK-101, rr 跑 TC-TASK-102/103) | `sched-test`/`sync-test` |
 | `[WQCONF]` 8 项 | **下半部/工作队列**(ADR-0011): 队列有界/FIFO/预算/非重入/bh 上下文与禁令(`TC-WQ-*`) | `sched-test`(宿主 `work-test` 是第二条腿) |
-| `[VFSCONF]` 13 + `[DEVCONF]` 6 + `[CDEVCONF]` 8 + `[IOCONF]` 12 | 存储/设备域: 挂载表/走查链/文件面/目录面 + 设备注册表 + 会话适配 + PL011 经 `/dev/uart0` 往返 | `fs-test` |
+| `[POSIXCONF]` 20 项 | **POSIX 面**(ADR-0014): fd/文件/目录/符号链接/硬链接/cwd/时间/pthread/stdio/errno —— 套件**只经 POSIX 头文件驱动**(一行 `br_*` 都不调), 因为要测的正是'面本身' | `posix-test` |
+| `[VFSCONF]` 20 + `[DEVCONF]` 6 + `[CDEVCONF]` 8 + `[IOCONF]` 12 | 存储/设备域: 挂载表/走查链/文件面/目录面 + 设备注册表 + 会话适配 + PL011 经 `/dev/uart0` 往返 | `fs-test` |
 | `[FTCONF]` 11 项 | **文件表(fd 表)**(ADR-0012): 最小可用 fd / 表满 / 非法 fd / dup / dup2 顶替 / 最后一个引用判定 / errno 值域(`TC-FT-*`) | `plugin-test`(宿主 `ft-test` 是第二条腿, 含 `BR_E*` 与宿主 `<errno.h>` 逐码对拍) |
 
 每道 QEMU 门禁都额外要求 `[SELFTEST] SUMMARY … ran=[1-9]… fails=0 errors=0` ——
@@ -106,7 +108,7 @@ ADR-0010 之后它们**全部**由 core 的**自检 pass** 统一驱动(在各�
 | `br_fault_handler_register` 的消费方(ramdump) | v2(`3-02 §10.5`); 挂接点与现场结构已在, 缺的是注册 API 与捕获插件 |
 | `br_mm_map`/`br_mm_unmap` 的**运行期实现** | v1 按设计返回 `-ENOTSUP`(`6-01` 的 `TC-MM-003` 就是这个期望): 签名先行、实现随 v2 重定位; 运行期**改属性**走 `br_mm_set_attrs`(已可用, 用例用它做真 RO 保护验证) |
 | 设备注册 / devfs / cdev | M2。早期 console 是**轮询**形态 —— 这是设计内的 M0 形态(`1-01 §8` console 双形态), **不是** workaround |
-| libc / svc-posix | `-nostdlib -ffreestanding`; 只有 `stdarg.h`(编译器自带) |
+| ~~libc / POSIX 运行时~~ | **`runtime/posix` 已交付**(ADR-0014): POSIX 面自带宽窄两族 —— `str*`/`atoi`/`malloc` 别名是**本件定义**的, `mem*` 仍是 core 的(`core/src/string.c`, 因为 core 在 EARLY 相就要用, 而 runtime/posix 是 LATE 相的服务 ⇒ 符号归一**做不到**, 见 ADR-0014 §4)。**仍未做**: `printf` 家族(libc 选型未拍)、`fork`/信号/`mmap`/`gettimeofday`(见 `11-02` 的 TR-C/TR-D) |
 
 ## 3. 目录结构
 
@@ -206,7 +208,11 @@ brickOS/
 │   ├── dev-core/                通用设备注册表: 唯一扁平命名空间 + 子分类注册协议 + open_file 钩子透传
 │   ├── cdev-core/               字符设备子分类: br_cdev_ops + flash 子型 + **通用 br_file_ops 会话适配**
 │   └── file-table/              **fd 表**(ADR-0012): 小整数 → br_file_t*, 最小可用 fd / dup / 最后一个引用
-│                                (零依赖: 只持指针不解引用 ⇒ 不把 vfs-core 拉进组合; svc-posix 的底座)
+│                                (零依赖: 只持指针不解引用 ⇒ 不把 vfs-core 拉进组合; runtime/posix 的底座)
+├── runtime/                     【运行时插件】(ADR-0015: "整套运行时"单独一个命名空间)
+│   └── posix/                   **POSIX 运行时**(ADR-0014): include/ 是一整套 POSIX 头(unistd/fcntl/dirent/…)
+│                                src/posix.c 只做翻译; fd 表主人在 framework/file-table
+├── service/                     【服务插件】(trace / dump / backtrace / hexdump / memleak)
 ├── fs/                          【FS 插件】(依赖 vfs-core; 顶层 = namespace)
 │   ├── tmpfs/                   **rootfs("/")**: RAM 文件系统(完整文件语义, 预建 /dev /data /tmp)
 │   └── devfs/                   **/dev**: 把 dev-core 注册表投影成节点(实时枚举, open 经类钩子)
@@ -393,7 +399,7 @@ make tools-test         # 工具自身用例: 渲染器自检 + 端到端回归(
 | `make tools` / `tools-core` / `tools-test` / `tools-clean` | 工具段(L5/L2 / Rust 核心 / 用例 / 清理) | `tools/brickie/Makefile` |
 | `make brickie-check` / `brickie-check-release` / `brickie-compose` | 组合期校验(dev/release)/ 重建生成物 | `brickie check` / `check --profile release` / `gen` |
 | `make run` | QEMU 上跑(Ctrl-A X 退出) | `brickie run` |
-| `make smoke` / `irq-test` / `dbg-test` / `sync-test` / `plugin-test` / `sched-test` / `fs-test` | QEMU 门禁(冒烟 / 中断逐用例 / 内存+调试 / 同步 / 插件管理器 / 调度 / 存储) | `brickie test <名>` |
+| `make smoke` / `irq-test` / `dbg-test` / `sync-test` / `plugin-test` / `sched-test` / `fs-test` / `posix-test` | QEMU 门禁(冒烟 / 中断逐用例 / 内存+调试 / 同步 / 插件管理器 / 调度 / 存储 / POSIX 面) | `brickie test <名>` |
 | `make mem-test` / `string-test` / `sched-test` / `rr-test` / `work-test` / `ft-test` | **宿主侧**用例(不需交叉/QEMU; ADR-0011 起 `sched-test` 专指 **coop**, 抢占那条是 `rr-test`; ADR-0012 起 `ft-test` = 文件表 + errno 与内核逐码对拍) | `brickie test <名> --no-build` |
 | `make check-string` / `check-headers` | 支持例程自递归 / 对外头文件自洽 | `brickie test check-string` / `test check-headers --no-build` |
 | `make size` / `disasm` | 体积 / 反汇编 | `brickie size` / `brickie disasm` |
@@ -552,7 +558,7 @@ v0.2.0 的欠债全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)** —— 本�
 后由 ADR-0008 收敛成 `bl br_core_main`)。历史留档见
 [WORKAROUNDS.md](WORKAROUNDS.md) 的"已注销"表。
 
-**`br-wa-test-001`(用例编号债)**从三套扩到八套: 新增的 `TC-VFS-*`(13)/
+**`br-wa-test-001`(用例编号债)**从三套扩到九套: 新增的 `TC-VFS-*`(13)/
 `TC-DEV-*`(6)/`TC-CDEV-*`(8)/`TC-IO-*`(12)在设计的 `6-01` 里**整组不存在**
 (7-storage/8-device 两域尚无用例表)⇒ 自编号; 补齐设计侧用例组后再改回正式编号。
 `fs-test` 门禁对这 39 个 tag **逐条点名**, 所以"裁掉一个用例"会立刻变红。
@@ -561,6 +567,9 @@ ADR-0011 追加的自编号: `TC-TASK-102/103/104`(抢占与 I2 的可观测面)
 `TC-WQ-001..007`(下半部/工作队列)—— 同样待 `6-01` 补齐正式编号。
 ADR-0012 追加的自编号: `TC-FT-001..011`(文件表 / fd 表)—— `plugin-test` 逐条点名;
 设计侧连"fd 表归哪一篇"都还没成篇(它现在写作 `svc-posix` 的共享状态)。
+ADR-0014 追加的自编号: `TC-POSIX-001..020`(POSIX 面)—— `posix-test` 逐条点名;
+ADR-0015(改名 `runtime/posix` + 新增 `runtime` 命名空间)不改用例, 只改插件身份与目录。
+同时把 vfs-core 的 `TC-VFS-014..020`(链接族)加进 `fs-test` 的点名名单。
 
 代码里的标记形如 `WORKAROUND(br-wa-boot-001)`, 与登记表由 `make check-workarounds` 绑死:
 **任一侧多/少即报红** —— 欠债最怕的不是欠着, 是没人知道欠着。
@@ -580,7 +589,9 @@ ADR-0012 追加的自编号: `TC-FT-001..011`(文件表 / fd 表)—— `plugin-
 | `br_core_main()` | `1-01 §9` + `§6.2` 阶段表 | **四阶段启动链**(① 平台无关 → ② platform 插件 → ③ 堆/地址映射 → ④ 插件相位驱动), ADR-0008 |
 | **插件自检(selftest)** | `6-01`(用例是交付物; §2 运行基建)+ `1-01 §6.2`(四相与"两个完成点") | ADR-0010: 测试搬进各插件 `src/*_selftest.c`, 由 core 的**自检 pass**在 START 之后统一驱动(描述符的 `selftest` 钩子); 开关 `product.toml [selftest]` 是**生成期**的(关掉 ⇒ 描述符 NO_HOOK + `core/selftest/` 不编译 ⇒ 测试代码被裁出镜像)。**自检不是第五相**(它没有依赖语义, 对所有插件在同一时刻发生) |
 | **测试入口不进 `[[export]]`** | ADR-0005 裁定 9(钩子是组合期契约) | 11 个 `*_conformance`/`*_selftest` 从各 `plugin.toml` 的 `[[export]]` 移除 ⇒ 改用例不再算接口变更(接口快照已重发)。测试需要的插件私有符号走 `<plugin>/src/<short>_internal.h`(在 `src/` 而非 `include/`, 因为 `include/` 下的一切都是对外面) |
-| **`framework/file-table`(fd 表)** | `11-01 §1`(D18: **fd 表 = 共享状态单一主人**判例)、`1-01 §7.2` 规则 3 + D19(框架件)、`3-06 §2`(三类共享状态主人)、`7-01 §1/§4.1`(fd 表项 = `br_file_t*`) | **ADR-0012**: 设计把 fd 表写作 `svc-posix` 的一部分(且 `svc-posix` 未落地); 本原型按 D19 的口径把它**抽成框架件** —— 归属从"服务"移到"框架件", 但规则 3 要保的"恰一个主人"不变(全树只有它写表)。它**零依赖**(只持 `br_file_t*` 不解引用)⇒ `br_file_close` 写成"最后一个引用时回报句柄"由消费者调。errno 表随之从 20 码改为 **errno-base 整表 + generic 按需**, 并新增宿主逐码对拍 |
+| **`framework/file-table`(fd 表)** | `11-01 §1`(D18: **fd 表 = 共享状态单一主人**判例)、`1-01 §7.2` 规则 3 + D19(框架件)、`3-06 §2`(三类共享状态主人)、`7-01 §1/§4.1`(fd 表项 = `br_file_t*`) | **ADR-0012**: 设计把 fd 表写作 `svc-posix` 的一部分(且当时那个插件未落地); 本原型按 D19 的口径把它**抽成框架件** —— 归属从"服务"移到"框架件", 但规则 3 要保的"恰一个主人"不变(全树只有它写表)。它**零依赖**(只持 `br_file_t*` 不解引用)⇒ `br_file_close` 写成"最后一个引用时回报句柄"由消费者调。errno 表随之从 20 码改为 **errno-base 整表 + generic 按需**, 并新增宿主逐码对拍 |
+| **`runtime/posix`(POSIX 运行时)** | `1-01` §7.2/§7.3/§7.4/§7.6(D18 双角色 + 依赖宪法 + 移植双模式)、`11-01` §1/§2、**`11-02`(覆盖清单 TR-A/TR-B)**、`7-01` §1/§4.1、`3-01` §2/§3/§4/§7 | **ADR-0014**(内容)/ **ADR-0015**(插件名与命名空间: 原名 `service/svc-posix`): 实现 `11-02` 的 TR-A/TR-B。三条承重口径: ① `errno = -ret` 零转换(ADR-0012 的对齐是前提); ② **两条错误通道**(系统调用 `-1`+`errno` / pthread 返回错误号); ③ 访问模式执法归本件(vfs 刻意不做, ADR-0009 §5 遗留项 5)。`chmod/chown/access` 按用户裁定是空操作(但 `access` 仍查存在性) |
+| **符号链接与硬链接(vfs + tmpfs)** | `7-01` §2(inode ops 的 v2 预留槽位) | **ADR-0013(提前落地)**: 链接的**解析在 vfs**(目标可能是绝对/相对路径 ⇒ 只有掌握挂载表的人做得到; 用**重启**而非递归, 免得压穿 4 KiB 栈); tmpfs 的数据从节点字段变成**带引用计数的 `tmpfs_body_t`**(硬链接 = 两个名字共享一个体); 三个槽位按 append-only **追加在 `br_inode_ops` 表尾** |
 | **`br_error.h` 的 errno 值域** | `3-01 §11`(负 errno; 编号沿用 Linux)、`8-01 §4`(SD-10 各域子集) | **ADR-0012**: 值表与域子集分开 —— 值表**逐字抄内核**(`errno-base.h` 整表 1–34 + `errno.h` generic 按需), 域子集仍按 SD-10 分域成文。判据 = 宿主 `ft-test` 拿 `<errno.h>` 对拍 49 码(宿主/目标同用内核 `asm-generic` 编号 ⇒ 对目标同样成立) |
 | **`br_irq_*` 九件 + 域四件** | `3-01 §8/§8.1`(签名冻结)+ `3-02 §3–§9`(机制) | Stage 1 全量; `register/enable/disable` 的 thread-only 加了**运行期拒绝**(设计侧靠静态扫描), ADR-0011 起判据是"ISR **或** bh"(`br_irq_in_atomic`)。**`BR_IRQ_F_DISPATCH_BH` 真的生效**、**SLOW 域可用**(ADR-0011); 新增三个查询面(`br_irq_in_isr`/`br_irq_in_atomic`/`br_irq_lock_depth`)与 `br_irq_stat_t` 的 bh 三项 |
 | **`br_pic_register` / `br_irq_bindings_set` / `br_pic_ops_t`** | `3-02 §4.1/§14.3`(platform 侧契约) | 新增的核心符号, 未回灌 `3-01 §10` 的登记(属 Design 仓库, 见 ADR-0002 §4) |

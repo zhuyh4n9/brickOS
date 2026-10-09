@@ -6,7 +6,8 @@
  * 内部头里, 是为了满足 `-Wmissing-prototypes`(定义前必须有原型), 同时**不**把
  * 它们混进 `core/include/br/core/` 的契约头 —— 契约头里出现的名字都算对外面。
  *
- * 将来 svc-posix(D18)交付 POSIX 符号面时, 本文件应被删掉(符号面归一)。
+ * ★ 符号归一**做不到**(ADR-0014 §4): core 在 EARLY 相就要 `memset`, 而 POSIX 运行时是
+ *   LATE 相的服务 ⇒ 那四个符号只能留在 core。本文件因此长期存在, 不是临时件。
  */
 #ifndef BR_CORE_STRING_INTERNAL_H
 #define BR_CORE_STRING_INTERNAL_H

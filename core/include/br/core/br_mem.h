@@ -50,7 +50,7 @@
 /* ---- 字节堆(TLSF) ---- */
 void *br_malloc (br_size_t n);
 void *br_calloc (br_size_t n, br_size_t size);
-void *br_realloc(void *p, br_size_t n);     /* svc-posix 的 libc stub 需要 */
+void *br_realloc(void *p, br_size_t n);     /* runtime/posix 的 `realloc` 直接转调它(ADR-0014) */
 void  br_free   (void *p);
 
 /* ---- 物理连续内存(CA-7): 独立 contig 池, 不走 TLSF 堆 ---- */

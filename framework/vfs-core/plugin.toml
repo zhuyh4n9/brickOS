@@ -56,7 +56,7 @@ name         = "vfs"
 version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
-hash         = "sha256:fa92ffcd07657624972308e8c2d8a8625f206cd92275306711e8b9d1a33e7ff9"
+hash         = "sha256:744bb3605fe427a7ad376dba45600552c14fbe44d8597459b9a0c81fff1ffb57"
 status       = "experimental"
 
 # 打开标志 / 定位 / inode 类型 / poll 位 / 上界(常量即契约的一部分)
@@ -98,6 +98,10 @@ name = "BR_O_NONBLOCK"
 value = "0x0100u"
 [[export.entries]]
 kind = "macro"
+name = "BR_O_NOFOLLOW"
+value = "0x0200u"
+[[export.entries]]
+kind = "macro"
 name = "BR_SEEK_SET"
 value = "0"
 [[export.entries]]
@@ -122,6 +126,10 @@ name = "BR_INODE_FILE"
 value = "2u"
 [[export.entries]]
 kind = "macro"
+name = "BR_INODE_SYMLINK"
+value = "3u"
+[[export.entries]]
+kind = "macro"
 name = "BR_POLLIN"
 value = "0x01u"
 [[export.entries]]
@@ -140,6 +148,14 @@ value = "32u"
 kind = "macro"
 name = "BR_STAT_SIZE"
 value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_STAT_NLINK"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYMLINK_MAX"
+value = "96u"
 
 # 四层 ops 的**结构布局**(D14: 布局入 golden —— 后补字段 = 二进制不兼容)
 [[export.entries]]
@@ -153,7 +169,7 @@ layout = "# {type, iops, fops, fpriv}"
 [[export.entries]]
 kind = "type"
 name = "br_inode_ops_t"
-layout = "# {lookup, create, unlink, mkdir, rmdir, rename, getattr, setattr}"
+layout = "# {lookup, create, unlink, mkdir, rmdir, rename, getattr, setattr, symlink, readlink, link}"
 [[export.entries]]
 kind = "type"
 name = "br_dentry_ops_t"
@@ -169,7 +185,7 @@ layout = "# {path, dev, opts}"
 [[export.entries]]
 kind = "type"
 name = "br_stat_t"
-layout = "# {valid, type, size}"
+layout = "# {valid, type, size, nlink}"
 [[export.entries]]
 kind = "type"
 name = "br_dirent_t"
@@ -257,11 +273,31 @@ kind = "func"
 name = "br_mount_path_at"
 sig  = "const char* (br_u32)"
 
-# 路径级便捷面(svc-posix 的 1:1 映射口)
+# 路径级便捷面(runtime/posix 的 1:1 映射口)
+[[export.entries]]
+kind = "func"
+name = "br_fstat"
+sig  = "int (br_file_t*, br_stat_t*)"
 [[export.entries]]
 kind = "func"
 name = "br_stat"
 sig  = "int (const char*, br_stat_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_lstat"
+sig  = "int (const char*, br_stat_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_symlink"
+sig  = "int (const char*, const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_readlink"
+sig  = "int (const char*, char*, br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_link"
+sig  = "int (const char*, const char*)"
 [[export.entries]]
 kind = "func"
 name = "br_mkdir"

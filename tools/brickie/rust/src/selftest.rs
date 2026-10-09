@@ -252,6 +252,7 @@ fn name_and_subkind(h: &mut Harness) {
     h.check(rules::is_recommended_form("service/crypto"), "推荐形态");
     h.check(!rules::is_recommended_form("sched-coop"), "裸名不是推荐形态");
     h.check(rules::is_recommended_form("ability/x") == false, "`ability/` 不是推荐 namespace");
+    h.check(rules::is_recommended_form("runtime/posix"), "推荐形态: runtime/posix(ADR-0015)");
 
     h.eq(rules::derive_subkind("service/crypto"), Some("service"), "subkind: service/⇒service");
     h.eq(rules::derive_subkind("sched/coop"), Some("scheduler"), "subkind: sched/⇒scheduler");
@@ -260,10 +261,13 @@ fn name_and_subkind(h: &mut Harness) {
     h.eq(rules::derive_subkind("fs/tmpfs"), Some("fs"), "subkind: fs/");
     h.eq(rules::derive_subkind("sched-coop"), None, "subkind: 裸名不可推导");
     h.eq(rules::derive_subkind("iface/min"), None, "subkind: iface/ 无 subkind");
+    h.eq(rules::derive_subkind("runtime/posix"), Some("service"), "subkind: runtime/⇒service");
 
     h.eq(rules::namespace_plugin_type("iface"), Some("interface"), "namespace: iface⇒interface");
     h.eq(rules::namespace_plugin_type("sched"), Some("ability"), "namespace: sched⇒ability");
     h.eq(rules::namespace_plugin_type("platform"), Some("platform"), "namespace: platform");
+    h.eq(rules::namespace_plugin_type("runtime"), Some("ability"), "namespace: runtime⇒ability");
+    h.eq(rules::namespace_subkind("runtime"), Some("service"), "namespace: runtime⇒subkind service");
     h.eq(rules::namespace_plugin_type("nope"), None, "namespace: 未知");
 }
 

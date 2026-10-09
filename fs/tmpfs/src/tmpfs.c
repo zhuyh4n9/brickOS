@@ -82,6 +82,27 @@ _Static_assert(TMPFS_DATA_MAX <= 0x7fffffffu, "配额必须让 cap(br_u32)与偏
  * ===================================================================== */
 
 typedef struct tmpfs_node tmpfs_node_t;
+typedef struct tmpfs_body tmpfs_body_t;
+
+/*
+ * **数据体**(ADR-0013 引入): 文件内容是**被名字共享**的东西, 不是名字的属性。
+ * 硬链接(`link`)的全部语义就是"两个名字 → 同一个 inode → 同一份数据、同一个长度、
+ * 同一个偏移基准"; 于是 `data/size/cap` 从节点上移到一个带引用计数的体里:
+ *
+ *   - `refs > 1` ⇒ 该体被多个目录项(节点)共享 —— 这正是硬链接;
+ *   - `refs == 0` ⇒ 归还堆(数据缓冲与 `s_fs.data_used` 的额度一起还)。
+ *
+ * 不变量: **FILE 与 SYMLINK 节点恒有体**(建立时就分配), 目录恒没有
+ * ⇒ 所有 `n->body->…` 都不需要判空。符号链接的目标串**就存在体里**
+ * (它本来就是"一小段数据"), 于是不必给每个节点加一个固定大小数组。
+ * 也正因为体是共享的, 节点尺寸反而比 ADR-0009 那一版更小(少三个字段)。
+ */
+struct tmpfs_body {
+    br_u8  *data;    /* 实占 = cap */
+    br_u64  size;    /* 文件字节数 / 符号链接目标串长度 */
+    br_u32  cap;     /* data 容量(字节) —— 同时是配额记账口径 */
+    br_u32  refs;    /* 引用它的节点数(= st_nlink) */
+};
 
 /*
  * `head` 必须首字段 —— CA-2 的全部要求就是"vfs 只认 br_inode_t*, 拿到手就能当节点用"。
@@ -93,9 +114,7 @@ struct tmpfs_node {
     tmpfs_node_t *parent;               /* 父目录; 根自指(root->parent == root) */
     tmpfs_node_t *child;                /* 子链头(目录用); 文件恒 BR_NULL */
     tmpfs_node_t *next;                 /* 兄弟单链 */
-    br_u8        *data;                 /* 文件数据(文件用); 实占 = cap */
-    br_u64        size;                 /* 文件字节数; 目录恒 0 */
-    br_u32        cap;                  /* data 容量(字节) —— 同时是配额记账口径 */
+    tmpfs_body_t *body;                 /* 数据体(文件/符号链接); 目录 = BR_NULL */
     char          name[BR_NAME_MAX];    /* 目录项名(根的名字是 "/", 只作诊断, 不参与比较) */
 };
 
@@ -121,7 +140,7 @@ typedef struct {
  * fs_priv(契约如此), 它们只能看见节点 ⇒ 账只能挂在插件静态上。mount 拿到的 fs_priv
  * 必须就是这一个(自洽检查见 tmpfs_mount)。
  *
- * 记账口径 = Σ node->cap(**容量**), 不是 Σ size: 占堆的是 cap; 若按 size 记账, 几何增长
+ * 记账口径 = Σ body->cap(**容量**), 不是 Σ size: 占堆的是 cap; 若按 size 记账, 几何增长
  * 多要出来的容量就成了"看不见的越额", 而上界的语义恰恰是"从堆里拿了多少"。代价是
  * "文件长度之和"可以远小于 data_used —— 这是如实记账, 不是泄漏: truncate/unlink 都会
  * 把 cap 交还(见 tmpfs_file_release / tmpfs_file_truncate)。
@@ -148,6 +167,9 @@ static int  tmpfs_rmdir  (br_inode_t *dir, const char *name);
 static int  tmpfs_rename (br_inode_t *dir, const char *name, br_inode_t *ndir, const char *nname);
 static int  tmpfs_getattr(br_inode_t *ino, br_stat_t *st);
 static int  tmpfs_setattr(br_inode_t *ino, const br_stat_t *st);
+static int  tmpfs_symlink (br_inode_t *dir, const char *name, const char *target);
+static int  tmpfs_readlink(br_inode_t *ino, char *buf, br_size_t cap);
+static int  tmpfs_link    (br_inode_t *dir, const char *name, br_inode_t *target);
 
 static int   tmpfs_file_open (br_file_t *f, br_u32 flags);
 static br_s64 tmpfs_file_read (br_file_t *f, void *buf, br_size_t n);
@@ -181,6 +203,10 @@ static const br_inode_ops_t s_iops = {
     .rename  = tmpfs_rename,
     .getattr = tmpfs_getattr,
     .setattr = tmpfs_setattr,
+    /* ADR-0013 追加(表尾 —— 既有 FS 的具名初始化因此不受影响) */
+    .symlink  = tmpfs_symlink,
+    .readlink = tmpfs_readlink,
+    .link     = tmpfs_link,
 };
 
 /* 层 3: 文件面。不支持的槽位**显式** BR_NULL ⇒ vfs 派发时得 -ENOTSUP(契约如此,
@@ -284,7 +310,7 @@ static void tmpfs_zero(void *dst, br_size_t n)
  *   非空、不含 '/'、不是 "." / ".."、长度 ≤ BR_NAME_MAX-1。
  *
  * 为什么长度判定写成"逐字节扫到 NUL 或扫满 BR_NAME_MAX"而不是先 tmpfs_str_len: 名字来自
- * 调用方(vfs/svc-posix), 未终止的串在这里也**只读 BR_NAME_MAX 字节** —— 越界读是比"返回
+ * 调用方(vfs/runtime/posix), 未终止的串在这里也**只读 BR_NAME_MAX 字节** —— 越界读是比"返回
  * -EINVAL"严重得多的错。'.'/'..' 只对**变更用**的名字拒绝; 走查(lookup)在更前面就地解析
  * 它们(见 tmpfs_lookup), 所以 "/." 与 "/.." 是合法的走查路径。
  */
@@ -366,19 +392,27 @@ static void tmpfs_child_unlink(tmpfs_node_t *dir, tmpfs_node_t *victim)
     }
 }
 
-/* 初始化一个节点(不改账: 记账归调用方)。所有节点共用 s_iops, 只有文件面按类型分。 */
-static void tmpfs_node_init(tmpfs_node_t *n, br_u32 type, tmpfs_node_t *parent, const char *name)
+/* 初始化一个节点(不改账: 记账归调用方)。所有节点共用 s_iops, 只有文件面按类型分。
+ * `body` 由调用方给: 文件/符号链接**必须**非空(见 tmpfs_body 的不变量), 目录恒 BR_NULL。
+ * 符号链接的 `fops` 是 BR_NULL —— 链接"看得见但打不开", vfs 会在展开或 O_NOFOLLOW
+ * 那一层就把它拦住(⇒ -ELOOP), 走不到文件面。 */
+static void tmpfs_node_init(tmpfs_node_t *n, br_u32 type, tmpfs_node_t *parent,
+                            const char *name, tmpfs_body_t *body)
 {
     n->head.type  = type;
     n->head.iops  = &s_iops;
-    n->head.fops  = (type == BR_INODE_DIR) ? &s_dir_fops : &s_file_fops;
+    if (type == BR_INODE_DIR) {
+        n->head.fops = &s_dir_fops;
+    } else if (type == BR_INODE_SYMLINK) {
+        n->head.fops = BR_NULL;
+    } else {
+        n->head.fops = &s_file_fops;
+    }
     n->head.fpriv = n;                    /* 节点身份: vfs 在 open 时把它交给 br_file_t */
     n->parent     = parent;
     n->child      = BR_NULL;
     n->next       = BR_NULL;
-    n->data       = BR_NULL;
-    n->size       = 0u;
-    n->cap        = 0u;
+    n->body       = body;
     tmpfs_str_copy(n->name, name, BR_NAME_MAX);
 }
 
@@ -387,9 +421,49 @@ static br_bool tmpfs_node_room(void)
     return (s_fs.nodes_used < TMPFS_NODE_MAX) ? BR_TRUE : BR_FALSE;
 }
 
-/* 造一个节点并链进 dir(create 与 mkdir 共用: 名字校验/配额/入链只有一处实现)。 */
+/* =====================================================================
+ * 数据体: 建立 / 引用 / 解引用(ADR-0013)
+ * ===================================================================== */
+
+/* 造一个空体(refs = 1)。容量按需长(见 tmpfs_file_reserve), 所以这里只花一个头的钱。 */
+static int tmpfs_body_new(tmpfs_body_t **out)
+{
+    tmpfs_body_t *b = (tmpfs_body_t *)br_malloc(sizeof *b);
+
+    if (b == BR_NULL) {
+        return BR_ERR(BR_ENOMEM);
+    }
+    b->data = BR_NULL;
+    b->size = 0u;
+    b->cap  = 0u;
+    b->refs = 1u;
+    *out = b;
+    return 0;
+}
+
+/* 少一个引用; 归零 ⇒ 把数据缓冲与它占的额度一起还给堆。 */
+static void tmpfs_body_unref(tmpfs_body_t *b)
+{
+    if (b == BR_NULL) {
+        return;
+    }
+    if (b->refs > 1u) {
+        b->refs--;
+        return;
+    }
+    if (b->data != BR_NULL) {
+        br_free(b->data);
+        b->data = BR_NULL;
+    }
+    s_fs.data_used -= b->cap;             /* 额度交还(记账口径 = cap) */
+    b->cap = 0u;
+    br_free(b);
+}
+
+/* 造一个节点并链进 dir(create/mkdir/symlink/link 共用: 名字校验/配额/入链只有一处实现)。
+ * `body` 可为 BR_NULL(目录); 否则所有权转移给节点(失败时由调用方解引用)。 */
 static int tmpfs_node_add(tmpfs_node_t *dir, const char *name, br_u32 type,
-                          tmpfs_node_t **out)
+                          tmpfs_body_t *body, tmpfs_node_t **out)
 {
     tmpfs_node_t *n;
 
@@ -400,7 +474,7 @@ static int tmpfs_node_add(tmpfs_node_t *dir, const char *name, br_u32 type,
     if (n == BR_NULL) {
         return BR_ERR(BR_ENOMEM);
     }
-    tmpfs_node_init(n, type, dir, name);
+    tmpfs_node_init(n, type, dir, name, body);
 
     /* 头插: 目录项顺序**无契约**(readdir 只保证 "." + ".." + 名字集合), 头插省一次遍历。
      * 若将来要求"创建顺序 = readdir 顺序", 把这里改成尾插即可(上限 48, 代价可忽略)。 */
@@ -411,6 +485,17 @@ static int tmpfs_node_add(tmpfs_node_t *dir, const char *name, br_u32 type,
         *out = n;
     }
     return 0;
+}
+
+/* 摘链 + 解引用数据体 + 还节点(硬链接下"删一个名字"与"删最后一份数据"是两件事,
+ * 这个函数做的正是前者 —— 后者由 tmpfs_body_unref 的引用计数决定)。 */
+static void tmpfs_node_drop(tmpfs_node_t *dir, tmpfs_node_t *victim)
+{
+    tmpfs_child_unlink(dir, victim);
+    tmpfs_body_unref(victim->body);
+    victim->body = BR_NULL;
+    br_free(victim);
+    s_fs.nodes_used--;
 }
 
 /* 填一条定长目录项。整条先清零: 不然 name[] 的尾部会把上一轮的残留漏给调用方。 */
@@ -427,18 +512,24 @@ static void tmpfs_dirent_fill(br_dirent_t *de, br_u32 type, const char *name, br
  * ===================================================================== */
 
 /*
- * 把数据缓冲还给堆, size/cap 归零。不变量: s_fs.data_used == Σ node->cap —— 因为账是
+ * 把数据缓冲还给堆, size/cap 归零。不变量: s_fs.data_used == Σ body->cap —— 因为账是
  * "加多少减多少", 这个减法是安全的(没有任何路径能不记账就改 cap)。
+ * ★ 这是对**体**的操作, 不是对名字的操作: 硬链接下 truncate 会同时影响所有名字(正确)。
  */
 static void tmpfs_file_release(tmpfs_node_t *n)
 {
-    if (n->data != BR_NULL) {
-        br_free(n->data);
-        n->data = BR_NULL;
+    tmpfs_body_t *b = n->body;
+
+    if (b == BR_NULL) {
+        return;
     }
-    s_fs.data_used -= n->cap;
-    n->cap  = 0u;
-    n->size = 0u;
+    if (b->data != BR_NULL) {
+        br_free(b->data);
+        b->data = BR_NULL;
+    }
+    s_fs.data_used -= b->cap;
+    b->cap  = 0u;
+    b->size = 0u;
 }
 
 /*
@@ -446,19 +537,19 @@ static void tmpfs_file_release(tmpfs_node_t *n)
  * 增长 = 几何翻倍(自 TMPFS_MIN_CAP 起): 顺序追加写是 tmpfs 最典型的写形状, 每次只扩到
  * need 会把它退化成 O(n²)。多要出来的容量照样记账(见 s_fs 的口径说明)。
  */
-static int tmpfs_file_reserve(tmpfs_node_t *n, br_u32 need)
+static int tmpfs_file_reserve(tmpfs_body_t *b, br_u32 need)
 {
     br_u32 new_cap;
     br_u8 *p;
 
-    if (need <= n->cap) {
+    if (need <= b->cap) {
         return 0;
     }
     if (need > TMPFS_DATA_MAX) {
         return BR_ERR(BR_ENOSPC);         /* 单次请求本身就超上界 */
     }
 
-    new_cap = (n->cap > 0u) ? n->cap : TMPFS_MIN_CAP;
+    new_cap = (b->cap > 0u) ? b->cap : TMPFS_MIN_CAP;
     while (new_cap < need) {
         if (new_cap > (TMPFS_DATA_MAX / 2u)) {
             new_cap = TMPFS_DATA_MAX;     /* 防"乘 2"绕回: 直接顶到上界 */
@@ -468,17 +559,17 @@ static int tmpfs_file_reserve(tmpfs_node_t *n, br_u32 need)
     }
 
     /* 配额执法: 换上 new_cap 之后的**全 FS 容量和**必须仍在界内 */
-    if ((s_fs.data_used - n->cap + new_cap) > TMPFS_DATA_MAX) {
+    if ((s_fs.data_used - b->cap + new_cap) > TMPFS_DATA_MAX) {
         return BR_ERR(BR_ENOSPC);
     }
 
-    p = (br_u8 *)br_realloc(n->data, (br_size_t)new_cap);
+    p = (br_u8 *)br_realloc(b->data, (br_size_t)new_cap);
     if (p == BR_NULL) {
         return BR_ERR(BR_ENOMEM);         /* 原块保持有效(br_realloc 的 POSIX 语义) */
     }
-    s_fs.data_used = s_fs.data_used - n->cap + new_cap;
-    n->data = p;
-    n->cap  = new_cap;
+    s_fs.data_used = s_fs.data_used - b->cap + new_cap;
+    b->data = p;
+    b->cap  = new_cap;
     return 0;
 }
 
@@ -491,23 +582,24 @@ static int tmpfs_file_reserve(tmpfs_node_t *n, br_u32 need)
  */
 static int tmpfs_file_truncate(tmpfs_node_t *n, br_u64 size)
 {
+    tmpfs_body_t *b = n->body;
     br_u8 *p;
     int rc;
 
-    if (size == n->size) {
+    if (size == b->size) {
         return 0;
     }
 
-    if (size > n->size) {                              /* 扩张(可能带空洞) */
+    if (size > b->size) {                              /* 扩张(可能带空洞) */
         if (size > (br_u64)TMPFS_DATA_MAX) {
             return BR_ERR(BR_ENOSPC);
         }
-        rc = tmpfs_file_reserve(n, (br_u32)size);
+        rc = tmpfs_file_reserve(b, (br_u32)size);
         if (rc != 0) {
             return rc;
         }
-        tmpfs_zero(n->data + (br_size_t)n->size, (br_size_t)(size - n->size));
-        n->size = size;
+        tmpfs_zero(b->data + (br_size_t)b->size, (br_size_t)(size - b->size));
+        b->size = size;
         return 0;
     }
 
@@ -515,14 +607,14 @@ static int tmpfs_file_truncate(tmpfs_node_t *n, br_u64 size)
         tmpfs_file_release(n);                         /* 不走 br_realloc(p,0): 它会 free 并返回 NULL */
         return 0;
     }
-    p = (br_u8 *)br_realloc(n->data, (br_size_t)size);
+    p = (br_u8 *)br_realloc(b->data, (br_size_t)size);
     if (p == BR_NULL) {
         return BR_ERR(BR_ENOMEM);
     }
-    s_fs.data_used = s_fs.data_used - n->cap + (br_u32)size;
-    n->data = p;
-    n->cap  = (br_u32)size;
-    n->size = size;
+    s_fs.data_used = s_fs.data_used - b->cap + (br_u32)size;
+    b->data = p;
+    b->cap  = (br_u32)size;
+    b->size = size;
     return 0;
 }
 
@@ -540,7 +632,7 @@ static int tmpfs_file_open(br_file_t *f, br_u32 flags)
     }
 
     /* O_TRUNC: 打开即截断到 0。**权限不在这里执法**(O_TRUNC 需写权限 / 只读 fd 不得写):
-     * 那是 vfs/svc-posix 的 fd 层职责(契约头也把这条写在 flags 的语义里)。同一策略在 FS
+     * 那是 vfs/runtime/posix 的 fd 层职责(契约头也把这条写在 flags 的语义里)。同一策略在 FS
      * 侧再来一遍只会造出两个真值, 迟早不一致。 */
     if ((flags & BR_O_TRUNC) != 0u) {
         rc = tmpfs_file_truncate(node, 0u);
@@ -550,7 +642,7 @@ static int tmpfs_file_open(br_file_t *f, br_u32 flags)
     }
 
     if ((flags & BR_O_APPEND) != 0u) {
-        br_file_set_offset(f, (br_s64)node->size);
+        br_file_set_offset(f, (br_s64)node->body->size);
     }
     return 0;
 }
@@ -569,7 +661,7 @@ static br_s64 tmpfs_file_read(br_file_t *f, void *buf, br_size_t n)
     if ((buf == BR_NULL) && (n > 0u)) {
         return BR_ERR(BR_EINVAL);
     }
-    if ((node->size > 0u) && (node->data == BR_NULL)) {
+    if ((node->body->size > 0u) && (node->body->data == BR_NULL)) {
         return BR_ERR(BR_EIO);            /* 不变量被破坏(size>0 ⇒ data 非空): 报错而不是解引用 */
     }
 
@@ -577,14 +669,14 @@ static br_s64 tmpfs_file_read(br_file_t *f, void *buf, br_size_t n)
     if (off < 0) {
         return BR_ERR(BR_EINVAL);
     }
-    if ((br_u64)off >= node->size) {
+    if ((br_u64)off >= node->body->size) {
         return 0;                         /* 读到/越过 EOF: 0 字节是**成功**(不是 -EIO) */
     }
 
-    avail = node->size - (br_u64)off;
+    avail = node->body->size - (br_u64)off;
     cnt = (n > (br_size_t)avail) ? (br_size_t)avail : n;   /* avail ≤ 128 KiB ⇒ 收窄安全 */
     if (cnt > 0u) {
-        tmpfs_copy(buf, node->data + (br_size_t)off, cnt);
+        tmpfs_copy(buf, node->body->data + (br_size_t)off, cnt);
     }
     br_file_set_offset(f, off + (br_s64)cnt);
     return (br_s64)cnt;
@@ -607,7 +699,7 @@ static br_s64 tmpfs_file_write(br_file_t *f, const void *buf, br_size_t n)
     /* BR_O_APPEND 的契约是"**每次写前**定位到末尾", 所以零长度写也要先定位(与 Linux 的
      * 实现细节不同, 这里跟契约文字走)。 */
     if ((br_file_flags(f) & BR_O_APPEND) != 0u) {
-        br_file_set_offset(f, (br_s64)node->size);
+        br_file_set_offset(f, (br_s64)node->body->size);
     }
     if (n == 0u) {
         return 0;
@@ -625,17 +717,18 @@ static br_s64 tmpfs_file_write(br_file_t *f, const void *buf, br_size_t n)
         return BR_ERR(BR_ENOSPC);         /* 写越 128 KiB 配额: 这里就是那条判据的落点 */
     }
 
-    rc = tmpfs_file_reserve(node, (br_u32)need);
+    rc = tmpfs_file_reserve(node->body, (br_u32)need);
     if (rc != BR_OK) {
         return rc;
     }
-    if ((br_u64)off > node->size) {
+    if ((br_u64)off > node->body->size) {
         /* 空洞写(lseek 越过 EOF 后再写): 中间必须读回 0, 见 tmpfs_file_truncate 的 ① */
-        tmpfs_zero(node->data + (br_size_t)node->size, (br_size_t)((br_u64)off - node->size));
+        tmpfs_zero(node->body->data + (br_size_t)node->body->size,
+                   (br_size_t)((br_u64)off - node->body->size));
     }
-    tmpfs_copy(node->data + (br_size_t)off, buf, n);
-    if (need > node->size) {
-        node->size = need;
+    tmpfs_copy(node->body->data + (br_size_t)off, buf, n);
+    if (need > node->body->size) {
+        node->body->size = need;
     }
     br_file_set_offset(f, (br_s64)need);
     return (br_s64)n;
@@ -654,7 +747,7 @@ static br_s64 tmpfs_file_lseek(br_file_t *f, br_s64 off, int whence)
     switch (whence) {
     case BR_SEEK_SET: base = 0; break;
     case BR_SEEK_CUR: base = br_file_offset(f); break;
-    case BR_SEEK_END: base = (br_s64)node->size; break;
+    case BR_SEEK_END: base = (br_s64)node->body->size; break;
     default:          return BR_ERR(BR_EINVAL);
     }
     if (base < 0) {
@@ -820,7 +913,9 @@ static int tmpfs_create(br_inode_t *dir, const char *name, br_u32 flags, br_inod
             return BR_ERR(BR_EEXIST);
         }
         /* O_CREAT 无 O_EXCL 命中已存在: 复用(Linux 口径)。vfs 的走查已先 lookup 过一次,
-         * 这里再查是"create 自己也自洽"的防御 —— 语义在两层都成立, 单看任一层都不缺。 */
+         * 这里再查是"create 自己也自洽"的防御 —— 语义在两层都成立, 单看任一层都不缺。
+         * `SYMLINK` 到不了这里: vfs 的走查会把末级链接**展开**后再 create(悬空链接也展开,
+         * 于是建的是目标), 而 `O_NOFOLLOW` 在更前面就被 -ELOOP 挡下(ADR-0013)。 */
         if (ex->head.type != BR_INODE_FILE) {
             return BR_ERR(BR_EISDIR);     /* create 只产文件; 目录要走 mkdir */
         }
@@ -828,8 +923,15 @@ static int tmpfs_create(br_inode_t *dir, const char *name, br_u32 flags, br_inod
         return 0;
     }
 
-    rc = tmpfs_node_add(d, name, BR_INODE_FILE, &n);
+    /* 文件恒有数据体(空体, 容量按需长) —— 见 tmpfs_body 的不变量。 */
+    tmpfs_body_t *body = BR_NULL;
+    rc = tmpfs_body_new(&body);
     if (rc != BR_OK) {
+        return rc;
+    }
+    rc = tmpfs_node_add(d, name, BR_INODE_FILE, body, &n);
+    if (rc != BR_OK) {
+        tmpfs_body_unref(body);           /* 入链失败: 体还给我们了 */
         return rc;
     }
     *out = &n->head;
@@ -854,13 +956,14 @@ static int tmpfs_unlink(br_inode_t *dir, const char *name)
     if (victim == BR_NULL) {
         return BR_ERR(BR_ENOENT);
     }
-    if (victim->head.type != BR_INODE_FILE) {
+    /* ★ ADR-0013: 符号链接也是"文件类"目录项 —— `unlink` 删的正是**链接本身**
+     *   (POSIX 如此; 目标是死是活都与本操作无关)。只有目录必须走 rmdir。 */
+    if ((victim->head.type != BR_INODE_FILE) && (victim->head.type != BR_INODE_SYMLINK)) {
         return BR_ERR(BR_EISDIR);         /* 目录要 rmdir(删树的语义归调用方) */
     }
-    tmpfs_child_unlink(d, victim);
-    tmpfs_file_release(victim);           /* 数据缓冲还给堆(账随之交还) */
-    br_free(victim);
-    s_fs.nodes_used--;
+    /* ★ 硬链接语义: 这里删的是**一个名字**。数据体的生死由引用计数决定 —— 还有别的
+     *   名字指向它(refs > 1)时数据必须留着, 否则另一个名字会读到已释放的内存。 */
+    tmpfs_node_drop(d, victim);
     return 0;
 }
 
@@ -879,7 +982,7 @@ static int tmpfs_mkdir(br_inode_t *dir, const char *name)
         return BR_ERR(BR_EEXIST);         /* 已存在(含"是文件"的情形): 都是 EEXIST */
     }
     /* out = BR_NULL: mkdir 只回答 rc(vfs 会自己再 lookup 一次拿 inode, 见 br_vfs.c) */
-    return tmpfs_node_add(d, name, BR_INODE_DIR, BR_NULL);
+    return tmpfs_node_add(d, name, BR_INODE_DIR, BR_NULL, BR_NULL);
 }
 
 static int tmpfs_rmdir(br_inode_t *dir, const char *name)
@@ -904,14 +1007,12 @@ static int tmpfs_rmdir(br_inode_t *dir, const char *name)
     if (victim->child != BR_NULL) {
         /* "非空目录"在 SD-10 子集里没有对应的码时曾取 -EBUSY, 但那是"挂载点不可删"的语义
          * (vfs 的 TC-VFS-012 正是这么判的)⇒ 会撞码。core 头已补入 -ENOTEMPTY(编号 39),
-         * 这里用它 —— 排障与 svc-posix 的 errno 映射都要这个区分。 */
+         * 这里用它 —— 排障与 runtime/posix 的 errno 映射都要这个区分。 */
         return BR_ERR(BR_ENOTEMPTY);
     }
     /* 根**不可能**被 rmdir: 它在任何父目录里都没有目录项(根没有父), 于是没有名字能指向它;
      * "." / ".." 上面已被名字规则挡下 ⇒ "不许删根"这条不需要特判代码。 */
-    tmpfs_child_unlink(d, victim);
-    br_free(victim);
-    s_fs.nodes_used--;
+    tmpfs_node_drop(d, victim);           /* 目录没有体 ⇒ 只是摘链 + 还节点 */
     return 0;
 }
 
@@ -980,7 +1081,8 @@ static int tmpfs_getattr(br_inode_t *ino, br_stat_t *st)
     if ((ino == BR_NULL) || (st == BR_NULL)) {
         return BR_ERR(BR_EINVAL);
     }
-    if ((ino->type != BR_INODE_DIR) && (ino->type != BR_INODE_FILE)) {
+    if ((ino->type != BR_INODE_DIR) && (ino->type != BR_INODE_FILE) &&
+        (ino->type != BR_INODE_SYMLINK)) {
         return BR_ERR(BR_ENOTSUP);
     }
     n = tmpfs_ino_node(ino);
@@ -989,11 +1091,145 @@ static int tmpfs_getattr(br_inode_t *ino, br_stat_t *st)
     }
 
     /* getattr 是"取属性", 不看入参的 valid(那是 setattr 的输入面)。
-     * 出参 valid 只报 BR_STAT_SIZE: 头里只有这一位, `type` 是**恒有效**字段(不是可选项),
-     * 于是"v1 只实现 size"这句话在 valid 上如实体现。 */
-    st->valid = BR_STAT_SIZE;
+     * `nlink` 是 ADR-0013 追加的字段: 对文件/符号链接 = 数据体的引用计数(硬链接数);
+     * 目录报 1(目录不参与硬链接, 也不像 Linux 那样把子目录数算进去 —— 见 ADR-0013 §4)。 */
+    st->valid = BR_STAT_SIZE | BR_STAT_NLINK;
     st->type  = ino->type;
-    st->size  = (ino->type == BR_INODE_DIR) ? 0u : n->size;
+    st->size  = (ino->type == BR_INODE_DIR) ? 0u : n->body->size;
+    st->nlink = (n->body != BR_NULL) ? n->body->refs : 1u;
+    return 0;
+}
+
+/*
+ * ===================================================================== 链接(ADR-0013)
+ *
+ * 三个槽位都在**层 2**(名字空间), 与 create/unlink 同级 —— 因为"链接"是给一个 inode
+ * 再添一个名字, 不是文件内容的操作。符号链接的**解析**不在这里(vfs-core 做, 见
+ * br_vfs.h 的说明): 本插件只回答"目标串是什么"与"帮我建一条"。
+ */
+
+/* 在 `dir` 里建一条名为 `name`、目标串为 `target` 的符号链接。 */
+static int tmpfs_symlink(br_inode_t *dir, const char *name, const char *target)
+{
+    tmpfs_node_t *d;
+    tmpfs_body_t *body = BR_NULL;
+    br_u32        tlen;
+    int           rc;
+
+    if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
+        return BR_ERR(BR_ENOTSUP);
+    }
+    if (target == BR_NULL || target[0] == '\0') {
+        return BR_ERR(BR_EINVAL);
+    }
+    if (tmpfs_name_ok(name) == BR_FALSE) {
+        return BR_ERR(BR_EINVAL);
+    }
+    /* 目标串**不校验存在性**(悬空链接合法), 只执法长度上界 —— 先扫到 NUL 或窗口尽头,
+     * 于是未终止的串也只读 BR_SYMLINK_MAX 字节(与 tmpfs_name_ok 同一纪律)。 */
+    for (tlen = 0u; tlen < BR_SYMLINK_MAX; tlen++) {
+        if (target[tlen] == '\0') {
+            break;
+        }
+    }
+    if (tlen >= BR_SYMLINK_MAX) {
+        return BR_ERR(BR_ENAMETOOLONG);
+    }
+
+    d = tmpfs_ino_node(dir);
+    if (tmpfs_child_find(d, name) != BR_NULL) {
+        return BR_ERR(BR_EEXIST);
+    }
+
+    rc = tmpfs_body_new(&body);
+    if (rc != BR_OK) {
+        return rc;
+    }
+    /* 目标串就存在数据体里(见 tmpfs_body: 链接目标本来就是"一小段数据")。
+     * 走 tmpfs_file_reserve 是为了**共用配额记账** —— 链接目标也占堆, 也要进上界。 */
+    rc = tmpfs_file_reserve(body, tlen + 1u);
+    if (rc == BR_OK) {
+        body->size = (br_u64)tlen;
+        tmpfs_copy(body->data, target, (br_size_t)tlen + 1u);   /* 连结尾 NUL 一起存,
+                                                                 * readlink 才有 C 串可用 */
+    }
+    if (rc != BR_OK) {
+        tmpfs_body_unref(body);
+        return rc;
+    }
+
+    rc = tmpfs_node_add(d, name, BR_INODE_SYMLINK, body, BR_NULL);
+    if (rc != BR_OK) {
+        tmpfs_body_unref(body);
+        return rc;
+    }
+    return 0;
+}
+
+/* 读出链接自身的目标串(不跟随 —— 跟随是 vfs 的事)。返回全长(截断也报全长, 照 POSIX)。 */
+static int tmpfs_readlink(br_inode_t *ino, char *buf, br_size_t cap)
+{
+    tmpfs_node_t *n;
+
+    if (ino == BR_NULL) {
+        return BR_ERR(BR_EINVAL);
+    }
+    if (ino->type != BR_INODE_SYMLINK) {
+        return BR_ERR(BR_EINVAL);         /* POSIX: 非符号链接 ⇒ EINVAL */
+    }
+    n = tmpfs_ino_node(ino);
+    if (n == BR_NULL || n->body == BR_NULL || n->body->data == BR_NULL) {
+        return BR_ERR(BR_EIO);            /* 体在而不见了: FS 侧不一致 */
+    }
+
+    const br_size_t len = (br_size_t)n->body->size;
+    if (buf != BR_NULL && cap > 0u) {
+        br_size_t cnt = (len < cap) ? len : (cap - 1u);   /* 留一个字节给 NUL(方便调用方) */
+        tmpfs_copy(buf, n->body->data, cnt);
+        buf[cnt] = '\0';
+    }
+    return (int)len;
+}
+
+/* 建一条硬链接: 新名字 → **同一个数据体**(引用计数 +1), 于是数据/长度/偏移全共享。 */
+static int tmpfs_link(br_inode_t *dir, const char *name, br_inode_t *target)
+{
+    tmpfs_node_t *d;
+    tmpfs_node_t *t;
+    int           rc;
+
+    if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR) || (target == BR_NULL)) {
+        return BR_ERR(BR_ENOTSUP);
+    }
+    if (tmpfs_name_ok(name) == BR_FALSE) {
+        return BR_ERR(BR_EINVAL);
+    }
+    /* 目录不参与硬链接(会造成父子环); POSIX 的答复是 EPERM —— vfs 已在更前面挡下,
+     * 这里是"第二道", 覆盖 vfs 之外的直接调用者(自检就属于这一类)。 */
+    if (target->type == BR_INODE_DIR) {
+        return BR_ERR(BR_EPERM);
+    }
+    /* 目标必须是**本插件**的节点: 私有尾只能由本 FS 解释(与 rename 同一条纪律)。 */
+    if (target->iops != &s_iops) {
+        return BR_ERR(BR_EXDEV);
+    }
+    t = tmpfs_ino_node(target);
+    if (t == BR_NULL || t->body == BR_NULL) {
+        return BR_ERR(BR_EIO);
+    }
+
+    d = tmpfs_ino_node(dir);
+    if (tmpfs_child_find(d, name) != BR_NULL) {
+        return BR_ERR(BR_EEXIST);
+    }
+
+    /* 直接搬指针: 体已经存在, 只多一个引用(这就是硬链接的全部机制)。 */
+    t->body->refs++;
+    rc = tmpfs_node_add(d, name, target->type, t->body, BR_NULL);
+    if (rc != BR_OK) {
+        t->body->refs--;                  /* 入链失败: 撤销那次引用 */
+        return rc;
+    }
     return 0;
 }
 
@@ -1031,10 +1267,12 @@ static void tmpfs_drop_tree(tmpfs_node_t *root)
 
     while (c != BR_NULL) {
         tmpfs_node_t *next = c->next;
+        tmpfs_body_unref(c->body);
         br_free(c);
         s_fs.nodes_used--;
         c = next;
     }
+    tmpfs_body_unref(root->body);
     br_free(root);
     s_fs.nodes_used--;
 }
@@ -1070,7 +1308,7 @@ static int tmpfs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root)
     if (r == BR_NULL) {
         return BR_ERR(BR_ENOMEM);
     }
-    tmpfs_node_init(r, BR_INODE_DIR, r, "/");   /* 根的 parent = 自己: "/.." == "/" */
+    tmpfs_node_init(r, BR_INODE_DIR, r, "/", BR_NULL);   /* 根: parent = 自己, 目录无体 */
     s_fs.nodes_used = 1u;
 
     /* 预建 /dev /data /tmp: 走**同一条** mkdir 路径(名字校验/节点配额/入链只有一处实现)。

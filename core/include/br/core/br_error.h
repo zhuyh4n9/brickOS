@@ -27,10 +27,11 @@
  *   8-01 §4 的 SD-10 设备/存储域子集是 `-EIO/-ENODEV/-ENOSPC/-EINVAL/-ENOTSUP/`
  *   `-EBUSY/-EROFS`; 而 D23 的 lookup 链与"名字空间变更"还需要 `-ENOENT`(未命中不是
  *   参数错)、`-ENOTDIR`/`-EISDIR`、`-ENOTEMPTY`(硬塞 -EBUSY 会与"挂载点不可删"撞码)。
- *   这些都不在 SD-10 的枚举里, 但用 -EINVAL 把它们压成一个会让排障与 svc-posix 的
- *   errno 映射同时失真, 故按内核编号补入(`docs/decisions/0009-…` §3 裁定 4)。
- *   svc-posix 到位后 `errno = -ret` 是**零转换**取负(11-01 §2), 所以本表的编号
- *   就是用户态看到的编号 —— 这一条是"对齐内核"的最终理由。
+ *   这些都不在 SD-10 的枚举里, 但用 -EINVAL 把它们压成一个会让排障与 errno 映射同时
+ *   失真, 故按内核编号补入(`docs/decisions/0009-…` §3 裁定 4)。
+ *   `runtime/posix` 的 `errno = -ret` 是**零转换**取负(11-01 §2, ADR-0014)⇒ 本表的编号
+ *   **就是**用户态看到的编号 —— 这一条是"对齐内核"的最终理由, 也是 `errno.h` 里每个
+ *   `E*` 都写成 `BR_E*` 别名(而不是重新定义数值)的原因。
  */
 #ifndef BR_CORE_BR_ERROR_H
 #define BR_CORE_BR_ERROR_H

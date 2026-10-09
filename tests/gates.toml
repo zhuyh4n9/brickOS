@@ -402,11 +402,41 @@ require_tags = [
   "TC-VFS-001", "TC-VFS-002", "TC-VFS-003", "TC-VFS-004", "TC-VFS-005",
   "TC-VFS-006", "TC-VFS-007", "TC-VFS-008", "TC-VFS-009", "TC-VFS-010",
   "TC-VFS-011", "TC-VFS-012", "TC-VFS-013",
+  # ★ ADR-0013 新增(链接族): 符号链接的展开在 vfs-core, 硬链接的共享数据体在 FS。
+  "TC-VFS-014", "TC-VFS-015", "TC-VFS-016", "TC-VFS-017", "TC-VFS-018",
+  "TC-VFS-019", "TC-VFS-020",
   "TC-DEV-001", "TC-DEV-002", "TC-DEV-003", "TC-DEV-004", "TC-DEV-005", "TC-DEV-006",
   "TC-CDEV-001", "TC-CDEV-002", "TC-CDEV-003", "TC-CDEV-004", "TC-CDEV-005",
   "TC-CDEV-006", "TC-CDEV-007", "TC-CDEV-008",
   "TC-IO-001", "TC-IO-002", "TC-IO-003", "TC-IO-004", "TC-IO-005", "TC-IO-006",
   "TC-IO-007", "TC-IO-008", "TC-IO-009", "TC-IO-010", "TC-IO-011", "TC-IO-012",
+]
+
+# posix-test: **runtime/posix 的 POSIX 面**端到端门禁(ADR-0014/0015)。
+# 判据 = `[POSIXCONF]` 摘要全绿 + 20 个 tag 逐条点名 + 启动证据行。这一关的意义与
+# fs-test 不同: fs-test 测的是**框架件契约**(VFSCONF 只经 native API), 本关测的是
+# **POSIX 面本身**(用例只 include POSIX 头, 一行 br_* 都不调)—— 名字/签名/错误通道
+# (系统调用 -1+errno vs pthread 返回错误号)正是最容易出错的地方。
+[[gate]]
+name      = "posix-test"
+timeout_s = 25
+log       = "build/logs/posix.log"
+require   = [
+  # ADR-0010: 自检 pass 存在且全绿(同时证明"自检被驱动过"与"开关是打开的")。
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
+  "runtime/posix: POSIX 运行时就绪",
+  "\\[POSIXCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[POSIXCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+require_tags = [
+  "TC-POSIX-001", "TC-POSIX-002", "TC-POSIX-003", "TC-POSIX-004", "TC-POSIX-005",
+  "TC-POSIX-006", "TC-POSIX-007", "TC-POSIX-008", "TC-POSIX-009", "TC-POSIX-010",
+  "TC-POSIX-011", "TC-POSIX-012", "TC-POSIX-013", "TC-POSIX-014", "TC-POSIX-015",
+  "TC-POSIX-016", "TC-POSIX-017", "TC-POSIX-018", "TC-POSIX-019", "TC-POSIX-020",
 ]
 
 # ------------------------------------------------------------------ 构建后门禁

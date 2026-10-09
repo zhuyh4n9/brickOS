@@ -22,7 +22,7 @@
  *     用 `br_mount_register()` 挂载; **瞬态 inode 由 FS 创建**, 经 `free_inode` 释放。
  *   设备框架(framework/dev-core + framework/cdev-core): 提供 `open_file` 钩子, 返回
  *     {fops, fpriv} 二元组(D21/D23) —— devfs 把它们塞进设备节点 inode。
- *   消费者(APP / svc-posix / 服务): `br_open` + `br_file_*` + `br_opendir/br_readdir`
+ *   消费者(APP / runtime/posix / 服务): `br_open` + `br_file_*` + `br_opendir/br_readdir`
  *     + 路径级便捷面(`br_stat`/`br_mkdir`/…)。
  *
  * ## br_file_t 的私有数据(为什么不需要"私有尾")
@@ -48,6 +48,7 @@
 #define BR_O_TRUNC     0x0040u   /* 打开即截断到 0(需写权限) */
 #define BR_O_APPEND    0x0080u   /* 每次写前定位到末尾 */
 #define BR_O_NONBLOCK  0x0100u   /* 不阻塞: 无数据 ⇒ -EAGAIN(设备类; v1 口径见 ADR-0009 §3) */
+#define BR_O_NOFOLLOW  0x0200u   /* 末级是符号链接 ⇒ -ELOOP(不展开; 中间分量仍展开) */
 
 #define BR_O_WRITABLE(f)  (((f) & BR_O_ACCMODE) != BR_O_RDONLY)
 
@@ -57,9 +58,10 @@
 #define BR_SEEK_END    2
 
 /* ==================================================================== inode 类型 */
-#define BR_INODE_NONE  0u
-#define BR_INODE_DIR   1u
-#define BR_INODE_FILE  2u
+#define BR_INODE_NONE    0u
+#define BR_INODE_DIR     1u
+#define BR_INODE_FILE    2u
+#define BR_INODE_SYMLINK 3u   /* 符号链接(append-only: 新增于 ADR-0013; 旧值不变) */
 
 /* ==================================================================== poll 事件位 */
 #define BR_POLLIN      0x01u
@@ -69,6 +71,11 @@
 /* 目录项/设备名的静态上界(devfs 节点名 = 路径分量, 设计 `7-01` §1: `[a-z][a-z0-9]*`;
  * 对 tmpfs 的文件名它是**静态上界** —— 超长 ⇒ -ENAMETOOLONG 的替代口径 = -ENOSPC, 见 ADR-0009)。 */
 #define BR_NAME_MAX    32u
+
+/* 符号链接**目标串**的静态上界(单条; 不是"解析后的总长" —— 后者由 vfs 的路径缓冲管)。
+ * 超长 ⇒ `-ENAMETOOLONG`。取 96: 比 BR_NAME_MAX 宽得多(一条链接常指向路径而非单个名字),
+ * 又小于路径缓冲, 于是"目标是相对路径时必然能被拼出来"这条性质由数值关系保证。 */
+#define BR_SYMLINK_MAX 96u
 
 /* ==================================================================== 前向声明 */
 typedef struct br_file       br_file_t;       /* 不透明打开句柄(D14) */
@@ -83,13 +90,17 @@ typedef struct br_fs_ops     br_fs_ops_t;
 
 /* 属性(设计 `7-01` §2 的 getattr/setattr 载体)。v1 **只实现 size**(截断);
  * 其余字段与 valid 位按 append-only 预留 —— 有 valid 掩码, 才能诚实表达
- * "这次 setattr 想改哪些字段", 而不是靠哨兵值猜。 */
+ * "这次 setattr 想改哪些字段", 而不是靠哨兵值猜。
+ * `nlink` 是 ADR-0013 追加的第二个字段(硬链接需要它: 消费者要能看见"这个名字之外
+ * 还有没有别的名字指向同一份数据")。符号链接的 `size` = **目标串长度**。 */
 #define BR_STAT_SIZE   0x0001u
+#define BR_STAT_NLINK  0x0002u
 
 typedef struct br_stat {
     br_u32 valid;   /* BR_STAT_* 位: 本次调用/本次回答里**有效**的字段 */
-    br_u32 type;    /* BR_INODE_DIR / BR_INODE_FILE */
-    br_u64 size;    /* 字节数(目录 = 0) */
+    br_u32 type;    /* BR_INODE_DIR / BR_INODE_FILE / BR_INODE_SYMLINK */
+    br_u64 size;    /* 字节数(目录 = 0; 符号链接 = 目标串长度) */
+    br_u32 nlink;   /* 硬链接数(目录 = 1; 不支持链接的 FS 可留 0 并**不置 valid 位**) */
 } br_stat_t;
 
 /* 目录项(design `7-01` §2: 目录 inode 的 file 面 read 产出)。定长记录 ——
@@ -170,7 +181,14 @@ void *br_inode_priv(br_inode_t *ino);
  * 本表只回答"这个名字在我这层是什么"。
  * `lookup` 返回**新建的瞬态 inode**, 未命中返回 `BR_NULL`(**不是**错误码 —— 走查要靠它
  * 区分"不存在"与"失败"); 其余槽位返回负 errno。
- * `symlink`/`readlink`/`mknod` 属 v2(槽位未占; 到 v2 再 append)。
+ *
+ * ★ 末三个槽位(link/symlink/readlink)是 **ADR-0013 追加**的(设计 `7-01` §2 原本把它们
+ *   写作"v2 预留: symlink / readlink / mknod")。追加在**表尾** ⇒ 既有 FS 的具名初始化
+ *   不受影响(未填 = BR_NULL ⇒ 该 FS 不支持, vfs 得 -ENOTSUP)。`mknod` 仍不占位。
+ *
+ * **谁负责解析符号链接**: 是 **vfs-core**, 不是 FS。理由: 目标串可能是绝对路径(要
+ * 重启挂载表匹配)或相对路径(要相对"链接所在目录"), 这两件事只有掌握挂载表与完整
+ * 路径的 vfs 做得到。FS 只提供"读出的目标串"(`readlink`)与"建一条链接"(`symlink`)。
  */
 struct br_inode_ops {
     br_inode_t *(*lookup)(br_inode_t *dir, const char *name);
@@ -181,6 +199,16 @@ struct br_inode_ops {
     int  (*rename)(br_inode_t *dir, const char *name, br_inode_t *ndir, const char *nname);
     int  (*getattr)(br_inode_t *ino, br_stat_t *st);
     int  (*setattr)(br_inode_t *ino, const br_stat_t *st);   /* v1 只认 BR_STAT_SIZE(截断) */
+    /* ---- ADR-0013 追加(append-only) ---- */
+    /* 在 `dir` 里建一条名为 `name` 的符号链接, 目标串 = `target`(不校验存在性 ——
+     * 悬空链接是合法状态, POSIX 如此)。目标超长 ⇒ -ENAMETOOLONG。 */
+    int  (*symlink)(br_inode_t *dir, const char *name, const char *target);
+    /* 读出**链接自身**的目标串。写满 `cap` 不截断报错, 而是**返回全长**(照 POSIX readlink);
+     * `cap == 0` 或 `buf == NULL` 时只回报长度。非符号链接 ⇒ -EINVAL。 */
+    int  (*readlink)(br_inode_t *ino, char *buf, br_size_t cap);
+    /* 在 `dir` 里建一个名为 `name`、指向 `target`(同一 FS 内的 inode)的**硬链接**。
+     * 目录不可链接(⇒ -EPERM, POSIX 如此); 跨 FS 由 vfs 在更前面挡下(⇒ -EXDEV)。 */
+    int  (*link)(br_inode_t *dir, const char *name, br_inode_t *target);
 };
 
 /* ==================================================================== 层 4: dentry */
@@ -236,7 +264,7 @@ const char *br_mount_path_at(br_u32 index);          /* 越界 ⇒ BR_NULL */
  *   → `O_CREAT` 且未命中 ⇒ 在父目录 `iops->create` → 分配 `br_file_t`(core 堆)
  *   → `fops->open(f, flags)` 建会话。
  * 返回句柄, 失败返回 `BR_NULL` 并**不设 errno**(原型口径: 返回 NULL; 需要错误码的调用方
- * 用下面的 `br_open_err()` 变体 —— 这是 svc-posix 把 errno 映射回用户态的唯一入口)。
+ * 用下面的 `br_open_err()` 变体 —— 这是 runtime/posix 把 errno 映射回用户态的唯一入口)。
  *
  * `br_open_err(path, flags, int *err)` 是同一个实现: `err` 可空; 成功写 0。
  */
@@ -252,13 +280,42 @@ int    br_file_fsync(br_file_t *f);
 int    br_file_poll (br_file_t *f, br_u32 *events);   /* v1: 查询就绪位(SD-7) */
 int    br_file_close(br_file_t *f);                   /* 释放会话 + 句柄; 幂等(NULL ⇒ 0) */
 
-/* 路径级便捷面(svc-posix 1:1 映射; 全部走"父目录 inode + 名字"两步)。 */
+/*
+ * `fstat` 的底层原语(ADR-0013): 已打开句柄的属性。
+ * 为什么必须有它: 消费者拿不到"这个 fd 对应的路径"(它可能已经被 rename/unlink),
+ * 而 `br_inode_t` 虽在头里可见, 让消费者自己去调 `iops->getattr` 属于**越过契约**
+ * (ops 表是给 FS 实现者看的扩展点, 不是给消费者调用的入口)。vfs 提供这一层,
+ * runtime/posix 的 `fstat` 才真的是"1:1 映射"而不是"自己伸手进 inode"。
+ */
+int br_fstat(br_file_t *f, br_stat_t *st);
+
+/* 路径级便捷面(runtime/posix 1:1 映射; 全部走"父目录 inode + 名字"两步)。
+ *
+ * `br_stat` **跟随**末级符号链接(POSIX `stat`); `br_lstat` **不跟随**(POSIX `lstat`)。
+ * 两者的中间分量都跟随。 */
 int br_stat    (const char *path, br_stat_t *st);
+int br_lstat   (const char *path, br_stat_t *st);
 int br_mkdir   (const char *path);
 int br_rmdir   (const char *path);
 int br_unlink  (const char *path);
 int br_rename  (const char *old_path, const char *new_path);
 int br_truncate(const char *path, br_u64 size);
+
+/* ==================================================================== 链接(ADR-0013)
+
+ * `br_symlink(target, path)`: 在 `path` 处建一条指向 `target` 的符号链接。
+ *   `target` **不被解析也不校验存在**(悬空链接合法); 超 `BR_SYMLINK_MAX` ⇒ -ENAMETOOLONG;
+ *   `path` 已存在 ⇒ -EEXIST。
+ * `br_readlink(path, buf, cap)`: 读**链接自身**的目标串(不跟随)。
+ *   返回目标串**全长**(照 POSIX: 截断不报错), `buf == NULL`/`cap == 0` 时只回报长度;
+ *   `path` 不是符号链接 ⇒ -EINVAL; 不存在 ⇒ -ENOENT。
+ * `br_link(old_path, new_path)`: 硬链接 —— 两个名字指向**同一份数据与同一个 inode**。
+ *   `old_path` 不存在 ⇒ -ENOENT; 中间分量跟随符号链接, **末级不跟随**? —— 不:
+ *   POSIX `link(2)` 对末级**默认不跟随**(Linux 语义), 这里照做(要跟随请先 `br_stat`)。
+ *   目录 ⇒ -EPERM; 跨挂载 ⇒ -EXDEV(`BR_EXDEV` 已在错误码表里, 本刀首次启用)。 */
+int br_symlink (const char *target, const char *path);
+int br_readlink(const char *path, char *buf, br_size_t cap);
+int br_link    (const char *old_path, const char *new_path);
 
 /* ==================================================================== 目录迭代 */
 

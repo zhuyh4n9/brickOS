@@ -3,7 +3,7 @@
  *
  * 不拉 libc 的 printf: -ffreestanding -nostdlib 下没有它, 而为了打几行日志
  * 去链一个 printf 实现, 与设计侧"v1 不引入 libc"的姿态不一致(设计 7/11 章:
- * POSIX 由 svc-posix 显式提供, 不是默认背景)。
+ * POSIX 由 runtime/posix 显式提供, 不是默认背景)。
  *
  * 输出的收口只有一个: br_console_putc(平台早期 console)。
  * 等 service/trace(设计 5-01)与 service/log(设计 11-01)落地, 本文件

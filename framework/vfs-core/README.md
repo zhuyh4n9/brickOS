@@ -50,7 +50,7 @@ dentry 预留)+ 逐级 `lookup` 走查 + 目录迭代。
    泛型地调 `fops->read` 取一条定长 `br_dirent_t`(返回 `1`/`0`/负 errno)—— 不需要任何
    "目录专用 ops"(D23 分层的收益)。
 5. **路径级便捷面**: `br_stat`/`br_mkdir`/`br_rmdir`/`br_unlink`/`br_rename`/`br_truncate`
-   —— "路径 → 父目录 inode + 名字"两段式的翻译层, 即 svc-posix 的 1:1 映射口(ADR-0009 §3 裁定 3)。
+   —— "路径 → 父目录 inode + 名字"两段式的翻译层, 即 runtime/posix 的 1:1 映射口(ADR-0009 §3 裁定 3)。
 6. **存储域一致性用例** `vfs_core_selftest()`, 在 `src/vfs_selftest.c`(见下)。
 
 句柄/inode 访问器(`br_file_inode`/`br_file_fpriv`/`br_file_set_fpriv`/`br_file_flags`/
@@ -64,8 +64,8 @@ dentry 预留)+ 逐级 `lookup` 走查 + 目录迭代。
 - **无 inode/dentry cache(SD-3)**: inode 是走查的中间产物, `free_inode` 即弃;
   `br_dentry_ops` v1 全 NULL, 槽位先占免得 v2 改布局。路径走查**零特判**, 一切经挂载表。
 - **不做访问模式执法**: `flags` 只做合法性校验(未知位置位 ⇒ `-EINVAL`), 在只读句柄上 write、
-  无写权限时 `O_TRUNC` 都不拒绝 —— 访问模式策略归 svc-posix 的 fd 层(ADR-0009 §5 遗留项 5)。
-- **不做 cwd**: cwd 是 POSIX 概念, 归 svc-posix; native API 只认绝对路径(`7-01` §2)。
+  无写权限时 `O_TRUNC` 都不拒绝 —— 访问模式策略归 runtime/posix 的 fd 层(ADR-0009 §5 遗留项 5)。
+- **不做 cwd**: cwd 是 POSIX 概念, 归 runtime/posix; native API 只认绝对路径(`7-01` §2)。
 - **不做运行时挂载/卸载**: 挂载点本身 `unlink`/`rmdir` ⇒ `-EBUSY`(卸载语义不早于 v3, O-S3);
   `unmount`/`sync` 是签名先行的可空槽位。
 - **不实现事件等待**: `poll_attach` v1 恒 NULL ⇒ `-ENOTSUP`; `br_file_poll` 只查就绪位(SD-7)。

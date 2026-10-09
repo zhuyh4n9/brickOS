@@ -74,7 +74,7 @@ int uart_pl011_selftest(void)
 
     /* ---- TC-IO-001: 设备节点可见且是 FILE 类型 ---- */
     {
-        br_stat_t  st = { 0u, 0u, 0u };
+        br_stat_t  st = { 0u, 0u, 0u, 0u };   /* ADR-0013: 追加了 nlink 字段 */
         const int  rc = br_stat(IO_CONF_PATH, &st);
         io_conf((rc == 0) && (st.type == BR_INODE_FILE), "TC-IO-001",
                 "br_stat(" IO_CONF_PATH ") 成功且 type = FILE");

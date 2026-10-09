@@ -1,0 +1,598 @@
+# runtime/posix — POSIX 运行时(plugin_type = ability, subkind = service, api_type = runtime_adapter)
+#
+# ★ 名字(ADR-0015): 本插件原名 `service/svc-posix`(设计 D18 的口径), 现改为 `runtime/posix`
+#   并落在 `runtime/` 命名空间下 —— "它不是一个普通服务, 而是一整套运行时"。
+#   `subkind = "service"` **保持不变**: 相位推导(ability + service ⇒ LATE)与 D18 的
+#   "POSIX 运行时服务"定位都靠它, 换 subkind 会把 init 掉到 CORE。
+#
+# 设计出处: `docs/1-architecture/1-01-architecture.md` §7(v0.5/D18: **POSIX 双角色拆分** ——
+# `runtime/posix` = 实现(普通服务), `iface-posix` = 薄皮肤; §7.6 三方移植双模式)、
+# `docs/11-service/11-01-service.md` §1/§2(POSIX 运行时服务: fd 表主人 + `errno = -ret`)、
+# `docs/11-service/11-02-svc-posix-subset.md`(**覆盖清单**: TR-A/TR-B 是本件的范围)、
+# `docs/7-storage/7-01-vfs.md` §1/§4.1(fd 表项 = `br_file_t*`; `br_open` 是底层原语)。
+# 逐条裁定与偏离: `docs/decisions/0014-svc-posix-posix-runtime.md`。
+#
+# ★ 依赖面(三条, 一条都不能少):
+#   - `framework/file-table`(**init**): fd 表的**唯一主人**在那里(ADR-0012)。本件只消费它
+#     —— 这正是"共享状态单一主人"的落地: `br_ft_alloc` 在全树只出现在本件源码里。
+#   - `framework/vfs-core`(**init**): `open/read/write/stat/dirent` 的底层原语;
+#     vfs 刻意**不**做访问模式执法(ADR-0009 §5 遗留项 5)⇒ 那一层归本件。
+#   - `platform/qemu-aarch64`(**runtime**): pthread/时间要线程与时钟, 那些由平台与 core 提供;
+#     声明 `runtime` 是为了让组合期闭包把平台拉进来(与 sched 插件同型)。
+# ★ 相位: `phase = "late"` —— `ability` + `subkind = service` 的类别决定(brickie 的
+#   `is_service_like`), 不是自选项。runtime/posix 要在 core 的堆/调度/服务注册表就绪之后才 init。
+# ★ `api_type = "runtime_adapter"`: 它是"为 third_party 提供接口支持的适配基座"(§3.1 的分类
+#   定义)。`iface-posix` 将来以 `form = "skin"` + `reexport_of` 再导出本件的单元 —— 分类必须
+#   与基座相等, 所以本件取 runtime_adapter 而不是 native。
+schema = 1
+
+[plugin]
+name        = "runtime/posix"
+plugin_type = "ability"
+api_type    = "runtime_adapter"
+subkind     = "service"
+lang        = "c"
+phase       = "late"
+version     = "0.1.0.0"
+summary     = "POSIX 运行时: fd/文件/目录/链接/线程/时间/stdio 子集(errno = -ret 零转换)"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 4
+notes    = "cwd 128 B + 记录锁 16 槽 + FILE* 池 8 槽 + pthread 线程记录 8 条。★ pthread_create 的线程栈从 **core 堆**切(4 KiB/线程), 不占本件的 [[res]].stack —— 那一栏的语义是'本插件自建线程的栈'(§3 裁定 10), 而本件不建常驻线程"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+# ---- 类型别名表(sig 里用的名字 ↔ 底层 C 类型) ----
+[iface.typedefs]
+br_u8        = "uint8_t"
+br_u32       = "uint32_t"
+br_u64       = "uint64_t"
+br_s64       = "int64_t"
+br_size_t    = "size_t"
+br_bool      = "int"
+br_uintptr_t = "uintptr_t"
+
+# ---- 结构依赖 ----
+[[dep]]
+name  = "framework/file-table"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "platform/qemu-aarch64"
+range = ">=0.1.0"
+kind  = "runtime"
+
+# ---- 导出面(本件 = br-svcposix.txt 的候选面; `3-01` §15 第五批) ----
+# ★ `sig` 此刻**不逐个声明**: 本单元是 `freeze_state = "unfrozen"` / `status = "experimental"`,
+#   而 POSIX 面有一百多个符号 —— 逐个写 sig 会引入"声明与头文件漂移"的第二处真值。
+#   升格为 frozen(第五批)时再按头文件逐条补 sig, 届时由 golden 管线做符号级真值。
+[[export]]
+api_iface    = "runtime_adapter"
+form         = "api"
+name         = "posix"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:b8697b3ba530dd77f2f6ffb008a99774d7b839c8f57a1ebefdcfc150118becc8"
+status       = "experimental"
+
+# ---- 打开标志(fcntl.h; Linux 数值) ----
+[[export.entries]]
+kind = "macro"
+name = "O_RDONLY"
+value = "00000000"
+[[export.entries]]
+kind = "macro"
+name = "O_WRONLY"
+value = "00000001"
+[[export.entries]]
+kind = "macro"
+name = "O_RDWR"
+value = "00000002"
+[[export.entries]]
+kind = "macro"
+name = "O_ACCMODE"
+value = "00000003"
+[[export.entries]]
+kind = "macro"
+name = "O_CREAT"
+value = "00000100"
+[[export.entries]]
+kind = "macro"
+name = "O_EXCL"
+value = "00000200"
+[[export.entries]]
+kind = "macro"
+name = "O_TRUNC"
+value = "0001000"
+[[export.entries]]
+kind = "macro"
+name = "O_APPEND"
+value = "0002000"
+[[export.entries]]
+kind = "macro"
+name = "O_NONBLOCK"
+value = "0004000"
+[[export.entries]]
+kind = "macro"
+name = "O_DIRECTORY"
+value = "0200000"
+[[export.entries]]
+kind = "macro"
+name = "O_NOFOLLOW"
+value = "0400000"
+[[export.entries]]
+kind = "macro"
+name = "AT_FDCWD"
+value = "(-100)"
+
+# ---- 文件类型与权限位(sys/stat.h) ----
+[[export.entries]]
+kind = "macro"
+name = "S_IFMT"
+value = "0170000"
+[[export.entries]]
+kind = "macro"
+name = "S_IFREG"
+value = "0100000"
+[[export.entries]]
+kind = "macro"
+name = "S_IFDIR"
+value = "0040000"
+[[export.entries]]
+kind = "macro"
+name = "S_IFLNK"
+value = "0120000"
+
+# ---- 结构布局(D14: 布局入 golden) ----
+[[export.entries]]
+kind = "type"
+name = "struct stat"
+layout = "# {st_dev, st_ino, st_mode, st_nlink, st_uid, st_gid, st_rdev, st_size, st_blksize, st_blocks, st_atime, st_mtime, st_ctime}"
+[[export.entries]]
+kind = "type"
+name = "struct dirent"
+layout = "# {d_ino, d_off, d_reclen, d_type, d_name[256]}"
+[[export.entries]]
+kind = "type"
+name = "struct pollfd"
+layout = "# {fd, events, revents}"
+[[export.entries]]
+kind = "type"
+name = "struct timespec"
+layout = "# {tv_sec, tv_nsec}"
+[[export.entries]]
+kind = "type"
+name = "struct iovec"
+layout = "# {iov_base, iov_len}"
+[[export.entries]]
+kind = "type"
+name = "pthread_mutex_t"
+layout = "# 包装 br_mutex_t(布局 = core 的 br_sync.h)"
+[[export.entries]]
+kind = "type"
+name = "pthread_cond_t"
+layout = "# 包装 br_cond_t(布局 = core 的 br_sync.h)"
+[[export.entries]]
+kind = "type"
+name = "sem_t"
+layout = "# = br_sem_t(布局 = core 的 br_sync.h)"
+
+# ---- fd / 文件 I/O ----
+[[export.entries]]
+kind = "func"
+name = "open"
+[[export.entries]]
+kind = "func"
+name = "openat"
+[[export.entries]]
+kind = "func"
+name = "creat"
+[[export.entries]]
+kind = "func"
+name = "close"
+[[export.entries]]
+kind = "func"
+name = "read"
+[[export.entries]]
+kind = "func"
+name = "write"
+[[export.entries]]
+kind = "func"
+name = "pread"
+[[export.entries]]
+kind = "func"
+name = "pwrite"
+[[export.entries]]
+kind = "func"
+name = "lseek"
+[[export.entries]]
+kind = "func"
+name = "dup"
+[[export.entries]]
+kind = "func"
+name = "dup2"
+[[export.entries]]
+kind = "func"
+name = "fcntl"
+[[export.entries]]
+kind = "func"
+name = "fsync"
+[[export.entries]]
+kind = "func"
+name = "fdatasync"
+[[export.entries]]
+kind = "func"
+name = "ftruncate"
+[[export.entries]]
+kind = "func"
+name = "truncate"
+[[export.entries]]
+kind = "func"
+name = "isatty"
+[[export.entries]]
+kind = "func"
+name = "readv"
+[[export.entries]]
+kind = "func"
+name = "writev"
+[[export.entries]]
+kind = "func"
+name = "poll"
+[[export.entries]]
+kind = "func"
+name = "select"
+
+# ---- 元数据 ----
+[[export.entries]]
+kind = "func"
+name = "stat"
+[[export.entries]]
+kind = "func"
+name = "lstat"
+[[export.entries]]
+kind = "func"
+name = "fstat"
+[[export.entries]]
+kind = "func"
+name = "mkdir"
+[[export.entries]]
+kind = "func"
+name = "chmod"
+[[export.entries]]
+kind = "func"
+name = "fchmod"
+[[export.entries]]
+kind = "func"
+name = "chown"
+[[export.entries]]
+kind = "func"
+name = "fchown"
+[[export.entries]]
+kind = "func"
+name = "umask"
+[[export.entries]]
+kind = "func"
+name = "access"
+
+# ---- 名字空间与链接 ----
+[[export.entries]]
+kind = "func"
+name = "unlink"
+[[export.entries]]
+kind = "func"
+name = "rmdir"
+[[export.entries]]
+kind = "func"
+name = "remove"
+[[export.entries]]
+kind = "func"
+name = "rename"
+[[export.entries]]
+kind = "func"
+name = "link"
+[[export.entries]]
+kind = "func"
+name = "symlink"
+[[export.entries]]
+kind = "func"
+name = "readlink"
+
+# ---- 目录 ----
+[[export.entries]]
+kind = "func"
+name = "opendir"
+[[export.entries]]
+kind = "func"
+name = "readdir"
+[[export.entries]]
+kind = "func"
+name = "closedir"
+[[export.entries]]
+kind = "func"
+name = "rewinddir"
+
+# ---- cwd / 时间 / 进程身份 ----
+[[export.entries]]
+kind = "func"
+name = "chdir"
+[[export.entries]]
+kind = "func"
+name = "getcwd"
+[[export.entries]]
+kind = "func"
+name = "clock_gettime"
+[[export.entries]]
+kind = "func"
+name = "clock_getres"
+[[export.entries]]
+kind = "func"
+name = "nanosleep"
+[[export.entries]]
+kind = "func"
+name = "sleep"
+[[export.entries]]
+kind = "func"
+name = "usleep"
+[[export.entries]]
+kind = "func"
+name = "getpid"
+[[export.entries]]
+kind = "func"
+name = "getppid"
+[[export.entries]]
+kind = "func"
+name = "getuid"
+[[export.entries]]
+kind = "func"
+name = "geteuid"
+[[export.entries]]
+kind = "func"
+name = "getgid"
+[[export.entries]]
+kind = "func"
+name = "getegid"
+
+# ---- pthread ----
+[[export.entries]]
+kind = "func"
+name = "pthread_create"
+[[export.entries]]
+kind = "func"
+name = "pthread_join"
+[[export.entries]]
+kind = "func"
+name = "pthread_exit"
+[[export.entries]]
+kind = "func"
+name = "pthread_self"
+[[export.entries]]
+kind = "func"
+name = "pthread_equal"
+[[export.entries]]
+kind = "func"
+name = "pthread_yield"
+[[export.entries]]
+kind = "func"
+name = "pthread_detach"
+[[export.entries]]
+kind = "func"
+name = "pthread_attr_init"
+[[export.entries]]
+kind = "func"
+name = "pthread_attr_destroy"
+[[export.entries]]
+kind = "func"
+name = "pthread_attr_setstacksize"
+[[export.entries]]
+kind = "func"
+name = "pthread_attr_getstacksize"
+[[export.entries]]
+kind = "func"
+name = "pthread_attr_setstack"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutex_init"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutex_destroy"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutex_lock"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutex_trylock"
+[[export.entries]]
+kind = "func"
+name = "pthread_mutex_unlock"
+[[export.entries]]
+kind = "func"
+name = "pthread_cond_init"
+[[export.entries]]
+kind = "func"
+name = "pthread_cond_destroy"
+[[export.entries]]
+kind = "func"
+name = "pthread_cond_wait"
+[[export.entries]]
+kind = "func"
+name = "pthread_cond_timedwait"
+[[export.entries]]
+kind = "func"
+name = "pthread_cond_signal"
+[[export.entries]]
+kind = "func"
+name = "pthread_cond_broadcast"
+
+# ---- semaphore ----
+[[export.entries]]
+kind = "func"
+name = "sem_init"
+[[export.entries]]
+kind = "func"
+name = "sem_destroy"
+[[export.entries]]
+kind = "func"
+name = "sem_wait"
+[[export.entries]]
+kind = "func"
+name = "sem_trywait"
+[[export.entries]]
+kind = "func"
+name = "sem_timedwait"
+[[export.entries]]
+kind = "func"
+name = "sem_post"
+[[export.entries]]
+kind = "func"
+name = "sem_getvalue"
+
+# ---- stdio(流层; 无 printf) ----
+[[export.entries]]
+kind = "func"
+name = "fopen"
+[[export.entries]]
+kind = "func"
+name = "fdopen"
+[[export.entries]]
+kind = "func"
+name = "fclose"
+[[export.entries]]
+kind = "func"
+name = "fread"
+[[export.entries]]
+kind = "func"
+name = "fwrite"
+[[export.entries]]
+kind = "func"
+name = "fseek"
+[[export.entries]]
+kind = "func"
+name = "ftell"
+[[export.entries]]
+kind = "func"
+name = "rewind"
+[[export.entries]]
+kind = "func"
+name = "fflush"
+[[export.entries]]
+kind = "func"
+name = "feof"
+[[export.entries]]
+kind = "func"
+name = "ferror"
+[[export.entries]]
+kind = "func"
+name = "clearerr"
+[[export.entries]]
+kind = "func"
+name = "fileno"
+[[export.entries]]
+kind = "func"
+name = "setvbuf"
+[[export.entries]]
+kind = "func"
+name = "fgets"
+[[export.entries]]
+kind = "func"
+name = "fputs"
+[[export.entries]]
+kind = "func"
+name = "fputc"
+[[export.entries]]
+kind = "func"
+name = "fgetc"
+[[export.entries]]
+kind = "func"
+name = "puts"
+[[export.entries]]
+kind = "func"
+name = "putchar"
+
+# ---- string / stdlib ----
+[[export.entries]]
+kind = "func"
+name = "strlen"
+[[export.entries]]
+kind = "func"
+name = "strcpy"
+[[export.entries]]
+kind = "func"
+name = "strncpy"
+[[export.entries]]
+kind = "func"
+name = "strcat"
+[[export.entries]]
+kind = "func"
+name = "strncat"
+[[export.entries]]
+kind = "func"
+name = "strcmp"
+[[export.entries]]
+kind = "func"
+name = "strncmp"
+[[export.entries]]
+kind = "func"
+name = "strchr"
+[[export.entries]]
+kind = "func"
+name = "strrchr"
+[[export.entries]]
+kind = "func"
+name = "memchr"
+[[export.entries]]
+kind = "func"
+name = "strerror"
+[[export.entries]]
+kind = "func"
+name = "malloc"
+[[export.entries]]
+kind = "func"
+name = "calloc"
+[[export.entries]]
+kind = "func"
+name = "realloc"
+[[export.entries]]
+kind = "func"
+name = "free"
+[[export.entries]]
+kind = "func"
+name = "abs"
+[[export.entries]]
+kind = "func"
+name = "labs"
+[[export.entries]]
+kind = "func"
+name = "atoi"
+[[export.entries]]
+kind = "func"
+name = "atol"
+[[export.entries]]
+kind = "func"
+name = "abort"
+[[export.entries]]
+kind = "func"
+name = "getenv"
+
+[selftest]
+# ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = posix_selftest`。
+# 用例: TC-POSIX-001..020(自编号, 见 br-wa-test-001)。开关在 `product.toml [selftest]`。
+cases = 20
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

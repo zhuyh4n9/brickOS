@@ -68,7 +68,7 @@ steps    = [
     "br_ft_alloc(A, 0x21) 后 br_ft_get_flags(0, &got) == 0 且 got == 0x21(存与还)",
     "br_ft_set_flags(0, 0x42) == 0; 再读 == 0x42(**整体替换**语义)",
     "br_ft_get_flags(0, NULL) ⇒ -EINVAL",
-    "语义: 表不解释 flags, 只存与还; 解释权归 svc-posix",
+    "语义: 表不解释 flags, 只存与还; 解释权归 runtime/posix",
 ]
 expect   = "[FTCONF] PASS TC-FT-005 ..."
 sched    = ["coop", "preempt"]

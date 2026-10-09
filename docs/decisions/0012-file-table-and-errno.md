@@ -1,5 +1,8 @@
 # 0012 — 文件表(fd 表)独立成件 + errno 与 Linux 内核逐值对齐
 
+> ★ **改名通知(ADR-0015)**: 本 ADR 里被称为 `svc-posix` 的那个插件, 现已改名为
+> **`runtime/posix`**(目录 `runtime/posix/`)。正文保留当时的名字(ADR 是记录)。
+
 > 状态: **已落地**(QEMU virt aarch64; `[FTCONF] 11/0`; 宿主 `ft-test` 全绿, 其中含
 > **errno 与宿主 `<errno.h>` 49 码逐一对拍**; `brickie test -j8` 全量门禁绿:
 > 宿主 7 + QEMU 7 + 脚本 4)。

@@ -11,7 +11,7 @@
 #   **不解引用**它(前向声明即可) ⇒ 不把 vfs-core 拉进任何组合, 与 framework/vfs-core 同型。
 #   "谁负责 br_file_close"因此写成**回报句柄**的形态: 表管 fd, vfs-core 管文件。
 # ★ 相位: `phase = "core"` —— 类别决定的 ② 完成点(ability 且 subkind != service ⇒ CORE)。
-#   表是 BSS, EARLY 就能用; svc-posix(LATE)装标准流时它早已在场。
+#   表是 BSS, EARLY 就能用; runtime/posix(LATE)开始用表时它早已在场。
 schema = 1
 
 [plugin]
