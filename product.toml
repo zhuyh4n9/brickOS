@@ -12,13 +12,45 @@ core    = ">=0.1.0"
 stage   = "dev"                 # dev | release; CLI 覆盖(§7.5)
 
 [select]
-# 只列**直接选择**的插件; service/dump 会经依赖闭包把 service/{trace,backtrace,hexdump,memleak}
-# 拉进来(能力经 `[[dep]]` 声明, 产品只做选择 —— BRV-D4 唯一真值)。
+# 只列**直接选择**的插件; 其余经依赖闭包拉进来(能力经 `[[dep]]` 声明, 产品只做选择
+# —— BRV-D4 唯一真值)。本产品的闭包链:
+#   service/dump → service/{trace,backtrace,hexdump,memleak}
+#   fs/devfs     → framework/{dev-core,cdev-core,vfs-core} + fs/tmpfs(挂载点父 FS)
+#   io/uart-pl011→ framework/{cdev-core,dev-core,vfs-core}
+#   fs/tmpfs     → framework/vfs-core
+#                          ↓
+#   framework/{vfs-core,dev-core,cdev-core}   (存储/设备域的框架件, ADR-0009)
+# ★ 为什么直接列 fs/devfs 与 io/uart-pl011 而不只列 tmpfs: 设计 `1-03` §1 的 v1.0
+#   插件清单里这三件(tmpfs rootfs / devfs /dev / uart-pl011 tty)都是**选择项** ——
+#   裁剪掉 devfs 就是 `8-01` §1.2 的形态 B(只有设备框架, 无 /dev 命名空间);
+#   而 "挂载计划含 / 或 /dev 即拉入"(§1 注)在本原型里还没有生成链路
+#   (WORKAROUND br-wa-fs-001), 所以选择权仍显式写在产品侧。
 plugins = [
   "platform/qemu-aarch64",
   "sched/coop",
   "service/dump",
+  "fs/tmpfs",
+  "fs/devfs",
+  "io/uart-pl011",
 ]
+
+[selftest]
+# ============================================================ 自检开关(ADR-0010)
+#
+# 自检 = 各插件的**接口测试**(<plugin>/src/*_selftest.c 里的 `*_selftest()`), 与核心
+# 代码分离; 由 core 在"全部 start 之后、调度器接管之前"统一驱动(见 br_plugin.h /
+# plugin_mgr.c 的 br_plugin_manager_selftest)。
+#
+# ★ 这个开关是**生成期**的: 关掉 ⇒ 生成物把描述符的 `.selftest` 写成
+#   BR_PLUGIN_NO_HOOK, 且 `core/selftest/**` 不参与编译 ⇒ 测试代码**整段被
+#   --gc-sections 裁出镜像**(不是"编了不跑")。判据 = 关掉后 `[SELFTEST]` 段消失。
+#
+# 语义: true/false 显式; "inherit"(或整表不写) = 跟随 [product].stage
+#       —— dev 开 / release 关(开发镜像自带自检, 发布镜像不带)。
+enabled = "inherit"
+# plugins: 只跑列出的插件(**可选**; 空/不写 = 所有声明了 [selftest] 的插件都跑)。
+# 用途: 只在某个镜像里留一两套自检时, 把其余的也一并裁掉。
+# plugins = []
 
 [budget]
 # 两份上限的分工(brickie-v0.1 §8.1): platform 的 [[res]] = **物理容量**(已抬到 8 MiB:
@@ -41,6 +73,10 @@ frozen_deps = "inherit"         # inherit(跟随 [product].stage) | allow | deny
 #   使"还有几条例外"一眼可见。
 allow_edges = [
   ["app/hello", "platform/qemu-aarch64"],
+  # ★ ADR-0010 之后**这条豁免已删**: 存储域总套件改由 core 的 selftest pass 驱动
+  #   (`br_plugin_manager_selftest`), APP 不再认识任何框架件 —— 全链路验证从
+  #   "消费者替所有人跑测试"变成"core 逐个驱动 + 用例自带判据"。
+  #   于是 `allow_edges` 又回到**一条**(app → platform), 那是 M0 引导例外里最后一条。
 ]
 
 [build]
@@ -66,6 +102,10 @@ core_includes = ["core/include"]
 # 两段"); **闭包过滤是工具的责任** —— 不在 `[select]` 闭包里的插件的生成物会被跳过
 # (BRV-BLD-0013 info), 所以不会出现"描述符进镜像而它的 .c 没进 ⇒ 链接期未定义符号"。
 gen_sources   = ["build/gen/**/plugin_desc.c"]
+# core 自检套件的源集合(ADR-0010)。**必须与 core_sources 分开**: core_sources 的
+# `core/src/*/*.c` 通配管不到 `core/selftest/`(不同顶层目录), 且自检关掉时这一族
+# 压根不编 —— 于是"关掉自检"对 core 侧也是"代码不进镜像"。
+selftest_sources = ["core/selftest/*.c"]
 obj_dir       = "build/obj"
 
 # 交叉编译纪律(逐条都有理由, 不是"随手加的优化开关"):

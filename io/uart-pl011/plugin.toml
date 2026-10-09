@@ -1,0 +1,107 @@
+# io/uart-pl011 — PL011 UART 字符设备(plugin_type = ability, subkind = io)
+#
+# 设计出处: `docs/1-architecture/1-03-roadmap.md` §1 的插件清单 —— "`io/uart-pl011` |
+# I/O | PL011: 早期轮询 console(**M0: platform 早期 console, 不注册设备**)→ 中断 tty
+# (**M2: 注册 cdev**)"; `docs/8-device/8-01-device.md` §1.1(体系分层)/§6(驱动编写者契约:
+# 实现 ops 表 + 三条纪律 + 声明资源)。
+# 逐条裁定(尤其"v1 为什么是轮询 cdev 而不是中断 tty")见
+# `docs/decisions/0009-vfs-storage-stack.md` §3 裁定 7, 并登记 `WORKAROUND(br-wa-io-001)`。
+#
+# ★ 与 platform 的 `console_pl011.c` 是**同一块硬件的两种形态**(设计内, 不是重复):
+#   platform 的是 M0 早期 console(轮询 putc, 形态 C standalone —— 内核日志与 panic 通道,
+#   不能注册设备: panic 路径不许依赖插件栈); 本件是 M2 形态 A 侧(注册 cdev ⇒ /dev/uart0)。
+# ★ 本件**没有"器件动作 API"**: `/dev/uart0` 的打开/读写/ioctl 全部走 `br_file_*`
+#   (经 cdev-core 的适配层)。它的对外面只有**器件契约**那一层 —— ioctl 编码与 info
+#   结构, 消费者(如将来的 tty 层或诊断工具)要用, 所以进 [[export]]。
+#   (对照 fs/tmpfs、fs/devfs: 那两件连契约都没有, 所以整件无 [[export]]。)
+schema = 1
+
+[plugin]
+name        = "io/uart-pl011"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "io"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "QEMU virt PL011 作为 cdev 注册: /dev/uart0 的会话式读写 + 3 个 ioctl; v1 轮询无中断"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "每会话 cdev_file_t + session 约 32 B(core 堆); 静态部分只有 ops 表与器件记录"
+# ★ **不声明 stack**: 本器件不创建线程 —— 它的 ops 全部运行在**调用者的**栈上
+#   (消费者线程或 main 线程)。设计的 [[res]].stack 是"插件自己的线程栈"预算,
+#   给一个不开线程的驱动声明它会把平台的栈容量白白占掉,
+#   从而挤掉真正需要栈的插件(app/hello 的 4 KiB)。
+
+# ---- 结构依赖 ----
+# init: 注册点 `br_cdev_register` 属 cdev-core(设计 §6 的"驱动 → cdev-core");
+#       拓扑序保证"框架件先于消费者初始化"。
+[[dep]]
+name  = "framework/cdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+# type: 头文件用 dev-core 的 ioctl 编码宏(`BR_IOR/IOW/IO`)与 `br_dev_name_valid`;
+#       形状与语义在 cdev-core, 而编码宏的归属是 dev-core(设计 §5)。
+[[dep]]
+name  = "framework/dev-core"
+range = ">=0.1.0"
+kind  = "type"
+
+# runtime: 器件的一致性用例与真实消费者都经 vfs 的公开文件面访问(它自己不开后门)。
+[[dep]]
+name   = "framework/vfs-core"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_open_err"
+
+# ---- 导出面(器件契约: ioctl 编码 + info 结构 + 一致性入口) ----
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "uart-pl011"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:b948dff0255343ade247c86ff2133951feef5cde5e8158ffb597a65e44a5b2d9"
+status       = "experimental"
+
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_PL011_DEV_NAME"
+value = "\"uart0\""
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_IOC_MAGIC"
+value = "'u'"
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_IOC_GET_INFO"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_IOC_FLUSH_RX"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_IOC_SET_BAUD"
+value = "2u"
+
+[[export.entries]]
+kind = "type"
+name = "br_uart_pl011_info_t"
+layout = "# {base, refclk_hz, baud, rx_available, rx_dropped}"
+
+[selftest]
+# ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = <prefix>selftest`。
+# 用例: TC-IO-*。开关在 `product.toml [selftest]`(生成期裁决: 关掉 ⇒ 本文件与
+# src/*_selftest.c 一起不参与编译, 测试代码不进镜像)。
+cases = 12
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

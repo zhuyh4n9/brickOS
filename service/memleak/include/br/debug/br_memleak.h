@@ -31,8 +31,10 @@
 /* LATE 相 init: 注册本插件的归属标签(基础账) + trace 事件名。返回 0。 */
 int br_memleak_init(void);
 
-/* 自检(打印 `[DBGCONF] PASS/FAIL TC-DBG-04x <desc>`; 返回失败数)。 */
-int br_memleak_selftest(void);
+/* 自检入口(TC-DBG-04x)已移到 `src/memleak_selftest.c`(ADR-0010): 生成物按 symbol_prefix
+ * 发 `.selftest = memleak_selftest`, 由 core 在全部 start 之后统一驱动。
+ * ★ 测试入口**不进**本插件的 golden 接口面 —— 否则改一条用例就成了对外接口变更
+ *   (接口 hash 覆盖的正是声明面), 与"自检与生产分离"的裁定冲突。 */
 
 /*
  * 泄漏报告。打印:

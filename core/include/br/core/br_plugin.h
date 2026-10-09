@@ -108,6 +108,23 @@ typedef struct br_plugin {
     int (*early_init)(void);          /* 可空(用 BR_PLUGIN_NO_HOOK) */
     int (*init)(void);
     int (*start)(void);
+    /*
+     * 自检钩子(接口测试的**唯一**入口; 可空)。
+     *
+     * 语义: 返回**失败项数**(0 = 全绿), 并把每项结论打进日志(`[XXXCONF] PASS/FAIL <id> ...`);
+     * 负数 = 钩子自身出错(与失败项数分开记, 见 plugin_mgr 的 rc 口径)。
+     * 它**不是**四相里的第五相: 相位是"能力完成点"(1-01 §9 的四相), 而自检是**验证**,
+     * 对所有插件都在同一时刻发生(全部 start 之后、调度器接管之前 —— 见 ADR-0010)。
+     *
+     * ★ 为什么不是 `[[export]]` 里的 API: 与 early_init/init/start 同源(ADR-0005 裁定 9)——
+     *   自检是**组合期契约**(生成物引用它), 不是插件对外提供的能力。消费者调用自检会让
+     *   "测试面"进入 golden 接口, 于是改一个用例就变成接口变更。
+     *
+     * ★ 生成期开关(ADR-0010 §2.3): `product.toml [selftest]` 关掉自检时, 生成物在这里发
+     *   `BR_PLUGIN_NO_HOOK` ⇒ 测试代码无人引用 ⇒ `--gc-sections` 把它整段裁出镜像。
+     *   所以"关了自检的镜像"里**没有测试代码**, 而不只是"不跑测试"。
+     */
+    int (*selftest)(void);
 } br_plugin_t;
 
 /* 空钩子的写法: 生成物里"该插件没有这一相"时用它, 让 plugin_manager 不用判 0/非 0 两种空。 */
@@ -137,6 +154,11 @@ typedef struct br_plugin {
         .init = (in),                                                                        \
         .start = (st),                                                                       \
     }
+/*
+ * `BR_PLUGIN_DEFINE` **不含 `selftest`**(形参表冻结, 与 ADR-0005 裁定 1 同源: 生成物已改为
+ * 直接实例化结构体)。宏用户省略 `.selftest` ⇒ 该字段按 C 规则零初始化 = `BR_PLUGIN_NO_HOOK`
+ * ⇒ "无自检"。要挂自检的手写描述符请直接写具名初始化器并在末尾加 `.selftest = 函数名`。
+ */
 
 /* ==================================================================== 管理器 */
 
@@ -178,11 +200,31 @@ void br_plugin_manager_platform_init(void);
 /*
  * ④ 建 init 边 → Kahn 拓扑排序(有环 ⇒ panic, 报完整环路径)
  *   → EARLY(其余插件的 early_init) → CORE(类别决定的 init) → LATE → 全局开中断
- *   → START(拓扑序, 但 APP 最后是显式规则) → `br_sched_run()`(core 的 idle/首次调度)。
+ *   → START(拓扑序, 但 APP 最后是显式规则)
+ *   → **SELFTEST pass**(逐插件 `selftest`; 见下)
+ *   → `br_sched_run()`(core 的 idle/首次调度)。
  *
  * 前置: ①② 已跑过(启动链顺序, 见 `br/core/br_main.h`)。不返回。
  */
 BR_NORETURN void br_plugin_manager_run(void);
+
+/*
+ * 自检 pass(ADR-0010)。**不是第五相**: 相位是"能力完成点", 自检是**验证** ——
+ * 它对所有插件都在同一时刻发生, 顺序只是"复用了 init 的拓扑序"以求确定性。
+ *
+ * 为什么在这个时刻(START 之后、`br_sched_run()` 之前): 此刻 timer 已 armed、中断已开、
+ * 设备已注册、挂载已就位 —— 现有全部一致性套件的前提都成立; 而调度器一旦接管, 控制流
+ * 就再也不会回到"单线程跑测试"的形态。
+ *
+ * 口径:
+ *   - `selftest == BR_PLUGIN_NO_HOOK` 的插件跳过(**大多数镜像里都是这样**: 生成期开关
+ *     关掉自检时, 生成物发的就是 NO_HOOK);
+ *   - 返回 **失败项数**(0 = 全绿); 负数 = 钩子自身出错。两者都**不**停机 ——
+ *     自检是**观测**, 红绿由门禁判(`[XXXCONF] FAIL` 在 gates.toml 的 forbid 里);
+ *     这与 init/start 的"首败即停机"(裁定 G6)是**两条不同的纪律**, 见 ADR-0010 §2.4。
+ *   - pass 末尾打一行 `[SELFTEST] SUMMARY plugins=N ran=M fails=K`(启动证据)。
+ */
+void br_plugin_manager_selftest(void);
 
 /* ==================================================================== 观测 */
 
@@ -206,14 +248,10 @@ br_u32 br_plugin_phase_reached(void);
 br_u32 br_plugin_init_failures(void);
 
 /*
- * 插件管理器的一致性用例(TC-PLUG-*, 6-01 §3.9):
- *   001 段非空且条数 == 生成物数量
- *   002 拓扑序满足所有 init 边(逐边校验)
- *   003 相位单调(每条 init 边的提供方完成点 <= 消费方)
- *   002b 环检测(**负例**): 用手工构造的假边集跑一遍 Kahn, 必须报环且报出完整路径
- * 打印 `[PLGCONF] PASS/FAIL <id> …` 并以 `[PLGCONF] SUMMARY pass=N fail=M` 收尾。
- * 由 APP 的 start() 调用(与 br_dump_conformance 同一位置、同一形态)。
+ * 插件管理器自检套件已移到 `core/selftest/plugin_selftest.c`(ADR-0010), 故不在此声明。
+ * 为什么不留在对外头: 自检是**测试面**, 不是插件能力 —— 声明进 `br_*.h` 会让
+ * "改一个用例"变成接口变更(golden 接口 hash 覆盖的正是对外声明面); 实现与声明面
+ * 都在 core/selftest/。
  */
-void br_plugin_conformance(void);
 
 #endif /* BR_CORE_BR_PLUGIN_H */

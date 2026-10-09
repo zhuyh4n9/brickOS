@@ -81,6 +81,11 @@ pub struct PluginFacts<'a> {
     pub decl_include: String,
     /// 有 `init` 钩子吗(由 `phase != "early"` 推导, 见 rules::derive_phase)。
     pub has_init: bool,
+    /// 这次生成要不要发 `selftest` 钩子(ADR-0010)。
+    ///
+    /// = 插件声明了 `[selftest]` **且** 产品开关(含名单)放行。为假时生成物写
+    /// `BR_PLUGIN_NO_HOOK` ⇒ 测试代码无人引用 ⇒ `--gc-sections` 把它整段裁出镜像。
+    pub emit_selftest: bool,
 }
 
 /// `descriptor_include` 的回落值: 元契约头(任何组合里都存在)。
@@ -315,6 +320,25 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
         },
     );
     v.insert("start_proto".into(), format!("int {sym}start(void);"));
+    // selftest(ADR-0010): 钩子名同样按 symbol_prefix 推导; 生成的**原型**与 init 一样
+    // 只在本插件真的发钩子时给出(否则会引用一个不存在的符号 → -Wmissing-prototypes 与
+    // 链接错误都会来)。关掉自检 ⇒ proto 为空 + hook = NO_HOOK。
+    v.insert(
+        "selftest_proto".into(),
+        if f.emit_selftest {
+            format!("int {sym}selftest(void);")
+        } else {
+            String::new()
+        },
+    );
+    v.insert(
+        "selftest_hook".into(),
+        if f.emit_selftest {
+            format!("{sym}selftest")
+        } else {
+            "BR_PLUGIN_NO_HOOK".into()
+        },
+    );
     let (deps_array, deps_expr) = deps_decl(&dtag, &f.deps);
     v.insert("deps_array".into(), deps_array);
     v.insert("deps_expr".into(), deps_expr);
@@ -624,6 +648,7 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
             short = rules::name_short(&name)
         ),
         has_init: true,
+        emit_selftest: false,
     };
     let vars = plugin_vars(&facts);
     let mut artifacts: Vec<Artifact> = plugin_paths(&facts)
@@ -719,6 +744,7 @@ pub fn plan_init(
         gen_total: 1,
         decl_include: format!("{short}/{short}.h", short = rules::name_short(&app)),
         has_init: true,
+        emit_selftest: false,
     };
     let app_vars = plugin_vars(&app_facts);
     for (path, kind, template) in plugin_paths(&app_facts) {
@@ -788,6 +814,15 @@ pub fn gen_plan(
         }
         let mut facts = facts_of(p);
         facts.gen_total = gen_total;
+        // 自检开关(ADR-0010 §2.3): 生成期裁决 —— 关掉时描述符写 BR_PLUGIN_NO_HOOK,
+        // 于是"关掉自检"= 测试代码**不进镜像**, 而不只是"不跑"。
+        // 没有 product.toml 的树(纯插件树校验/R-1)按"不发"处理: 那是不完整的组合。
+        facts.emit_selftest = p.has_selftest
+            && tree
+                .product
+                .as_ref()
+                .map(|prod| prod.selftest_for(&p.name))
+                .unwrap_or(false);
         let symbols: Vec<String> = p
             .exports
             .iter()
@@ -841,6 +876,9 @@ pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
         gen_total: 0,
         decl_include: String::new(),
         has_init: p.phase != "early",
+        // 缺省**不发**: 只有 gen_plan(知道产品开关)会把它打开。
+        // 这样 plan_new/plan_init 的骨架期预测也自然是"不带自检"。
+        emit_selftest: false,
     }
 }
 

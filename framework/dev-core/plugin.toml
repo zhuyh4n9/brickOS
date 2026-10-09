@@ -1,0 +1,134 @@
+# framework/dev-core — 通用设备注册表(plugin_type = ability, subkind = framework)
+#
+# 设计出处: `docs/8-device/8-01-device.md` §1.1/§1.3(体系分层与框架件归属:
+# **dev-core 只管"是个设备"**——唯一扁平命名空间/命名规则/调用语义与错误模型/ioctl 编码/
+# 子分类注册协议; 形状归子分类)、§2(注册表条目 + open_file 钩子)、§4/§5(错误模型/ioctl 编码)。
+# 逐条裁定: `docs/decisions/0009-vfs-storage-stack.md`。
+#
+# ★ 依赖面只有一条, 且是 **type**(仅头文件): 设计 §1.3 的表述就是
+#   "core native + vfs-core(类型, 仅头文件——open_file 钩子引用 br_file_ops, §2)"。
+#   `type` 边**不进闭包**(设计 `1-01` §7.2 的说明: 写成 runtime 会把 vfs-core 拉进组合,
+#   从而推翻 D19/O-S7 的"设备框架可独立于 VFS 成立")。于是形态 B(不选 vfs-core 的组合)
+#   能成立 —— 那正是 §1.2 判据表要的东西。这条边已知的类型依赖成本登记在 O-S7。
+schema = 1
+
+[plugin]
+name        = "framework/dev-core"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "framework"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "通用设备注册表: 唯一扁平命名空间 + 命名规则 + 子分类注册协议 + open_file 钩子透传 + ioctl 编码"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 2
+notes    = "注册表 16 槽(名字 32 B + 条目 32 B/槽 ≈ 1 KiB); 无动态分配"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u8        = "uint8_t"
+br_u16       = "uint16_t"
+br_u32       = "uint32_t"
+br_bool      = "int"
+br_uintptr_t = "uintptr_t"
+
+# ---- 结构依赖 ----
+# type: 仅头文件(open_file 钩子的签名引用 br_file_ops_t)。dev-core 不调用 vfs-core 的
+# 任何函数, 也不参与它的 init 顺序 —— 这正是"形态 B 可裁剪"的依据(§1.2/§1.3)。
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "type"
+
+# ---- 导出面(本件 = br-devcore.txt 的候选面) ----
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "dev"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:683df2ce258eb70fb96849760f12e29b976aefbdb56212857ffd7d287c0de952"
+status       = "experimental"
+
+# 子分类 id(append-only, D14: dev-core 只透传, 形状解释权在子分类)
+[[export.entries]]
+kind = "macro"
+name = "BR_CLASS_NONE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_CLASS_CDEV"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_CLASS_BDEV"
+value = "2u"
+# 上界(静态池; 与 BR_DEV_NAME_MAX 一起构成注册表的容量契约)
+[[export.entries]]
+kind = "macro"
+name = "BR_DEV_MAX"
+value = "16u"
+# ioctl 方向位(设计 §5: 与 Linux _IOC 的 dir 字段同义)
+[[export.entries]]
+kind = "macro"
+name = "BR_IOC_NONE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IOC_WRITE"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IOC_READ"
+value = "2u"
+
+[[export.entries]]
+kind = "type"
+name = "br_dev_class_entry_t"
+layout = "# {class_id, class_priv, open_file, dev_priv}"
+
+[[export.entries]]
+kind = "func"
+name = "br_dev_add"
+sig  = "int (const char*, const br_dev_class_entry_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_dev_lookup"
+sig  = "const br_dev_class_entry_t* (const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_dev_count"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_dev_name_at"
+sig  = "const char* (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_dev_entry_at"
+sig  = "const br_dev_class_entry_t* (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_dev_name_valid"
+sig  = "br_bool (const char*)"
+[selftest]
+# ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = <prefix>selftest`。
+# 用例: TC-DEV-*。开关在 `product.toml [selftest]`(生成期裁决: 关掉 ⇒ 本文件与
+# src/*_selftest.c 一起不参与编译, 测试代码不进镜像)。
+cases = 6
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

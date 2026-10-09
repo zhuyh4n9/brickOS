@@ -1,0 +1,67 @@
+# brickie:generated
+# api/iface 快照 api/iface/framework/cdev-core/cdev.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "framework/cdev-core#cdev"
+provider = "framework/cdev-core"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.1.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:46b125d4480ef7d3e1d20fe4528a0504d31e973e9678e65c19e58cbf39a40641"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "type"
+name = "br_cdev_ops_t"
+layout = "# {open, read, write, ioctl, poll, close, suspend, resume}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_flash_geom_t"
+layout = "# {read_size, prog_size, block_size, block_count}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_flash_ops_t"
+layout = "# {read, program, erase, sync, ioctl, suspend, resume}"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_cdev_register"
+sig = "int (const char*, const br_cdev_ops_t*, void*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_cdev_get"
+sig = "const br_cdev_ops_t* (const char*, void**)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_flash_register"
+sig = "int (const char*, const br_flash_ops_t*, const br_flash_geom_t*, void*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_flash_get"
+sig = "const br_flash_ops_t* (const char*, void**)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_flash_geom_get"
+sig = "int (const char*, br_flash_geom_t*)"
+status = "experimental"

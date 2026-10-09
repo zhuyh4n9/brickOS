@@ -28,8 +28,10 @@
 /* LATE 相 init: 清计数 + 注册本插件自有事件名。返回 0。 */
 int br_trace_svc_init(void);
 
-/* 自检(打印 `[DBGCONF] PASS/FAIL TC-DBG-00x <desc>`; 返回失败数, 0 = 全绿)。 */
-int br_trace_svc_selftest(void);
+/* 自检入口(TC-DBG-00x)已移到 `src/trace_selftest.c`(ADR-0010): 生成物按 symbol_prefix
+ * 发 `.selftest = trace_selftest`, 由 core 在全部 start 之后统一驱动。
+ * ★ 测试入口**不进**本插件的 golden 接口面 —— 否则改一条用例就成了对外接口变更
+ *   (接口 hash 覆盖的正是声明面), 与"自检与生产分离"的裁定冲突。 */
 
 /*
  * 标记(marker): 线程上下文调用(不是 ISR 路径 —— ISR 路径直接用 core 的

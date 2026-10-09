@@ -159,9 +159,10 @@ br_u32 br_sched_task_count(void);
 br_u32 br_sched_ready_count(void);
 
 /*
- * 调度框架 + coop 调度器的一致性用例(TC-TASK-* / TC-TIME-*, 6-01 §3.1/§3.3)。
- * 打印 `[TASKCONF] PASS/FAIL <id> …` + `[TASKCONF] SUMMARY pass=N fail=M`。
+ * 这里**不再**声明调度套件的入口 `br_sched_selftest()`。理由: 自检入口**不是插件的
+ * 对外能力**, 留在本头就会进 golden 接口面 —— 于是"改一个用例"变成接口变更(与
+ * ADR-0005 裁定 9 对钩子的处置同源)。声明集中在 `core/selftest/core_selftest.c`,
+ * 实现随套件一起在 `core/selftest/sched_selftest.c`(ADR-0010)。
  */
-void br_sched_conformance(void);
 
 #endif /* BR_CORE_BR_SCHED_H */

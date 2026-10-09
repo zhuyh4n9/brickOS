@@ -36,8 +36,10 @@ typedef struct {
  *  见本插件 README 的"声明面欠账"。) */
 int br_bt_init(void);
 
-/* 自检(打印 `[DBGCONF] PASS/FAIL TC-DBG-01x <desc>`; 返回失败数)。 */
-int br_bt_selftest(void);
+/* 自检入口(TC-DBG-01x)已移到 `src/backtrace_selftest.c`(ADR-0010): 生成物按
+ * symbol_prefix 发 `.selftest = backtrace_selftest`, 由 core 在全部 start 之后统一驱动。
+ * ★ 测试入口**不进**本插件的 golden 接口面 —— 否则改一条用例就成了对外接口变更
+ *   (接口 hash 覆盖的正是声明面), 与"自检与生产分离"的裁定冲突。 */
 
 /*
  * 告知栈范围(**可选**; 让栈走查能判断"fp 已越界", 从而在链被踩坏时停下来而不是

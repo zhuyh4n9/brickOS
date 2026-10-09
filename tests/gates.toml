@@ -35,8 +35,12 @@ cflags = [
 name     = "sync-test"
 # 同步原语的主判据: 被测 = sync.c(+ time.c 的 br_deadline_from_now + string.c),
 # 桩 = sync_test.c 里的 ucontext 假调度器(真跑阻塞/唤醒/超时) + host_stubs.c。
+# 自检套件(`core/selftest/sync_selftest.c`, ADR-0010)必须列进来: 宿主的退出码是
+# sched/sync 的**主判据**, 套件搬出生产 .c 后不列就既缺符号(链接失败)又丢掉整套用例。
+# 宿主上自检**恒在** —— 宿主测试只在开发/CI 跑, 没有需要尊重的产品开关(§2.3)。
 sources  = [
   "core/src/sync/sync.c", "core/src/time.c", "core/src/string.c",
+  "core/selftest/sync_selftest.c",
   "tests/host/sync_test.c", "tests/host/host_stubs.c",
 ]
 includes = [
@@ -63,13 +67,16 @@ includes = ["core/include", "core/src", "core/src/mem", "core/src/mm", "tests/ho
 # 切换层 `core/src/sched/switch.S` **只在 aarch64 编**(宿主是 x86-64)⇒ 用例自备
 # ucontext 版的 `br_sched_switch_to()` 与时钟/L2/日志/panic 桩; 见 tests/host/sched_test.c
 # 文件头的"层次切分"。判据两类: 宿主专用的 FIFO/block-wake/超时/sleep_until/idle,
-# 加上 core 的 `br_sched_conformance()`(TC-TASK-* / TC-TIME-* 真的 create/join/yield/sleep)。
+# 加上 core 的 `br_sched_selftest()`(TC-TASK-* / TC-TIME-* 真的 create/join/yield/sleep)。
 [[hosttest]]
 name     = "sched-test"
 # 与内存语义门禁同样的支持例程前置(编译器可能把整块清零降低成 memset)。
 depends  = ["string-test"]
+# 自检套件 `core/selftest/sched_selftest.c` 的理由同上面的 sync-test(宿主是主判据,
+# 套件已搬出 sched_core.c; 宿主上自检恒在)。
 sources  = [
   "core/src/sched/sched_core.c", "core/src/string.c",
+  "core/selftest/sched_selftest.c",
   "sched/coop/src/coop.c", "tests/host/sched_test.c",
 ]
 includes = ["core/include", "core/src", "core/src/sched", "sched/coop/include", "tests/host"]
@@ -87,9 +94,16 @@ name      = "smoke"
 timeout_s = 3
 log       = "build/logs/smoke.log"
 require   = [
+  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
+  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
+  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "core MainLoop",
   "tick=2 ",
-  "int: conformance ALL PASS",
+  # ★ 替代原 `int: conformance ALL PASS`(ADR-0010): 那行由 platform.start 打印,
+  # 而中断/内存两套用例已搬到 selftest。这里直接钉 IRQCONF 的 SUMMARY ——
+  # 比原判据更强(它同时断言"跑了 67 项"且"全绿", 原来那句只是 platform 的一句自述)。
+  "\\[IRQCONF\\] SUMMARY pass=[0-9]+ fail=0 ",
   "\\[MEMCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[DBGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -115,6 +129,10 @@ name      = "irq-test"
 timeout_s = 6
 log       = "build/logs/irq.log"
 require   = [
+  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
+  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
+  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[IRQCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
@@ -136,6 +154,18 @@ name      = "dbg-test"
 timeout_s = 8
 log       = "build/logs/dbg.log"
 require   = [
+  # ★ 替代原先的 `DBG-INIT` 用例(ADR-0010): 那条例外是 dump **代调**四家 LATE init 时
+  # 写的本地断言; 现在 init 由 plugin_manager 驱动, 事实在**管理器的日志**里 ——
+  # 于是判据直接钉在管理器自己的行上: 四个插件各自被驱动过且 init 返回 0。
+  # 比原用例更强: 它同时证明"被驱动"(而 DBG-INIT 只证明"dump 调过")。
+  "\\[PLUGIN\\] phase=late name=service/trace rc=0",
+  "\\[PLUGIN\\] phase=late name=service/backtrace rc=0",
+  "\\[PLUGIN\\] phase=late name=service/hexdump rc=0",
+  "\\[PLUGIN\\] phase=late name=service/memleak rc=0",
+  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
+  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
+  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[MEMCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[DBGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -149,7 +179,6 @@ require_tags = [
   "MM-ACTIVE", "MM-IDENT", "MM-POOLS", "MM-REGION", "MM-RO", "MM-NXDESC", "MM-UNMAP",
   "TC-MEM-001", "TC-MEM-002", "TC-MEM-003", "TC-MEM-004", "TC-MEM-005",
   "TC-MEM-006", "TC-MEM-007", "TC-MM-001", "TC-MM-002", "TC-MM-003",
-  "DBG-INIT",
   "TC-DBG-001", "TC-DBG-002", "TC-DBG-003", "TC-DBG-010", "TC-DBG-011",
   "TC-DBG-020", "TC-DBG-021", "TC-DBG-030", "TC-DBG-031", "TC-DBG-032",
   "TC-DBG-040", "TC-DBG-041", "TC-DBG-042", "TC-DBG-043", "TC-DBG-100",
@@ -177,13 +206,17 @@ name = "check-build"
 argv = ["bash", "tools/check-build.sh"]
 
 # sync-test: 同步原语的端到端门禁(线程 + 阻塞 + 超时, 在 QEMU 上)。
-# 依赖 F2 的调度框架与 F1 把 br_sync_conformance() 接到 APP 的 start 里;
+# 依赖 F2 的调度框架与 F1 把 br_sync_selftest() 接到 APP 的 start 里;
 # 框架未注册时 sync.c 只打 SKIP + 部分 tag ⇒ 本门禁**如实判红**(不放宽判据)。
 [[gate]]
 name      = "sync-test"
 timeout_s = 8
 log       = "build/logs/sync.log"
 require   = [
+  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
+  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
+  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[SYNCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
@@ -208,6 +241,10 @@ name      = "plugin-test"
 timeout_s = 8
 log       = "build/logs/plugin.log"
 require   = [
+  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
+  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
+  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[PLGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[SVCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -224,7 +261,7 @@ require_tags = [
 
 # sched-test(QEMU): 调度框架 + coop 的端到端门禁。
 # 依赖 F1 把 APP 的 start() 改成"创建 APP 线程"(于是插件管理器在全部 start 之后
-# 进 `br_sched_run()`)并把 `br_sched_conformance()` 接在 APP 线程里; 未接线时镜像里
+# 进 `br_sched_run()`)并把 `br_sched_selftest()` 接在 APP 线程里; 未接线时镜像里
 # 没有 `[TASKCONF]` 输出 ⇒ 本门禁**如实判红**(不放宽判据)。
 # `irq_ticks=[1-9]` 是"START 相之后的 timer 心跳真的在跑"的证据, 也保证超时扫描有 tick 源。
 [[gate]]
@@ -232,6 +269,10 @@ name      = "sched-test"
 timeout_s = 8
 log       = "build/logs/sched.log"
 require   = [
+  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
+  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
+  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[TASKCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
@@ -243,6 +284,50 @@ require_tags = [
   "TC-TASK-001", "TC-TASK-002", "TC-TASK-003", "TC-TASK-004", "TC-TASK-005",
   "TC-TASK-006", "TC-TASK-007", "TC-TASK-101",
   "TC-TIME-001", "TC-TIME-002", "TC-TIME-003",
+]
+
+# fs-test: 存储/设备域端到端门禁(ADR-0009)。
+# 判据 = 四套新用例摘要全绿 + 挂载证据 + 设备真的被投影出来:
+#   [VFSCONF] 存储域总套件(挂载表/走查链/文件面/目录面, APP 的 start 调)
+#   [DEVCONF] 通用设备注册表(framework/dev-core 的 start)
+#   [CDEVCONF] 字符设备子分类与适配层(framework/cdev-core 的 start)
+#   [IOCONF]  PL011 器件经 /dev/uart0 的完整往返(io/uart-pl011 的 start)
+# `vfs: mount /` 与 `vfs: mount /dev` 是"挂载计划真的执行了"的证据(不是只看摘要);
+# `irq_ticks` 非 0 保证这一切发生在中断已开的 START 相之后。
+[[gate]]
+name      = "fs-test"
+timeout_s = 10
+log       = "build/logs/fs.log"
+require   = [
+  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
+  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
+  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
+  "vfs: mount / ",
+  "vfs: mount /dev ",
+  "\\[VFSCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "\\[DEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "\\[CDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "\\[IOCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[VFSCONF\\] FAIL",
+  "\\[DEVCONF\\] FAIL",
+  "\\[CDEVCONF\\] FAIL",
+  "\\[IOCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+# 用例 tag 逐条点名(裁掉用例也算红 —— 与 smoke 的分工)。
+require_tags = [
+  "TC-VFS-001", "TC-VFS-002", "TC-VFS-003", "TC-VFS-004", "TC-VFS-005",
+  "TC-VFS-006", "TC-VFS-007", "TC-VFS-008", "TC-VFS-009", "TC-VFS-010",
+  "TC-VFS-011", "TC-VFS-012", "TC-VFS-013",
+  "TC-DEV-001", "TC-DEV-002", "TC-DEV-003", "TC-DEV-004", "TC-DEV-005", "TC-DEV-006",
+  "TC-CDEV-001", "TC-CDEV-002", "TC-CDEV-003", "TC-CDEV-004", "TC-CDEV-005",
+  "TC-CDEV-006", "TC-CDEV-007", "TC-CDEV-008",
+  "TC-IO-001", "TC-IO-002", "TC-IO-003", "TC-IO-004", "TC-IO-005", "TC-IO-006",
+  "TC-IO-007", "TC-IO-008", "TC-IO-009", "TC-IO-010", "TC-IO-011", "TC-IO-012",
 ]
 
 # ------------------------------------------------------------------ 构建后门禁

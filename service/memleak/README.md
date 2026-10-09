@@ -13,7 +13,13 @@
 | `br_memleak_live_by_owner(o)` | 某归属的存活块数 |
 | `br_memleak_corruptions()` | **当前**违约数(= `br_heap_check()`, 每次调用重算) |
 | `br_memleak_owner()` | 本插件自己的归属标签 |
-| `br_memleak_selftest()` | `TC-DBG-040..043`; 返回失败数并打 `[DBGCONF] SUMMARY memleak ...` |
+
+上表是**对外声明面**。自检**不在**这里(ADR-0010 §2.5): 用例在 `src/memleak_selftest.c`,
+入口 `memleak_selftest()` 是描述符的 `.selftest` 钩子, 由 **core** 的
+`br_plugin_manager_selftest()` 在全部 `start()` 之后统一驱动 —— 跑 `TC-DBG-040..043`,
+返回失败项数并打 `[DBGCONF] SUMMARY memleak pass=... fail=... total=...`(失败不停机)。
+本插件**不需要** `src/memleak_internal.h`: 四条用例的被测对象全是对外面(本插件的观测函数
+与 core 的堆契约), 生产实现里没有要为它们暴露的私有符号。
 
 打印格式(契约):
 
@@ -76,9 +82,10 @@
    累计口径已在 `br_heap_stats_t`(`redzone_hits` 等), 而用例 `TC-DBG-041` 依赖
    "红区复原后必须回到 0"的语义; 两者相加会把"修好的破坏"永远记成红。
    (声明面签名未变; 这是对该行文档口径的**实现侧收窄**, 记入「待回灌」。)
-4. **懒注册**: v0.1 没有运行期插件管理器, `br_memleak_init()` 不保证被调用过; 故
-   `br_memleak_owner()` 首次需要时就注册并缓存成功结果(失败不缓存, 下次再试),
-   init 只是它的显式入口。这样 `br_dump_conformance()` 在未 init 的组合下也能工作。
+4. **懒注册**: 插件管理器按相驱动 `memleak_init()`(→ `br_memleak_init()`), 但自检钩子
+   可能出现在"未 init 的组合"里(宿主/裁剪镜像); 故 `br_memleak_owner()` 首次需要时就注册
+   并缓存成功结果(失败不缓存, 下次再试), init 只是它的显式入口。这样
+   `memleak_selftest()`(由 core 驱动)在 `init` 未跑过的组合下也能工作。
 5. **不注册 trace 事件名**: 头文件抬头提到 memleak init 还要"注册 trace 事件名", 但
    `plugin.toml` **没有** `service/trace` 依赖边 ⇒ 不造一条未声明的调用边
    (声明面唯一真值的纪律)。留待依赖边被显式声明后再补。
@@ -93,14 +100,15 @@
 
 ## 被谁调用
 
-- **`service/dump`**: `br_dump_leaks()` → `br_memleak_report()`(以及
-  `br_dump_conformance()` → `br_memleak_selftest()`)。`product.toml [select].plugins`
-  只选了 `service/dump`, memleak 作为它的 `[[dep]]` 被**同镜像编译**(源集合由本插件
-  `plugin.toml` 的 `[build].sources` 声明、`brickie build` 按依赖闭包消费), 但**不是**
-  被显式选中的插件 —— 运行期插件管理器到位后应由 dump 的依赖闭包带入。
-- **APP 不直调 memleak**(`app/hello/plugin.toml` 没有这条 dep); 它经 dump 的编排间接覆盖。
-- v0.1 **没有运行期插件管理器**: 谁在何时调用 `br_memleak_init()` 是人工编排的,
-  即 `WORKAROUND(br-wa-boot-001)` 的欠债(见 `WORKAROUNDS.md`)。
+- **`service/dump`**: `br_dump_leaks()` → `br_memleak_report()`(只调**呈现面**; dump 不再
+  代跑任何自检)。`product.toml [select].plugins` 只选了 `service/dump`, memleak 作为它的
+  `[[dep]]` 被**同镜像编译**(源集合由本插件 `plugin.toml` 的 `[build].sources` 声明、
+  `brickie build` 按依赖闭包消费); 插件管理器扫 `.br_plugins` 时按 dump 的 init 闭包把它
+  带入, LATE 相按拓扑序调到 `memleak_init()` → `br_memleak_init()`。
+- **自检**: `memleak_selftest()` 由 **core** 的 `br_plugin_manager_selftest()` 在全部
+  `start()` 之后、按 init 拓扑序统一驱动 —— dump 的四条 `kind = "init"` 边保证 memleak 的
+  钩子排在 dump 自己的 `dump_selftest()` 之前(后者要观测"堆已被 memleak 用例恢复干净")。
+- **APP 不直调 memleak**(`app/hello/plugin.toml` 没有这条 dep), 也不直调 dump。
 
 ## 验证
 

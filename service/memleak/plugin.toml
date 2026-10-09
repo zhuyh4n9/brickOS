@@ -49,16 +49,12 @@ name         = "memleak"
 version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
-hash         = "sha256:4847d941784c39b7b8efd55aabdfbb445f3eaf0b165e310da2fd20dfb19cdf01"
+hash         = "sha256:e0c8af553f57b1688e0962b7ed3df883b45923a839e1b693181a536f9470c526"
 status       = "experimental"
 
 [[export.entries]]
 kind = "func"
 name = "br_memleak_init"
-sig  = "int (void)"
-[[export.entries]]
-kind = "func"
-name = "br_memleak_selftest"
 sig  = "int (void)"
 [[export.entries]]
 kind = "func"
@@ -84,6 +80,12 @@ sig  = "br_owner_t (void)"
 kind = "macro"
 name = "BR_MEMLEAK_MAX_ROWS_PER_OWNER"
 value = "8"
+
+[selftest]
+# ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = <prefix>selftest`。
+# 用例: TC-DBG-040..043。开关在 `product.toml [selftest]`(生成期裁决: 关掉 ⇒ 本文件与
+# src/*_selftest.c 一起不参与编译, 测试代码不进镜像)。
+cases = 0
 
 [build]
 sources  = ["src/*.c"]

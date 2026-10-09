@@ -17,7 +17,42 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.plugins]]
+name = "framework/cdev-core"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "framework/dev-core"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "framework/vfs-core"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "fs/devfs"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "fs/tmpfs"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "io/uart-pl011"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
 name = "platform/qemu-aarch64"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "sched/coop"
 version = "0.1.0.0"
 compat_gen = 0
 
@@ -47,6 +82,50 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.units]]
+id = "framework/cdev-core#cdev"
+provider = "framework/cdev-core"
+unit = "cdev"
+api_iface = "native"
+version = "0.1.1.0"
+compat_gen = 0
+hash = "sha256:46b125d4480ef7d3e1d20fe4528a0504d31e973e9678e65c19e58cbf39a40641"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "framework/dev-core#dev"
+provider = "framework/dev-core"
+unit = "dev"
+api_iface = "native"
+version = "0.1.1.0"
+compat_gen = 0
+hash = "sha256:683df2ce258eb70fb96849760f12e29b976aefbdb56212857ffd7d287c0de952"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "framework/vfs-core#vfs"
+provider = "framework/vfs-core"
+unit = "vfs"
+api_iface = "native"
+version = "0.1.1.0"
+compat_gen = 0
+hash = "sha256:fa92ffcd07657624972308e8c2d8a8625f206cd92275306711e8b9d1a33e7ff9"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "io/uart-pl011#uart-pl011"
+provider = "io/uart-pl011"
+unit = "uart-pl011"
+api_iface = "native"
+version = "0.1.1.0"
+compat_gen = 0
+hash = "sha256:b948dff0255343ade247c86ff2133951feef5cde5e8158ffb597a65e44a5b2d9"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
 id = "platform/qemu-aarch64#gicv3"
 provider = "platform/qemu-aarch64"
 unit = "gicv3"
@@ -62,9 +141,9 @@ id = "platform/qemu-aarch64#plat"
 provider = "platform/qemu-aarch64"
 unit = "plat"
 api_iface = "native"
-version = "0.1.3.0"
+version = "0.1.4.0"
 compat_gen = 0
-hash = "sha256:ef36d8bea3eca02fe1df18a61011f757a55ab2e7b286413fac031f61c04b305c"
+hash = "sha256:3863fa62c2d559a6b3ca3e81fc5d99f75b188ec0b2203ddacf331cdfb92139a7"
 hash_scope = "decl"
 truth = "decl"
 
@@ -73,9 +152,9 @@ id = "service/backtrace#backtrace"
 provider = "service/backtrace"
 unit = "backtrace"
 api_iface = "native"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
-hash = "sha256:0b2a3249f76bf6d91b1057ba4042b102b79a065e3b9ca83361327ca7dc1df419"
+hash = "sha256:f6f23bd46f4507650af50a9e0945514c8e4965375995652ec014c28b3fb15f28"
 hash_scope = "decl"
 truth = "decl"
 
@@ -84,9 +163,9 @@ id = "service/dump#dump"
 provider = "service/dump"
 unit = "dump"
 api_iface = "native"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
-hash = "sha256:d02f0a4af0753aa2ed4842e4dc4b6a338ca187a9908a326be48a1d24fcf5cec7"
+hash = "sha256:19c962b129ced77e1f04973db05b196a7ad2f9852df6c7c36097396436335364"
 hash_scope = "decl"
 truth = "decl"
 
@@ -95,9 +174,9 @@ id = "service/hexdump#hexdump"
 provider = "service/hexdump"
 unit = "hexdump"
 api_iface = "native"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
-hash = "sha256:4629b1bf2e6ec0f56b0272c6d8960131ba51490f61e4baae4a26963983f17324"
+hash = "sha256:6e59c5b3d90b43dd84a031fcfad231e8586397cb72bfbe81b75570f481fbe6fc"
 hash_scope = "decl"
 truth = "decl"
 
@@ -106,9 +185,9 @@ id = "service/memleak#memleak"
 provider = "service/memleak"
 unit = "memleak"
 api_iface = "native"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
-hash = "sha256:4847d941784c39b7b8efd55aabdfbb445f3eaf0b165e310da2fd20dfb19cdf01"
+hash = "sha256:e0c8af553f57b1688e0962b7ed3df883b45923a839e1b693181a536f9470c526"
 hash_scope = "decl"
 truth = "decl"
 
@@ -117,8 +196,8 @@ id = "service/trace#trace"
 provider = "service/trace"
 unit = "trace"
 api_iface = "native"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
-hash = "sha256:a7d8fc97fbea303a552023370c452178a544633bf16797addcabaf6e3e88ab8d"
+hash = "sha256:b3d67241bfeffc050dfbaa14733ff700a15622cc4b23cf375881f89171b958c5"
 hash_scope = "decl"
 truth = "decl"

@@ -1,14 +1,15 @@
 # app/hello — conformance 用例(人写)
 #
 # 字段形状照 `6-01` §2 的用例表契约: {id, pre, steps, expect, sched, platform}。
-# 运行期的真身是编进镜像、由 **APP 的 start()** 调用的两个一致性入口:
-#   `br_plugin_conformance()`(core 的插件管理器, `[PLGCONF]`)
-#   `br_service_conformance()`(core 的服务注册表, `[SVCCONF]`)
+# 运行期的真身是编进镜像、由 **core 的自检 pass** 驱动的两个套件(ADR-0010):
+#   `br_plugin_selftest()`(core 的插件管理器, `[PLGCONF]`)
+#   `br_service_selftest()`(core 的服务注册表, `[SVCCONF]`)
 # 逐用例 tag 与镜像日志一一对应, 由 `brickie test plugin-test`(QEMU)判红绿。
 #
-# 为什么这些用例记在 APP 名下: 两个入口的**调用点**在 APP 的 start(插件管理器的自证
-# 需要"段已经驱动完、且正处在最后一个 start 里"这个上下文); 管理器与注册表本身是 core
-# 的实现, 其声明面在 `core/include/br/core/br_plugin.h` / `br_svc.h`。
+# 为什么这些用例记在 APP 名下: **历史原因** —— 它们的调用点曾经在 APP 的 start
+# (插件管理器的自证要"段已驱动完"这个上下文, 而那时只有 APP 能提供)。ADR-0010 把驱动
+# 权收归 core 之后, 调用点已不在 APP; 本文件作为**用例声明面**保持原有 id 不动
+# (改 id 会牵动门禁的逐 tag 点名, 而那与"测试住在哪"无关)。
 schema = 1
 
 [[case]]
@@ -35,7 +36,7 @@ steps    = [
   "检查 EARLY 相第一步是否为 platform 插件的 early_init",
   "检查 APP 的 start 是否在所有非 APP 的 start 之后",
 ]
-expect   = "相位单调成立; early 相第一步是 platform; APP 最后(且本用例正跑在 APP 的 start 里)"
+expect   = "相位单调成立; early 相第一步是 platform; APP 最后(非 APP 的 start 全先跑完); 且自检跑在**全部 start 之后**(ADR-0010 换过判据, 见 core/selftest/plugin_selftest.c)"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]
 
@@ -72,4 +73,4 @@ sched    = ["coop"]
 platform = ["qemu-aarch64"]
 
 # 收尾口径: 用例自用的名字全部带 `selftest.` 前缀, 且用例结束前从表里移除
-# (br_service_conformance 的白盒动作) —— 不污染后续 dump 的注册表清单。
+# (br_service_selftest 的白盒动作) —— 不污染后续 dump 的注册表清单。

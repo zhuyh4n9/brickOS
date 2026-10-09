@@ -1,0 +1,37 @@
+# fs/devfs — conformance 用例(人写)
+#
+# ★ 本插件**没有自己的 in-image 套件**: devfs 不导出 API, 它的行为由 vfs-core 的
+# `vfs_core_selftest()`(src/vfs_selftest.c; 由 **core** 在全部 start() 之后驱动,
+# ADR-0010)在**非根挂载** "/dev" 上**泛型地**验证 ——
+# 用例不认任何设备名(认设备名是 io/uart-pl011 的事)。因此这里的 id 借的就是那套
+# TC-VFS-*: 下面两条正是**落在 devfs 投影上**的例子(非根挂载 = devfs)。
+# 红绿由 in-image 套件打 `[VFSCONF] PASS/FAIL` + SUMMARY; 门禁 `fs-test` 要求
+# `[VFSCONF] SUMMARY pass=N fail=0`。本文件是声明面骨架(照 `6-01` §2 的字段契约),
+# 不是可执行形式。设计出处: `docs/7-storage/7-03-concrete-fs.md` §3;
+# 裁定见 ADR-0009 §2.3/§2.4; 欠债 `br-wa-fs-001`。
+schema = 1
+
+[[case]]
+id       = "TC-VFS-013"
+pre      = "devfs 已挂 '/dev'(其父目录由 tmpfs 预建); dev-core 注册表里已有一条真实设备(io/uart-pl011 的 uart0); 本用例含 readdir 枚举"
+steps    = [
+    "取第一个非根挂载 dev == '/dev'; conf_count_dir(dev) 成功且条目总数 >= 2",
+    "br_opendir(dev) 后逐条 br_readdir: 先产出 '.' 与 '..', 再逐条枚举 dev-core 注册表(实时投影, 注册即上线)",
+    "跳过 '.' 与 '..'; 每个设备节点: br_stat('/dev/<name>') == 0(节点 iops 的 getattr 必须存在)",
+    "每个设备节点: br_open_err(O_RDONLY|O_NONBLOCK) 只允许两种结果 —— 成功(有文件面, close 成对) 或 err == -ENOTSUP(没有文件面, 如 v1 的 raw flash); 别的 errno 判红",
+]
+expect   = "[VFSCONF] PASS TC-VFS-013 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-012"
+pre      = "devfs 已挂 '/dev'; 挂载表可观测"
+steps    = [
+    "br_rmdir('/dev') == -EBUSY(挂载点本身不可删: 那需要卸载语义, O-S3/不早于 v3)",
+    "br_unlink('/dev') == -EBUSY",
+    "语义: devfs 的名字空间变更(create/unlink/mkdir/rmdir/rename)槽位全空 ⇒ vfs 翻成 -ENOTSUP; 挂载点这一层由 vfs 自己挡成 -EBUSY",
+]
+expect   = "[VFSCONF] PASS TC-VFS-012 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

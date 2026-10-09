@@ -17,12 +17,16 @@
  * 与设计的偏离(登记在 `docs/decisions/0005-plugin-manager.md` §2.7):
  *   - 新增三个**观测**入口(`br_service_count` / `br_service_name_at` /
  *     `br_service_lookup_hits`, 见 `br_svc.h`), 供 dump 风格呈现与一致性用例读表;
- *   - 一致性用例自带 `selftest.` 前缀并在结束时**白盒移除**自己的条目(不污染后续 dump)。
+ *   - 白盒移除入口 `svc_remove`(声明在 `core/src/svc/svc_internal.h`): 设计里没有
+ *     unpublish, 而 core 自检(ADR-0010)要用 `selftest.` 前缀的临时条目并**自己清干净**
+ *     —— 用例本体已搬到 `core/selftest/svc_selftest.c`。
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 #include <br/core/br_svc.h>
 #include <br/core/br_types.h>
+
+#include "svc_internal.h"
 
 /* ==================================================================== 表 */
 
@@ -35,7 +39,8 @@ typedef struct br_svc_entry {
 static br_svc_entry_t s_svc[BR_SERVICE_MAX];
 static br_u32 s_count;
 
-static br_bool name_equal(const char *a, const char *b)
+/* 名字相等(publish/lookup/hits 的比较; 自检也用它复核 name_at 的返回 —— 见 svc_internal.h)。 */
+br_bool name_equal(const char *a, const char *b)
 {
     if (a == BR_NULL || b == BR_NULL) {
         return BR_FALSE;
@@ -111,8 +116,8 @@ br_u32 br_service_lookup_hits(const char *name)
     return 0u;
 }
 
-/* 白盒移除(只给本文件的一致性用例用: 用例条目不能留在表里污染后续 dump)。 */
-static void svc_remove(const char *name)
+/* 白盒移除(生产面没有 unpublish; 只有自检用它清掉自己的临时条目 —— 见 svc_internal.h)。 */
+void svc_remove(const char *name)
 {
     if (name == BR_NULL) {
         return;
@@ -132,85 +137,3 @@ static void svc_remove(const char *name)
     }
 }
 
-/* ==================================================================== 一致性用例 */
-
-/* 用例用的名字全部带 `selftest.` 前缀(结束后从表里移除)。 */
-#define SVC_T_A   "selftest.svc.a"
-#define SVC_T_B   "selftest.svc.missing"
-
-static br_u32 s_sc_pass;
-static br_u32 s_sc_fail;
-
-static void sc_report(br_bool ok, const char *tag, const char *what)
-{
-    if (ok) {
-        s_sc_pass++;
-        br_log_info("[SVCCONF] PASS %s %s", tag, what);
-    } else {
-        s_sc_fail++;
-        br_log_info("[SVCCONF] FAIL %s %s", tag, what);
-    }
-}
-
-void br_service_conformance(void)
-{
-    static const br_u32 ops_a = 0xA1B2C3D4u;   /* "ops" 只需是一个稳定指针 */
-    static const br_u32 ops_b = 0x5A5A1234u;
-
-    s_sc_pass = 0u;
-    s_sc_fail = 0u;
-
-    br_log_info("[SVCCONF] service registry conformance (publish/lookup/错误码)");
-
-    /* 防御性清理: 上一次次跑留下的同名条目(重复调用用例时应幂等)。 */
-    svc_remove(SVC_T_A);
-
-    /* ---- TC-SVC-001: publish 后 lookup 拿到同一指针(且 name_at/count 一致) ---- */
-    {
-        const br_u32 before = br_service_count();
-        const int rp = br_service_publish(SVC_T_A, &ops_a);
-        const void *got = br_service_lookup(SVC_T_A);
-        const br_u32 after = br_service_count();
-
-        br_bool ok = (rp == 0) && (got == (const void *)&ops_a) && (after == before + 1u);
-        /* name_at/count 与表一致 */
-        ok = ok && (after > 0u);
-        if (ok) {
-            br_bool found = BR_FALSE;
-            for (br_u32 i = 0u; i < after; i++) {
-                if (name_equal(br_service_name_at(i), SVC_T_A)) {
-                    found = BR_TRUE;
-                    break;
-                }
-            }
-            ok = found;
-        }
-        ok = ok && (br_service_lookup_hits(SVC_T_A) >= 1u);
-        sc_report(ok, "TC-SVC-001", "publish → lookup 往返: 指针一致, count/name_at 同步, 命中记账");
-    }
-
-    /* ---- TC-SVC-002: 重名 publish ⇒ -EEXIST, 且原指针未被覆盖 ---- */
-    {
-        const int rp2 = br_service_publish(SVC_T_A, &ops_b);
-        const void *still = br_service_lookup(SVC_T_A);
-        sc_report((rp2 == BR_ERR(BR_EEXIST)) && (still == (const void *)&ops_a),
-                  "TC-SVC-002", "重复 publish ⇒ -EEXIST 且原 ops 未被覆盖");
-    }
-
-    /* ---- TC-SVC-003: 未发布的名字 ⇒ BR_NULL; 非法入参 ⇒ -EINVAL ---- */
-    {
-        const void *miss = br_service_lookup(SVC_T_B);
-        const int   e_name = br_service_publish(BR_NULL, &ops_b);
-        const int   e_ops  = br_service_publish(SVC_T_B, BR_NULL);
-        sc_report((miss == BR_NULL) && (e_name == BR_ERR(BR_EINVAL))
-                  && (e_ops == BR_ERR(BR_EINVAL)),
-                  "TC-SVC-003", "lookup 缺失 ⇒ NULL; 空 name/空 ops ⇒ -EINVAL");
-    }
-
-    /* ---- 收尾: 用例条目出表(不污染后续 dump 的注册表清单) ---- */
-    svc_remove(SVC_T_A);
-    svc_remove(SVC_T_B);
-
-    br_log_info("[SVCCONF] SUMMARY pass=%u fail=%u total=%u",
-                s_sc_pass, s_sc_fail, s_sc_pass + s_sc_fail);
-}

@@ -45,16 +45,12 @@ name         = "hexdump"
 version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
-hash         = "sha256:4629b1bf2e6ec0f56b0272c6d8960131ba51490f61e4baae4a26963983f17324"
+hash         = "sha256:6e59c5b3d90b43dd84a031fcfad231e8586397cb72bfbe81b75570f481fbe6fc"
 status       = "experimental"
 
 [[export.entries]]
 kind = "func"
 name = "br_hexdump_init"
-sig  = "int (void)"
-[[export.entries]]
-kind = "func"
-name = "br_hexdump_selftest"
 sig  = "int (void)"
 [[export.entries]]
 kind = "func"
@@ -72,6 +68,12 @@ sig  = "br_size_t (void)"
 kind = "macro"
 name = "BR_HEXDUMP_WIDTH"
 value = "16"
+
+[selftest]
+# ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = <prefix>selftest`。
+# 用例: TC-DBG-020/021。开关在 `product.toml [selftest]`(生成期裁决: 关掉 ⇒ 本文件与
+# src/*_selftest.c 一起不参与编译, 测试代码不进镜像)。
+cases = 0
 
 [build]
 sources  = ["src/*.c"]

@@ -529,11 +529,35 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     }
     let mut units: Vec<Unit> = Vec::new();
 
+    // 自检总开关(ADR-0010 §2.3)的**唯一**读取点(`Product::selftest_on` 是唯一裁决函数):
+    // 它同时决定 core 自检源要不要编、以及生成物里发不发 selftest 钩子(后者在 gen_plan 里)。
+    let selftest_on = tree
+        .product
+        .as_ref()
+        .map(|p| p.selftest_on())
+        .unwrap_or(false);
+
     // (a) 核心本体(**不是插件**, `[compat].core` 引用它)
+    // core 的自检套件(`core/selftest/**`)只在产品开关放行时编进来(ADR-0010 §2.3):
+    // 关掉自检 ⇒ 这些文件**不参与编译** ⇒ `br_core_selftest()` 缺席 ⇒ plugin_mgr 的
+    // 弱引用读到 NULL 就跳过整个 core 侧自检。这就是"关掉 = 代码不进镜像"的落地方式。
+    let mut core_sources =
+        expand_many(&root, "", &pb.core_sources, "core", "product.toml", "build.core_sources", &mut diags);
+    if selftest_on {
+        core_sources.extend(expand_many(
+            &root,
+            "",
+            &pb.selftest_sources,
+            "core/selftest",
+            "product.toml",
+            "build.selftest_sources",
+            &mut diags,
+        ));
+    }
     units.push(Unit {
         name: "core".to_string(),
         dir: String::new(),
-        sources: expand_many(&root, "", &pb.core_sources, "core", "product.toml", "build.core_sources", &mut diags),
+        sources: core_sources,
         includes: pb.core_includes.clone(),
         defines: Vec::new(),
         plugin: None,

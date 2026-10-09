@@ -179,6 +179,12 @@ pub struct ProductBuild {
     pub core_includes: Vec<String>,
     /// 生成物源集合(`build/gen/**`, 由 `brickie gen` 产出), 相对仓库根。
     pub gen_sources: Vec<String>,
+    /// **core 自检套件的源集合**(ADR-0010), 相对仓库根。
+    ///
+    /// 与 `core_sources` 分开是刻意的: 自检会被 `product.toml [selftest]` 关掉, 而
+    /// "关掉"的含义是**不编进来**(不是"编了不跑")—— 于是 `core/selftest/**` 不能落在
+    /// `core_sources` 的通配范围内(否则关掉开关后 core 仍会带上测试代码)。
+    pub selftest_sources: Vec<String>,
     pub cflags: Vec<String>,
     pub asflags: Vec<String>,
     pub ldflags: Vec<String>,
@@ -205,6 +211,15 @@ pub struct Plugin {
     pub phase: String,
     pub sched_class: String,
     pub sched_kind: Option<String>,
+    /// 本插件是否声明了 `[selftest]`(ADR-0010)。
+    ///
+    /// **为什么由 manifest 声明而不是"猜"**: 生成器要决定描述符里发不发
+    /// `.selftest = <prefix>selftest` 这个**符号引用** —— 一个不存在的符号会让链接失败,
+    /// 而"哪些插件有自检"既不能从 `phase` 推导(自检不是相), 也不能靠扫源码(组合期工具
+    /// 零编译依赖, 不做符号级分析)。所以它是**声明面事实**: 写了 `[selftest]` = 有自检。
+    pub has_selftest: bool,
+    /// `[selftest].cases`: 自称的用例条数(**只作呈现/诊断**, 不参与任何判定)。
+    pub selftest_cases: Option<i64>,
     pub version: Version,
     pub version_raw: String,
     pub summary: Option<String>,
@@ -400,9 +415,37 @@ pub struct Product {
     pub allow_edges: Vec<(String, String)>,
     /// `[build]`: 产品级构建策略(ADR-0004; `brickie build` 消费)。
     pub build: Option<ProductBuild>,
+    /// `[selftest].enabled`: 自检总开关(ADR-0010)。`None` = 未声明 ⇒ 跟随 stage。
+    pub selftest_enabled: Option<bool>,
+    /// `[selftest].plugins`: 只跑列出的插件(空 = 所有声明了 `[selftest]` 的插件)。
+    pub selftest_plugins: Vec<String>,
+    /// `[selftest]` 表是否在场(用于区分"没写"与"写了空表")。
+    pub has_selftest_table: bool,
 }
 
 impl Product {
+    /// 自检总开关的**唯一**裁决点(ADR-0010 §2.3)。
+    ///
+    /// 语义: `enabled = true|false` 显式; 缺省(整表不在场) = **跟随 `stage`** ——
+    /// `dev` 开、`release` 关(工程直觉: 开发镜像自带自检, 发布镜像不带)。
+    /// 写成 `"inherit"` 与缺省等价(显式表达同一条默认, 便于评审时一眼看到)。
+    pub fn selftest_on(&self) -> bool {
+        match self.selftest_enabled {
+            Some(v) => v,
+            None => self.stage != "release",
+        }
+    }
+
+    /// 某个插件这次要不要发 `selftest` 钩子(总开关 ∧ 名单)。
+    ///
+    /// 名单为空 = 不做逐件筛选(所有**声明了** `[selftest]` 的插件都发钩子)。
+    pub fn selftest_for(&self, plugin: &str) -> bool {
+        if !self.selftest_on() {
+            return false;
+        }
+        self.selftest_plugins.is_empty() || self.selftest_plugins.iter().any(|n| n == plugin)
+    }
+
     /// §7.5: `[lint].frozen_deps` 覆盖 `stage` 的默认。
     pub fn release_strict(&self) -> bool {
         match self.lint_frozen_deps.as_str() {
@@ -430,10 +473,16 @@ impl Product {
             "select": self.select,
             "budget": {"ram_kib": self.budget_ram_kib, "stack_kib": self.budget_stack_kib},
             "lint": {"frozen_deps": self.lint_frozen_deps, "allow_edges": edges},
+            "selftest": {
+                "enabled": self.selftest_on(),
+                "declared": self.selftest_enabled,
+                "plugins": self.selftest_plugins,
+            },
             "build": self.build.as_ref().map(|b| json!({
                 "core_sources": b.core_sources,
                 "core_includes": b.core_includes,
                 "gen_sources": b.gen_sources,
+                "selftest_sources": b.selftest_sources,
                 "cflags": b.cflags,
                 "asflags": b.asflags,
                 "ldflags": b.ldflags,
@@ -931,6 +980,12 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     p.phase = req_str(plugin, "phase", &p.name, &file, "plugin", d).unwrap_or_default();
     p.sched_class = opt_str(plugin, "sched_class", &p.name, &file, "plugin", d)
         .unwrap_or_else(|| "SAFE_PREEMPT".to_string());
+    // `[selftest]`(ADR-0010): **表在场 = 本插件有自检**。表里的字段现在只有 `cases`
+    // (自述条数, 仅呈现); 钩子符号名由生成器按 symbol_prefix 推导, 不在这里写。
+    if let Some(st) = opt_table(top, "selftest") {
+        p.has_selftest = true;
+        p.selftest_cases = opt_int(st, "cases", &p.name, &file, "selftest", d);
+    }
     if !p.sched_class.is_empty() {
         check_enum(d, &p.name, &file, "plugin", "sched_class", &p.sched_class, rules::SCHED_CLASSES);
     }
@@ -1551,6 +1606,27 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     if let Some(sel) = opt_table(top, "select") {
         prod.select = str_array(sel, "plugins", &file, &file, "select", d);
     }
+    // ---- [selftest](ADR-0010: 自检的总开关 + 可选名单) ----
+    if let Some(st) = opt_table(top, "selftest") {
+        prod.has_selftest_table = true;
+        match st.get("enabled") {
+            None => {}
+            Some(toml::Value::Boolean(v)) => prod.selftest_enabled = Some(*v),
+            Some(toml::Value::String(v)) if v == "inherit" => prod.selftest_enabled = None,
+            Some(other) => d.shape(
+                "BRV-MF-0001",
+                &file,
+                &file,
+                "selftest.enabled",
+                format!(
+                    "`enabled` 必须是布尔或字符串 \"inherit\", 收到 {}",
+                    other.type_str()
+                ),
+                "ADR-0010 §2.3: inherit = 跟随 [product].stage(dev 开 / release 关)",
+            ),
+        }
+        prod.selftest_plugins = str_array(st, "plugins", &file, &file, "selftest", d);
+    }
     if let Some(b) = opt_table(top, "budget") {
         prod.budget_ram_kib = opt_int(b, "ram_kib", &file, &file, "budget", d);
         prod.budget_stack_kib = opt_int(b, "stack_kib", &file, &file, "budget", d);
@@ -1606,6 +1682,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
             core_sources: str_array(b, "core_sources", &file, &file, "build", d),
             core_includes: str_array(b, "core_includes", &file, &file, "build", d),
             gen_sources: str_array(b, "gen_sources", &file, &file, "build", d),
+            selftest_sources: str_array(b, "selftest_sources", &file, &file, "build", d),
             cflags: str_array(b, "cflags", &file, &file, "build", d),
             asflags: str_array(b, "asflags", &file, &file, "build", d),
             ldflags: str_array(b, "ldflags", &file, &file, "build", d),

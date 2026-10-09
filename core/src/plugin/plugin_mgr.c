@@ -42,6 +42,8 @@
 #include <br/core/br_sched.h>
 #include <br/core/br_types.h>
 
+#include "plugin_mgr_internal.h"
+
 /* ==================================================================== 段边界 */
 
 /*
@@ -53,46 +55,52 @@ extern const br_plugin_t __br_plugins_start[];
 extern const br_plugin_t __br_plugins_stop[];
 
 /*
- * 生成物数量: 每个 `build/gen/<plugin>/plugin_desc.c` 给一条**同值的弱定义**
- * (见该模板与 ADR-0005 §2.4)。弱引用的意义: 没把生成物编进镜像时本文件仍可单独链接,
- * 此时 TC-PLUG-001 会明确报红(而不是链接失败得不明不白)。
+ * core 自检套件的入口(`core/selftest/`, ADR-0010)的**弱引用**。
+ *
+ * 为什么必须弱: 自检关掉时 `core/selftest/` 整个目录**不参与编译**(见 build.rs)⇒ 这个符号
+ * 不存在。弱引用让 core 本体仍能单独链接(与 `plugin_mgr_internal.h` 里 `br_plugin_gen_total`
+ * 的弱引用同一手法), 而
+ * 空指针就是"本镜像没编自检"的**唯一判据** —— 不需要第二个开关, 也不会有"开关说开、
+ * 代码却没编进来"的不一致。
  */
-extern const br_u32 br_plugin_gen_total __attribute__((weak));
+extern int br_core_selftest(void) __attribute__((weak));
 
 /* ==================================================================== 静态上界 */
 
-#define BR_PLUGIN_MAX        32u   /* 段里描述符条数上界(设计 3-02 §14.6 的静态上界手法) */
+/* `BR_PLUGIN_MAX`(描述符条数上界)也在 plugin_mgr_internal.h —— 自检要拿它开临时数组。 */
 #define BR_PLUGIN_MAX_EDGES  128u  /* init 边上界 */
 #define BR_PLUGIN_CYCLE_BUF  512u  /* 环路径文本缓冲 */
 #define BR_DEP_TERM_GUARD    512u  /* 遍历 deps 的硬上界(坏表不终止时也不越界) */
 
-/* 一条 init 边: `from` **依赖** `to` ⇒ `to` 必须先完成。下标 = 段序。 */
-typedef struct plug_edge {
-    br_u16 from;
-    br_u16 to;
-} plug_edge_t;
+/* `plug_edge_t` 的真值在 plugin_mgr_internal.h(自检的负例夹具要构造假边集)。 */
 
 /* ==================================================================== 状态 */
+/*
+ * ★ 标 `[自检可读]` 的几条去掉了 `static`(契约在 `plugin_mgr_internal.h`):
+ *   插件管理器的自检套件(`core/selftest/plugin_selftest.c`, ADR-0010)拿**真实状态**做
+ *   判据, 而不是复刻一份平行账本。它们仍只是 core 内部符号 —— 不进 `br_plugin.h` 的
+ *   接口面。其余(`s_order` / `s_init_done` / start 计数)保持私有: 自检不读它们。
+ */
 
-static const br_plugin_t *s_plugins[BR_PLUGIN_MAX];   /* 段序 */
-static br_u32  s_count;                                /* 段里的条数 */
-static plug_edge_t s_edges[BR_PLUGIN_MAX_EDGES];       /* 只含 kind == BR_DEP_INIT */
-static br_u32  s_edge_count;
+const br_plugin_t *s_plugins[BR_PLUGIN_MAX];           /* [自检可读] 段序 */
+br_u32  s_count;                                       /* [自检可读] 段里的条数 */
+plug_edge_t s_edges[BR_PLUGIN_MAX_EDGES];              /* [自检可读] 只含 kind == BR_DEP_INIT */
+br_u32  s_edge_count;                                  /* [自检可读] */
 static br_u16  s_order[BR_PLUGIN_MAX];                 /* 拓扑序(段下标) */
-static br_u16  s_pos[BR_PLUGIN_MAX];                   /* 段下标 → 拓扑位次 */
-static br_bool s_sorted;
+br_u16  s_pos[BR_PLUGIN_MAX];                          /* [自检可读] 段下标 → 拓扑位次 */
+br_bool s_sorted;                                      /* [自检可读] */
 static br_bool s_init_done;                            /* 启动链 ① 已跑(扫过段) */
 
 static br_u32  s_phase_reached = BR_PHASE_EARLY;
 static br_u32  s_init_failures;
-static br_u32  s_plat_index = (br_u32)-1;   /* platform 插件的段下标(EARLY 第一步) */
+br_u32  s_plat_index = (br_u32)-1;                     /* [自检可读] platform 插件的段下标 */
 
 /* ---- 自检用: "顺序不变量"的执行痕迹 ---- */
-static const char *s_first_early_name;   /* 第一个真的跑起来的 early_init 属于谁 */
+const char *s_first_early_name;   /* [自检可读] 第一个真的跑起来的 early_init 属于谁 */
 static br_u32  s_non_app_start_done;     /* 已执行的非 APP start 数 */
 static br_u32  s_non_app_start_total;    /* 非 APP 且有 start 钩子的插件数 */
-static br_bool s_app_start_last_ok;      /* 调用第一个 APP start 之前: 非 APP 已全跑完 */
-static br_bool s_in_app_start;           /* 当前正处在 APP 的 start 里 */
+br_bool s_app_start_last_ok;      /* [自检可读] 调用第一个 APP start 之前: 非 APP 已全跑完 */
+br_bool s_in_app_start;           /* [自检可读] 当前正处在 APP 的 start 里 */
 
 /* ==================================================================== 段枚举 */
 
@@ -173,8 +181,11 @@ static br_bool is_service_like(const br_plugin_t *p)
 /*
  * `init` 落在哪一相 —— 由**类别**决定(`1-01` §9: 非 Service/Interface ⇒ CORE,
  * Service/Interface ⇒ LATE)。没有 init 钩子 ⇒ 完成点 = EARLY(② 与 ① 重合)。
+ *
+ * 非 static: 自检要拿它复核"每条 init 边的相位单调"(TC-PLUG-003)——
+ * 见 plugin_mgr_internal.h。
  */
-static br_u32 init_phase_of(const br_plugin_t *p)
+br_u32 init_phase_of(const br_plugin_t *p)
 {
     if (p->init == BR_PLUGIN_NO_HOOK) {
         return BR_PHASE_EARLY;
@@ -190,8 +201,11 @@ static br_u32 init_phase_of(const br_plugin_t *p)
  * 语义: `edges[e] = {from, to}` = "from 依赖 to" ⇒ to 必须先出队。
  * 返回 BR_TRUE = 排好了(`order` 前 n 项有效); BR_FALSE = 有环(`cycle` 里是**闭合**路径,
  * 首尾同一下标, `cycle_len` 含重复的收尾项)。
+ *
+ * 非 static: TC-PLUG-002b 的**负例**必须跑这个真身(手工造环丢进来), 否则只证明副本会报环
+ * —— 见 plugin_mgr_internal.h。
  */
-static br_bool topo_sort(br_u32 n, const plug_edge_t *edges, br_u32 m,
+br_bool topo_sort(br_u32 n, const plug_edge_t *edges, br_u32 m,
                          br_u16 *order, br_u16 *cycle, br_u32 *cycle_len)
 {
     br_u16 indeg[BR_PLUGIN_MAX];
@@ -550,7 +564,13 @@ BR_NORETURN void br_plugin_manager_run(void)
         }
     }
 
-    /* ---- ⑦ 调度器: 注册了就交给它; 没注册 ⇒ 最后一个 start() 本该占住 CPU ---- */
+    /* ---- ⑦ 自检 pass(START 之后、调度器接管之前; ADR-0010) ----
+     * 为什么必须在这里: 此刻 timer 已 armed、中断已开、设备已注册、挂载已就位 ——
+     * 现有全部一致性套件的前提都成立; 而 `br_sched_run()` 一旦接管, 控制流就再也
+     * 回不到"单线程顺序跑测试"的形态。 */
+    br_plugin_manager_selftest();
+
+    /* ---- ⑧ 调度器: 注册了就交给它; 没注册 ⇒ 最后一个 start() 本该占住 CPU ---- */
     if (br_sched_registered()) {
         br_log_info("[PLUGIN] manager: 调度器已注册 ⇒ br_sched_run()");
         br_sched_run();
@@ -559,6 +579,73 @@ BR_NORETURN void br_plugin_manager_run(void)
     for (;;) {
         __asm__ volatile("wfi");
     }
+}
+
+/* ==================================================================== 自检 pass */
+
+/*
+ * 自检是**观测**而不是启动的一格, 所以它与 init/start 的纪律**不同**(ADR-0010 §2.4):
+ *   - init/start 失败 ⇒ `plugin_fail` 停机(裁定 G6: 启动失败不降级);
+ *   - 自检失败 ⇒ **只记不停**: 红绿由门禁判(`[XXXCONF] FAIL` 在 gates.toml 的 forbid 里),
+ *     因为"某条用例红了"与"系统起不来"是两件事, 混在一起会让排障无从下手。
+ *
+ * 顺序 = init 的拓扑序(不另立规则): 自检之间没有依赖, 拓扑序只是给"输出顺序"一个
+ * **确定性**(同一镜像两次运行的日志顺序一致), 这对 diff 日志很重要。
+ */
+void br_plugin_manager_selftest(void)
+{
+    if (s_sorted == BR_FALSE) {
+        br_panic("plugin_manager: selftest() 必须在拓扑排序之后调用");
+    }
+
+    br_log_info("[SELFTEST] ---- plugin self-tests (START 之后, 调度器接管之前) ----");
+
+    br_u32 ran = 0u;      /* 真的跑了自检的插件数 */
+    br_u32 skipped = 0u;  /* 没有 selftest 钩子的(关掉开关 / 未声明) */
+    br_u32 fails = 0u;    /* 各插件自检的**失败项数**之和 */
+    br_u32 errors = 0u;   /* 钩子自身返回负数的次数 */
+
+    for (br_u32 k = 0u; k < s_count; k++) {
+        const br_plugin_t *p = s_plugins[s_order[k]];
+        if (p->selftest == BR_PLUGIN_NO_HOOK) {
+            skipped++;
+            continue;
+        }
+
+        const int rc = p->selftest();
+        if (rc < 0) {
+            /* 负数 = 钩子自身出错(不是"有 N 项失败")。分开记, 免得把"用例红了"
+             * 与"自检根本没跑完"混成一个数字。 */
+            errors++;
+            br_log_error("[SELFTEST] ERROR %s: 自检钩子返回 %d(自身出错, 不是失败项数)",
+                         p->name, rc);
+        } else {
+            fails += (br_u32)rc;
+            br_log_info("[SELFTEST] %s rc=%d", p->name, rc);
+        }
+        ran++;
+    }
+
+    /* core 自己的套件(插件管理器/服务注册表/调度/同步; 实现都在 `core/selftest/`)。
+     * 它们与插件自检**同开关** ——
+     * 关掉时 `core/selftest/` 根本不参与编译 ⇒ 这里的弱引用读到 BR_NULL 就跳过。
+     * 这就是"core 侧也代码进不了镜像"的落地方式(ADR-0010 §2.3 / build.rs)。 */
+    if (br_core_selftest != BR_NULL) {
+        const int rc = br_core_selftest();
+        if (rc < 0) {
+            errors++;
+            br_log_error("[SELFTEST] ERROR core: rc=%d", rc);
+        } else {
+            fails += (br_u32)rc;
+            br_log_info("[SELFTEST] core rc=%d", rc);
+        }
+        ran++;
+    } else {
+        skipped++;
+    }
+
+    br_log_info("[SELFTEST] SUMMARY plugins=%u ran=%u skipped=%u fails=%u errors=%u",
+                s_count, ran, skipped, fails, errors);
 }
 
 /* ==================================================================== 观测面 */
@@ -617,138 +704,4 @@ br_u32 br_plugin_phase_reached(void)
 br_u32 br_plugin_init_failures(void)
 {
     return s_init_failures;
-}
-
-/* ==================================================================== 一致性用例 */
-
-static br_u32 s_pc_pass;
-static br_u32 s_pc_fail;
-
-static void pc_report(br_bool ok, const char *tag, const char *what)
-{
-    if (ok) {
-        s_pc_pass++;
-        br_log_info("[PLGCONF] PASS %s %s", tag, what);
-    } else {
-        s_pc_fail++;
-        br_log_info("[PLGCONF] FAIL %s %s", tag, what);
-    }
-}
-
-/* TC-PLUG-002b 的负例夹具: 3 节点环(a→b→c→a)与 3 节点 DAG(c→b→a)。  * WORKAROUND(br-wa-test-001): 本套件的 `TC-PLUG-*` id 是**自编号**(6-01 表里没有这一组),
- * 自述文字才是判据内容; 与设计表逐条对齐见 WORKAROUNDS.md 的 br-wa-test-001。
- */
-static br_bool cycle_negative_case(void)
-{
-    static const plug_edge_t cyc[3] = { {0u, 1u}, {1u, 2u}, {2u, 0u} };
-    static const plug_edge_t dag[2] = { {2u, 1u}, {1u, 0u} };
-    br_u16 order[BR_PLUGIN_MAX];
-    br_u16 cycle[BR_PLUGIN_MAX];
-    br_u32 clen = 0u;
-
-    /* (a) 环必须被检出, 且报出**完整**路径: 3 个节点 + 收尾闭合 = 4 项。 */
-    if (topo_sort(3u, cyc, 3u, order, cycle, &clen)) {
-        return BR_FALSE;
-    }
-    if (clen != 4u || cycle[0] != cycle[3]) {
-        return BR_FALSE;
-    }
-    for (br_u16 want = 0u; want < 3u; want++) {
-        br_bool seen = BR_FALSE;
-        for (br_u32 j = 0u; j < 3u; j++) {
-            if (cycle[j] == want) {
-                seen = BR_TRUE;
-                break;
-            }
-        }
-        if (!seen) {
-            return BR_FALSE;
-        }
-    }
-
-    /* (b) 负控制: 同样的算法对无环图必须排得出 c→b→a(否则"总能报环"也是假绿)。 */
-    if (!topo_sort(3u, dag, 2u, order, cycle, &clen)) {
-        return BR_FALSE;
-    }
-    return (order[0] == 0u) && (order[1] == 1u) && (order[2] == 2u);
-}
-
-void br_plugin_conformance(void)
-{
-    s_pc_pass = 0u;
-    s_pc_fail = 0u;
-
-    br_log_info("[PLGCONF] plugin-manager conformance (.br_plugins / init-DAG / 相位)");
-
-    /* ---- TC-PLUG-001: 段非空且条数 == 生成物数量 ---- */
-    {
-        const br_u32 count = br_plugin_count();
-        br_bool ok = (count > 0u);
-        br_u32  total = 0u;
-        br_bool have_total = (&br_plugin_gen_total != BR_NULL);
-        if (have_total) {
-            total = br_plugin_gen_total;
-            ok = ok && (count == total);
-        } else {
-            ok = BR_FALSE;   /* 生成物计数符号缺席 = 描述符不是生成物 ⇒ 明确报红 */
-        }
-        br_log_info("[PLGCONF] descriptors=%u gen_total=%u", count, total);
-        pc_report(ok, "TC-PLUG-001",
-                  "段非空 且 条数 == 生成物数量(生成物计数符号在场)");
-    }
-
-    /* ---- TC-PLUG-002: 拓扑序满足每条 init 边(逐边校验, 违例报出边) ---- */
-    {
-        br_bool ok = s_sorted;
-        const char *bad_from = BR_NULL;
-        const char *bad_to = BR_NULL;
-        for (br_u32 e = 0u; e < s_edge_count && ok; e++) {
-            const br_u16 f = s_edges[e].from;
-            const br_u16 t = s_edges[e].to;
-            /* from 依赖 to ⇒ to 的位次必须更靠前 */
-            if (!(s_pos[t] < s_pos[f])) {
-                ok = BR_FALSE;
-                bad_from = s_plugins[f]->name;
-                bad_to = s_plugins[t]->name;
-            }
-        }
-        if (!ok && bad_from != BR_NULL) {
-            br_log_info("[PLGCONF] 违例边: %s -> %s", bad_from, bad_to);
-        }
-        br_log_info("[PLGCONF] init_edges=%u", s_edge_count);
-        pc_report(ok, "TC-PLUG-002", "拓扑序满足全部 init 边(逐边校验)");
-    }
-
-    /* ---- TC-PLUG-003: 相位单调 + 顺序不变量(APP 最后 / 本用例由 APP start 调用) ---- */
-    {
-        br_bool ok = BR_TRUE;
-        for (br_u32 e = 0u; e < s_edge_count; e++) {
-            const br_plugin_t *a = s_plugins[s_edges[e].from];   /* 依赖方 */
-            const br_plugin_t *b = s_plugins[s_edges[e].to];     /* 提供方 */
-            const br_u32 ra = init_phase_of(a);
-            const br_u32 rb = init_phase_of(b);
-            if (rb > ra) {
-                ok = BR_FALSE;
-                br_log_info("[PLGCONF] 相位违例: %s(%s) 依赖 %s(%s)",
-                            a->name, br_plugin_phase_name(ra), b->name, br_plugin_phase_name(rb));
-            }
-        }
-        pc_report(ok, "TC-PLUG-003",
-                  "相位单调: 每条 init 边的提供方完成点 rank <= 消费方");
-
-        pc_report((s_plat_index != (br_u32)-1) && (s_first_early_name != BR_NULL)
-                  && (s_first_early_name == s_plugins[s_plat_index]->name),
-                  "TC-PLUG-003",
-                  "early 相第一步 = platform 插件的 early_init(显式取 plugin_type, 不靠拓扑序)");
-
-        pc_report(s_app_start_last_ok && s_in_app_start, "TC-PLUG-003",
-                  "APP 最后: 非 APP 的 start 全部先跑完, 且本用例正跑在 APP 的 start 里");
-    }
-
-    /* ---- TC-PLUG-002b: 环检测负例 ---- */
-    pc_report(cycle_negative_case(), "TC-PLUG-002b",
-              "环检测负例: 3 节点环被检出且报完整路径; 同算法对 DAG 排得出序");
-
-    br_log_info("[PLGCONF] SUMMARY pass=%u fail=%u total=%u",
-                s_pc_pass, s_pc_fail, s_pc_pass + s_pc_fail);
 }

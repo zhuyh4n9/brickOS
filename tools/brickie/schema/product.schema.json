@@ -1,129 +1,201 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "product.toml — brickie v0.1 产品选择面(BRV-D2: 单条记录形状)",
-  "description": "只表达单条记录形状(contract §7.2)。'恰一个 app'、'select.plugins 全局唯一'、预算与闭包的关系等跨字段/跨文件不变量由 brickie-core 报码。",
-  "type": "object",
-  "required": ["schema", "product"],
-  "additionalProperties": true,
-  "properties": {
-    "schema": {
-      "type": "integer",
-      "enum": [1]
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "title": "product.toml — brickie v0.1 产品选择面(BRV-D2: 单条记录形状)",
+ "description": "只表达单条记录形状(contract §7.2)。'恰一个 app'、'select.plugins 全局唯一'、预算与闭包的关系等跨字段/跨文件不变量由 brickie-core 报码。",
+ "type": "object",
+ "required": [
+  "schema",
+  "product"
+ ],
+ "additionalProperties": true,
+ "properties": {
+  "schema": {
+   "type": "integer",
+   "enum": [
+    1
+   ]
+  },
+  "product": {
+   "type": "object",
+   "required": [
+    "name",
+    "app"
+   ],
+   "additionalProperties": true,
+   "properties": {
+    "name": {
+     "type": "string"
     },
-    "product": {
-      "type": "object",
-      "required": ["name", "app"],
-      "additionalProperties": true,
-      "properties": {
-        "name": {
-          "type": "string"
-        },
-        "version": {
-          "type": "string"
-        },
-        "app": {
-          "type": "string"
-        },
-        "core": {
-          "type": "string"
-        },
-        "stage": {
-          "type": "string",
-          "enum": ["dev", "release"]
-        }
-      }
+    "version": {
+     "type": "string"
     },
-    "select": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "plugins": {
-          "type": "array",
-          "items": {"type": "string"}
-        }
-      }
+    "app": {
+     "type": "string"
     },
-    "budget": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "ram_kib": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "stack_kib": {
-          "type": "integer",
-          "minimum": 0
-        }
-      }
+    "core": {
+     "type": "string"
     },
-    "lint": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "frozen_deps": {
-          "type": "string",
-          "enum": ["inherit", "allow", "deny"]
-        },
-        "allow_edges": {
-          "type": "array",
-          "items": {
-            "type": "array",
-            "items": {"type": "string"}
-          }
-        }
-      }
-    },
-    "build": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "core_sources": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "core_includes": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "gen_sources": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "cflags": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "asflags": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "ldflags": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "obj_dir": {
-          "type": "string"
-        },
-        "release": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "cflags_extra": {
-              "type": "array",
-              "items": {"type": "string"}
-            },
-            "asflags_extra": {
-              "type": "array",
-              "items": {"type": "string"}
-            },
-            "ldflags_extra": {
-              "type": "array",
-              "items": {"type": "string"}
-            }
-          }
-        }
-      }
+    "stage": {
+     "type": "string",
+     "enum": [
+      "dev",
+      "release"
+     ]
     }
+   }
+  },
+  "select": {
+   "type": "object",
+   "additionalProperties": true,
+   "properties": {
+    "plugins": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "budget": {
+   "type": "object",
+   "additionalProperties": true,
+   "properties": {
+    "ram_kib": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "stack_kib": {
+     "type": "integer",
+     "minimum": 0
+    }
+   }
+  },
+  "lint": {
+   "type": "object",
+   "additionalProperties": true,
+   "properties": {
+    "frozen_deps": {
+     "type": "string",
+     "enum": [
+      "inherit",
+      "allow",
+      "deny"
+     ]
+    },
+    "allow_edges": {
+     "type": "array",
+     "items": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  },
+  "build": {
+   "type": "object",
+   "additionalProperties": true,
+   "properties": {
+    "core_sources": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "core_includes": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "gen_sources": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "cflags": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "asflags": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "ldflags": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
+    "obj_dir": {
+     "type": "string"
+    },
+    "release": {
+     "type": "object",
+     "additionalProperties": true,
+     "properties": {
+      "cflags_extra": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "asflags_extra": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "ldflags_extra": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     }
+    },
+    "selftest_sources": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "core 自检套件的源集合(ADR-0010; 自检关掉时**不编**)。与 core_sources 分开, 因为 core_sources 的通配会覆盖 core/selftest/**。"
+    }
+   }
+  },
+  "selftest": {
+   "type": "object",
+   "description": "ADR-0010: 自检总开关 + 可选插件名单。**表不在场** = 跟随 [product].stage(dev 开 / release 关)。",
+   "additionalProperties": true,
+   "properties": {
+    "enabled": {
+     "description": "true/false 显式; 字符串 \"inherit\" = 跟随 stage(与缺省等价)。",
+     "oneOf": [
+      {
+       "type": "boolean"
+      },
+      {
+       "type": "string",
+       "enum": [
+        "inherit"
+       ]
+      }
+     ]
+    },
+    "plugins": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "只跑列出的插件; 空数组 = 所有声明了 [selftest] 的插件都跑。"
+    }
+   }
   }
+ }
 }

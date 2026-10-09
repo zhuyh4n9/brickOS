@@ -7,7 +7,9 @@
  * 为什么是 **in-image** 而不是 host 用例:
  *   设计 6-01 §3.7 已定"中断组 = target-only"; 而且 Stage 1 的中断路径
  *   (异常向量桩 → ack → 分发 → ISR → eoi → ERET)在 host 上根本不存在。
- *   所以本文件把用例编进镜像, 由 `br_plat_irq_conformance()` 在启动时跑一遍,
+ *   所以本文件把用例编进镜像, 由 `qemu_aarch64_selftest()`(src/selftest.c)在**全部
+ *   start 之后**经 core 的自检 pass 驱动(ADR-0010; 本文件此前是从 platform 的 start
+ *   里被调的),
  *   每项打一行 `[IRQCONF] PASS/FAIL <用例 id> <说明>`, 末尾打
  *   `[IRQCONF] SUMMARY pass=N fail=M` —— 于是红绿可被 `make smoke` / `make irq-test`
  *   的 grep 判定, 不靠人眼。

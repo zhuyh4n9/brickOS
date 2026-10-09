@@ -39,14 +39,10 @@ const char *br_service_name_at(br_u32 index);   /* index 越界 ⇒ BR_NULL */
 br_u32 br_service_lookup_hits(const char *name);
 
 /*
- * 注册表一致性用例(TC-SVC-001..003, 6-01 §3.8):
- *   001 publish 后 lookup 拿到同一指针(且 name_at/count 一致)
- *   002 重名 publish ⇒ -EEXIST(且原指针未被覆盖)
- *   003 未发布的 name ⇒ BR_NULL; 非法入参(空 name/空 ops) ⇒ -EINVAL
- * 打印 `[SVCCONF] PASS/FAIL <id> …` + `[SVCCONF] SUMMARY pass=N fail=M`。
- * 它自己用的名字全部带 `selftest.` 前缀, 且**用例结束后从表里移除**(白盒),
- * 免得污染后续 dump 的注册表清单。
+ * 注册表自检套件已移到 `core/selftest/svc_selftest.c`(ADR-0010), 故不在此声明。
+ * 为什么不留在对外头: 自检是**测试面**, 不是插件能力 —— 声明进 `br_*.h` 会让
+ * "改一个用例"变成接口变更(golden 接口 hash 覆盖的正是对外声明面); 实现与声明面
+ * 都在 core/selftest/。
  */
-void br_service_conformance(void);
 
 #endif /* BR_CORE_BR_SVC_H */

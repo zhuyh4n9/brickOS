@@ -46,16 +46,12 @@ name         = "trace"
 version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
-hash         = "sha256:a7d8fc97fbea303a552023370c452178a544633bf16797addcabaf6e3e88ab8d"
+hash         = "sha256:b3d67241bfeffc050dfbaa14733ff700a15622cc4b23cf375881f89171b958c5"
 status       = "experimental"
 
 [[export.entries]]
 kind = "func"
 name = "br_trace_svc_init"
-sig  = "int (void)"
-[[export.entries]]
-kind = "func"
-name = "br_trace_svc_selftest"
 sig  = "int (void)"
 [[export.entries]]
 kind = "func"
@@ -93,6 +89,12 @@ value = "1024"
 kind = "macro"
 name = "BR_TRACE_SVC_ID_SLOTS"
 value = "32"
+
+[selftest]
+# ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = <prefix>selftest`。
+# 用例: TC-DBG-001。开关在 `product.toml [selftest]`(生成期裁决: 关掉 ⇒ 本文件与
+# src/*_selftest.c 一起不参与编译, 测试代码不进镜像)。
+cases = 0
 
 [build]
 sources  = ["src/*.c"]

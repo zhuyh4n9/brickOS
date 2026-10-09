@@ -1,0 +1,55 @@
+# brickie:generated
+# api/iface 快照 api/iface/io/uart-pl011/uart-pl011.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "io/uart-pl011#uart-pl011"
+provider = "io/uart-pl011"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.1.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:b948dff0255343ade247c86ff2133951feef5cde5e8158ffb597a65e44a5b2d9"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "macro"
+name = "BR_UART_PL011_DEV_NAME"
+value = "\"uart0\""
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_UART_IOC_MAGIC"
+value = "'u'"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_UART_IOC_GET_INFO"
+value = "0u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_UART_IOC_FLUSH_RX"
+value = "1u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_UART_IOC_SET_BAUD"
+value = "2u"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_uart_pl011_info_t"
+layout = "# {base, refclk_hz, baud, rx_available, rx_dropped}"
+status = "experimental"

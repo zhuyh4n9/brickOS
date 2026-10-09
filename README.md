@@ -19,13 +19,14 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 **一条链, 三个环节:**
 
 ```
-(Platform 插件) aarch64 Start.S ─► br_irq_cpu_init ─► br_plat_early_init ─► (Core+APP) br_core_main
-                                                       │                        │
-                    早期 console + GICv3 PIC + IRQ 绑定表                        ├─ 中断一致性用例(TC-IRQ-*, 67 项)
-                    + region 表 + 4 KiB 恒等映射页表(开 MMU)                     ├─ 内存/MMU 一致性用例(TC-MEM/TC-MM)
-                    + 三池认领(br_mem_init)                                      ├─ 调试域一致性用例(TC-DBG-*)
-                                                                                ├─ 中断心跳(timer PPI INTID 30)
-                                                                                └─ MainLoop(延时 + 日志 + 现场快照)
+(Platform 插件) Start.S ─► br_core_main ─► 四阶段启动链(ADR-0008)
+                                            │
+    ① core 平台无关(时钟/日志/中断框架/插件管理扫段)
+    ② platform 插件初始化(早期 console + GICv3 PIC + IRQ 绑定表 + region 表 + 页表 ops)
+    ③ core 依赖平台(三池认领 br_mem_init + 恒等映射页表建立/开 MMU)
+    ④ plugin_manager: EARLY → CORE → LATE → 开中断 → START(APP 最后)
+         → **自检 pass**(ADR-0010: 逐插件 selftest, 全部 start 之后)
+         → br_sched_run() → APP 线程 MainLoop(延时 + 日志 + 心跳)
 ```
 
 | 环节 | 内容 | 代码 |
@@ -37,7 +38,10 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 | | **中断一致性用例**(target-only, 编进镜像) | `platform/qemu-aarch64/src/irq_conf.c` |
 | | **内存/MMU 一致性用例**(target-only) | `platform/qemu-aarch64/src/mm_conf.c` |
 | | 链接脚本(含 `.br_extable` 收集) | `platform/qemu-aarch64/src/link.ld` |
-| **APP**(`app/hello` 插件) | MainLoop: 每秒打一行日志, 延时自带"不早醒"判据; 只**读**平台的心跳计数(纯 P0 消费者); 依次驱动三套一致性用例 | `app/hello/src/main.c` |
+| **框架件**(`framework/`) | `vfs-core`(纯 VFS)/ `dev-core`(通用设备注册表)/ `cdev-core`(字符设备 + 会话适配) | `framework/*/src/*.c`(+ 各自的 `*_selftest.c`) |
+| **存储**(`fs/`) | `tmpfs`(**rootfs "/"**)、`devfs`(**/dev** 设备节点投影) | `fs/tmpfs/src/tmpfs.c` / `fs/devfs/src/devfs.c` |
+| **I/O**(`io/`) | `uart-pl011`: PL011 注册为 cdev ⇒ `/dev/uart0` | `io/uart-pl011/src/uart_pl011.c`(+ `uart_selftest.c`) |
+| **APP**(`app/hello` 插件) | MainLoop: 每秒打一行日志, 延时自带"不早醒"判据; 只**读**平台的心跳计数(纯 P0 消费者)。**不再驱动任何用例**(ADR-0010: 自检归 core) | `app/hello/src/main.c` |
 | **调试服务插件**(`service/*`) | `trace`(core 16B 事件环的唯一消费方)/ `backtrace`(x29 帧链捕获)/ `hexdump`(16 B/行契约格式)/ `memleak`(按归属标签出账)/ `dump`(现场编排 + `[DBGCONF]` 入口) | `service/*/src/*.c` |
 | **Core**(内核本体, 不是插件) | **中断框架 Stage 1**: 号空间/描述符池、生命周期(ack→ISR→eoi 单出口)、三层屏蔽、优先级语义、级联域(FAST)、fault/extable、最小 trace 环 | `core/src/irq/*.c`, `core/src/{panic,trace}.c` |
 | | **内存**: TLSF 堆(红区 + 毒化 + owner 记账)、contig/DMA 池、4 KiB 页位图池、region 表 + `br_mm_ops` 派发 + cache 维护 | `core/src/mem/*.c`, `core/src/mm/mm.c` |
@@ -49,11 +53,27 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 且每次延时**实际不短于请求值**(设计 `3-01 §2.1` 的"不早醒"语义)。后一条是**自动化判据**,
 不是人眼看着差不多 —— `make smoke` 会 grep 它。
 
-三套一致性用例都有**自动化判据**, 而且是**真跑硬件/真跑页表路径**(不是静态检查):
+**七套一致性用例**(共 39+ 个 tag)都有**自动化判据**, 而且是**真跑硬件/真跑页表路径**(不是静态检查)。
+ADR-0010 之后它们**全部**由 core 的**自检 pass** 统一驱动(在各插件的 `src/*_selftest.c`,
+经描述符的 `selftest` 钩子; 开关 = `product.toml [selftest]`, 关掉则测试代码被 `--gc-sections`
+裁出镜像):
 
-- `make irq-test` —— 67 项逐用例判 PASS/FAIL(设计 `6-01 §3.7` 的 `TC-IRQ-*` + GICv3 方言事实);
-- `make dbg-test` —— `[MEMCONF]`(设计 `6-01 §3.5/§3.6` 的 `TC-MEM-*`/`TC-MM-*` + 恒等映射/RO/NX/未映射 fault)
-  与 `[DBGCONF]`(调试插件域 `TC-DBG-*`)两个摘要必须 `fail=0`, **且逐个用例 tag 一个不缺**;
+| 套件 | 内容 | 门禁 |
+|---|---|---|
+| `[IRQCONF]` 67 项 | 中断逐用例(设计 `6-01 §3.7` 的 `TC-IRQ-*` + GICv3 方言事实) | `irq-test` |
+| `[MEMCONF]` 35 项 | 恒等映射 / RO / NX / 未映射 fault(§3.5/§3.6 的 `TC-MEM-*`/`TC-MM-*`) | `dbg-test` |
+| `[DBGCONF]` | 调试域(`TC-DBG-*`: trace/backtrace/hexdump/dump/memleak 各自报自己的) | `dbg-test` |
+| `[PLGCONF]` 7 项 | 插件管理器: 段条数 / 拓扑序 / 相位单调 / 环检测负例 / APP 最后 / **自检时机** | `plugin-test` |
+| `[SVCCONF]` 3 项 | 服务注册表: 发布 / 查找 / 错误码(`br_svc.h`) | `plugin-test` |
+| `[TASKCONF]` 12 + `[SYNCCONF]` 12 | 调度框架与同步原语(真线程 create/yield/join/sleep) | `sched-test`/`sync-test` |
+| `[VFSCONF]` 13 + `[DEVCONF]` 6 + `[CDEVCONF]` 8 + `[IOCONF]` 12 | 存储/设备域: 挂载表/走查链/文件面/目录面 + 设备注册表 + 会话适配 + PL011 经 `/dev/uart0` 往返 | `fs-test` |
+
+每道 QEMU 门禁都额外要求 `[SELFTEST] SUMMARY … ran=[1-9]… fails=0 errors=0` ——
+它同时证明"自检被驱动过"与"开关是打开的"(关掉时该行是 `ran=0`, 匹配不上 ⇒ 门禁红)。
+**自检失败不停机**(ADR-0010 §2.4: 它是观测, 红绿由门禁判; 这与 init/start 的"首败即停机"
+是两条不同的纪律)。
+
+其余判据:
 - `make mem-test` —— 把 `core/src/mem/*` + `core/src/mm/mm.c` 编成**宿主可执行**, 跑 20 万次随机
   交错分配/释放 + 参考模型对拍(TLSF 的合并/分裂/碎片与页位图的 run 分配是算法性质, 宿主上几秒
   能跑上百万次操作);
@@ -65,7 +85,7 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 
 | 不做 | 理由 |
 |---|---|
-| **插件化(描述符 / manifest / 组合器)** | 这正是组合器 brickie 与插件管理器的产出(`4-02`/`4-03`, `3-05`)。**声明期 + 编译编排**已由 brickie v0.1 接管(插件发现 / 校验 / 描述符生成 / 接口发布 / 版本治理 / `brickie build`; 见 [`tools/brickie/README.md`](tools/brickie/README.md)), 但**运行期**的插件管理器与描述符段(`.br_plugins`)仍未落地 ⇒ `platform/qemu-aarch64` 与 `app/hello` 虽已是插件且源集合由声明面给出, 启动链的**调用点**仍是 APP 直调。**Platform Entry 因此仍挂 WORKAROUND, 见 §5** |
+| ~~**插件化(描述符 / manifest / 组合器)**~~ | **已交付**(v0.2.0): 声明期 + 编译编排由 brickie 接管(插件发现/校验/描述符生成/接口发布/版本治理/`brickie build`, 见 [`tools/brickie/README.md`](tools/brickie/README.md)); **运行期**的插件管理器 + `.br_plugins` 段 + 四相驱动由 ADR-0005 落地, 启动链入口由 ADR-0008 收敛为 `br_core_main`, 自检由 ADR-0010 统一驱动。此行的历史留档见 §5 的"已注销" |
 | 调度器 / 线程 / `br_sched_ops` | M1。没有调度器就没有"可让出的对象", 所以睡眠只能是忙等 |
 | **中断的 Stage 2**(分发到 bh/线程、亲和性/均衡/IPI、`CAP_NEST` 嵌套、PM save/restore) | 设计 `3-02 §1.1` 的分期: Stage 1(无调度器世界)已落地, Stage 2 的前提是**调度器与 bh** —— 它们是 M1 |
 | `br_fault_handler_register`(fault handler 链) | 设计 `3-02 §10.5`: 分槽/分类/extable/panic 属 Stage 1(已做), **注册 API 归 v2** |
@@ -89,7 +109,9 @@ brickOS/
 ├── product.toml                 产品声明: app 选择 / 插件选择 / 预算 / M0 引导例外豁免
 ├── mk/
 │   └── host.mk                  宿主三元组 + 宿主产物目录(build/host/… 与 prebuilts/…)
-├── docs/decisions/              本原型的决策记录(如 0001-platform-plugin-manifest.md)
+├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 /
+│                              0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 /
+│                              0009 VFS 存储栈 / 0010 **插件自检(selftest)**
 ├── prebuilts/toolchain/                    外部工具链**下载缓存**(派生, 不进库; fetch-prebuilt.py)
 ├── prebuilts/                   宿主工具**自举种子**(进库; 见下, 详见其 README)
 │   └── seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}
@@ -129,14 +151,15 @@ brickOS/
 │   │   ├── br_svc.h             【插件】服务注册表(publish/lookup + 观测)
 │   │   ├── br_sched.h           【调度】线程/任务 + br_sched_ops 注册点 + idle
 │   │   ├── br_sync.h            【调度】mutex / sem / cond / spinlock
-│   │   └── (br_main.h 已删: 入口由插件描述符的 start 钩子承担)
+│   │   └── br_main.h          【启动】core 启动入口契约: br_core_main() 四阶段链(ADR-0008)
 │   └── src/
 │       ├── log.c                格式化 + 等级过滤
 │       ├── time.c               时钟换算 + 忙等延时 + br_deadline_from_now
-│       ├── plugin/              插件管理器(扫段/拓扑/相位驱动/失败停机)
+│       ├── main.c               ★ core 启动入口: 四阶段启动链(main.c 的 br_core_main)
+│       ├── plugin/              插件管理器(扫段/拓扑/四相/自检 pass)+ 段边界符号
 │       ├── svc/                 服务注册表
 │       ├── sched/               调度框架(TCB/切换 asm/超时表/idle)+ 等待链原语
-│       ├── sync/                同步原语(mutex/sem/cond/spinlock + 一致性套件)
+│       ├── sync/                同步原语(mutex/sem/cond/spinlock)
 │       ├── panic.c              br_panic_bare / br_panic(无锁/无堆/无调度器)
 │       ├── trace.c              16 B 定长事件的环形缓冲
 │       ├── string.c             ★ 编译器支持例程(memcpy/memmove/memset/memcmp)
@@ -155,6 +178,22 @@ brickOS/
 │           ├── irq_core.c       描述符池 / lock-unlock / register-enable-disable / 风暴 / 入口
 │           ├── irq_domain.c     级联域池 + 窗口切片 + FAST demux + 逐子 ack
 │           └── irq_fault.c      fault 入口 + extable 查找 + double-fault 兜底
+│   └── selftest/                【自检套件】(ADR-0010: 与生产代码分离; 开关关掉则整个目录不编译)
+│       ├── core_selftest.c      唯一入口 br_core_selftest(): 汇总下面四套(弱引用, 见 plugin_mgr)
+│       ├── plugin_selftest.c    [PLGCONF] 段条数/拓扑序/相位单调/环检测负例/APP 最后/自检时机
+│       ├── svc_selftest.c       [SVCCONF] 服务注册表
+│       ├── sched_selftest.c     [TASKCONF] 调度框架 + coop(真线程)
+│       └── sync_selftest.c      [SYNCCONF] 同步原语 + 时间
+├── framework/                   【框架件插件】(设计 D19: 能力框架 = 插件身份 + core 纪律)
+│   ├── vfs-core/                **纯 VFS**(D21): br_file_t 句柄 + 挂载表单路由 + 四层 ops + lookup 走查
+│   │                            (+ src/vfs_selftest.c: TC-VFS-* 自检, 开关见 product.toml [selftest])
+│   ├── dev-core/                通用设备注册表: 唯一扁平命名空间 + 子分类注册协议 + open_file 钩子透传
+│   └── cdev-core/               字符设备子分类: br_cdev_ops + flash 子型 + **通用 br_file_ops 会话适配**
+├── fs/                          【FS 插件】(依赖 vfs-core; 顶层 = namespace)
+│   ├── tmpfs/                   **rootfs("/")**: RAM 文件系统(完整文件语义, 预建 /dev /data /tmp)
+│   └── devfs/                   **/dev**: 把 dev-core 注册表投影成节点(实时枚举, open 经类钩子)
+├── io/                          【I/O 插件】(向 cdev-core/bdev-core 注册设备)
+│   └── uart-pl011/              PL011 注册为 cdev ⇒ /dev/uart0(M2 形态 A 侧; v1 轮询, 见 br-wa-io-001)
 ├── service/                     【调试服务插件】(每个目录 = 一个插件; 顶层 = namespace)
 │   ├── trace/                   core 16 B 事件环的唯一消费方(drain/解码/计数/呈现)
 │   ├── backtrace/               x29 帧链捕获(符号化归 host 离线工具)
@@ -189,17 +228,20 @@ brickOS/
     └── tests/smoke.toml         用例骨架(v0.1 不消费; 已登记 TC-IRQ 梗概)
 ```
 
-跨层边有两条, 都在 `product.toml [lint].allow_edges` 里**逐条列名豁免**(M0 引导例外;
-设计的正解是 app → interface(iface-min, M2)/ 运行期插件管理器, 二者都还没落地):
+跨层边现在只有**一条**(在 `product.toml [lint].allow_edges` 里列名豁免; 另两条已被
+ADR-0008/0010 消除 —— 见下):
 
 - **Platform Entry → Core**: `start.S` 只做 reset/BSS, 然后 `bl br_core_main()`
   (core 的四阶段启动链: ① 平台无关初始化 → ② platform 插件初始化 → ③ 堆 + 地址映射的
   建立 → ④ 插件相位驱动; 见 `docs/decisions/0008-core-main-boot-chain.md`);
-- **APP → Platform / 调试服务**: `app/hello` 直调 `platform/qemu-aarch64` 的
-  `br_plat_name()` / `br_plat_irq_conformance()` / `br_plat_irq_start()` /
-  `br_plat_mem_conformance()`, 以及 `service/dump` 的 `br_dump_conformance()` /
-  `br_dump_all()` / `br_dump_trace()` —— APP 只认识 **dump 一个面**, 其余四个调试
-  插件的 LATE 相 init 与 selftest 由 dump 按 `[[dep]]` 依赖序代调。
+- ~~**APP → VFS(存储域总套件)**~~ ⇒ **ADR-0010 之后已删**: 自检改由 core 统一驱动,
+  APP 不再认识任何框架件 ⇒ `allow_edges` 回到**一条**(只剩下面的 app → platform)。
+- **APP → Platform**: `app/hello` 只直读平台身份与心跳(`br_plat_name()` / `br_plat_isa()` /
+  `br_plat_timer_ticks()`)—— 一致性用例的调用点 ADR-0010 之后全部搬走, APP 不再调任何
+  用例。这条边是 `product.toml [lint].allow_edges` 里**最后一条** M0 引导例外
+  (正解是 iface-min(M2))。
+  `service/dump` 的 `br_dump_all()`/`br_dump_trace()` 曾是 APP 的另一个面, 现在也不在
+  APP 里 —— 启动快照由 dump 自己的 LATE init 打(见 `service/dump/README.md`)。
 
 **中断的三层归属**(设计 `1-01 §8` / `3-02 §1.3`)在本原型的落点: 机制在 **core**、
 GICv3 寄存器序列在 **`gicv3.c` + `vectors.S`**(设计归 ISA 共享库, 原型同目录 + 文件边界,
@@ -374,6 +416,30 @@ make clean              # 清掉工具与镜像两侧的派生物(只清工具: 
 > 这是**有意**的: 声明面自洽是镜像构建的前置。只编工具用 `make tools` / `make tools-core`;
 > 只想看结论用 `make brickie-check`。
 
+**自检开关(ADR-0010)**: 自检是**生成期**开关, 不是运行时开关 ——
+关掉它, 测试代码**整段不进镜像**(描述符写 `NO_HOOK` ⇒ 各插件 `src/*_selftest.c` 无人引用
+⇒ `--gc-sections` 裁掉; `core/selftest/` 则直接不参与编译):
+
+```toml
+# product.toml
+[selftest]
+enabled = "inherit"   # true | false | "inherit" —— inherit = 跟随 [product].stage(dev 开 / release 关)
+# plugins = []        # 可选: 只跑列出的插件(其余的连钩子都不发)
+```
+
+判据是**机械的**, 两条都要看:
+
+```bash
+# ① 钩子符号必须消失(只剩管理器自己的入口)
+aarch64-linux-gnu-nm build/brick.elf | grep -c _selftest     # 关掉后: 1(只有 br_plugin_manager_selftest)
+# ② 日志里 ran=0(★ 不是"没有 [SELFTEST] 行": 管理器照旧打 banner 与 SUMMARY)
+grep 'SELFTEST\] SUMMARY' build/logs/smoke.log
+```
+
+7 道 QEMU 门禁都 require `ran=[1-9][0-9]* … fails=0 errors=0` ⇒ **关掉开关会让门禁全红**
+(而不是静默少跑一堆测试)。这是有意的绊线: 开关只该在"我真的不要测试"时关,
+而那一刻门禁本来就不该绿。
+
 换交叉工具链前缀改**声明面**(这是 `br-wa-toolchain-001` 的还债口), 构建规则不动:
 
 ```bash
@@ -382,36 +448,41 @@ make clean              # 清掉工具与镜像两侧的派生物(只清工具: 
 make print-cross-compile
 ```
 
-实际输出(QEMU virt, `-cpu cortex-a53`, `gic-version=3`; 逐用例的 67/35/31 行已省略):
+实际输出(QEMU virt, `-cpu cortex-a53`, `gic-version=3`; 逐用例的 67/35/… 行已省略):
 
 ```
-[    0.000050] INFO  brickOS-prototype v0.1.0 -- core MainLoop (interrupt heartbeat + delay + logging)
+[    0.000050] INFO  brickOS-prototype v0.2.0 -- core MainLoop (interrupt heartbeat + delay + logging)
 [    0.000684] INFO  platform: qemu-aarch64/virt (aarch64)
 [    0.002937] INFO  mem: heap=1048576 contig=262144 page=1048576(256 pages) dma=262144
 [    0.003849] INFO  mem: identity map on (SCTLR=0x30d51825, regions=9, 4 KiB pages=2048, 2 MiB device blocks=512)
 [    0.004479] INFO  mem: TTBR0=0x400a3000 TCR=0x200803d19 MAIR=0x4400ff
 [    0.001157] INFO  entry chain: start.S -> br_core_main (core.init -> platform.init -> core.plat.init -> plugin_manager: EARLY/CORE/LATE -> irq on -> START) -> app thread -> br_sched_run
-...                                                                    ← 67 项 PASS(见 make irq-test)
-[    0.031887] INFO  [IRQCONF] SUMMARY pass=67 fail=0 total=67
-[    0.032564] INFO  int: conformance ALL PASS (failures=0)
+[    0.009748] INFO  vfs: mount / (root type=1)
+[    0.011129] INFO  vfs: mount /dev (root type=1)
+[    0.012543] INFO  devfs: /dev mounted (1 device(s) visible so far)
 [    0.032862] INFO  int: timer PPI armed by platform (virq=0 INTID=30, 100 ms)
-...                                                                    ← 35 项 PASS(见 make dbg-test)
+...                                                                    ← START 相跑完; 下面是**自检 pass**(ADR-0010)
+[    0.030486] INFO  [SELFTEST] ---- plugin self-tests (START 之后, 调度器接管之前) ----
+[    0.075021] INFO  [DEVCONF] SUMMARY pass=6 fail=0 total=6
+[    0.121820] INFO  [CDEVCONF] SUMMARY pass=8 fail=0 total=8
+[    0.124976] INFO  [IOCONF] SUMMARY pass=12 fail=0 total=12
+[    0.031887] INFO  [IRQCONF] SUMMARY pass=67 fail=0 total=67
 [    0.054880] INFO  [MEMCONF] SUMMARY pass=35 fail=0 total=35
-[    0.055056] INFO  mem: conformance ALL PASS (failures=0)
 [    0.113357] INFO  [TRACE] total=461 drained=264 overrun=8 ids=3 live=197
-[    0.118435] INFO  [LEAK] summary live=1 bytes=123 owners=1 corrupt=0 high_water=18352
 [    0.122500] INFO  [DBGCONF] SUMMARY memleak pass=12 fail=0 total=12
 [    0.127891] INFO  [DUMP] ===== snapshot start =====
 [    0.130603] INFO  [DUMP] regions=9
-[    0.132661] INFO  [LEAK] summary live=0 bytes=0 owners=0 corrupt=0 high_water=18352
-[    0.133731] INFO  [BT] frames=4
 [    0.133820] INFO  [DUMP] ===== snapshot end =====
-[    0.135335] INFO  [DBGCONF] SUMMARY pass=9 fail=0 total=9
-[    0.135498] INFO  dbg: conformance ALL PASS (failures=0)
-[    0.141333] INFO  dbg: boot snapshot lines=24
+[    0.135335] INFO  [DBGCONF] SUMMARY pass=8 fail=0 total=8
+[    0.136957] INFO  [PLGCONF] SUMMARY pass=7 fail=0 total=7
+[    0.139543] INFO  [SVCCONF] SUMMARY pass=3 fail=0 total=3
+[    0.227397] INFO  [TASKCONF] SUMMARY pass=12 fail=0 total=12
+[    0.522121] INFO  [SYNCCONF] SUMMARY pass=12 fail=0 total=12
+[    0.525079] INFO  [VFSCONF] SUMMARY pass=13 fail=0 total=13
+[    0.529387] INFO  [SELFTEST] SUMMARY plugins=14 ran=11 skipped=4 fails=0 errors=0
+[    0.530000] INFO  [PLUGIN] manager: 调度器已注册 ⇒ br_sched_run()
 [    1.033218] INFO  tick=1 uptime=1034999 us delay=1000054 us (>=1000000 us: ok) irq_ticks=9
 [    2.033521] INFO  tick=2 uptime=2035324 us delay=1000001 us (>=1000000 us: ok) irq_ticks=19
-[    2.149967] INFO  dbg: steady-state trace drained=40
 ```
 
 几处值得看的证据: `identity map on (SCTLR=0x30d51825, ...)` 是 MMU 真的开了(读回 `SCTLR_EL1`);
@@ -442,30 +513,30 @@ TLSF 堆与 contig/页池的控制块(池本体在 region 表划的 RAM 里, 不
 
 ## 5. WORKAROUND(欠债清单)
 
-v0.1.0 有**七条**欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**:
+v0.2.0 的欠债全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)** —— 本节只列**还在欠**的
+(已注销的 `br-wa-entry-001` 见该文件的"已注销"表):
 
 | id | 一句话 |
 |---|---|
-| `br-wa-entry-001` | **Platform 的插件化只完成了一半**: `plugin.toml` + 描述符已就位, 源集合也已改由插件的 `[build].sources` 声明(`brickie build` 消费), 但启动链的**调用点**仍是 APP 直调, 不是 `.br_plugins` 段枚举驱动 |
-| `br-wa-boot-001` | 启动链仍被压缩成一个死循环(无 plugin_manager / 阶段机 / 调度器); 中断框架挂接的三处(core.init 的 TPIDR_EL1、"全部 init 之后开中断"、timer PPI 的 ISR 注册)都靠替身; **新增**: 五个调试服务插件的 init 与调用也靠 APP 直调(`allow_edges` 里的两条 M0 引导例外) |
+| `br-wa-fs-001` | **挂载点是代码常量**: `fs/tmpfs` 的 `/`、`fs/devfs` 的 `/dev` 写死在源码里, 而 `plugin.toml` 的 `[[mount]]` 只是**人读的声明面** —— 缺"manifest → 挂载计划"的生成链路(**两处真值**, 与 `br-wa-mem-001` 同源) |
+| `br-wa-io-001` | **PL011 是"轮询 cdev", 不是设计写的"中断 tty"**: 不开 UART 中断、阻塞 read 靠 `br_task_sleep` 轮询、无 tty 层; 另: `SET_BAUD` 会连带改内核日志速率(与 platform 的早期 console 共用同一根 UART) |
+| `br-wa-boot-001` | **① 已还**(ADR-0008: 有了独立的 `core.init` 入口 —— 四阶段启动链)。**仍欠两件**: ② APP 仍直读平台身份(`br_plat_name/isa/timer_ticks`)⇒ 还剩一条 `allow_edges` 豁免; ③ 日志/trace 直写 console/RAM 环, 未经服务注册表(与 `br-wa-debug-002` 同源) |
 | `br-wa-isa-001` | **ISA 共享库这一层还没有独立存在**: GICv3 方言、异常向量桩、**4 KiB 页表构造(`mmu.c`)** 暂居 platform 插件目录(靠文件边界分层); 异常帧布局因 extable fixup 暂放 core |
 | `br-wa-toolchain-001` | 工具链用外部 gcc; 目标事实写在声明面(`product.toml` + platform 的 `[build.target]`), **工具候选序与解析在 `brickie-core`**(裁定 R-14) |
 | `br-wa-mem-001` | **三池比例写死在 platform 的 region 表里**(heap 1 MiB / contig 256 KiB / page 1 MiB / DMA 256 KiB / 保留 16 KiB), 未经 manifest 的 `[budget]`/`[[res]]` 生成 —— 编译编排**已落地**(`brickie build`), 仍欠的是 `budget → region` 的**生成链路** |
 | `br-wa-debug-001` | **memleak 的"归属标签" ≠ v2 的 per-plugin arena 记账**: 能报"谁没还、在哪分配的", 没有预算上限/强制归属/OOM 策略 |
 | `br-wa-debug-002` | **dump/trace 直写早期 console**, 未经 `5-01 §2` 的 debug bridge(COBS + CRC16 成帧 + `MEMRD`/`TRACE_READ` 命令面, M3) |
 
-**`br-wa-entry-001` 的退出条件**(`brickie`, 原名 `br`, 就绪后必须做的三件事):
+**`br-wa-entry-001` 已注销**(v0.2.0): ① `brickie check`/`gen` 按布局发现与校验插件;
+② `platform/` 收敛为插件 `platform/qemu-aarch64`; ③ 源集合改由 `[build].sources` 声明
+(ADR-0003 的 S1/S4), 且 ④ **启动链的调用点改成 `.br_plugins` 段枚举驱动**(ADR-0005,
+后由 ADR-0008 收敛成 `bl br_core_main`)。历史留档见
+[WORKAROUNDS.md](WORKAROUNDS.md) 的"已注销"表。
 
-1. ~~`br` 能按布局约定发现并校验插件(`4-02`)~~ ⇒ **已还**(`brickie check` / `gen`, 见
-   [docs/decisions/0001-platform-plugin-manifest.md](docs/decisions/0001-platform-plugin-manifest.md));
-2. ~~`platform/` 收敛为插件 `platform/qemu-aarch64`(`BR_PLUGIN` 描述符 + 声明片段, `4-03`)~~
-   ⇒ **已还**(`platform/qemu-aarch64/plugin.toml` + 生成物
-   `build/gen/platform/qemu-aarch64/plugin_desc.c`);
-3. ~~`start.S` 的调用点从"Makefile 直编"改为声明面驱动~~ ⇒ **直编那半条已注销**
-   (源集合改由 `platform/qemu-aarch64/plugin.toml` 的 `[build].sources` 声明、
-   `brickie build` 消费 —— ADR-0003 的 S1/S4); **仍欠**: 启动链的调用点从"APP 直调"
-   改为 `.br_plugins` 段枚举驱动(`3-05 §2.2` 的 `__br_plugins_start/__br_plugins_stop`)
-   —— 依赖插件管理器(M0 运行期)。
+**`br-wa-test-001`(用例编号债)在本刀**从三套扩到七套: 新增的 `TC-VFS-*`(13)/
+`TC-DEV-*`(6)/`TC-CDEV-*`(8)/`TC-IO-*`(12)在设计的 `6-01` 里**整组不存在**
+(7-storage/8-device 两域尚无用例表)⇒ 自编号; 补齐设计侧用例组后再改回正式编号。
+`fs-test` 门禁对这 39 个 tag **逐条点名**, 所以"裁掉一个用例"会立刻变红。
 
 代码里的标记形如 `WORKAROUND(br-wa-boot-001)`, 与登记表由 `make check-workarounds` 绑死:
 **任一侧多/少即报红** —— 欠债最怕的不是欠着, 是没人知道欠着。
@@ -480,6 +551,8 @@ v0.1.0 有**七条**欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**
 | `br_clock_now()` / `br_time_t` | `3-01 §4`(br-sched 组); `3-01 §14` CA-1(us) | 只实现读数; 超时表/唤醒属 M1 |
 | `br_log_*` | `5-01`(trace 观测)/ `11-01`(日志 Service) | v0.1.0 是 core 内的最小打印设施, 不是那个服务 |
 | `br_core_main()` | `1-01 §9` + `§6.2` 阶段表 | **四阶段启动链**(① 平台无关 → ② platform 插件 → ③ 堆/地址映射 → ④ 插件相位驱动), ADR-0008 |
+| **插件自检(selftest)** | `6-01`(用例是交付物; §2 运行基建)+ `1-01 §6.2`(四相与"两个完成点") | ADR-0010: 测试搬进各插件 `src/*_selftest.c`, 由 core 的**自检 pass**在 START 之后统一驱动(描述符的 `selftest` 钩子); 开关 `product.toml [selftest]` 是**生成期**的(关掉 ⇒ 描述符 NO_HOOK + `core/selftest/` 不编译 ⇒ 测试代码被裁出镜像)。**自检不是第五相**(它没有依赖语义, 对所有插件在同一时刻发生) |
+| **测试入口不进 `[[export]]`** | ADR-0005 裁定 9(钩子是组合期契约) | 11 个 `*_conformance`/`*_selftest` 从各 `plugin.toml` 的 `[[export]]` 移除 ⇒ 改用例不再算接口变更(接口快照已重发)。测试需要的插件私有符号走 `<plugin>/src/<short>_internal.h`(在 `src/` 而非 `include/`, 因为 `include/` 下的一切都是对外面) |
 | **`br_irq_*` 九件 + 域四件** | `3-01 §8/§8.1`(签名冻结)+ `3-02 §3–§9`(机制) | Stage 1 全量; `register/enable/disable` 的 thread-only 加了**运行期拒绝**(设计侧靠静态扫描) |
 | **`br_pic_register` / `br_irq_bindings_set` / `br_pic_ops_t`** | `3-02 §4.1/§14.3`(platform 侧契约) | 新增的核心符号, 未回灌 `3-01 §10` 的登记(属 Design 仓库, 见 ADR-0002 §4) |
 | **GICv3 方言(`br_gicv3_*`)** | `3-01 §8` 表"中断控制器 → GICv3 驱动"; `3-02 §4.1.1/§5.3/§7.1` | ISA 层代码暂居 platform 目录(`br-wa-isa-001`); 1020–1023 折算 / EOImode=0 / MSB 对齐量化 |
@@ -489,6 +562,9 @@ v0.1.0 有**七条**欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**
 | **`br_malloc` 族 / contig / page / dma / heap_usage** | `3-01 §6`(br-mem 11 函数, 签名逐字一致)+ `CA-6/CA-7/CA-8` | 三池由 platform 的 region 表按 `BR_MM_KIND_*` 划; TLSF + 红区/毒化是 `5-01 §4` 的 v1.x 便宜层; 归属标签只是 v2 arena 的近似(`br-wa-debug-001`) |
 | **`br_mm_region_add` / `br_mm_map` / `br_mm_unmap` / `br_mm_cache_*`** | `3-01 §7`(br-mm 5 函数) | `map`/`unmap` 按 `TC-MM-003` 的期望返回 `-ENOTSUP`(v2 重定位); 运行期改属性走 `br_mm_set_attrs`(用例做真 RO 保护验证); region 种类位是原型新增载体 |
 | **`br_mm_ops_t` / `br_mm_register` / `br_mm_activate`** | `3-01 §10`"平台侧接口"行(同 `br_pic` ops 手法)+ `1-01 §8` 三层模式 | 状态机(未注册→已注册→已激活)在 core, 页表构造在 platform; 描述符编码属 ISA 层 ⇒ `br-wa-isa-001` 范围扩大 |
+| **`framework/{vfs-core,dev-core,cdev-core}`** | `7-01`(§1 SD-1/§2 SD-15/§3 SD-7)、`8-01`(§1 框架件归属与形态 A/B/C、§2 注册表与 open_file 钩子、§3 子分类与 D22 预留)、`1-01` §4.5(D19) | 三件的依赖方向**逐条照 §7.3/`8-01` §1.3**: `cdev-core→dev-core`(init)、`cdev-core→vfs-core`(type)、`dev-core→vfs-core`(**type** —— 写成 runtime 会推翻形态 B); `vfs-core` 的 deps **为空**(D21 撤销设备路由后的纯 VFS)。增量: `br_inode_t` 加 `fpriv`、补路径级便捷面与 `br_open_err`、补 5 个存储域错误码(见 ADR-0009 §3) |
+| **`fs/{tmpfs,devfs}`** | `7-03`(§2 tmpfs rootfs / §3 devfs 设备节点 / §6 挂载计划) | tmpfs 挂 "/" 并预建 `/dev /data /tmp`; devfs 把 dev-core 注册表**实时投影**为节点(打开经类 open_file 钩子)⇒ `/dev/uart0` 可 `br_open`。两件的挂载点是**代码常量**(`[[mount]]` 声明面工具侧尚未消费)⇒ `br-wa-fs-001` |
+| **`io/uart-pl011`** | `1-03 §1`(M0 轮询 console → **M2 注册 cdev**)、`8-01` §6(驱动编写者契约)、§5(ioctl 编码) | v1 交付**注册 cdev + 轮询式会话**(`/dev/uart0` 可开/读/写/ioctl/poll + 严格独占); **不开 UART 中断**(中断 tty 需 Stage 2 的 bh)⇒ `br-wa-io-001`。与 platform 的 `console_pl011.c` 是同一硬件的两种**设计内**形态(后者是 panic 通道, 不能注册设备) |
 | **`service/{trace,backtrace,hexdump,memleak,dump}`** | `1-03 §1`(v1.0 插件清单: `service/trace`)+ `5-01`(§1 trace / §2 bridge / §3 ramdump 捕获集 / §4 memleak) | `service/trace` 与清单同名; 另四件是本次补的调试服务(6-01 尚无 `TC-DBG-*` 组, 属回灌项); 调用点靠 `product.toml` 的两条 M0 引导例外(`br-wa-boot-001`) |
 | **`tests/host/mem_test.c` + `make mem-test`** | `1-03` 的"host 平台插件: CI 秒级 + ASan 白捡" | 完整 host 平台插件未落地; 本原型先做到"内存实现编成宿主可执行跑算法压测"(无需交叉工具链/QEMU) |
 | **`board_irq.h`** | `3-02 §3.1`(IR-2 生成头) | 走设计明示的**退路**: platform 导出静态头(brickie v0.1 不生成该头, 属 2-01 的 O-4) |

@@ -13,8 +13,9 @@
  *   - 环的消费 → `service/trace`;
  *   - 泄漏/红区账 → `service/memleak`;
  *   - **本插件自己只做三件事**: ① 按 region 表做边界判定(未声明区拒绝 dump);
- *     ② 把上面几件的输出编排成一份"现场"; ③ 调试域的 conformance 入口
- *     `br_dump_conformance()`(与 platform 的 `br_plat_irq_conformance()` 同型)。
+ *     ② 把上面几件的输出编排成一份"现场"; ③ 自身状态的 LATE 相 init + 启动快照。
+ *     ★ 调试域自检入口(ADR-0010 前 dump 对外发的那个 conformance 函数)已移出本头: 自检是
+ *     **测试面**而不是插件能力, 进 golden 接口会让"改一条用例"变成接口变更。
  *
  * ISR 安全: 全部 **thread-only**(会打印、会走堆观测)。
  */
@@ -41,23 +42,21 @@
 /* 单次 dump 的字节上界(v1 静态预算; 防"一个 dump 打满 UART") */
 #define BR_DUMP_MAX_BYTES  4096u
 
-/* LATE 相 init: 注册 trace 事件名 + 自检前置。返回 0。 */
+/* LATE 相 init: 注册本插件自己的 trace 事件名(供离线解码可达)。返回 0。
+ * (不再兼"自检前置": 自检由插件管理器在全部 START 之后统一驱动, 见文件头。) */
 int br_dump_init(void);
 
 /*
- * **调试域一致性用例入口**(target-only; 打印 `[DBGCONF] PASS/FAIL <tag> <desc>` 与
- * `[DBGCONF] SUMMARY pass=N fail=0 total=N`)。它按顺序跑:
- *   trace(TC-DBG-00x) → backtrace(01x) → hexdump(02x) → dump(03x) → memleak(04x)
- * 每件由对应插件自己的 `*_selftest()` 提供, 本函数只汇总与编排。
- *
- * ★ 它还兼**调试域的 LATE 相 init 编排**(v0.1 的替身, `WORKAROUND(br-wa-boot-001)`):
- *   设计 `1-01 §9` 里"LATE 相按 `[[dep]]` 拓扑序调各插件 init"归 plugin_manager, 而
- *   v0.1 没有阶段机; dump 在声明面上正是这四件的依赖方 ⇒ 由它按依赖序代调
- *   (四个 init 都幂等, 重复调用无害)。调用方因此只需认识 dump 一个面 —— 这也是
- *   APP 只需一条 `allow_edges` 的原因。
- * 返回失败数(0 = 全绿)。
+ * 调试域自检入口(ADR-0010 前 dump 对外发的那个 conformance 函数)已拆掉, 不再是对外 API:
+ *   - 各插件的用例在 `src/<short>_selftest.c` 里, 由描述符钩子 `.selftest` 挂出,
+ *     **core 在一个 pass 里驱动**(`br_plugin_manager_selftest`);
+ *   - dump 自己的用例(TC-DBG-030/031/032/100)搬到 `src/dump_selftest.c`, 入口名
+ *     `dump_selftest` 由生成物按 symbol_prefix 推导;
+ *   - 旧入口兼的"代调四家 init"编排一并移除: init 由 plugin_manager 按 `[[dep]]`
+ *     拓扑序驱动(ADR-0005 裁定 G6: 非 0 rc ⇒ 停机)。
+ * ★ 测试入口**不进**本插件的 golden 接口面 —— 否则改一条用例就成了对外接口变更
+ *   (接口 hash 覆盖的正是声明面), 与"自检与生产分离"的裁定冲突。
  */
-int br_dump_conformance(void);
 
 /* 打印 region 清单(设计 §3 捕获集的"内存 region 表"): 每行
  *   `[DUMP] region[<i>] kind=<name> attrs=0x<hex> base=0x<hex> size=<n>`

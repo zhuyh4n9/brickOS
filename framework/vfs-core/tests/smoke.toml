@@ -1,0 +1,171 @@
+# framework/vfs-core — conformance 用例(人写)
+#
+# 与 `vfs_core_selftest()`(src/vfs_selftest.c)里的 TC-VFS-001..013 一一对应
+# (该钩子在描述符里, 由 **core** 在全部 start() 之后统一驱动, ADR-0010):
+# 红绿由 in-image 套件打 `[VFSCONF] PASS/FAIL`, 末尾 SUMMARY; 门禁 `fs-test` 要求
+# `[VFSCONF] SUMMARY pass=N fail=0`。本文件是同一批用例的**声明面骨架**,
+# 不是可执行形式(in-image 套件才是), 形状照 `6-01` §2 的字段契约。
+# 设计出处: `docs/7-storage/7-01-vfs.md` §1/§2/§3; 裁定见 ADR-0009 §2.2/§2.3。
+schema = 1
+
+[[case]]
+id       = "TC-VFS-001"
+pre      = "START 相; 各 FS 的 CORE init 已完成(tmpfs 至少挂了 '/'); 挂载表可观测"
+steps    = [
+    "br_mount_count() > 0, 且逐条 br_mount_path_at(i) 非 NULL 且以 '/' 开头",
+    "存在一条路径恰为 '/' 的挂载(rootfs 兜底, SD-1 的单路由前提)",
+    "br_mount_path_at(br_mount_count()) == NULL(越界取路径)",
+]
+expect   = "[VFSCONF] PASS TC-VFS-001 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-002"
+pre      = "TC-VFS-001 已过(表里有根挂载)"
+steps    = [
+    "对每个挂载 m: mount_match(m->path) == m(自己的路径必须命中自己, 最长前缀)",
+    "拿现有根挂载的 {path, ops, priv} 再注册一次 ⇒ -EEXIST",
+    "br_mount_register('/x', NULL, NULL) / (NULL, ops, NULL) / ('relative', ops, NULL) ⇒ 全 -EINVAL",
+]
+expect   = "[VFSCONF] PASS TC-VFS-002 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-003"
+pre      = "TC-VFS-002 已过; 根挂载上已清掉上次运行的残留(自用临时目录)"
+steps    = [
+    "br_mkdir(<base>/vfsconf.d) == 0; 再来一次 ⇒ -EEXIST",
+    "br_stat 该目录 ⇒ BR_OK 且 type == BR_INODE_DIR",
+    "以 BR_O_WRONLY 打开该目录 ⇒ NULL 且 err == -EISDIR",
+    "造一个文件后打开 <file>/x ⇒ NULL 且 err == -ENOTDIR(文件当目录走查)",
+]
+expect   = "[VFSCONF] PASS TC-VFS-003 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-004"
+pre      = "TC-VFS-003 已过; 自用临时目录已建"
+steps    = [
+    "以 BR_O_CREAT|BR_O_RDWR|BR_O_TRUNC 打开 a.bin",
+    "三段写 'brickOS ' / 'vfs ' / 'roundtrip', 各自返回写入字节数",
+    "lseek(0, SEEK_END) == 总长; lseek(0, SEEK_SET) == 0; br_file_offset() == 0",
+    "read 回总长, 与 'brickOS vfs roundtrip' 逐字节一致",
+    "EOF 之后再 read 1 字节 ⇒ 0(不是 -EIO、不死循环)",
+]
+expect   = "[VFSCONF] PASS TC-VFS-004 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-005"
+pre      = "TC-VFS-004 的句柄仍开着(同一个文件)"
+steps    = [
+    "br_file_close(f) == 0",
+    "br_stat(a.bin) == 0 且 type == BR_INODE_FILE, size == 写入总长",
+]
+expect   = "[VFSCONF] PASS TC-VFS-005 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-006"
+pre      = "TC-VFS-004/005 已过(a.bin 存在)"
+steps    = [
+    "br_open_err(a.bin, O_CREAT|O_EXCL|O_RDWR) ⇒ NULL 且 err == -EEXIST",
+    "br_open_err('/vfsconf_no_such_file', O_RDONLY) ⇒ NULL 且 err == -ENOENT",
+    "br_open_err(NULL, O_RDONLY) ⇒ NULL 且 err == -EINVAL",
+    "br_open_err('relative/path', O_RDONLY) ⇒ NULL 且 err == -EINVAL(native 只认绝对路径)",
+]
+expect   = "[VFSCONF] PASS TC-VFS-006 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-007"
+pre      = "TC-VFS-004 已过; 自用临时目录里恰有 1 个文件"
+steps    = [
+    "br_opendir(<dir>) 非 NULL, 循环 br_readdir 到返回 0",
+    "条目总数 == 3('.' + '..' + 1 个文件), 其中 type == BR_INODE_FILE 的恰 1 条",
+    "br_closedir 收尾",
+]
+expect   = "[VFSCONF] PASS TC-VFS-007 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-008"
+pre      = "TC-VFS-004/005 已过(a.bin 有内容)"
+steps    = [
+    "br_rename(a.bin, b.bin) == 0; stat(b.bin) 成功且 size > 0; stat(a.bin) ⇒ -ENOENT",
+    "br_truncate(b.bin, 7) == 0; stat 的 size == 7; read 回 7 字节 == 'brickOS'",
+    "以 BR_O_WRONLY|BR_O_TRUNC 打开 b.bin 并关闭; stat 的 size == 0",
+]
+expect   = "[VFSCONF] PASS TC-VFS-008 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-009"
+pre      = "TC-VFS-008 已过(b.bin 存在, 长度 0)"
+steps    = [
+    "以 BR_O_RDWR 打开 b.bin",
+    "lseek(-1, SEEK_SET) == -EINVAL(负偏移)",
+    "lseek(0, SEEK_END) == 0; lseek(1, 99) == -EINVAL(非法 whence)",
+    "br_file_inode(f) 非 NULL 且 type == BR_INODE_FILE; (br_file_flags(f) & BR_O_ACCMODE) == BR_O_RDWR",
+    "close == 0",
+]
+expect   = "[VFSCONF] PASS TC-VFS-009 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-010"
+pre      = "TC-VFS-008/009 已过(b.bin 存在)"
+steps    = [
+    "br_unlink(b.bin) == 0; 再来一次 ⇒ -ENOENT; 其后 br_stat(b.bin) ⇒ -ENOENT",
+    "br_rmdir(<dir>) == 0; 再来一次 ⇒ -ENOENT",
+]
+expect   = "[VFSCONF] PASS TC-VFS-010 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-011"
+pre      = "无(纯健壮性; 表与堆已就绪)"
+steps    = [
+    "br_file_read/write/lseek/ioctl/fsync(NULL, …) ⇒ 全 -EINVAL",
+    "br_file_close(NULL) == 0 且 br_closedir(NULL) == 0(幂等)",
+    "br_readdir(NULL, NULL) == -EINVAL; br_opendir('/vfsconf_no_such_dir') == NULL",
+    "br_stat(NULL,…) / br_mkdir(NULL) / br_truncate(NULL, 0) ⇒ 全 -EINVAL",
+]
+expect   = "[VFSCONF] PASS TC-VFS-011 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-012"
+pre      = "组合里有非根挂载(devfs 挂的 '/dev')"
+steps    = [
+    "对每个挂载点 p(跳过 '/'): br_rmdir(p) == -EBUSY",
+    "对每个挂载点 p(跳过 '/'): br_unlink(p) == -EBUSY",
+    "语义: 卸载需要运行时挂载语义(O-S3, 不早于 v3), 故挂载点本身不可删",
+]
+expect   = "[VFSCONF] PASS TC-VFS-012 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-013"
+pre      = "组合里有非根挂载(devfs 挂的 '/dev'); 这是 devfs + cdev 适配层的泛型验证, 用例不认任何设备名"
+steps    = [
+    "取第一个非根挂载 dev; conf_count_dir(dev) 成功且条目总数 >= 2",
+    "br_opendir(dev) 后逐条 br_readdir; 跳过 '.' 与 '..'",
+    "每个节点: br_stat(dev/name) == 0",
+    "每个节点: br_open_err(dev/name, O_RDONLY|O_NONBLOCK) 只允许两种结果 —— 成功(有文件面, close 成对) 或 err == -ENOTSUP(看得见打不开); 别的 errno 判红",
+]
+expect   = "[VFSCONF] PASS TC-VFS-013 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

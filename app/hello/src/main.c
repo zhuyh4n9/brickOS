@@ -31,10 +31,7 @@
 #include <hello/hello.h>
 
 #include <br/core/br_log.h>
-#include <br/core/br_plugin.h>
 #include <br/core/br_sched.h>
-#include <br/core/br_svc.h>
-#include <br/core/br_sync.h>
 #include <br/core/br_time.h>
 #include <br/core/br_version.h>
 
@@ -120,15 +117,16 @@ static void hello_mainloop(void *arg)
 }
 
 /*
- * START 相: 启动期自检 + MainLoop(**不返回**)。
+ * START 相: 启动横幅 + 创建 APP 线程(**不返回**)。
  *
- * 自检的分工(设计 6-01 的用例组):
- *   - `[PLGCONF]` 插件管理器(本镜像的 `.br_plugins` / init-DAG / 相位);
- *   - `[SVCCONF]` 服务注册表(core 公地);
- *   - `[TASKCONF]` / `[SYNCCONF]` 调度框架与同步原语(F2/F3 的实现; 调用点先接线)。
- * 中断(`[IRQCONF]`)/内存(`[MEMCONF]`)/调试域(`[DBGCONF]`)三套**已按相位归位**:
- * 前两者在 platform 的 start, 后者在 service/dump 的 LATE init —— APP 不再直调它们
- * (这正是 `product.toml [lint].allow_edges` 里 app → service/dump 那条豁免可以删掉的依据)。
+ * ★ **自检不在本相里, 也不由 APP 驱动**(ADR-0010): 七套一致性用例(`[PLGCONF]`/
+ *   `[SVCCONF]`/`[TASKCONF]`/`[SYNCCONF]`/`[VFSCONF]` + platform 的 `[IRQCONF]`/
+ *   `[MEMCONF]` + 调试域的 `[DBGCONF]`)全部由 core 的**自检 pass**在**全部 start
+ *   返回之后**统一驱动(`br_plugin_manager_selftest()` → 各描述符的 `selftest` 钩子)。
+ *   历史沿革(免得下一个人以为这里漏了什么): 它们曾分别由 APP 的 start(四套 core 套件
+ *   + VFS 总套件)、platform 的 start(中断/内存)、dump 的 LATE init(调试域)驱动 ——
+ *   五种调用形态, 没有一个地方能回答"这个镜像跑了哪些测试"。ADR-0010 把它们收归一处,
+ *   顺带让 APP 不再认识任何框架件/服务(那条 `app → framework/vfs-core` 豁免随之删除)。
  *
  * ★ 为什么 APP 不自己碰中断控制(P-IRQ-17): 设计 3-01 §13.6 的特权分级把"中断控制"
  *   归 P3(仅调度类 ability 与 platform 可声明), APP 是 P0 ⇒ 只能**读**平台的心跳计数。
@@ -149,20 +147,19 @@ int hello_start(void)
                 "(core.init -> platform.init -> core.plat.init -> plugin_manager: "
                 "EARLY/CORE/LATE -> irq on -> START) -> app thread -> br_sched_run");
 
-    /* 插件管理器一致性用例(TC-PLUG-*): 段条数/拓扑序/相位单调/环检测负例。 */
-    br_plugin_conformance();
-
-    /* 服务注册表一致性用例(TC-SVC-*)。 */
-    br_service_conformance();
-
     /*
-     * 调度框架与同步原语的一致性用例。这两个入口必须由 APP 的 start 调用
-     * (与其余 conformance 同一位置、同一形态); 它们的实现分别属 F2/F3 ——
-     * 调用点先接线, 实现后补。此刻 timer 已在 platform 的 start 里 armed,
-     * 所以里面的真超时用例(20 ms / 不早醒)有节拍可用。
+     * ★ **自检不在这里跑**(ADR-0010): 五套一致性用例(PLGCONF/SVCCONF/TASKCONF/
+     *   SYNCCONF/VFSCONF)与本插件自己的自检一样, 都由 core 在**全部 start 之后、
+     *   调度器接管之前**统一驱动(`br_plugin_manager_selftest()`)。
+     *
+     *   于是 APP 的 start 变回"纯业务": 打印启动横幅 + 创建 APP 线程。这顺带**还清了
+     *   一笔旧账** —— 以前 APP 要直调四个 core 套件与一个 framework 套件(靠
+     *   `allow_edges` 豁免), 现在它一个都不认识; 那些调用点跟着套件一起搬到了
+     *   `core/selftest/`(core 自己驱动自己)与各插件的 selftest 钩子。
+     *
+     *   顺带的结果: APP 对存储域的 `allow_edges` 豁免**不再需要**了 —— 全链路验证
+     *   从"消费者替所有人跑测试"变成"core 逐个驱动 + 用例自带判据"。
      */
-    br_sched_conformance();
-    br_sync_conformance();
 
     /* 创建 APP 线程: 此后 CPU 的占用由调度器决定(coop: 只在显式点换栈)。 */
     const br_task_attr_t attr = {

@@ -35,6 +35,8 @@
 #include <br/core/br_time.h>
 #include <br/core/br_trace.h>
 
+#include "trace_internal.h"    /* 自检用的内部视图(见该头; 生产路径不用它) */
+
 /* =====================================================================
  * 常量与内部状态
  * ===================================================================== */
@@ -69,20 +71,6 @@ static br_trace_evt_t s_batch[TRC_DRAIN_BATCH];
 static const char TRC_NAME_REPORT[] = "trace.report";
 static const char TRC_NAME_RESET[]  = "trace.reset";
 
-/* selftest 的 tag 也用静态数组: marker 的幂等判据是指针相等 */
-static const char TRC_TAG_SELFTEST[] = "selftest.a";
-
-/* 线性探测判据: 下面两个 tag 的初始槽位**相同**(此处 = 16; 用例内用 trc_slot_of
- * 复核), 用来断言"撞槽不再 -ENOSPC, 而是探测到下一个空槽、各自拿到不同 id"。 */
-static const char TRC_TAG_SLOT_A[] = "selftest.victor";
-static const char TRC_TAG_SLOT_B[] = "selftest.yankee";
-
-/* "内容同名但指针不同 ⇒ -ENOSPC" 判据。刻意用**非 const**的可写数组: 常量合并
- * (-fmerge-constants)可能把内容相同的 const 数组并成同一地址, 那就测不到
- * "指针不同"这一支了。 */
-static char TRC_TAG_DUP_A[] = "selftest.dup";
-static char TRC_TAG_DUP_B[] = "selftest.dup";
-
 /* =====================================================================
  * 小工具(不引 libc)
  * ===================================================================== */
@@ -111,13 +99,6 @@ static br_bool trc_streq(const char *a, const char *b)
         b++;
     }
     return (*a == *b);   /* 同时停在 '\0' 才相等 */
-}
-
-/* 记一条 DBGCONF 判据; 返回 0/1 便于累加失败数 */
-static br_u32 trc_conf(br_bool ok, const char *tag, const char *what)
-{
-    br_log_info("[DBGCONF] %s %s %s", ok ? "PASS" : "FAIL", tag, what);
-    return ok ? 0u : 1u;
 }
 
 /* =====================================================================
@@ -315,112 +296,24 @@ int br_trace_svc_init(void)
 }
 
 /* =====================================================================
- * 自检(TC-DBG-00x)
+ * 自检用的内部视图
+ *
+ * 见 `src/trace_internal.h` 的说明: 这两条**只**为 `trace_selftest.c` 存在 —— 用例要
+ * 复核"撞槽前提"与"解码出的名字逐字节相等", 用公开 API 表达不出来。★ 一律**转调**
+ * 生产实现, 不复制逻辑: 用例必须跑真算法, 否则验证的是副本。
+ * 原型在该头文件里(-Wmissing-prototypes), 入口名不是本插件的对外 API。
  * ===================================================================== */
 
-int br_trace_svc_selftest(void)
+br_u32 br_trace_internal_slot_of(const char *name)
 {
-    br_u32 fails = 0u;
-
-    /* ---- TC-DBG-001: marker 幂等 + 动态 id/名字 + 消费计数 ---- */
-    br_trace_svc_reset();
-
-    const int   id1 = br_trace_svc_marker(TRC_TAG_SELFTEST);
-    const int   id2 = br_trace_svc_marker(TRC_TAG_SELFTEST);
-    const char *nm  = (id1 >= 0) ? br_trace_svc_name((br_u32)id1) : BR_NULL;
-
-    fails += trc_conf((id1 >= (int)BR_TRACE_SVC_ID_BASE) && (id1 == id2)
-                      && (nm != BR_NULL) && trc_streq(nm, TRC_TAG_SELFTEST),
-                      "TC-DBG-001",
-                      "marker 两次得到同一动态 id(>= BASE)且 name 可解码");
-
-    const br_u32 got1 = br_trace_svc_report(0u);
-    fails += trc_conf((got1 >= 2u) && (id1 >= 0)
-                      && (br_trace_svc_seen((br_u32)id1) >= 2u),
-                      "TC-DBG-001",
-                      "report(0) 取回 >=2 条且 seen(id) >= 2");
-
-    /* ---- TC-DBG-001(续): 撞槽走线性探测, 不再"撞车即错" ----
-     * 两个 tag 的初始槽位相同(用例内用 trc_slot_of 复核, 免得 hash 改动后这条
-     * 断言悄悄变成空转); 断言两者都注册成功、id 不同、名字各自可解码。
-     * 用 register(不发事件); tag 是静态数组(指针稳定) ⇒ 重复跑 selftest 仍幂等。 */
-    const int   ca  = br_trace_svc_register(TRC_TAG_SLOT_A);
-    const int   cb  = br_trace_svc_register(TRC_TAG_SLOT_B);
-    const char *cna = (ca >= 0) ? br_trace_svc_name((br_u32)ca) : BR_NULL;
-    const char *cnb = (cb >= 0) ? br_trace_svc_name((br_u32)cb) : BR_NULL;
-
-    fails += trc_conf((trc_slot_of(TRC_TAG_SLOT_A) == trc_slot_of(TRC_TAG_SLOT_B))
-                      && (ca >= (int)BR_TRACE_SVC_ID_BASE)
-                      && (cb >= (int)BR_TRACE_SVC_ID_BASE)
-                      && (ca != cb)
-                      && (cna != BR_NULL) && trc_streq(cna, TRC_TAG_SLOT_A)
-                      && (cnb != BR_NULL) && trc_streq(cnb, TRC_TAG_SLOT_B),
-                      "TC-DBG-001",
-                      "hash 同槽的两个 tag 线性探测后都注册成功(id 不同、名字正确)");
-
-    /* 内容同名但指针不同 ⇒ -ENOSPC(身份不可判定, 不复用也不新建第二份名字)。
-     * 顺带断言两个静态数组地址确实不同(常量合并若发生, 这条会先报出来)。 */
-    const int da = br_trace_svc_register(TRC_TAG_DUP_A);
-    const int db = br_trace_svc_register(TRC_TAG_DUP_B);
-
-    /* -Warray-compare: 直接比较数组名会被警告, 这里显式比首元素地址 */
-    fails += trc_conf((da >= (int)BR_TRACE_SVC_ID_BASE)
-                      && (db == BR_ERR(BR_ENOSPC))
-                      && (&TRC_TAG_DUP_A[0] != &TRC_TAG_DUP_B[0]),
-                      "TC-DBG-001",
-                      "内容同名但指针不同 ⇒ -ENOSPC(不复用、不新建)");
-
-    /* ---- TC-DBG-002: 故意把环打满, overrun > 0 是"这段历史不可信"的诚实信号 ----
-     * 连续发 RING_SIZE + 8 条而不消费: 生产者覆盖尚未消费的旧槽位, overrun 递增。
-     * summary 打印的 overrun 直接取 br_trace_overrun(), 与断言值同源 ⇒ 相等按构造成立;
-     * 这里额外验证"打印前后读数不变"(drain/summary 都不改生产者计数)。 */
-    const br_u32 orun_before = br_trace_overrun();
-
-    for (br_u32 i = 0u; i < ((br_u32)BR_TRACE_RING_SIZE + 8u); i++) {
-        (void)br_trace_svc_marker(TRC_TAG_SELFTEST);
-    }
-
-    /* 全部 drain; 有界循环: 消费期间 ISR 可能继续补货, 不能死等"空" */
-    for (br_u32 i = 0u; i < 8u; i++) {
-        if (br_trace_svc_report(0u) == 0u) {
-            break;
-        }
-    }
-
-    const br_u32 orun_after = br_trace_overrun();
-    (void)br_trace_svc_summary();
-    const br_u32 orun_post = br_trace_overrun();
-
-    fails += trc_conf((orun_after > 0u) && (orun_after >= orun_before)
-                      && (orun_post == orun_after),
-                      "TC-DBG-002",
-                      "打满环后 overrun > 0 且 summary 的 overrun 与之一致");
-
-    /* ---- TC-DBG-003: 截断消费后从最旧未消费处续读, 不丢中间积压 ---- */
-    br_trace_svc_reset();
-
-    for (br_u32 i = 0u; i < 5u; i++) {
-        (void)br_trace_svc_marker(TRC_TAG_SELFTEST);
-    }
-
-    const br_u32 first = br_trace_svc_report(2u);
-    const br_u32 rest  = br_trace_svc_report(0u);
-
-    fails += trc_conf((first == 2u) && (rest >= 3u),
-                      "TC-DBG-003",
-                      "report(2) 只取 2 条, 紧接 report(0) 续读 >=3 条");
-
-    /* ---- 收尾: 清计数并把环 drain 空, 免得污染后续 dump 的 trace 段 ---- */
-    br_trace_svc_reset();
-    for (br_u32 i = 0u; i < 8u; i++) {
-        if (br_trace_svc_report(0u) == 0u) {
-            break;
-        }
-    }
-    br_trace_svc_reset();
-
-    return (int)fails;
+    return trc_slot_of(name);
 }
+
+br_bool br_trace_internal_streq(const char *a, const char *b)
+{
+    return trc_streq(a, b);
+}
+
 
 /* =====================================================================
  * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物

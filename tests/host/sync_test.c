@@ -40,6 +40,14 @@
 
 #include "sched_internal.h"
 
+/*
+ * 自检套件入口的前置声明。ADR-0010 之后它**不再**出现在 `br_sync.h` —— 自检入口不是
+ * 插件的对外能力, 留在 golden 面会让"改一个用例"变成接口变更。声明集中在
+ * `core/selftest/core_selftest.c`; 本文件是调用者, 于是自带一份(实现随套件在
+ * `core/selftest/sync_selftest.c`, 由 gates.toml 的 sync-test sources 一起编)。
+ */
+int br_sync_selftest(void);
+
 #include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -756,8 +764,9 @@ static void host_stress(void)
 
 static void host_body(void)
 {
-    /* 与 target 侧**同一份**一致性用例(真的建线程 + join, 阻塞路径真跑) */
-    br_sync_conformance();
+    /* 与 target 侧**同一份**自检套件(`core/selftest/sync_selftest.c`): 真的建线程 +
+     * join, 阻塞路径真跑(返回值 = 失败项数, 红绿以日志与宿主汇总为准)。 */
+    br_sync_selftest();
 
     host_static_define();
     host_magic_corrupt();

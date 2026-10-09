@@ -1,0 +1,86 @@
+# framework/dev-core — conformance 用例(人写)
+#
+# 与 `dev_core_selftest()`(src/dev_selftest.c)里的 TC-DEV-001..006 一一对应
+# (该钩子在描述符里, 由 **core** 在全部 start() 之后统一驱动, ADR-0010):
+# 红绿由 in-image 套件打 `[DEVCONF] PASS/FAIL`, 末尾 SUMMARY; 门禁 `fs-test` 要求
+# `[DEVCONF] SUMMARY pass=N fail=0`。本文件是同一批用例的**声明面骨架**,
+# 不是可执行形式(in-image 套件才是), 形状照 `6-01` §2 的字段契约。
+# 设计出处: `docs/8-device/8-01-device.md` §2/§4/§5; 裁定见 ADR-0009 §2.1/§2.4。
+schema = 1
+
+[[case]]
+id       = "TC-DEV-001"
+pre      = "无(纯函数用例, 不碰注册表)"
+steps    = [
+    "br_dev_name_valid('uart0'/'a'/'nor0x') == BR_TRUE",
+    "br_dev_name_valid(NULL/'') == BR_FALSE",
+    "br_dev_name_valid('Uart0'/'0uart') == BR_FALSE(大写 / 数字开头)",
+    "br_dev_name_valid('u/art'/'u_art') == BR_FALSE(斜杠 / 下划线)",
+    "br_dev_name_valid(<40 字符名>) == BR_FALSE(超长: 长度必须 < BR_DEV_NAME_MAX)",
+]
+expect   = "[DEVCONF] PASS TC-DEV-001 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DEV-002"
+pre      = "注册表已就绪; 记下当前 br_dev_count()"
+steps    = [
+    "br_dev_add('Bad', <entry>) == -EINVAL(名字非法)",
+    "br_dev_add('testdev', <class_id = BR_CLASS_NONE>) == -EINVAL(没有形状解释者)",
+    "br_dev_add('testdev', NULL) == -EINVAL(entry 空)",
+    "br_dev_add(NULL, NULL) == -EINVAL",
+    "br_dev_count() 不变; br_dev_lookup('testdev') == NULL(坏输入不污染注册表)",
+]
+expect   = "[DEVCONF] PASS TC-DEV-002 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DEV-003"
+pre      = "注册表可观测"
+steps    = [
+    "br_dev_lookup('nosuchdev') == NULL(缺失是 NULL, 不是错误码)",
+    "br_dev_lookup(NULL) == NULL",
+    "br_dev_name_at(br_dev_count()) == NULL(越界)",
+    "br_dev_entry_at(br_dev_count()) == NULL(越界)",
+]
+expect   = "[DEVCONF] PASS TC-DEV-003 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DEV-004"
+pre      = "注册表里可能已有真实驱动登记的条目(如 uart0); 空表时该用例仍平凡成立"
+steps    = [
+    "遍历 i = 0..br_dev_count()-1: br_dev_name_at(i) 与 br_dev_entry_at(i) 都非 NULL",
+    "每条名字 br_dev_name_valid(name) == BR_TRUE",
+    "每条 br_dev_lookup(name) == br_dev_entry_at(i)(枚举与查找同源)",
+]
+expect   = "[DEVCONF] PASS TC-DEV-004 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DEV-005"
+pre      = "注册表里至少有 1 条(组合含 io/uart-pl011 时即满足); 表空时只走'不适用'分支"
+steps    = [
+    "取 br_dev_name_at(0) 与 br_dev_entry_at(0)",
+    "br_dev_add(该名字, 该 entry) == -EEXIST(唯一性执法)",
+]
+expect   = "[DEVCONF] PASS TC-DEV-005 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-DEV-006"
+pre      = "无(纯编译期编码, 用例只是把它翻译成运行期断言)"
+steps    = [
+    "cmd = BR_IOWR('u', 7, {u32 a; u32 b;})",
+    "BR_IOC_DIR(cmd) == (BR_IOC_READ | BR_IOC_WRITE)",
+    "BR_IOC_TYPE(cmd) == 'u'; BR_IOC_NR(cmd) == 7",
+    "BR_IOC_SIZE(cmd) == sizeof(该载荷)(位布局与 Linux _IOC 一致)",
+]
+expect   = "[DEVCONF] PASS TC-DEV-006 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

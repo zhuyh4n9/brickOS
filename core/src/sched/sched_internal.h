@@ -83,4 +83,13 @@ br_u32        br_waitq_len(const void *head);
 #endif
 br_u32 br_thread_pool_used(void);
 
+/*
+ * 已注册的调度器 ops(sched_core.c 的真值; 未注册 ⇒ BR_NULL)。
+ * 为什么在这里开这个口子: 自检套件(`core/selftest/sched_selftest.c`)要打
+ * `scheduler=%s kind=%u spawn=%u` 这条证据行 —— name/kind/tcb_size 只存在于注册表里。
+ * 让它读生产侧的**同一份**真值, 胜过在套件里复制一份插件表(那会有两处真值)。
+ * 只读: 本函数不给调用者任何写入通道。
+ */
+const br_sched_ops_t *br_sched_ops_get(void);
+
 #endif /* BR_SCHED_INTERNAL_H */

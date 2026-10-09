@@ -21,7 +21,7 @@
  * 输出协议(照 tests/host/mem_test.c):
  *   [HOSTTEST] PASS|FAIL <tag> <desc>
  *   [HOSTTEST] SUMMARY pass=N fail=M total=T
- * 有失败(含 br_sched_conformance 打出的任何 `[TASKCONF] FAIL`)⇒ 退出码非 0。
+ * 有失败(含 br_sched_selftest 打出的任何 `[TASKCONF] FAIL`)⇒ 退出码非 0。
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -34,6 +34,14 @@
 #include <br/sched/coop.h>
 
 #include "sched_internal.h"
+
+/*
+ * 自检套件入口的前置声明。ADR-0010 之后它**不再**出现在 `br_sched.h` —— 自检入口不是
+ * 插件的对外能力, 留在 golden 面会让"改一个用例"变成接口变更。声明集中在
+ * `core/selftest/core_selftest.c`; 本文件是调用者, 于是自带一份(实现随套件在
+ * `core/selftest/sched_selftest.c`, 由 gates.toml 的 sched-test sources 一起编)。
+ */
+int br_sched_selftest(void);
 
 #include <stdarg.h>
 #include <stdio.h>
@@ -93,7 +101,7 @@ void br_log_write(br_log_level_t level, const char *fmt, ...)
     const char *t = ((unsigned)level < (unsigned)BR_LOG_LEVEL_COUNT) ? tag[level] : "?";
     printf("[HOST %s] %s\n", t, buf);
 
-    /* 宿主门禁靠退出码判定; br_sched_conformance 的红绿也由这里汇总 */
+    /* 宿主门禁靠退出码判定; br_sched_selftest 的红绿也由这里汇总 */
     if (strstr(buf, "[TASKCONF] FAIL") != NULL) {
         s_conf_fail_seen++;
     }
@@ -388,15 +396,16 @@ static void host_supervisor(void *arg)
     host_case_timeout();
     host_case_sleep_until();
 
-    /* core 的一致性用例(它自身跑在真实线程里, 真的 create/join/yield/sleep) */
-    br_sched_conformance();
+    /* core 的自检套件(`core/selftest/sched_selftest.c`): 它自身跑在真实线程里, 真的
+     * create/join/yield/sleep。返回值 = 失败项数; 日志红绿由上面的 br_log 钩子汇总。 */
+    br_sched_selftest();
 
     host_check(s_idle_calls > 0u, "HOST-SCHED-IDLE",
                "pick_next 返回 NULL ⇒ core 进 idle(宿主由钩子代 WFI)并被 tick 唤醒");
     host_check(br_sched_task_count() == 2u, "HOST-SCHED-POOL",
                "测试线程全部被 join 回收(只剩 main + supervisor)");
     host_check(s_conf_fail_seen == 0, "HOST-SCHED-CONF",
-               "br_sched_conformance 无 [TASKCONF] FAIL");
+               "br_sched_selftest 无 [TASKCONF] FAIL");
     host_check((br_task_name(br_task_self()) != NULL) &&
                (strcmp(br_task_name(br_task_self()), "supervisor") == 0),
                "HOST-SCHED-NAME", "br_task_name/br_task_self 在真实线程里正确");

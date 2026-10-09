@@ -5,7 +5,7 @@
 #
 # 归属: 本插件是**编排者** —— 呈现原语归 service/hexdump, 栈回溯归 service/backtrace,
 # 环的消费归 service/trace, 堆/泄漏账归 service/memleak; 本插件自己只做
-# ① 按 region 表做边界判定、② 编排现场、③ 调试域 conformance 入口。
+# ① 按 region 表做边界判定、② 编排现场、③ **自带**自检套件(不再代调别家; ADR-0010)。
 #
 # 特权: P0(不声明 [privileged])。⚠ 读内存不属 3-01 §13.6 的 ops 三轴
 # (alloc/free/map/protect/flush/invalidate/unmap) —— 这是分级模型的一个缺口,
@@ -20,7 +20,7 @@ subkind     = "service"
 lang        = "c"
 phase       = "late"
 version     = "0.1.0.0"
-summary     = "现场倾倒: region 清单 / 边界受检的内存 dump / 堆与泄漏摘要 / trace 呈现 / 栈回溯 + 调试域 conformance 入口"
+summary     = "现场倾倒: region 清单 / 边界受检的内存 dump / 堆与泄漏摘要 / trace 呈现 / 栈回溯 + 自带自检套件(dump_selftest)"
 license     = "WTFPL"
 sched_class = "SAFE_PREEMPT"
 
@@ -107,16 +107,12 @@ name         = "dump"
 version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
-hash         = "sha256:d02f0a4af0753aa2ed4842e4dc4b6a338ca187a9908a326be48a1d24fcf5cec7"
+hash         = "sha256:19c962b129ced77e1f04973db05b196a7ad2f9852df6c7c36097396436335364"
 status       = "experimental"
 
 [[export.entries]]
 kind = "func"
 name = "br_dump_init"
-sig  = "int (void)"
-[[export.entries]]
-kind = "func"
-name = "br_dump_conformance"
 sig  = "int (void)"
 [[export.entries]]
 kind = "func"
@@ -158,6 +154,12 @@ value = "1"
 kind = "macro"
 name = "BR_DUMP_MAX_BYTES"
 value = "4096"
+
+[selftest]
+# ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = <prefix>selftest`。
+# 用例: TC-DBG-* 的调试域汇总。开关在 `product.toml [selftest]`(生成期裁决: 关掉 ⇒ 本文件与
+# src/*_selftest.c 一起不参与编译, 测试代码不进镜像)。
+cases = 0
 
 [build]
 sources  = ["src/*.c"]

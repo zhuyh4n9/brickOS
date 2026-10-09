@@ -138,10 +138,10 @@ br_bool br_spinlock_is_locked(const br_spinlock_t *s);
 br_u32 br_spinlock_contention(void);
 
 /*
- * 同步原语一致性用例(TC-SYNC-001..009 / TC-TIME-001..003, `6-01` §3.2/§3.3)。
- * 打印 `[SYNCCONF] PASS/FAIL <id> …` + `[SYNCCONF] SUMMARY pass=N fail=M`。
- * 用例**不改**全局状态(用例结束把对象复位)。
+ * 这里**不再**声明同步套件的入口 `br_sync_selftest()`。理由: 自检入口**不是插件的
+ * 对外能力**, 留在本头就会进 golden 接口面 —— 于是"改一个用例"变成接口变更(与
+ * ADR-0005 裁定 9 对钩子的处置同源)。声明集中在 `core/selftest/core_selftest.c`,
+ * 实现随套件一起在 `core/selftest/sync_selftest.c`(ADR-0010)。
  */
-void br_sync_conformance(void);
 
 #endif /* BR_CORE_BR_SYNC_H */

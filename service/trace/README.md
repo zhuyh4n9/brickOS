@@ -17,7 +17,13 @@ trace 观测服务: **core 16 B 事件环的唯一消费方** —— 取走(drai
 | `br_trace_svc_summary()` | 打 `[TRACE] total= drained= overrun= ids= live=`;返回 drained |
 | `br_trace_svc_seen(id)` | 某 id 的累计**已消费**条数 |
 | `br_trace_svc_reset()` | 只清消费侧计数(不动 core 环、不动名字表) |
-| `br_trace_svc_selftest()` | 跑 TC-DBG-001/002/003, 打 `[DBGCONF] PASS/FAIL`, 返回失败数 |
+
+上表是**对外声明面**(`[[export]]`)。自检**不在**这里(ADR-0010 §2.5): 用例在
+`src/trace_selftest.c`, 入口 `trace_selftest()` 是描述符的 `.selftest` 钩子, 由 **core** 的
+`br_plugin_manager_selftest()` 在全部 `start()` 之后统一驱动 —— 跑 TC-DBG-001/002/003,
+打 `[DBGCONF] PASS/FAIL`, 返回失败项数(失败不停机, 红绿由门禁判)。用例里"两个 tag 初始
+槽位相同"与"名字逐字节相等"两处判据经 `src/trace_internal.h` 的访问器读生产实现(转调,
+不复制逻辑)。
 
 ## 设计出处
 
@@ -80,9 +86,10 @@ ISR/fault 路径只允许直接调 core 的 `br_trace_emit`。
 
 ## 如何被调用
 
-- 启动期: `br_trace_svc_init()`(LATE 相), 随后由
-  `service/dump` 的 `br_dump_conformance()` **统一驱动** `br_trace_svc_selftest()`
-  (打印 `[DBGCONF]` 行), 再由 `br_dump_trace()` / `br_dump_all()` 调 `report`/`summary`。
+- 启动期: `br_trace_svc_init()`(LATE 相); 自检钩子 `trace_selftest()` 由 **core** 的
+  `br_plugin_manager_selftest()` 在全部 `start()` 之后统一驱动(打印 `[DBGCONF]` 行)。
+  之后由 `service/dump` 的 `br_dump_trace()` / `br_dump_all()` 调 `report`/`summary`
+  —— dump 只调**呈现面**, 不再代跑任何自检。
 - 其它插件: `br_trace_svc_register(name)` 给自己的事件 id 起名;
   线程上下文打点用 `br_trace_svc_marker(tag)`, ISR 内直接 `br_trace_emit`。
 

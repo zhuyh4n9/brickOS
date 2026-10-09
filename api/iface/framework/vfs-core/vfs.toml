@@ -1,0 +1,355 @@
+# brickie:generated
+# api/iface 快照 api/iface/framework/vfs-core/vfs.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "framework/vfs-core#vfs"
+provider = "framework/vfs-core"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.1.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:fa92ffcd07657624972308e8c2d8a8625f206cd92275306711e8b9d1a33e7ff9"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "macro"
+name = "BR_O_RDONLY"
+value = "0x0001u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_O_WRONLY"
+value = "0x0002u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_O_RDWR"
+value = "0x0003u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_O_ACCMODE"
+value = "0x0003u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_O_CREAT"
+value = "0x0010u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_O_EXCL"
+value = "0x0020u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_O_TRUNC"
+value = "0x0040u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_O_APPEND"
+value = "0x0080u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_O_NONBLOCK"
+value = "0x0100u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_SEEK_SET"
+value = "0"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_SEEK_CUR"
+value = "1"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_SEEK_END"
+value = "2"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_INODE_NONE"
+value = "0u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_INODE_DIR"
+value = "1u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_INODE_FILE"
+value = "2u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_POLLIN"
+value = "0x01u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_POLLOUT"
+value = "0x02u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_POLLERR"
+value = "0x04u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_NAME_MAX"
+value = "32u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_STAT_SIZE"
+value = "0x0001u"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_file_ops_t"
+layout = "# {open, read, write, lseek, ioctl, fsync, poll, poll_attach, close}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_inode_t"
+layout = "# {type, iops, fops, fpriv}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_inode_ops_t"
+layout = "# {lookup, create, unlink, mkdir, rmdir, rename, getattr, setattr}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_dentry_ops_t"
+layout = "# {revalidate, compare}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_fs_ops_t"
+layout = "# {mount, free_inode, unmount, sync}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_fs_cfg_t"
+layout = "# {path, dev, opts}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_stat_t"
+layout = "# {valid, type, size}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_dirent_t"
+layout = "# {type, name_len, name}"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_open"
+sig = "br_file_t* (const char*, br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_open_err"
+sig = "br_file_t* (const char*, br_u32, int*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_read"
+sig = "br_s64 (br_file_t*, void*, br_size_t)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_write"
+sig = "br_s64 (br_file_t*, const void*, br_size_t)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_lseek"
+sig = "br_s64 (br_file_t*, br_s64, int)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_ioctl"
+sig = "int (br_file_t*, br_u32, void*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_fsync"
+sig = "int (br_file_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_poll"
+sig = "int (br_file_t*, br_u32*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_close"
+sig = "int (br_file_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_inode"
+sig = "br_inode_t* (br_file_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_fpriv"
+sig = "void* (br_file_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_set_fpriv"
+sig = "void (br_file_t*, void*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_flags"
+sig = "br_u32 (br_file_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_offset"
+sig = "br_s64 (br_file_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_file_set_offset"
+sig = "void (br_file_t*, br_s64)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_inode_priv"
+sig = "void* (br_inode_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_mount_register"
+sig = "int (const char*, const br_fs_ops_t*, void*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_mount_count"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_mount_path_at"
+sig = "const char* (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_stat"
+sig = "int (const char*, br_stat_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_mkdir"
+sig = "int (const char*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_rmdir"
+sig = "int (const char*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_unlink"
+sig = "int (const char*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_rename"
+sig = "int (const char*, const char*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_truncate"
+sig = "int (const char*, br_u64)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_opendir"
+sig = "br_dir_t* (const char*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_readdir"
+sig = "int (br_dir_t*, br_dirent_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_closedir"
+sig = "int (br_dir_t*)"
+status = "experimental"

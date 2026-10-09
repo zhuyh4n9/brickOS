@@ -2,12 +2,13 @@
 #
 # 由 `brickie new` 生成字段形状(照 `6-01` §2 的用例表契约: {id, pre, steps, expect,
 # sched, platform}); **v0.1 不消费它**(无 test 命令, 排 v0.4, §0 边界纪律)。
-# 运行期的真身是编进镜像的 `br_dump_conformance()`(见 src/dump.c), 由 `make dbg-test`
-# 在 QEMU 上逐项判 PASS/FAIL; 本表的 id 与镜像日志里的用例 tag 一一对应。
+# 运行期的真身是编进镜像的 `dump_selftest()`(见 src/dump_selftest.c), 由 core 的
+# `br_plugin_manager_selftest()` 在全部 start() 之后按 init 拓扑序驱动(ADR-0010),
+# 由 `make dbg-test` 在 QEMU 上逐项判 PASS/FAIL; 本表的 id 与镜像日志里的用例 tag 一一对应。
 #
-# 归属: 本文件覆盖 **dump 自己的用例**(TC-DBG-03x / 100); 转调插件的用例
+# 归属: 本文件覆盖 **dump 自己的用例**(TC-DBG-03x / 100); 兄弟插件的用例
 # (TC-DBG-00x trace / 01x backtrace / 02x hexdump / 04x memleak)在各自插件的
-# tests/smoke.toml 里, 由 `br_dump_conformance()` 汇总。
+# tests/smoke.toml 里, 同样由 core 统一驱动 —— dump 不再汇总它们。
 schema = 1
 
 [[case]]
@@ -50,16 +51,16 @@ platform = ["qemu-aarch64"]
 # ★ `dump_init` 的位置 = **LATE 相**, 而且 plugin.toml 对 trace/backtrace/hexdump/memleak
 #   各有一条 `kind = "init"` 的边(phase = "late")⇒ plugin_manager 的拓扑序保证它们的
 #   init 先返回(没有这四条边, LATE 相顺序会退化成字典序, dump 会排到最前)。
-# ★ 它同时是 v0.1 里 `br_core_main` 直调 `br_dump_conformance()` 的**替代调用点** ——
-#   APP 不再需要 app → service/dump 的依赖边。
+# ★ 调试域一致性用例**不在** `dump_init()` 里跑(ADR-0010): 用例搬到 `src/dump_selftest.c`,
+#   由 core 在全部 start() 之后统一驱动; 于是 APP 不再需要 app → service/dump 的依赖边。
 [[case]]
 id       = "dump-late-init"
 pre      = "plugin_manager 已扫 .br_plugins 段并完成拓扑排序; trace/backtrace/hexdump/memleak 的 LATE init 已返回"
 steps    = [
     "EARLY 相: dump_early_init()(不碰堆/不读 region)",
-    "LATE 相: dump_init() → br_dump_init() → br_dump_conformance() → br_dump_all() 取启动快照",
+    "LATE 相: dump_init() → br_dump_init() → br_dump_all() 取启动快照(用例不在这里跑)",
     "START 相: dump_start()(本插件无动作)",
 ]
-expect   = "返回 0; 日志出现 [DBGCONF] SUMMARY fail=0、`dbg: boot snapshot lines=` 与 [PLUGIN] phase=late name=service/dump rc=0"
+expect   = "返回 0; 日志出现 `dbg: boot snapshot lines=` 与 [PLUGIN] phase=late name=service/dump rc=0; [DBGCONF] SUMMARY fail=0 在随后的 core 自检 pass 里打出"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]

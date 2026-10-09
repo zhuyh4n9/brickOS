@@ -9,11 +9,11 @@ NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 [unit_meta]
 api_iface = "native"
 form = "api"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
 freeze_state = "unfrozen"
 status = "experimental"
-hash = "sha256:0b2a3249f76bf6d91b1057ba4042b102b79a065e3b9ca83361327ca7dc1df419"
+hash = "sha256:f6f23bd46f4507650af50a9e0945514c8e4965375995652ec014c28b3fb15f28"
 hash_scope = "decl"
 truth = "decl"
 strict_params = false
@@ -21,12 +21,6 @@ strict_params = false
 [[entry]]
 kind = "func"
 name = "br_bt_init"
-sig = "int (void)"
-status = "experimental"
-
-[[entry]]
-kind = "func"
-name = "br_bt_selftest"
 sig = "int (void)"
 status = "experimental"
 

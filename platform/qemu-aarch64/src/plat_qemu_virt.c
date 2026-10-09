@@ -55,28 +55,24 @@ int qemu_aarch64_init(void)
 
 /*
  * START 相(**全局开中断之后**, 设计 §6.2 的表): 设备与中断一起开跑。
- *   ① 中断/内存映射一致性用例(启动期自检 —— 红了就该在第一时间看见);
- *   ② `br_plat_irq_start()`: 注册 timer PPI 的 ISR + 使能该线 + 装第一个 100 ms 期限
+ *   ① `br_plat_irq_start()`: 注册 timer PPI 的 ISR + 使能该线 + 装第一个 100 ms 期限
  *      + 全局开中断(已在管理器里开过, 这里幂等) —— 这是"心跳"的开始。
  *
- * ★ 为什么 ② 放在 ① 之后: 保持与 v0.1 完全相同的时序(那时 conformance 先跑,
- *   MainLoop 之前才 arm timer), 于是 irq-test 的逐用例判据**一个字都不用动**。
- *   F2/F3 要的"tick 已经在跑"由 ② 在 platform.start 内完成来保证 —— 它严格早于
- *   APP 的 start()(管理器把 APP 的 start 排在最后)。
+ * ★ 一致性用例不再在这里跑(ADR-0010): 中断/内存两套搬到本插件的 **selftest**
+ *   (`src/selftest.c` 的 `qemu_aarch64_selftest`), 由 core 在**全部 start 之后**统一
+ *   驱动。这是一处**时序变化**, 值得写明: 以前 conformance 跑在 `br_plat_irq_start()`
+ *   **之前**(timer 还没 arm), 现在跑在它**之后**(timer 已在跑、中断已开)。
+ *   - 为什么会变: 自检是"所有插件都就绪之后"的验证, 统一时刻是它的定义(ADR-0010 §2.2);
+ *     为 platform 一家保留"start 内先跑测试"的旧形态, 就等于留了第二个自检时机。
+ *   - 为什么可以变: 两套用例的前提(设备已注册、region 表已声明、页表已建)在 start 之后
+ *     同样成立, 而它们**新增**的前提(能收中断)反而只有这时才满足 —— 逐用例判据由
+ *     `irq-test`/`dbg-test` 两道门禁实测把关(见 ADR-0010 §5 的验证记录)。
  *
- * 一致性用例的失败**不**作为 start 的失败返回: 它由门禁([IRQCONF]/[MEMCONF] 的
- * FAIL 模式)判红, 而 start 的返回值只表达"设备 bring-up 成不成"(见 ADR-0005 §2.5)。
+ * start 的返回值只表达"设备 bring-up 成不成"(见 ADR-0005 §2.5): 自检的红绿不在这里,
+ * 它由门禁([IRQCONF]/[MEMCONF] 的 FAIL 模式)判。
  */
 int qemu_aarch64_start(void)
 {
-    const int irq_fail = br_plat_irq_conformance();
-    br_log_info("int: conformance %s (failures=%d)",
-                (irq_fail == 0) ? "ALL PASS" : "HAS FAILURES", irq_fail);
-
-    const int mem_fail = br_plat_mem_conformance();
-    br_log_info("mem: conformance %s (failures=%d)",
-                (mem_fail == 0) ? "ALL PASS" : "HAS FAILURES", mem_fail);
-
     const int r = br_plat_irq_start();
     if (r != 0) {
         br_log_error("int: platform irq start failed: %d", r);

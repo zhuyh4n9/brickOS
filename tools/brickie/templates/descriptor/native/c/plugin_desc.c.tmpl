@@ -15,6 +15,8 @@
  *      全部插件); `init` 仅在 `phase != "early"` 时发射, 否则 `BR_PLUGIN_NO_HOOK`;
  *   5. `descriptor_include`: 插件 `include/` 下**恰有一个**对外头时用它(声明面锚点),
  *      否则回落到元契约头(多头插件无法机器判定"主头")。
+ *   6. `selftest`: 插件声明了 `[selftest]` **且** `product.toml [selftest]` 放行时才发
+ *      钩子; 否则写 `BR_PLUGIN_NO_HOOK`(关掉自检 = 测试代码不进镜像, ADR-0010 §2.3)。
  */
 #include <br/core/br_plugin.h>
 #include "{{descriptor_include}}"
@@ -25,6 +27,7 @@
 {{early_proto}}
 {{init_proto}}
 {{start_proto}}
+{{selftest_proto}}
 
 {{deps_array}}
 /*
@@ -49,4 +52,8 @@ static const br_plugin_t BR_PLUGIN_SECTION {{descriptor_symbol}} = {
     .early_init  = {{symbol_prefix}}early_init,
     .init        = {{init_hook}},
     .start       = {{symbol_prefix}}start,
+    /* 自检钩子(ADR-0010)。生成期已按 `product.toml [selftest]` 裁决:
+     *   发钩子 ⇒ 引用 `{{symbol_prefix}}selftest`(定义在插件的 *_selftest.c 里)
+     *   关掉   ⇒ BR_PLUGIN_NO_HOOK, 测试代码随之被 --gc-sections 裁掉 */
+    .selftest    = {{selftest_hook}},
 };

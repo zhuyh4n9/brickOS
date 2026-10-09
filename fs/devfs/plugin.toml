@@ -1,0 +1,81 @@
+# fs/devfs — /dev 设备节点(plugin_type = ability, subkind = fs)
+#
+# 设计出处: `docs/7-storage/7-03-concrete-fs.md` §3("所有设备经 devfs 接入 VFS 管理",
+# Linux devtmpfs / rCore DeviceFS 同型; 节点 = dev-core 注册表**实时枚举**; inode 映射
+# = "根 inode = 注册表投影, lookup → 设备节点文件 inode({fops, fpriv} 由类 open_file 钩子给出)";
+# unlink/mkdir → -ENOTSUP)、§6(挂载计划: 2. fs/devfs → /dev)。
+# 逐条裁定: `docs/decisions/0009-vfs-storage-stack.md`。
+#
+# ★ 依赖面三条(设计 §1.4 的表: "dev-core(枚举)+ cdev-core(钩子就绪)+ vfs-core(挂载)"):
+#   - dev-core   **init**: 枚举注册表(虽然只是读, 但"注册表在场"是语义前提);
+#   - cdev-core  **init**: 设计明说"保证钩子就绪"—— 它注册的 open_file 适配层是本件
+#                  lookup 时唯一的取文件面入口(顺序错了会得到一堆"看得见打不开");
+#   - vfs-core   **init**: `br_mount_register`;
+#   - fs/tmpfs   **init**: 挂载点 /dev 的**父目录**由 tmpfs 的 CORE init 预建, 而
+#                 `br_mount_register` 的自动 mkdir 走的是"父挂载"⇒ tmpfs 必须先挂上。
+#                 (设计 §6 的挂载计划顺序: 1. tmpfs → /, 2. devfs → /dev)
+# ★ 本件**不依赖任何子分类的 ops 形状**(不 include br_cdev.h): 那正是 D21/D23 要的边界。
+# ★ 本件不导出 API(同 fs/tmpfs): 它的行为经 vfs-core 的公开 API 被观测。
+schema = 1
+
+[plugin]
+name        = "fs/devfs"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "fs"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "设备文件系统: 把 dev-core 注册表投影为 /dev/<name> 节点(实时枚举, open 经类 open_file 钩子)"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 2
+notes    = "静态部分只有根 inode + iops/fops 表; 设备节点 inode 在 lookup 时从 core 堆现造(约 48 B/次)"
+
+# ---- 挂载计划(设计 `7-03` §6; 同 tmpfs: 工具侧尚不消费, 欠债 br-wa-fs-001) ----
+[[mount]]
+path  = "/dev"
+order = 2
+
+# ---- 结构依赖(四条 init 边; 逐条理由见文件头的"依赖面三条") ----
+[[dep]]
+name  = "framework/dev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/cdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "fs/tmpfs"
+range = ">=0.1.0"
+kind  = "init"
+
+# 运行期调用面(记录真实调用: lookup/getattr 走 dev-core 的枚举口;
+# 挂载走 vfs-core)。这些边**不参与拓扑**(kind = runtime), 只让"谁调谁"在声明面可见。
+[[dep]]
+name   = "framework/dev-core"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_dev_count"
+
+[[dep]]
+name   = "framework/vfs-core"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_mount_register"
+
+[build]
+# ★ 无 `includes`: 本件不抛对外头(不导出 API, 也不被别人 include)——
+#   声明一个不存在的 include 目录只会让工具多产一条无效 -I。
+sources  = ["src/*.c"]

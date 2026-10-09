@@ -44,16 +44,12 @@ name         = "backtrace"
 version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
-hash         = "sha256:0b2a3249f76bf6d91b1057ba4042b102b79a065e3b9ca83361327ca7dc1df419"
+hash         = "sha256:f6f23bd46f4507650af50a9e0945514c8e4965375995652ec014c28b3fb15f28"
 status       = "experimental"
 
 [[export.entries]]
 kind = "func"
 name = "br_bt_init"
-sig  = "int (void)"
-[[export.entries]]
-kind = "func"
-name = "br_bt_selftest"
 sig  = "int (void)"
 [[export.entries]]
 kind = "func"
@@ -95,6 +91,12 @@ value = "16"
 kind = "macro"
 name = "BR_BT_MAX_DEPTH"
 value = "32"
+
+[selftest]
+# ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = <prefix>selftest`。
+# 用例: TC-DBG-010/011。开关在 `product.toml [selftest]`(生成期裁决: 关掉 ⇒ 本文件与
+# src/*_selftest.c 一起不参与编译, 测试代码不进镜像)。
+cases = 0
 
 [build]
 sources  = ["src/*.c"]

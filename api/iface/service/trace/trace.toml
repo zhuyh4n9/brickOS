@@ -9,11 +9,11 @@ NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 [unit_meta]
 api_iface = "native"
 form = "api"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
 freeze_state = "unfrozen"
 status = "experimental"
-hash = "sha256:a7d8fc97fbea303a552023370c452178a544633bf16797addcabaf6e3e88ab8d"
+hash = "sha256:b3d67241bfeffc050dfbaa14733ff700a15622cc4b23cf375881f89171b958c5"
 hash_scope = "decl"
 truth = "decl"
 strict_params = false
@@ -21,12 +21,6 @@ strict_params = false
 [[entry]]
 kind = "func"
 name = "br_trace_svc_init"
-sig = "int (void)"
-status = "experimental"
-
-[[entry]]
-kind = "func"
-name = "br_trace_svc_selftest"
 sig = "int (void)"
 status = "experimental"
 

@@ -9,11 +9,11 @@ NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 [unit_meta]
 api_iface = "native"
 form = "api"
-version = "0.1.0.0"
+version = "0.1.1.0"
 compat_gen = 0
 freeze_state = "unfrozen"
 status = "experimental"
-hash = "sha256:d02f0a4af0753aa2ed4842e4dc4b6a338ca187a9908a326be48a1d24fcf5cec7"
+hash = "sha256:19c962b129ced77e1f04973db05b196a7ad2f9852df6c7c36097396436335364"
 hash_scope = "decl"
 truth = "decl"
 strict_params = false
@@ -21,12 +21,6 @@ strict_params = false
 [[entry]]
 kind = "func"
 name = "br_dump_init"
-sig = "int (void)"
-status = "experimental"
-
-[[entry]]
-kind = "func"
-name = "br_dump_conformance"
 sig = "int (void)"
 status = "experimental"
 

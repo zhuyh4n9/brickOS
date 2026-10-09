@@ -12,9 +12,16 @@
  *   环的消费  → `service/trace`(环本身在 core, 插件是唯一消费方);
  *   泄漏/红区账 → `service/memleak`(只读 core 的堆观测契约)。
  *   本插件自己只做三件事: ① 按 region 表做边界判定; ② 把上面几件编排成一份现场;
- *   ③ 调试域的 conformance 入口 `br_dump_conformance()`(与 platform 的
- *   `br_plat_irq_conformance()` 同型, 并兼调试域的 LATE 相 init 编排 —— 阶段机缺席
- *   时的替身, `WORKAROUND(br-wa-boot-001)`)。
+ *   ③ 自身状态的 LATE 相 init + 启动快照。
+ *
+ * ★ 调试域 conformance 的旧编排入口**已不在本文件**(ADR-0010): 拆分前 dump 那个对外发的
+ *   conformance 函数
+ *   既跑 dump 自己的用例, 又代调 trace/backtrace/hexdump/memleak 四家的 `*_selftest()`
+ *   与 `*_init()`(v0.1 没有阶段机时的替身, WORKAROUND(br-wa-boot-001))。现在:
+ *     - 各插件的自检入口在各自的 `src/<short>_selftest.c` 里, 由描述符钩子 `.selftest` 挂出,
+ *       **core 在一个 pass 里驱动**(`br_plugin_manager_selftest`);
+ *     - init 由 plugin_manager 按 `[[dep]]` 拓扑序驱动(本插件**不再**代调别家的 init)。
+ *   dump 自己的用例搬到 `src/dump_selftest.c`; 台账口径见该文件抬头。
  *
  * ★ 呈现落点欠债: 现在直写早期 console, 未经 `5-01 §2` 的 debug bridge
  *   (COBS + CRC16 成帧 + `MEMRD`/`TRACE_READ` 命令面, M3)。`WORKAROUND(br-wa-debug-002)`
@@ -370,156 +377,17 @@ br_u32 br_dump_all(void)
 }
 
 /* =====================================================================
- * ⑥ 调试域 conformance
- * ===================================================================== */
-
-static br_u32 s_cf_pass;
-static br_u32 s_cf_fail;
-
-static void cf_report(br_bool ok, const char *tag, const char *what)
-{
-    if (ok) {
-        s_cf_pass++;
-        br_log_info("[DBGCONF] PASS %s %s", tag, what);
-    } else {
-        s_cf_fail++;
-        br_log_info("[DBGCONF] FAIL %s %s", tag, what);
-    }
-}
-
-/* TC-DBG-030: region 清单与 region 表同源同数 */
-static void cf_case_030(void)
-{
-    const br_u32 count = br_mm_region_count();
-    const br_u32 got   = br_dump_regions();
-
-    cf_report((got == count) && (count > 0u), "TC-DBG-030",
-              "region 清单条数 == region 表条数 且 > 0");
-}
-
-/* TC-DBG-031: 边界判定的两个分支(拒绝 / FORCE 不崩) */
-static void cf_case_031(void)
-{
-    const br_uintptr_t undeclared = (br_uintptr_t)0x42000000u;
-    const int strict = br_dump_memory(undeclared, (br_size_t)16u, BR_DUMP_F_STRICT);
-    const int forced = br_dump_memory(undeclared, (br_size_t)16u, BR_DUMP_F_FORCE);
-
-    cf_report(strict == BR_ERR(BR_EINVAL), "TC-DBG-031",
-              "未声明地址(0x42000000) + STRICT ⇒ -EINVAL");
-    cf_report(forced >= 0, "TC-DBG-031",
-              "同地址 + FORCE ⇒ >= 0(表外不读取, 不崩)");
-}
-
-/* TC-DBG-032: 已声明区(堆池基址)真 dump + 呈现确实发生 */
-static void cf_case_032(void)
-{
-    br_mem_layout_t lay;
-    char            buf[256];
-    br_size_t       need;
-    int             rc;
-
-    if (br_mem_layout(&lay) != 0) {
-        cf_report(BR_FALSE, "TC-DBG-032", "堆布局不可读, 无法 dump 堆池基址");
-        return;
-    }
-
-    rc   = br_dump_memory(lay.heap.base, (br_size_t)32u, BR_DUMP_F_STRICT);
-    /* "确实渲染了"的判据取自呈现原语本身: 32 B = 2 整行(格式契约 BR_HEXDUMP_WIDTH=16) */
-    need = br_hexdump_to(buf, sizeof buf, (const void *)lay.heap.base, (br_size_t)32u);
-
-    cf_report((rc == 32) && (need > 0u) && (need == 2u * br_hexdump_line_bytes()),
-              "TC-DBG-032", "堆池基址 dump 32 B: 返回 32 且 hexdump 渲染 2 行");
-}
-
-/* TC-DBG-100: 全量现场确实把所有子段都跑过(用子段自己的观测交叉验证) */
-static void cf_case_100(void)
-{
-    const br_u32 regions = br_mm_region_count();
-    const br_u32 lines   = br_dump_all();
-    const br_u32 frames  = br_bt_last_count();
-    const br_u32 live    = br_memleak_live();
-    const br_u32 corrupt = br_memleak_corruptions();
-
-    br_log_info("[DBGCONF] info dump_all lines=%u regions=%u bt_frames=%u live=%u corrupt=%u",
-                lines, regions, frames, live, corrupt);
-
-    cf_report(lines >= 8u, "TC-DBG-100",
-              "dump_all 累计行数 >= 8(标题 + region + heap + leaks + trace + bt)");
-    cf_report(regions > 0u, "TC-DBG-100",
-              "region 段有内容(br_mm_region_count > 0)");
-    cf_report(frames > 0u, "TC-DBG-100",
-              "backtrace 段确实捕获到帧(br_bt_last_count > 0)");
-    cf_report(corrupt == 0u, "TC-DBG-100",
-              "全量现场之后堆仍干净(br_heap_check == 0)");
-}
-
-/*
- * 顺序裁定: 各插件 selftest 先行(trace → backtrace → hexdump → memleak),
- * 编排者自有用例收尾(03x → 100)。与 `br_dump.h` 抬头列的集合完全一致, 只把
- * TC-DBG-100(内含 br_dump_all 全量现场)放到**最后** —— 它要用到 memleak 自检
- * 把堆恢复干净之后的观测(br_memleak_corruptions()==0)。
- *
- * ★ 本函数还兼**调试域的 LATE 相 init 编排**(v0.1 的替身, `WORKAROUND(br-wa-boot-001)`):
- *   设计 1-01 §9 里"LATE 相按 `[[dep]]` 拓扑序调各插件 init"是 plugin_manager 的职责,
- *   而 v0.1 没有阶段机。dump 在**声明面上正是这四件的依赖方**(dump → {trace, backtrace,
- *   hexdump, memleak}, `kind = runtime`), 所以"由依赖方代调被依赖方的 init"是唯一
- *   **不需要新增任何跨层调用边**的落点。四个 init 都幂等, 重复调用无害。
- */
-int br_dump_conformance(void)
-{
-    int sub_fails = 0;
-    int init_fails = 0;
-    int total_fails;
-
-    s_cf_pass = 0u;
-    s_cf_fail = 0u;
-
-    br_log_info("[DBGCONF] debug-domain conformance (trace / backtrace / hexdump / dump / memleak)");
-
-    /* LATE 相 init(按依赖序; platform/APP 的调用点只碰 dump 一个面) */
-    init_fails += (br_trace_svc_init() != 0) ? 1 : 0;
-    init_fails += (br_bt_init()        != 0) ? 1 : 0;
-    init_fails += (br_hexdump_init()   != 0) ? 1 : 0;
-    init_fails += (br_memleak_init()   != 0) ? 1 : 0;
-
-    cf_report(init_fails == 0, "DBG-INIT",
-              "调试域 LATE 相 init(trace/backtrace/hexdump/memleak)全部返回 0");
-
-    sub_fails += br_trace_svc_selftest();
-    sub_fails += br_bt_selftest();
-    sub_fails += br_hexdump_selftest();
-    sub_fails += br_memleak_selftest();
-
-    cf_case_030();
-    cf_case_031();
-    cf_case_032();
-    cf_case_100();
-
-    total_fails = sub_fails + (int)s_cf_fail;
-
-    /*
-     * 总摘要(**Makefile 门禁唯一 grep 的格式**)。
-     * 口径: pass 只算本编排者自己的断言(子插件的 PASS 数不在其声明面回传, 它们
-     * 各自打 `[DBGCONF] SUMMARY <name> ...`); fail = 子插件 selftest 失败数之和
-     * + 本编排者断言失败数。门禁只认 `fail=0`, 所以任何一环红都会在这里体现。
-     */
-    br_log_info("[DBGCONF] SUMMARY pass=%u fail=%u total=%u",
-                s_cf_pass, (br_u32)total_fails, s_cf_pass + (br_u32)total_fails);
-
-    return total_fails;
-}
-
-/* =====================================================================
  * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物
  * `build/gen/service/dump/plugin_desc.c` 引用; 设计 1-01 §9 / 3-05 §2)
  * 自带原型满足 -Wmissing-prototypes(钩子名由生成器推导, 不进对外头与 [[export]])。
  *
- * ★ LATE init 里跑调试域一致性用例 + 启动快照: 这一处**替代**了 v0.1 里
- *   APP 曾直调 `br_dump_conformance()` 的位置 —— v0.2.0 起本套件由**插件管理器**在
- *   dump 的 LATE `init` 里驱动(ADR-0005), 于是 `app/hello → service/dump` 那条 M0 豁免
- *   **已从 `product.toml [lint].allow_edges` 删掉**(删掉后 `brickie check` 仍 0 错误 = 证据)。
- *   plugin.toml 的四条 `kind = "init"` 边保证 LATE 相里 trace/backtrace/hexdump/memleak
- *   的 init 已经返回(拓扑序 + 相位单调由 plugin_manager 执法)。
+ * ★ LATE init 只做**本插件自己的**事(自身 init + 启动快照) —— 调试域一致性用例已按
+ *   ADR-0010 搬到 `src/dump_selftest.c`, 其驱动者不再是 init, 而是**插件管理器**在全部
+ *   START 之后统一调描述符的 `.selftest` 钩子。于是 `app/hello → service/dump` 那条 M0
+ *   豁免**已从 `product.toml [lint].allow_edges` 删掉**(删掉后 `brickie check` 仍 0 错误
+ *   = 证据), 而 dump 也**不再代调** trace/backtrace/hexdump/memleak 四家的 init:
+ *   plugin.toml 的四条 `kind = "init"` 边保证 LATE 相里它们的 init 已由 plugin_manager
+ *   按拓扑序调过(相位单调由它执法; 非 0 rc ⇒ `[PLUGIN] FAIL` + 停机, ADR-0005 裁定 G6)。
  * ===================================================================== */
 int dump_early_init(void);
 int dump_init(void);
@@ -531,7 +399,11 @@ int dump_early_init(void)
     return 0;
 }
 
-/* LATE 相(Service 类别 ⇒ ② 完成点): 自身 init → 调试域一致性用例 → 启动快照。 */
+/* LATE 相(Service 类别 ⇒ ② 完成点): 自身 init → 启动快照。
+ *
+ * 这里**没有** conformance 调用: 用例由 core 的自检 pass 驱动(见 dump_selftest.c 抬头)。
+ * 也不代调别家 init —— 那正是 ADR-0010 拆掉的编排(四家的 init 由 plugin_manager 在
+ * 本函数**之前**按 `[[dep]]` 拓扑序调完)。 */
 int dump_init(void)
 {
     const int rc = br_dump_init();
@@ -539,16 +411,12 @@ int dump_init(void)
         return rc;   /* 首败即停机由 plugin_manager 执行(裁定 G6) */
     }
 
-    const int conf_fail = br_dump_conformance();
-    br_log_info("dbg: conformance %s (failures=%d)",
-                (conf_fail == 0) ? "ALL PASS" : "HAS FAILURES", conf_fail);
-
     /* 启动现场一份(三套门禁截取证据的地方; 行数口径见 br_dump.h) */
     const br_u32 dump_lines = br_dump_all();
     br_log_info("dbg: boot snapshot lines=%lu", (br_u64)dump_lines);
 
-    /* 一致性用例的失败**不**作为 init 的失败返回: 它由门禁([DBGCONF] FAIL)判红,
-     * init 的返回值只表达"本插件的初始化成不成"(见 ADR-0005 §2.5)。 */
+    /* init 的返回值只表达"本插件的初始化成不成"(见 ADR-0005 §2.5); 用例的红绿由门禁
+     * ([DBGCONF] FAIL 的 forbid)判, 两者不混。 */
     return 0;
 }
 

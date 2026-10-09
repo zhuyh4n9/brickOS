@@ -80,7 +80,7 @@ platform = ["qemu-aarch64"]
 id       = "plat-0007"
 pre      = "LATE 相已过、全局中断已开、START 相轮到 platform"
 steps    = [
-  "qemu_aarch64_start(): 先 br_plat_irq_conformance() + br_plat_mem_conformance()",
+  "qemu_aarch64_start(): br_plat_irq_start()(arm timer; 两套用例已搬到 qemu_aarch64_selftest, ADR-0010)",
   "再 br_plat_irq_start(): 注册 timer PPI 的 ISR + 使能 + 装 100 ms 期限 + 全局开中断",
   "核对 [PLUGIN] phase=start name=platform/qemu-aarch64 rc=0",
 ]

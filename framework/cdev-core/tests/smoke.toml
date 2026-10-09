@@ -1,0 +1,107 @@
+# framework/cdev-core — conformance 用例(人写)
+#
+# 与 `cdev_core_selftest()`(src/cdev_selftest.c)里的 TC-CDEV-001..008 一一对应:
+# 红绿由 in-image 套件打 `[CDEVCONF] PASS/FAIL`, 末尾 SUMMARY; 该钩子在描述符里, 由
+# **core** 在全部 start() 之后统一驱动(ADR-0010); 门禁 `fs-test` 要求
+# `[CDEVCONF] SUMMARY pass=N fail=0`。本文件是同一批用例的**声明面骨架**,
+# 不是可执行形式(in-image 套件才是), 形状照 `6-01` §2 的字段契约。
+# 设计出处: `docs/8-device/8-01-device.md` §2/§3 + `docs/7-storage/7-03-concrete-fs.md` §3;
+# 裁定见 ADR-0009 §2.4/§3 裁定 6。
+schema = 1
+
+[[case]]
+id       = "TC-CDEV-001"
+pre      = "注册表已就绪; 记下当前 br_dev_count()"
+steps    = [
+    "br_cdev_register('Cdev0', <合法 ops>, NULL) == -EINVAL(大写开头)",
+    "br_cdev_register('c/dev', <合法 ops>, NULL) == -EINVAL(含斜杠)",
+    "br_cdev_register('', <合法 ops>, NULL) == -EINVAL(空名)",
+    "br_dev_count() 不变(非法登记不污染注册表)",
+]
+expect   = "[CDEVCONF] PASS TC-CDEV-001 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-CDEV-002"
+pre      = "注册表已就绪"
+steps    = [
+    "br_cdev_register('cdevx', <只有 open 的 ops>, NULL) == -EINVAL(缺 close)",
+    "br_cdev_register('cdevx', <只有 close 的 ops>, NULL) == -EINVAL(缺 open)",
+    "br_cdev_register('cdevx', NULL, NULL) == -EINVAL(ops 为空)",
+]
+expect   = "[CDEVCONF] PASS TC-CDEV-002 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-CDEV-003"
+pre      = "注册表里没有 'nosuchcdev'"
+steps    = [
+    "出参 priv 预置为哨兵值(非 NULL)",
+    "br_cdev_get('nosuchcdev', &priv) == NULL 且 priv 仍是哨兵(不改写出参)",
+    "br_cdev_get(NULL, NULL) == NULL",
+]
+expect   = "[CDEVCONF] PASS TC-CDEV-003 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-CDEV-004"
+pre      = "组合含至少一个 cdev(io/uart-pl011 登记的 uart0); 无 cdev 时只走'不适用'分支"
+steps    = [
+    "遍历注册表: 跳过 class_id != BR_CLASS_CDEV 或 open_file != cdev 适配层的条目(如 flash 子型)",
+    "对每条 name: br_cdev_get(name, &priv) 非 NULL",
+    "返回的 ops == 条目登记的 class_priv(逐个 cdev 往返)",
+]
+expect   = "[CDEVCONF] PASS TC-CDEV-004 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-CDEV-005"
+pre      = "组合含至少一个 cdev; 无 cdev 时只走'不适用'分支"
+steps    = [
+    "取第一个 cdev 的名字与它的 ops/priv",
+    "br_cdev_register(该名字, 该 ops, 该 priv) == -EEXIST(唯一性由 dev-core 执法, 本件透传)",
+]
+expect   = "[CDEVCONF] PASS TC-CDEV-005 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-CDEV-006"
+pre      = "无(直接检查本件的适配层 ops 表)"
+steps    = [
+    "适配层 s_cdev_file_ops 的 open/read/write/ioctl/poll/close 六槽全非 NULL(转发槽位齐备)",
+    "lseek == NULL 且 fsync == NULL(字符设备无偏移/无落介质语义)",
+    "poll_attach == NULL(v2 wait-queue 预留, D22/D14 ⇒ 调用方得 -ENOTSUP 的机制)",
+]
+expect   = "[CDEVCONF] PASS TC-CDEV-006 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-CDEV-007"
+pre      = "注册表里没有 'nor0'(本用例只走前置校验与取回, 不真的登记 flash)"
+steps    = [
+    "br_flash_register('nor0', NULL, &geom, NULL) == -EINVAL",
+    "几何全 0 ⇒ -EINVAL(0 粒度/0 块数: 任何 FS 都算不出地址)",
+    "几何自洽但缺 read/program/erase ⇒ -EINVAL(三个必填动作)",
+    "br_flash_geom_get('nor0', &got) == -ENODEV(未注册); br_flash_geom_get('nor0', NULL) == -EINVAL",
+    "br_flash_get('nor0', NULL) == NULL",
+]
+expect   = "[CDEVCONF] PASS TC-CDEV-007 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-CDEV-008"
+pre      = "注册表可观测(可能为空 —— 空表时该用例平凡成立)"
+steps    = [
+    "遍历注册表; 对 br_flash_get(name, NULL) != NULL 的条目: 断言 entry->open_file == NULL",
+    "语义: v1 的 raw flash 不提供文件面 ⇒ /dev/nor0 出现但 br_open 得 -ENOTSUP(ADR-0009 §3 裁定 6)",
+]
+expect   = "[CDEVCONF] PASS TC-CDEV-008 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

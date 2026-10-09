@@ -1,0 +1,86 @@
+# fs/tmpfs — conformance 用例(人写)
+#
+# ★ 本插件**没有自己的 in-image 套件**: tmpfs 不导出 API, 它的行为由 vfs-core 的
+# `vfs_core_selftest()`(src/vfs_selftest.c; 由 **core** 在全部 start() 之后驱动,
+# ADR-0010)在 rootfs "/" 上**泛型地**验证。
+# 因此这里的 id 借的就是那套 TC-VFS-*: 下面每条都是**落在 tmpfs 上**的那些例子
+# (挂载在 "/" 的 FS 就是 tmpfs)。红绿由 in-image 套件打 `[VFSCONF] PASS/FAIL` +
+# SUMMARY; 门禁 `fs-test` 要求 `[VFSCONF] SUMMARY pass=N fail=0`。
+# 本文件是声明面骨架(照 `6-01` §2 的字段契约), 不是可执行形式。
+# 设计出处: `docs/7-storage/7-03-concrete-fs.md` §2/§6 + `7-01-vfs.md` §2;
+# 裁定见 ADR-0009 §2.2/§3 裁定 9; 欠债 `br-wa-fs-001`。
+schema = 1
+
+[[case]]
+id       = "TC-VFS-003"
+pre      = "tmpfs 已挂 '/' 且预建 /dev /data /tmp; 本用例用 rootfs 上的自用临时目录, 落在 tmpfs 的节点树上"
+steps    = [
+    "br_mkdir(<base>/vfsconf.d) == 0(tmpfs 的 mkdir 走节点分配与入链); 再来一次 ⇒ -EEXIST",
+    "br_stat 该目录 ⇒ BR_OK 且 type == BR_INODE_DIR(tmpfs 的 getattr)",
+    "以 BR_O_WRONLY 打开该目录 ⇒ NULL 且 err == -EISDIR(tmpfs 的目录类型守卫)",
+    "造一个文件后打开 <file>/x ⇒ NULL 且 err == -ENOTDIR",
+]
+expect   = "[VFSCONF] PASS TC-VFS-003 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-004"
+pre      = "tmpfs 的 CORE mount 已完成(节点与数据都在 core 堆上)"
+steps    = [
+    "以 BR_O_CREAT|BR_O_RDWR|BR_O_TRUNC 打开 <dir>/a.bin",
+    "三段写 'brickOS ' / 'vfs ' / 'roundtrip'(tmpfs 的顺序追加走 cap 增长, 首写最小容量 64 B)",
+    "lseek(0, SEEK_END) == 总长; lseek(0, SEEK_SET) == 0; br_file_offset() == 0",
+    "read 回总长, 与 'brickOS vfs roundtrip' 逐字节一致",
+    "EOF 之后再 read 1 字节 ⇒ 0",
+]
+expect   = "[VFSCONF] PASS TC-VFS-004 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-005"
+pre      = "TC-VFS-004 的 <dir>/a.bin 仍在"
+steps    = [
+    "br_file_close(f) == 0(tmpfs 的文件 close 把 cap 交还记账)",
+    "br_stat(a.bin) == 0 且 type == BR_INODE_FILE, size == 写入总长",
+]
+expect   = "[VFSCONF] PASS TC-VFS-005 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-007"
+pre      = "tmpfs 的 <dir> 里恰有 1 个文件(TC-VFS-004 建的)"
+steps    = [
+    "br_opendir(<dir>) 非 NULL(tmpfs 的目录面 open 换成迭代器)",
+    "循环 br_readdir 到返回 0: 条目总数 == 3('.' + '..' + 1 个文件)",
+    "其中 type == BR_INODE_FILE 的恰 1 条; br_closedir 收尾",
+]
+expect   = "[VFSCONF] PASS TC-VFS-007 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-008"
+pre      = "tmpfs 的 <dir>/a.bin 有内容"
+steps    = [
+    "br_rename(a.bin, b.bin) == 0(tmpfs 的改名只在父目录子链上改名字); stat(a.bin) ⇒ -ENOENT",
+    "br_truncate(b.bin, 7) == 0(tmpfs 的 setattr 只认 BR_STAT_SIZE); read 回 7 字节 == 'brickOS'",
+    "以 BR_O_WRONLY|BR_O_TRUNC 打开并关闭 ⇒ stat 的 size == 0",
+]
+expect   = "[VFSCONF] PASS TC-VFS-008 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-VFS-010"
+pre      = "tmpfs 的 <dir>/b.bin 存在(已截断为 0)"
+steps    = [
+    "br_unlink(b.bin) == 0(tmpfs 把节点的 cap 与节点一起交还); 再来一次 ⇒ -ENOENT",
+    "br_rmdir(<dir>) == 0(空目录); 再来一次 ⇒ -ENOENT",
+    "语义: 非空目录 rmdir 会得 -ENOTEMPTY, 与'挂载点不可删'的 -EBUSY 分开(ADR-0009 §2.2)",
+]
+expect   = "[VFSCONF] PASS TC-VFS-010 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

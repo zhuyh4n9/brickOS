@@ -1,0 +1,53 @@
+# fs/tmpfs — RAM rootfs(plugin_type = ability, subkind = fs)
+#
+# 设计出处: `docs/7-storage/7-03-concrete-fs.md` §2(tmpfs: "节点与数据均出自 core 堆
+# (`br_malloc`); 完整文件语义(read/write/lseek/truncate/unlink/rename/mkdir/stat)";
+# **挂载为 rootfs("/")**——命名空间骨架, 由 manifest 预建目录列表生成)、§6(挂载计划:
+# 1. fs/tmpfs → /, 预建 /dev /data /tmp)。
+# 逐条裁定: `docs/decisions/0009-vfs-storage-stack.md`。
+#
+# ★ **本件不导出 API**(没有 [[export]]): 设计 §2 没有给 tmpfs 任何函数面 —— 它的能力
+#   就是"一个挂载在 / 上的 FS", 行为全部经 vfs-core 的公开 API 被观测/验证
+#   (存储域总套件 `vfs_core_selftest()` 跑在 "/" 上; 由 core 的自检 pass 驱动, ADR-0010)。
+#   这与 app/hello 的形态同类:
+#   组合期契约(生命周期钩子)不进 [[export]], 而本件没有别的对外面。
+# ★ 挂载点是**代码常量**(src/tmpfs.c), 与下面的挂载计划注释是两处真值 ——
+#   生成链路未落地, 已登记 `WORKAROUND(br-wa-fs-001)`。
+schema = 1
+
+[plugin]
+name        = "fs/tmpfs"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "fs"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "RAM 文件系统: rootfs(\"/\"), 完整文件语义 + 预建 /dev /data /tmp; 数据出自 core 堆"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 4
+notes    = "静态部分只有根节点与记账; 文件数据与目录节点在运行期从 core 堆取(配额见 WORKAROUND br-wa-fs-001)"
+
+# ---- 挂载计划(设计 `7-03` §6。★ 工具侧还**不**消费本表: 它现在是人读的声明面,
+#      代码里的挂载点常量是执行面 —— 两处真值即 br-wa-fs-001 的欠债) ----
+[[mount]]
+path  = "/"
+order = 1
+
+# ---- 结构依赖 ----
+# init: 挂载要经 vfs-core 的 `br_mount_register`(设计 §1.4 的依赖表: fs/tmpfs → vfs-core)。
+# 这也是"挂载表先能收挂载"的顺序保证(vfs-core 的 CORE init 在自己的 phase 里, 而
+# 拓扑序保证依赖方先完成)。
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[build]
+# ★ 无 `includes`: 本件不抛对外头(不导出 API, 也不被别人 include)——
+#   声明一个不存在的 include 目录只会让工具多产一条无效 -I。
+sources  = ["src/*.c"]

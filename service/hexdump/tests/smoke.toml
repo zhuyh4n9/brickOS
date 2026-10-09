@@ -1,8 +1,9 @@
 # service/hexdump — conformance 用例(人写)
 #
-# 与 `br_hexdump_selftest()` 里的 TC-DBG-020/021 一一对应:
+# 与 `hexdump_selftest()`(src/hexdump_selftest.c)里的 TC-DBG-020/021 一一对应:
 # v0.1 的红绿由 in-image 自检打 `[DBGCONF] PASS/FAIL`(make dbg-test 的
-# DBGCONF_REQUIRED 名单);本文件是同一批用例的声明面形状(照 `6-01` §2 的字段契约)。
+# DBGCONF_REQUIRED 名单);该钩子在描述符里, 由 **core** 在全部 start() 之后统一驱动
+# (ADR-0010);本文件是同一批用例的声明面形状(照 `6-01` §2 的字段契约)。
 # 设计出处: `docs/5-debug/5-01-debug.md` §2(MEMRD)/§3(ramdump 输出);
 # 行格式契约见 `include/br/debug/br_hexdump.h` 的文件头。
 schema = 1

@@ -1,0 +1,159 @@
+# io/uart-pl011 — conformance 用例(人写)
+#
+# 与 `uart_pl011_selftest()`(src/uart_selftest.c)里的 TC-IO-001..012 一一对应:
+# 红绿由 in-image 套件打 `[IOCONF] PASS/FAIL`, 末尾 SUMMARY; 该钩子在描述符里, 由
+# **core** 在全部 start() 之后统一驱动(ADR-0010); 门禁 `fs-test` 要求
+# `[IOCONF] SUMMARY pass=N fail=0`。本文件是同一批用例的**声明面骨架**,
+# 不是可执行形式(in-image 套件才是), 形状照 `6-01` §2 的字段契约。
+# 设计出处: `docs/8-device/8-01-device.md` §3/§4/§5 + `docs/7-storage/7-01-vfs.md` §1/§3;
+# 裁定见 ADR-0009 §2.7; 偏离登记在 `WORKAROUND(br-wa-io-001)`。
+schema = 1
+
+[[case]]
+id       = "TC-IO-001"
+pre      = "START 相; io/uart-pl011 的 CORE init 已 br_cdev_register('uart0'), devfs 已挂 '/dev'"
+steps    = [
+    "br_stat('/dev/uart0', &st) == 0",
+    "st.type == BR_INODE_FILE(设备节点是文件 inode)",
+]
+expect   = "[IOCONF] PASS TC-IO-001 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-002"
+pre      = "TC-IO-001 已过; /dev/uart0 当前没有被别人打开"
+steps    = [
+    "f1 = br_open_err('/dev/uart0', O_RDONLY|O_NONBLOCK, &e1) ⇒ 非 NULL 且 e1 == 0",
+    "f2 = br_open_err(同路径, 同 flags, &e2) ⇒ NULL 且 e2 == -EBUSY(独占策略归驱动)",
+    "收尾: 若 f2 意外成功也 close 掉; close(f1)(否则后续用例全被独占挡住)",
+]
+expect   = "[IOCONF] PASS TC-IO-002 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-003"
+pre      = "TC-IO-002 已收尾(独占已释放)"
+steps    = [
+    "以 O_RDWR|O_NONBLOCK 打开; 用 BR_IOR('u',0,info) 发 GET_INFO",
+    "ioctl 返回 0; info.base == 0x09000000; info.refclk_hz == 24 MHz; info.baud == 115200",
+    "close",
+]
+expect   = "[IOCONF] PASS TC-IO-003 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-004"
+pre      = "无(字节出现在 QEMU console 上是证据, 不是判据)"
+steps    = [
+    "以 O_RDWR|O_NONBLOCK 打开",
+    "write 一个带 CRLF 的短字面量(设备 write 字节透明, 不做换行转换)",
+    "write 返回值 == 该字面量字节数; close",
+]
+expect   = "[IOCONF] PASS TC-IO-004 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-005"
+pre      = "RX FIFO 为空(启动后主机侧没有往 QEMU 串口输过字符 —— 前提不成立就该如实报红, 不为常绿而先 flush)"
+steps    = [
+    "以 O_RDONLY|O_NONBLOCK 打开",
+    "read 1 字节 ⇒ -EAGAIN(FIFO 空 + 非阻塞)",
+    "close",
+]
+expect   = "[IOCONF] PASS TC-IO-005 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-006"
+pre      = "TX FIFO 不满"
+steps    = [
+    "以 O_RDWR|O_NONBLOCK 打开; events 预置为 0xffffffff(验证未置位的位必须被清掉)",
+    "br_file_poll(f, &events) == 0",
+    "(events & BR_POLLOUT) != 0; (events & ~(BR_POLLIN|BR_POLLOUT)) == 0",
+    "close",
+]
+expect   = "[IOCONF] PASS TC-IO-006 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-007"
+pre      = "无"
+steps    = [
+    "打开 /dev/uart0(O_RDWR|O_NONBLOCK)",
+    "br_file_ioctl(f, BR_IO('z', 0), NULL) == -ENOTSUP(错魔数 —— 不是 -EINVAL)",
+    "br_file_ioctl(f, BR_IO('u', 9), NULL) == -ENOTSUP(本器件没有的 nr)",
+    "close",
+]
+expect   = "[IOCONF] PASS TC-IO-007 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-008"
+pre      = "无"
+steps    = [
+    "打开 /dev/uart0(O_RDWR|O_NONBLOCK)",
+    "br_file_lseek(f, 0, BR_SEEK_SET) == -ENOTSUP(cdev 适配层 lseek 槽位为空)",
+    "br_file_fsync(f) == -ENOTSUP(字符设备没有落介质语义)",
+    "close",
+]
+expect   = "[IOCONF] PASS TC-IO-008 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-009"
+pre      = "无"
+steps    = [
+    "f = open(O_RDWR|O_NONBLOCK) 成功; br_file_close(f) == 0",
+    "紧接着 g = open(同路径) 成功(独占已随 close 释放); br_file_close(g) == 0",
+]
+expect   = "[IOCONF] PASS TC-IO-009 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-010"
+pre      = "无(验证 -EINVAL 与 -ENOTSUP 是两件事)"
+steps    = [
+    "打开 /dev/uart0(O_RDWR|O_NONBLOCK)",
+    "br_file_poll(f, NULL) == -EINVAL(需要参数却给 NULL)",
+    "br_file_ioctl(f, GET_INFO, NULL) == -EINVAL; br_file_ioctl(f, SET_BAUD, NULL) == -EINVAL",
+    "close",
+]
+expect   = "[IOCONF] PASS TC-IO-010 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-011"
+pre      = "无; 用例最后一定把 115200 写回(SET_BAUD 会连带改内核日志速率, 抬头 ⑦)"
+steps    = [
+    "打开 /dev/uart0(O_RDWR|O_NONBLOCK)",
+    "SET_BAUD(4000000) == -EINVAL(> refclk/16, IBRD 会算成 0)",
+    "SET_BAUD(0) == -EINVAL(除数为 0, 必须显式拒绝)",
+    "SET_BAUD(9600) == 0; GET_INFO 回读 info.baud == 9600",
+    "SET_BAUD(115200) == 0; GET_INFO 回读 info.baud == 115200; close",
+]
+expect   = "[IOCONF] PASS TC-IO-011 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-IO-012"
+pre      = "无"
+steps    = [
+    "打开 /dev/uart0(O_RDWR|O_NONBLOCK)",
+    "br_file_ioctl(f, BR_IO('u',1), NULL) == 0(FLUSH_RX, 丢弃 FIFO 残留)",
+    "GET_INFO 回读 info.rx_available == 0",
+    "close",
+]
+expect   = "[IOCONF] PASS TC-IO-012 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

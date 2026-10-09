@@ -13,7 +13,12 @@
 | `br_hexdump(base, len)` | 逐行渲染到 console(一行 88 B 的栈缓冲, 不缓冲整段);返回渲染字节数 |
 | `br_hexdump_line_bytes()` | 一行字节数 = **87**(供调用方预算缓冲) |
 | `br_hexdump_init()` | 无状态;返回 0 |
-| `br_hexdump_selftest()` | 跑 TC-DBG-020/021, 打 `[DBGCONF] PASS/FAIL`, 返回失败数 |
+
+上表是**对外声明面**(`[[export]]`)。自检**不在**这里(ADR-0010 §2.5): 用例在
+`src/hexdump_selftest.c`, 入口 `hexdump_selftest()` 是描述符的 `.selftest` 钩子, 由
+**core** 的 `br_plugin_manager_selftest()` 在全部 `start()` 之后统一驱动 —— 跑
+TC-DBG-020/021, 打 `[DBGCONF] PASS/FAIL`, 返回失败项数(失败不停机)。格式常量(行缓冲容量 /
+满行字节数 / 地址位宽)经 `src/hexdump_internal.h` 取用(转调生产实现, 不复制)。
 
 ## 行格式契约(逐字节冻结在头文件抬头, 用例 TC-DBG-020 断言)
 
@@ -64,8 +69,9 @@
 
 ## 如何被调用
 
-`service/dump` 的 `br_dump_conformance()` **统一驱动** `br_hexdump_selftest()`
-(打印 `[DBGCONF]` 行);它的 `br_dump_memory()` / `br_dump_heap()` / `br_dump_all()`
+自检钩子 `hexdump_selftest()`(在 `src/hexdump_selftest.c`)由 **core** 的
+`br_plugin_manager_selftest()` 在全部 `start()` 之后统一驱动(打印 `[DBGCONF]` 行)。
+`service/dump` 的 `br_dump_memory()` / `br_dump_heap()` / `br_dump_all()`
 调 `br_hexdump()` 出内容, `br_dump_trace()` 之外的 bridge `MEMRD` 路径用
 `br_hexdump_to()` 做两段式(先问长度, 再填缓冲)。
 

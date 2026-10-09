@@ -2,9 +2,9 @@
 #
 # 由 `brickie new` 生成字段形状(照 `6-01` §2 的用例表契约: {id, pre, steps, expect,
 # sched, platform}); **v0.1 不消费它**(无 test 命令, 排 v0.4, §0 边界纪律)。
-# 运行期的真身是编进镜像的 `br_memleak_selftest()`(见 src/memleak.c), 由
-# `br_dump_conformance()`(dump 编排)调用、`make dbg-test` 判定; 本表的 id 与镜像
-# 日志里的用例 tag 一一对应。
+# 运行期的真身是编进镜像的 `memleak_selftest()`(见 src/memleak_selftest.c), 由 core 的
+# `br_plugin_manager_selftest()` 在全部 start() 之后统一驱动(ADR-0010)、`make dbg-test`
+# 判定; 本表的 id 与镜像日志里的用例 tag 一一对应。
 #
 # 共同前置: 堆已初始化(br_mem_init 完成)、MMU 已开; 每一例收尾都把堆恢复干净 ——
 # 用例是判据, 不给 MainLoop 留破坏现场(只有 TC-DBG-040 需要"先泄漏再归还")。

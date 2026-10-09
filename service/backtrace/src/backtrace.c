@@ -24,13 +24,12 @@
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 
+#include "backtrace_internal.h"    /* 自检用的内部视图(见该头; 生产路径不用它) */
+
 /* 无边界信息时的保守回退窗口: 以走查者当前 SP 为下界、SP + 1 MiB 为上界。
  * 真实启动栈只有几十 KiB(link.ld), 1 MiB 足够覆盖全部调用者帧, 又能挡住
  * "fp 被踩成一个远处的野值"这种最坏情况。 */
 #define BT_FALLBACK_STACK_BYTES  (1024u * 1024u)
-
-/* TC-DBG-010 判定"pc 落在探针函数体内"的扫描窗口 */
-#define BT_PROBE_SPAN            512u
 
 /* =====================================================================
  * 内部状态
@@ -45,13 +44,6 @@ static br_u32        s_last_count;
 /* =====================================================================
  * 小工具
  * ===================================================================== */
-
-/* 记一条 DBGCONF 判据; 返回 0/1 便于累加失败数 */
-static br_u32 bt_conf(br_bool ok, const char *tag, const char *what)
-{
-    br_log_info("[DBGCONF] %s %s %s", ok ? "PASS" : "FAIL", tag, what);
-    return ok ? 0u : 1u;
-}
 
 /* 本次走查的栈范围: 优先用 platform 设的边界; 否则回退到"当前 SP .. +1 MiB"。
  * 回退下界取走查者自己的 SP —— 它比任何被走查的调用者帧都低(栈向下增长),
@@ -258,82 +250,30 @@ int br_bt_init(void)
 }
 
 /* =====================================================================
- * 自检(TC-DBG-01x)
+ * 自检用的内部视图
+ *
+ * 见 `src/backtrace_internal.h` 的说明: 这两条**只**为 `backtrace_selftest.c` 存在 ——
+ * 用例要把栈边界临时改窄再**原样复原**, 而"复原到未设置(0/0)"经公开的
+ * `br_bt_set_stack_bounds` 表达不出来(它拒非法值)。★ 直接读写**生产状态本身**,
+ * 不在别处留副本, 否则用例改的是副本的边界。
  * ===================================================================== */
 
-/* 探针: 必须 noinline, 否则它的帧会被折叠, pc 落点判据失去意义 */
-static void __attribute__((noinline))
-bt_probe(br_bt_frame_t *out, br_u32 max, br_u32 *n)
+void br_bt_internal_read_stack_bounds(br_uintptr_t *bottom, br_uintptr_t *top)
 {
-    *n = br_bt_capture(out, max);
-}
-
-/* 是否有某一帧的 pc 落在 [&bt_probe, &bt_probe + BT_PROBE_SPAN) ——
- * 这证明帧链真的穿过了"调用 capture 的那个调用点", 而不只是读到了当前帧。 */
-static br_bool bt_probe_covered(const br_bt_frame_t *fr, br_u32 n)
-{
-    const br_uintptr_t lo = (br_uintptr_t)&bt_probe;
-    const br_uintptr_t hi = lo + (br_uintptr_t)BT_PROBE_SPAN;
-
-    for (br_u32 i = 0u; i < n; i++) {
-        if ((fr[i].pc >= lo) && (fr[i].pc < hi)) {
-            return BR_TRUE;
-        }
+    if (bottom != BR_NULL) {
+        *bottom = s_stack_bottom;
     }
-    return BR_FALSE;
-}
-
-int br_bt_selftest(void)
-{
-    static br_bt_frame_t frames[BR_BT_MAX_FRAMES];
-    br_u32 fails = 0u;
-
-    /* ---- TC-DBG-010: 真栈上的链完整性 + 调用点覆盖 ---- */
-    br_u32 n = 0u;
-    bt_probe(frames, BR_BT_MAX_FRAMES, &n);
-
-    br_bool ok10 = (n >= 2u) && (frames[0].depth == 0u) && bt_probe_covered(frames, n);
-
-    for (br_u32 i = 0u; i < n; i++) {
-        ok10 = ok10 && (frames[i].pc != 0u);
-        ok10 = ok10 && ((frames[i].fp % 16u) == 0u);
-        if (i > 0u) {
-            ok10 = ok10 && (frames[i].fp > frames[i - 1u].fp);
-        }
+    if (top != BR_NULL) {
+        *top = s_stack_top;
     }
-
-    fails += bt_conf(ok10, "TC-DBG-010",
-                     "帧数>=2, pc!=0, fp 16 对齐且严格递增, 且 pc 覆盖探针函数体");
-
-    /* ---- TC-DBG-011: 空/非法现场被拒; 边界护栏生效; max 生效 ---- */
-    const br_uintptr_t saved_bottom = s_stack_bottom;   /* 白盒保存, 用例收尾复位 */
-    const br_uintptr_t saved_top    = s_stack_top;
-    br_bool ok11 = BR_TRUE;
-
-    /* fp == 0 ⇒ 0 帧(无现场); fp 未 16 对齐 ⇒ 0 帧且不解引用(不死) */
-    ok11 = ok11 && (br_bt_capture_from(0u, 0u, frames, 8u) == 0u);
-    ok11 = ok11 && (br_bt_capture_from(0x1234u, 0x40080000u, frames, 8u) == 0u);
-
-    /* 非法边界被拒(setter 先校验后写入 ⇒ 不改状态, 这里顺带验证不变式) */
-    ok11 = ok11 && (br_bt_set_stack_bounds(0u, 0x1000u) == BR_ERR(BR_EINVAL));
-    ok11 = ok11 && (br_bt_set_stack_bounds(0x2000u, 0x1000u) == BR_ERR(BR_EINVAL));
-
-    /* 合法但极窄的边界: 当前栈在界外 ⇒ 捕获必须掐成 0 帧(证明边界真的被查) */
-    ok11 = ok11 && (br_bt_set_stack_bounds(0x1000u, 0x2000u) == 0);
-    ok11 = ok11 && (br_bt_capture(frames, 4u) == 0u);
-
-    /* 复位到调用前的边界(可能是 0/0 = "未设置"), 不残留用例里的窄边界 */
-    s_stack_bottom = saved_bottom;
-    s_stack_top    = saved_top;
-
-    /* max 生效: 只要 1 帧就只写 1 帧 */
-    ok11 = ok11 && (br_bt_capture(frames, 1u) == 1u);
-
-    fails += bt_conf(ok11, "TC-DBG-011",
-                     "capture_from(0/未对齐)=0, 非法 bounds 被拒, 窄 bounds 掐断, max 生效");
-
-    return (int)fails;
 }
+
+void br_bt_internal_restore_stack_bounds(br_uintptr_t bottom, br_uintptr_t top)
+{
+    s_stack_bottom = bottom;
+    s_stack_top    = top;
+}
+
 
 /* =====================================================================
  * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物

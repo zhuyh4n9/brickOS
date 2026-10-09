@@ -1,0 +1,103 @@
+# brickie:generated
+# api/iface 快照 api/iface/framework/dev-core/dev.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "framework/dev-core#dev"
+provider = "framework/dev-core"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.1.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:683df2ce258eb70fb96849760f12e29b976aefbdb56212857ffd7d287c0de952"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "macro"
+name = "BR_CLASS_NONE"
+value = "0u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_CLASS_CDEV"
+value = "1u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_CLASS_BDEV"
+value = "2u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_DEV_MAX"
+value = "16u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_IOC_NONE"
+value = "0u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_IOC_WRITE"
+value = "1u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_IOC_READ"
+value = "2u"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_dev_class_entry_t"
+layout = "# {class_id, class_priv, open_file, dev_priv}"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dev_add"
+sig = "int (const char*, const br_dev_class_entry_t*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dev_lookup"
+sig = "const br_dev_class_entry_t* (const char*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dev_count"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dev_name_at"
+sig = "const char* (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dev_entry_at"
+sig = "const br_dev_class_entry_t* (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_dev_name_valid"
+sig = "br_bool (const char*)"
+status = "experimental"

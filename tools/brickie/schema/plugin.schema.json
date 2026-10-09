@@ -1,411 +1,602 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "plugin.toml — brickie v0.1 插件声明面(BRV-D2: 单条记录形状)",
-  "description": "只表达**单条记录形状**(字段名/类型/取值域/必填)。跨字段不变量(api_iface == api_type)、版本串段数、range 语义、名字全局唯一一律**不在这里** —— 那些由 brickie-core 报 BRV-* 码(contract §7/§8)。校验器是本仓库自带的**最小子集**(contract §8 的'更小的允许集', 零第三方依赖)。",
-  "type": "object",
-  "required": ["schema", "plugin"],
-  "additionalProperties": true,
-  "properties": {
-    "schema": {
+ "$schema": "http://json-schema.org/draft-07/schema#",
+ "title": "plugin.toml — brickie v0.1 插件声明面(BRV-D2: 单条记录形状)",
+ "description": "只表达**单条记录形状**(字段名/类型/取值域/必填)。跨字段不变量(api_iface == api_type)、版本串段数、range 语义、名字全局唯一一律**不在这里** —— 那些由 brickie-core 报 BRV-* 码(contract §7/§8)。校验器是本仓库自带的**最小子集**(contract §8 的'更小的允许集', 零第三方依赖)。",
+ "type": "object",
+ "required": [
+  "schema",
+  "plugin"
+ ],
+ "additionalProperties": true,
+ "properties": {
+  "schema": {
+   "type": "integer",
+   "enum": [
+    1
+   ]
+  },
+  "plugin": {
+   "type": "object",
+   "required": [
+    "name",
+    "plugin_type",
+    "api_type",
+    "lang",
+    "phase",
+    "version"
+   ],
+   "additionalProperties": true,
+   "properties": {
+    "name": {
+     "type": "string",
+     "pattern": "^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$"
+    },
+    "plugin_type": {
+     "type": "string",
+     "enum": [
+      "app",
+      "interface",
+      "ability",
+      "platform"
+     ]
+    },
+    "api_type": {
+     "type": "string",
+     "enum": [
+      "native",
+      "runtime_adapter",
+      "third_party"
+     ]
+    },
+    "subkind": {
+     "type": "string",
+     "enum": [
+      "scheduler",
+      "framework",
+      "io",
+      "fs",
+      "service"
+     ]
+    },
+    "lang": {
+     "type": "string",
+     "enum": [
+      "c",
+      "cxx",
+      "rust"
+     ]
+    },
+    "phase": {
+     "type": "string",
+     "enum": [
+      "early",
+      "core",
+      "late",
+      "app"
+     ]
+    },
+    "sched_class": {
+     "type": "string",
+     "enum": [
+      "SAFE_PREEMPT",
+      "COOP_ONLY",
+      "TT_SAFE"
+     ]
+    },
+    "sched_kind": {
+     "type": "string",
+     "enum": [
+      "coop",
+      "preempt",
+      "tt"
+     ]
+    },
+    "version": {
+     "type": "string"
+    },
+    "summary": {
+     "type": "string"
+    },
+    "license": {
+     "type": "string"
+    }
+   }
+  },
+  "res": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "kind",
+     "used_kib"
+    ],
+    "additionalProperties": true,
+    "properties": {
+     "kind": {
+      "type": "string",
+      "enum": [
+       "ram",
+       "stack"
+      ]
+     },
+     "used_kib": {
       "type": "integer",
-      "enum": [1]
+      "minimum": 0
+     },
+     "notes": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "sched": {
+   "type": "object",
+   "additionalProperties": true,
+   "properties": {
+    "tt": {
+     "type": "object",
+     "required": [
+      "period_us",
+      "deadline_us",
+      "wcet_us"
+     ],
+     "additionalProperties": true,
+     "properties": {
+      "period_us": {
+       "type": "integer",
+       "minimum": 0
+      },
+      "deadline_us": {
+       "type": "integer",
+       "minimum": 0
+      },
+      "wcet_us": {
+       "type": "integer",
+       "minimum": 0
+      }
+     }
+    }
+   }
+  },
+  "compat": {
+   "type": "object",
+   "required": [
+    "core"
+   ],
+   "additionalProperties": true,
+   "properties": {
+    "core": {
+     "type": "string"
     },
-    "plugin": {
+    "api_rev": {
+     "type": "integer",
+     "minimum": 0
+    },
+    "hash_scope": {
+     "type": "string",
+     "enum": [
+      "decl",
+      "sym"
+     ]
+    },
+    "truth": {
+     "type": "string",
+     "enum": [
+      "decl",
+      "header"
+     ]
+    },
+    "abi_id": {
+     "type": "string"
+    },
+    "requires_iface": {
+     "type": "array",
+     "items": {
       "type": "object",
-      "required": ["name", "plugin_type", "api_type", "lang", "phase", "version"],
+      "required": [
+       "id",
+       "api_iface",
+       "compat_gen",
+       "range"
+      ],
       "additionalProperties": true,
       "properties": {
+       "id": {
+        "type": "string"
+       },
+       "api_iface": {
+        "type": "string",
+        "enum": [
+         "native",
+         "runtime_adapter",
+         "third_party"
+        ]
+       },
+       "compat_gen": {
+        "type": "integer",
+        "minimum": 0
+       },
+       "range": {
+        "type": "string"
+       },
+       "mode": {
+        "type": "string",
+        "enum": [
+         "decl",
+         "sym"
+        ]
+       }
+      }
+     }
+    }
+   }
+  },
+  "iface": {
+   "type": "object",
+   "additionalProperties": true,
+   "properties": {
+    "typedefs": {
+     "type": "object",
+     "additionalProperties": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "dep": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "name",
+     "kind"
+    ],
+    "additionalProperties": true,
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "range": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string",
+      "enum": [
+       "init",
+       "runtime",
+       "type"
+      ]
+     },
+     "phase": {
+      "type": "string",
+      "enum": [
+       "early",
+       "core",
+       "late",
+       "app"
+      ]
+     },
+     "symbol": {
+      "type": "string"
+     }
+    }
+   }
+  },
+  "export": {
+   "type": "array",
+   "items": {
+    "type": "object",
+    "required": [
+     "name",
+     "api_iface",
+     "form",
+     "version",
+     "compat_gen",
+     "freeze_state",
+     "status"
+    ],
+    "additionalProperties": true,
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "api_iface": {
+      "type": "string",
+      "enum": [
+       "native",
+       "runtime_adapter",
+       "third_party"
+      ]
+     },
+     "form": {
+      "type": "string",
+      "enum": [
+       "api",
+       "skin",
+       "service"
+      ]
+     },
+     "version": {
+      "type": "string"
+     },
+     "compat_gen": {
+      "type": "integer",
+      "minimum": 0
+     },
+     "freeze_state": {
+      "type": "string",
+      "enum": [
+       "unfrozen",
+       "frozen",
+       "unfreezing"
+      ]
+     },
+     "hash": {
+      "type": "string"
+     },
+     "status": {
+      "type": "string",
+      "enum": [
+       "experimental",
+       "frozen",
+       "deprecated"
+      ]
+     },
+     "reexport_of": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "symbols": {
+      "type": "array",
+      "items": {
+       "type": "string"
+      }
+     },
+     "entries": {
+      "type": "array",
+      "items": {
+       "type": "object",
+       "required": [
+        "kind",
+        "name"
+       ],
+       "additionalProperties": true,
+       "properties": {
+        "kind": {
+         "type": "string",
+         "enum": [
+          "func",
+          "var",
+          "macro",
+          "type",
+          "enum",
+          "service",
+          "symbol-family"
+         ]
+        },
         "name": {
-          "type": "string",
-          "pattern": "^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$"
+         "type": "string"
         },
-        "plugin_type": {
-          "type": "string",
-          "enum": ["app", "interface", "ability", "platform"]
+        "sig": {
+         "type": "string"
         },
-        "api_type": {
-          "type": "string",
-          "enum": ["native", "runtime_adapter", "third_party"]
+        "layout": {
+         "type": "string"
         },
-        "subkind": {
-          "type": "string",
-          "enum": ["scheduler", "framework", "io", "fs", "service"]
-        },
-        "lang": {
-          "type": "string",
-          "enum": ["c", "cxx", "rust"]
-        },
-        "phase": {
-          "type": "string",
-          "enum": ["early", "core", "late", "app"]
-        },
-        "sched_class": {
-          "type": "string",
-          "enum": ["SAFE_PREEMPT", "COOP_ONLY", "TT_SAFE"]
-        },
-        "sched_kind": {
-          "type": "string",
-          "enum": ["coop", "preempt", "tt"]
-        },
-        "version": {
-          "type": "string"
-        },
-        "summary": {
-          "type": "string"
-        },
-        "license": {
-          "type": "string"
-        }
-      }
-    },
-    "res": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["kind", "used_kib"],
-        "additionalProperties": true,
-        "properties": {
-          "kind": {
-            "type": "string",
-            "enum": ["ram", "stack"]
+        "value": {
+         "oneOf": [
+          {
+           "type": "string"
           },
-          "used_kib": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "notes": {
+          {
+           "type": "array",
+           "items": {
             "type": "string"
+           }
           }
+         ]
+        },
+        "ops": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
+        },
+        "status": {
+         "type": "string",
+         "enum": [
+          "experimental",
+          "frozen",
+          "deprecated"
+         ]
         }
+       }
       }
+     }
+    }
+   }
+  },
+  "privileged": {
+   "type": "object",
+   "additionalProperties": true,
+   "properties": {
+    "level": {
+     "type": "string",
+     "enum": [
+      "P0",
+      "P1",
+      "P2",
+      "P3",
+      "P4"
+     ]
     },
-    "sched": {
+    "memory": {
+     "type": "array",
+     "items": {
+      "type": "object",
+      "required": [
+       "granularity",
+       "ops"
+      ],
+      "additionalProperties": true,
+      "properties": {
+       "granularity": {
+        "type": "string",
+        "enum": [
+         "byte",
+         "page",
+         "region",
+         "pool"
+        ]
+       },
+       "ops": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "enum": [
+          "alloc",
+          "free",
+          "map",
+          "protect",
+          "flush",
+          "invalidate",
+          "unmap"
+         ]
+        }
+       },
+       "regions": {
+        "type": "array",
+        "items": {
+         "type": "string",
+         "enum": [
+          "heap",
+          "dma",
+          "contig",
+          "page",
+          "mmio",
+          "reserved"
+         ]
+        }
+       }
+      }
+     }
+    },
+    "resources": {
+     "type": "array",
+     "items": {
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "tt": {
-          "type": "object",
-          "required": ["period_us", "deadline_us", "wcet_us"],
-          "additionalProperties": true,
-          "properties": {
-            "period_us": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "deadline_us": {
-              "type": "integer",
-              "minimum": 0
-            },
-            "wcet_us": {
-              "type": "integer",
-              "minimum": 0
-            }
-          }
+       "irq": {
+        "type": "array",
+        "items": {
+         "type": "integer",
+         "minimum": 0
         }
-      }
-    },
-    "compat": {
-      "type": "object",
-      "required": ["core"],
-      "additionalProperties": true,
-      "properties": {
-        "core": {
-          "type": "string"
-        },
-        "api_rev": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "hash_scope": {
-          "type": "string",
-          "enum": ["decl", "sym"]
-        },
-        "truth": {
-          "type": "string",
-          "enum": ["decl", "header"]
-        },
-        "abi_id": {
-          "type": "string"
-        },
-        "requires_iface": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["id", "api_iface", "compat_gen", "range"],
-            "additionalProperties": true,
-            "properties": {
-              "id": {
-                "type": "string"
-              },
-              "api_iface": {
-                "type": "string",
-                "enum": ["native", "runtime_adapter", "third_party"]
-              },
-              "compat_gen": {
-                "type": "integer",
-                "minimum": 0
-              },
-              "range": {
-                "type": "string"
-              },
-              "mode": {
-                "type": "string",
-                "enum": ["decl", "sym"]
-              }
-            }
-          }
+       },
+       "dma_channels": {
+        "type": "array",
+        "items": {
+         "type": "integer",
+         "minimum": 0
         }
-      }
-    },
-    "iface": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "typedefs": {
-          "type": "object",
-          "additionalProperties": {
-            "type": "string"
-          }
+       },
+       "pins": {
+        "type": "array"
+       },
+       "device_names": {
+        "type": "array",
+        "items": {
+         "type": "string"
         }
+       }
       }
+     }
+    }
+   }
+  },
+  "build": {
+   "type": "object",
+   "additionalProperties": true,
+   "properties": {
+    "sources": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
     },
-    "dep": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["name", "kind"],
-        "additionalProperties": true,
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "range": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string",
-            "enum": ["init", "runtime", "type"]
-          },
-          "phase": {
-            "type": "string",
-            "enum": ["early", "core", "late", "app"]
-          },
-          "symbol": {
-            "type": "string"
-          }
-        }
-      }
+    "includes": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
     },
-    "export": {
-      "type": "array",
-      "items": {
-        "type": "object",
-        "required": ["name", "api_iface", "form", "version", "compat_gen", "freeze_state", "status"],
-        "additionalProperties": true,
-        "properties": {
-          "name": {
-            "type": "string"
-          },
-          "api_iface": {
-            "type": "string",
-            "enum": ["native", "runtime_adapter", "third_party"]
-          },
-          "form": {
-            "type": "string",
-            "enum": ["api", "skin", "service"]
-          },
-          "version": {
-            "type": "string"
-          },
-          "compat_gen": {
-            "type": "integer",
-            "minimum": 0
-          },
-          "freeze_state": {
-            "type": "string",
-            "enum": ["unfrozen", "frozen", "unfreezing"]
-          },
-          "hash": {
-            "type": "string"
-          },
-          "status": {
-            "type": "string",
-            "enum": ["experimental", "frozen", "deprecated"]
-          },
-          "reexport_of": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "symbols": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "entries": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": ["kind", "name"],
-              "additionalProperties": true,
-              "properties": {
-                "kind": {
-                  "type": "string",
-                  "enum": ["func", "var", "macro", "type", "enum", "service", "symbol-family"]
-                },
-                "name": {
-                  "type": "string"
-                },
-                "sig": {
-                  "type": "string"
-                },
-                "layout": {
-                  "type": "string"
-                },
-                "value": {
-                  "oneOf": [
-                    {"type": "string"},
-                    {"type": "array", "items": {"type": "string"}}
-                  ]
-                },
-                "ops": {
-                  "type": "array",
-                  "items": {
-                    "type": "string"
-                  }
-                },
-                "status": {
-                  "type": "string",
-                  "enum": ["experimental", "frozen", "deprecated"]
-                }
-              }
-            }
-          }
-        }
-      }
+    "defines": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
     },
-    "privileged": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "level": {
-          "type": "string",
-          "enum": ["P0", "P1", "P2", "P3", "P4"]
+    "target": {
+     "type": "object",
+     "additionalProperties": true,
+     "properties": {
+      "arch": {
+       "type": "string"
+      },
+      "cross": {
+       "type": "string"
+      },
+      "arch_flags": {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      },
+      "linker_script": {
+       "type": "string"
+      },
+      "qemu": {
+       "type": "object",
+       "additionalProperties": true,
+       "properties": {
+        "binary": {
+         "type": "string"
+        },
+        "machine": {
+         "type": "string"
+        },
+        "cpu": {
+         "type": "string"
         },
         "memory": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "required": ["granularity", "ops"],
-            "additionalProperties": true,
-            "properties": {
-              "granularity": {
-                "type": "string",
-                "enum": ["byte", "page", "region", "pool"]
-              },
-              "ops": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "enum": ["alloc", "free", "map", "protect", "flush", "invalidate", "unmap"]
-                }
-              },
-              "regions": {
-                "type": "array",
-                "items": {
-                  "type": "string",
-                  "enum": ["heap", "dma", "contig", "page", "mmio", "reserved"]
-                }
-              }
-            }
-          }
+         "type": "string"
         },
-        "resources": {
-          "type": "array",
-          "items": {
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-              "irq": {
-                "type": "array",
-                "items": {"type": "integer", "minimum": 0}
-              },
-              "dma_channels": {
-                "type": "array",
-                "items": {"type": "integer", "minimum": 0}
-              },
-              "pins": {
-                "type": "array"
-              },
-              "device_names": {
-                "type": "array",
-                "items": {"type": "string"}
-              }
-            }
-          }
+        "extra": {
+         "type": "array",
+         "items": {
+          "type": "string"
+         }
         }
+       }
       }
-    },
-    "build": {
-      "type": "object",
-      "additionalProperties": true,
-      "properties": {
-        "sources": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "includes": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "defines": {
-          "type": "array",
-          "items": {"type": "string"}
-        },
-        "target": {
-          "type": "object",
-          "additionalProperties": true,
-          "properties": {
-            "arch": {
-              "type": "string"
-            },
-            "cross": {
-              "type": "string"
-            },
-            "arch_flags": {
-              "type": "array",
-              "items": {"type": "string"}
-            },
-            "linker_script": {
-              "type": "string"
-            },
-            "qemu": {
-              "type": "object",
-              "additionalProperties": true,
-              "properties": {
-                "binary": {
-                  "type": "string"
-                },
-                "machine": {
-                  "type": "string"
-                },
-                "cpu": {
-                  "type": "string"
-                },
-                "memory": {
-                  "type": "string"
-                },
-                "extra": {
-                  "type": "array",
-                  "items": {"type": "string"}
-                }
-              }
-            }
-          }
-        }
-      }
+     }
     }
+   }
+  },
+  "selftest": {
+   "type": "object",
+   "description": "ADR-0010: **表在场 = 本插件有自检** ⇒ 生成器发 `.selftest = <prefix>selftest`。不写 = 无自检(不发钩子)。",
+   "additionalProperties": true,
+   "properties": {
+    "cases": {
+     "type": "integer",
+     "minimum": 0,
+     "description": "自称的用例条数(**只作呈现/诊断**, 不参与判定; 真值是 selftest 钩子的返回值)。"
+    }
+   }
   }
+ }
 }

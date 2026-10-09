@@ -16,7 +16,13 @@
 | `br_bt_capture_from(fp, pc, out, max)` | 从给定现场(异常帧/已知 fp)捕获;返回帧数 |
 | `br_bt_print()` / `br_bt_print_from()` | 捕获并逐帧打印 `[BT] <depth>: pc= fp= sp=`, 末尾 `[BT] frames=`, 返回帧数 |
 | `br_bt_last()` / `br_bt_last_count()` | 最近一次捕获的快照与帧数 |
-| `br_bt_selftest()` | 跑 TC-DBG-010/011, 打 `[DBGCONF] PASS/FAIL`, 返回失败数 |
+
+上表是**对外声明面**(`[[export]]`)。自检**不在**这里(ADR-0010 §2.5): 用例在
+`src/backtrace_selftest.c`, 入口 `backtrace_selftest()` 是描述符的 `.selftest` 钩子, 由
+**core** 的 `br_plugin_manager_selftest()` 在全部 `start()` 之后统一驱动 —— 跑
+TC-DBG-010/011, 打 `[DBGCONF] PASS/FAIL`, 返回失败项数(失败不停机)。TC-DBG-011 收尾要把
+栈边界复原成用例前的原样, 经 `src/backtrace_internal.h` 的访问器读/写生产状态(转调,
+不复制)。
 
 帧的语义: `pc` = "下一条要执行的地址"(即调用点的返回地址);`sp` = `fp + 16`,
 是 AAPCS64 栈帧里的**规范位置**(`stp x29,x30,[sp,#-N]!` 之后 `x29` 指向保存区,
@@ -84,8 +90,8 @@ fault 现场的捕获入口接收异常帧里的 `fp/pc`(由 platform 的 fault 
 
 ## 如何被调用
 
-- 启动期: `br_bt_init()`(LATE 相);`br_dump_conformance()` **统一驱动**
-  `br_bt_selftest()`(打印 `[DBGCONF]` 行)。
+- 启动期: `br_bt_init()`(LATE 相); 自检钩子 `backtrace_selftest()` 由 **core** 的
+  `br_plugin_manager_selftest()` 在全部 `start()` 之后统一驱动(打印 `[DBGCONF]` 行)。
 - 现场倾倒: `service/dump` 的 `br_dump_backtrace()` → `br_bt_print()`;
   dump 也可以取 `br_bt_last()` / `br_bt_last_count()` 复用快照。
 - platform: 在 `early_init` 里用链接脚本的栈符号调 `br_bt_set_stack_bounds()`;
