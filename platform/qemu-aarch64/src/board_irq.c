@@ -195,8 +195,10 @@ void br_plat_timer_stop(void)
  *   ⇒ 让 app/hello 调 `br_irq_register` 会是一处**声明面与实现不一致**:
  *     它在 P0 的位置上做了 P3 的事, 而 `brickie check` 的 priv 域(声明合法性)
  *     看不到源码从而不会报红 —— 这类"工具看不见"的越权必须靠**放置**来避免。
- *   设计 3-02 §11.1 也把 timer PPI 的 ISR 归 core.init(核心自己注册);
- *   v0.1 没有 core.init, 由同属 P4 的 platform 代注册, 并记入 br-wa-boot-001。
+ *   设计 3-02 §11.1 把 timer PPI 的 ISR 归 core.init; 原型按 **P-IRQ-17 的放置裁定**
+ *   把它留在 platform 的 start 相(理由就是上面的权限模型), `docs/decisions/0002` 有登记。
+ *   ADR-0008 之后 core.init 已是独立入口, 但这条"ISR 放哪"的裁定**未变**(core.init 不
+ *   接管设备级 ISR 的注册)。
  * ------------------------------------------------------------------- */
 static volatile br_u32 s_timer_ticks;
 
@@ -238,8 +240,8 @@ int br_plat_irq_start(void)
     br_timer_write_ctl(BR_CNTP_CTL_ENABLE);   /* IMASK=0: 条件满足就发中断 */
 
     /* 全局开中断 = 设计 3-02 §14.3 初始化链的最后一步("全部插件 init 之后")。
-     * v0.1 没有 core.init / 阶段机 ⇒ 由 platform 在"设备已就绪"这一刻执行
-     * (WORKAROUND br-wa-boot-001)。 */
+     * 它已由插件管理器在 LATE 相之后、START 相之前完成(见 plugin_mgr.c 的相位驱动);
+     * 这里保留一次是**幂等**的平台侧 bring-up(与 3-02 §14.3 的字面顺序一致)。 */
     br_irq_cpu_enable();
     return 0;
 }

@@ -36,15 +36,19 @@ src/main.c           人写   ← 三个钩子(early_init/init/start) + APP 线�
 tests/smoke.toml     人写   ← 用例声明面(与镜像里 [PLGCONF]/[SVCCONF] 的 id 一一对应)
 ```
 
-**`br_core_main` 已经不存在了** —— 与 `core/include/br/core/br_main.h` 一起被拆掉。
-这正是 `WORKAROUND(br-wa-boot-001)` 说的“它的归宿不是长大, 而是被拆掉”, 拆完之后:
+M0 那个"在 APP 里直调各子系统"的旧 `br_core_main` 已经不存在了 —— 与
+`core/include/br/core/br_main.h` 一起在 ADR-0005 那一刀被拆掉(`WORKAROUND(br-wa-boot-001)`
+的口径就是"它的归宿不是长大, 而是被拆掉")。
 
-| 原来在 `br_core_main` 里的事 | 现在归谁 |
+★ **ADR-0008 之后 core 又有了 `br_core_main`** —— 但它是"四阶段启动链的**编排**",
+不是 M0 那个 APP 替身(见 [br_main.h](../../core/include/br/core/br_main.h)):
+
+| 原来在 M0 的 `br_core_main` 里的事 | 现在归谁 |
 |---|---|
 | 平台名/ISA 打印 | 插件管理器的描述符枚举 + 本文件的启动日志(读 `br_plat_*`) |
-| `br_irq_cpu_init` | `start.S`(core.init 尚未抽成独立入口, 见 `br-wa-boot-001` ①) |
-| `br_mem_init` / 开 MMU | platform 的 `early_init` 钩子(EARLY 相第一条) |
+| `br_irq_cpu_init` | core 的 `br_core_main()` 阶段 ①(ADR-0008 后 `core.init` 有了独立入口) |
+| `br_mem_init` / 开 MMU | core 的 `br_core_main()` 阶段 ③(memory + 地址映射的建立归 core) |
 | 五个 service 插件的 init | 插件管理器按 `[[dep]]` 拓扑驱动(LATE 相, dump 最后) |
 | `br_plat_irq_start` / 一致性套件 | platform 的 `start()`(中断已开)＋各插件自己的 init/start |
 | 循环体 + `br_delay_ms` | **APP 线程 + `br_task_sleep`**(`br-wa-boot-001` ① 已还清) |
-| `br_log_init` / trace 环 | core 侧初始化(仍在管理器头部, 见 `br-wa-boot-001` ①) |
+| `br_log_init` / trace 环 | core 的 `br_core_main()` 阶段 ①(时钟/日志起点) |

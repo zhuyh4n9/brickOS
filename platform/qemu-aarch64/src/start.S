@@ -1,31 +1,33 @@
 /*
  * brickOS prototype v0.2.0 — Platform Entry (aarch64)
  *
- * ======================= 已还清(ADR-0005) · 启动链 =======================
+ * ======================= 已还清(ADR-0005/0008) · 启动链 =======================
  * 设计上这段汇编属于 **Platform 插件**(设计 1-01 §6.3: Platform 类 = reset 汇编、
  * 时钟/引脚/RAM、中断控制器实现、console、cache、timer、region 表; 每 SoC 一个)。
  * 插件化已完成(manifest + 描述符 + `[build].target` 提供目标事实), 本文件按设计
  * 留在 platform 插件目录内。
  *
- * ★ **本文件不再直接调任何子系统**: 启动链的编排权已交给 core 的插件管理器
- *   (`.br_plugins` 段枚举 + 相位驱动, 设计 1-01 §9 / 3-05 §2)。
- *   的第 ③ 条("调用点由段枚举驱动")到此还清; 标记保留到 WORKAROUNDS.md 由主控同步删除
- *   (登记表由人维护, 本工作流不写它)。
+ * ★ **本文件不再直接调任何子系统, 也不再直接调插件管理器**: reset/BSS 之后只 `bl`
+ *   core 的入口 `br_core_main()`(core/src/main.c)。四阶段启动链(平台无关初始化 →
+ *   platform 插件初始化 → 堆与地址映射 → 插件相位驱动)的编排全在 core 侧, 见
+ *   `core/include/br/core/br_main.h` 与 `docs/decisions/0008-core-main-boot-chain.md`。
  * ==========================================================================
  *
  * 与设计启动序列(1-01 §9)的对应:
  *   reset -> 向量表(汇编) + BSS 清零(汇编)              [本文件]
- *         -> core.init(TPIDR_EL1 / 中断框架)             [br_irq_cpu_init]
- *         -> plugin_manager(扫段 → 拓扑 → 相位驱动)      [br_plugin_manager_run]
- *              EARLY(platform 的 early_init 显式第一) → CORE → LATE → 开中断
- *              → START(APP 最后) → br_sched_run()
+ *         -> core 的 main(br_core_main, core/src/main.c) [本文件只 jump 过去]
+ *              ① core 平台无关初始化(时钟/日志/中断框架/插件管理扫段)
+ *              ② platform 插件初始化(console / PIC / region 表 / 页表 ops)
+ *              ③ core 依赖平台实现的模块(堆 + 恒等映射的建立)
+ *              ④ plugin_manager 相位驱动(EARLY/CORE/LATE -> 开中断 -> START)
+ *                 -> br_sched_run()
  *
  * 本文件只做 5 件事, 不碰内存管理与中断控制器本体:
  *   1. 选 CPU(boot 核继续, 其余核 park)
  *   2. 屏蔽异常源(DAIF)+ 必要时从 EL2 降到 EL1h
  *   3. 装载启动栈 + 设向量表(表本体在 vectors.S)
  *   4. 清零 BSS
- *   5. 初始化 core 的 per-CPU 中断状态, 然后把 CPU 交给插件管理器(不返回)
+ *   5. 把 CPU 交给 core 的 main(不返回)
  */
 
     .section .text.boot, "ax"
@@ -82,22 +84,16 @@ _start:
     b       .Lbss_loop
 .Lbss_done:
 
-    /* ---- 4b. core 的 per-CPU 中断状态初始化 ----
-     * 设计侧这一步属 core.init(`1-01` §9 的第一格)。它把 TPIDR_EL1 指向本核的
-     * br_irq_cpu_t —— 此后任何 IRQ 入口都要用(3-02 §14.4)。
-     * 顺序硬约束(§14.3): 必须在 BSS 清零后(否则 CPU-local 结构被抹掉)。
-     * core.init 的其余两件(时钟/日志)由插件管理器的头部代做(见 plugin_mgr.c ①)。 */
-    bl      br_irq_cpu_init
-
-    /* ---- 5. 交 core 的插件管理器: 扫 `.br_plugins` → 拓扑 → 相位驱动 ----
-     * ★ 这里**不再**直接调 br_plat_early_init / br_core_main: 平台自己的 early_init
-     *   是 EARLY 相的第一步(管理器按 plugin_type 显式取), APP 的 MainLoop 是 APP
-     *   插件 start() 的实现细节。编排权只有一处 —— core 的插件管理器(设计 3-05 §2)。
+    /* ---- 5. 交 core 的入口 br_core_main(core/src/main.c) ----
+     * ★ 这里**不再**直接调 br_irq_cpu_init / br_plugin_manager_run: 中断框架的
+     *   per-CPU 状态、时钟/日志、扫段、platform 的 early_init、堆与恒等映射的建立、
+     *   插件相位驱动 —— 全部按顺序落在 core 侧的四阶段启动链里(见 br_main.h)。
+     *   汇编只负责 reset/BSS, 编排权只有一处: core 的 main(设计 1-01 §9)。
      * 不返回: 管理器在 START 相末尾交给调度器(br_sched_run)或由最后一个 start()
      * 占住 CPU(过渡桥, 见 core/include/br/core/br_plugin.h)。 */
-    bl      br_plugin_manager_run
+    bl      br_core_main
 
-    /* 理论上到不了这里(管理器是 BR_NORETURN); 到了也按不可恢复处理 */
+    /* 理论上到不了这里(br_core_main 是 BR_NORETURN); 到了也按不可恢复处理 */
     b       br_plat_park_forever
 
     .size   _start, . - _start

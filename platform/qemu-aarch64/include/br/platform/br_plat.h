@@ -28,16 +28,20 @@
 #include <br/core/br_types.h>
 
 /*
- * 平台早期初始化。**由 Platform Entry(start.S)调用**, 在 BSS 清零之后、
- * 进入 core 之前。现在做三件(按此顺序):
+ * 平台早期初始化。**由 platform 插件的 `early_init` 钩子调用**, 而那是 core 启动链
+ * `br_core_main()` 的**阶段 ②**(见 `core/include/br/core/br_main.h` / ADR-0008):
+ *
+ *   reset/BSS(汇编) → core 平台无关初始化 → **[本函数]** → core 的堆/地址映射 → 插件相
+ *
+ * 本函数只做**平台侧**的三件(按此顺序):
  *   1. 早期 console 就绪(轮询 PL011)—— 必须最先, 之后才有可观测性;
  *   2. 中断子系统的平台侧三步(PIC 注册 / caps / 绑定表, `br_plat_irq_init`);
- *   3. 内存映射: 声明 region 表 → `br_mem_init()` 认领三池 → 建 4 KiB 恒等映射
- *      页表并开 MMU(`br_mm_register` + `ops.activate`)。
+ *   3. 内存映射的**数据与机制**: 声明 region 表 + 注册页表构造 ops。
  *
- * 设计侧它对应 platform.early_init(1-01 §9): 时钟 / 引脚 / RAM / 恒等映射页表
- * (br_mm) / 早期 console。第 3 步落地后, "MMU 用于 region 属性"的 v1 政策生效,
- * `-mstrict-align` 从"硬要求"退化为"防御性旋钮"(见 Makefile 的注释)。
+ * ★ 池的认领(`br_mem_init`)与页表的**建立**(`br_mm_activate`)属 core 的阶段 ③ ——
+ *   platform 只提供"哪块内存是什么"与"页表怎么造", core 执行建立动作(ADR-0008)。
+ *   建立完成后 "MMU 用于 region 属性"的 v1 政策生效, `-mstrict-align` 从"硬要求"
+ *   退化为"防御性旋钮"(见 Makefile 的注释)。
  */
 void br_plat_early_init(void);
 
@@ -104,10 +108,12 @@ int br_plat_irq_hwirq(br_u32 virq, br_u32 *out);
 
 /* ---- 内存映射子系统(设计 3-04; 页表/region 表/三池) ----
  *
- * 平台侧的三件事(顺序有讲究, 见 `br_plat_early_init` 的注释):
- *   ① 声明 region 表(`br_mm_region_add`: 镜像/栈/三池/MMIO/保留区);
- *   ② `br_mem_init()`(core 按 region 种类认领池);
- *   ③ `br_mm_register(ops)` + `ops.activate()` 建 4 KiB 恒等映射页表并开 MMU。
+ * 平台侧**只提供两件**(见 `br_plat_early_init` 的注释与 ADR-0008):
+ *   ① 数据: 声明 region 表(`br_mm_region_add`: 镜像/栈/三池/MMIO/保留区);
+ *   ② 机制: `br_mm_register(ops)` 注册页表构造。
+ * core 侧执行两件(core 启动链阶段 ③, `core/src/main.c`):
+ *   ③ `br_mem_init()`(core 按 region 种类认领池);
+ *   ④ `br_mm_activate()`(core 执行建立: 按同一张 region 表建 4 KiB 恒等映射并开 MMU)。
  *
  * `br_plat_mem_conformance()` = 内存/MMU 一致性用例入口(设计 6-01 §3.5/§3.6 的
  * `TC-MEM-*` 与 `TC-MM-*`, 在 QEMU 上跑)。返回**失败项数**(0 = 全绿), 每项打

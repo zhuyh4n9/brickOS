@@ -634,7 +634,8 @@ int br_plat_irq_conformance(void)
     br_log_info("[IRQCONF] int framework conformance (Stage 1, GICv3, no scheduler)");
 
     /* 全局开中断: 设计 §14.3 的最后一步(全部插件 init 之后)。
-     * v0.1 没有 core.init, 由这里显式执行(WORKAROUND br-wa-boot-001)。 */
+     * 管理器已在 LATE 之后开过(见 plugin_mgr.c), 这里是**幂等**的保底 —— 用例本身
+     * 需要"中断真的放行"这一前提(软件触发 SGI 才收得到)。 */
     br_irq_cpu_enable();
 
     conf_gicv3_facts();

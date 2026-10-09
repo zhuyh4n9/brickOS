@@ -6,19 +6,25 @@
  *   - `3-05` §2(plugin_manager: 扫段 → 拓扑 → 相驱动)、§2.2(`__br_plugins_start/stop`)
  *   - `3-01` §13.3(段收集: 插件近零导出面, 靠 `.br_plugins` 段 + 链接器边界符号枚举)
  *
- * 本文件做的**全部**事情(裁定见 `docs/decisions/0005-plugin-manager.md`):
- *   ① core.init 的落点(v0.2 由本函数代做): 时钟 → 日志
- *   ② 扫 `.br_plugins` → 段条数自证(重名 = 组合期本应拦住的事, 运行期也自证)
- *   ③ 建 init 边(只取 `kind == BR_DEP_INIT`)→ **Kahn 拓扑排序**
- *      * 有环 ⇒ 打印**完整环路径**并 `br_panic`(环是组合期硬错误; 运行期也要能自证)
- *   ④ EARLY: **第一步显式取 platform 插件的 early_init**(靠 `plugin_type`, 不靠拓扑序的
- *      巧合 —— 此刻 console/PIC/页表还没就绪), 之后其余插件按拓扑序
- *   ⑤ CORE: 类别决定的 `init`(非 Service/Interface; `1-01` §9/§6.2)
- *   ⑥ LATE: Service / Interface 的 `init`
- *   ⑦ **全局开中断**(core 的 `br_irq_cpu_enable()`)
- *   ⑧ START: 拓扑序, 但 **APP 最后是显式规则**(拓扑序里 app/hello 可能排第一)
- *   ⑨ `br_sched_registered()` ⇒ `br_sched_run()`; 没注册就让最后一个 start() 自己占住
- *      CPU(过渡桥: 调度器落地前, APP 的 start 不返回 —— 见 ADR-0005 §2.5)
+ * 本文件做的**全部**事情, 按 core 启动链的三格分开(见 `br/core/br_main.h` / ADR-0008):
+ *
+ *   `br_plugin_manager_init()`           [启动链 ①] 扫 `.br_plugins` → 插件表 + 显式找出 platform
+ *   `br_plugin_manager_platform_init()`  [启动链 ②] 跑 platform 插件的 `early_init`
+ *   `br_plugin_manager_run()`            [启动链 ④] 拓扑 + 相位驱动:
+ *     ① 段条数自证 + 重名自证(重名 = 组合期本应拦住的事, 运行期也自证)
+ *     ② 建 init 边(只取 `kind == BR_DEP_INIT`)→ **Kahn 拓扑排序**
+ *        * 有环 ⇒ 打印**完整环路径**并 `br_panic`(环是组合期硬错误; 运行期也要能自证)
+ *     ③ EARLY: 其余插件按拓扑序(**platform 已在启动链 ② 跑过**, 这里跳过)
+ *     ④ CORE: 类别决定的 `init`(非 Service/Interface; `1-01` §9/§6.2)
+ *     ⑤ LATE: Service / Interface 的 `init`
+ *     ⑥ **全局开中断**(core 的 `br_irq_cpu_enable()`)
+ *     ⑦ START: 拓扑序, 但 **APP 最后是显式规则**(拓扑序里 app/hello 可能排第一)
+ *     ⑧ `br_sched_registered()` ⇒ `br_sched_run()`; 没注册就让最后一个 start() 自己占住
+ *        CPU(过渡桥: 调度器落地前, APP 的 start 不返回 —— 见 ADR-0005 §2.5)
+ *
+ * ★ 时钟/日志(core.init 的落点)与堆/地址映射**不在本文件**: 它们归 `core/src/main.c`
+ *   的四阶段启动链 —— ADR-0008 把 ADR-0005 §2.6 的"管理器代做 core.init"这笔债还清了,
+ *   插件管理器从此只做"扫段/排序/驱动"这三件与插件有关的事。
  *
  * 失败粒度(裁定 G6): **首败即停机** —— 打 `[PLUGIN] FAIL <name> phase=<相> rc=<n>` 后
  * `br_panic`。init 失败 = 启动失败, 不降级(设计 `3-02` §14.3 的同一义务)。
@@ -34,7 +40,6 @@
 #include <br/core/br_log.h>
 #include <br/core/br_plugin.h>
 #include <br/core/br_sched.h>
-#include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
 /* ==================================================================== 段边界 */
@@ -76,6 +81,7 @@ static br_u32  s_edge_count;
 static br_u16  s_order[BR_PLUGIN_MAX];                 /* 拓扑序(段下标) */
 static br_u16  s_pos[BR_PLUGIN_MAX];                   /* 段下标 → 拓扑位次 */
 static br_bool s_sorted;
+static br_bool s_init_done;                            /* 启动链 ① 已跑(扫过段) */
 
 static br_u32  s_phase_reached = BR_PHASE_EARLY;
 static br_u32  s_init_failures;
@@ -357,81 +363,93 @@ static void cycle_text(const br_u16 *cycle, br_u32 cycle_len, char *out, br_u32 
     }
 }
 
-BR_NORETURN void br_plugin_manager_run(void)
-{
-    /* ---- ① core.init 的落点(v0.2 由本函数代做): 时钟 → 日志 ----
-     * 设计 1-01 §9 的 core.init 还没有独立入口, 而 EARLY 相起就要有可观测性(设计
-     * 3-05 §2 的"扫段/排序"必须能打日志)。见 ADR-0005 §2.6。
-     * 这两步只读架构计数器/置软件状态, **不产生任何输出** —— 输出要等 console 起来。 */
-    br_clock_init();
-    br_log_init();
-    br_log_set_level(BR_LOG_DEBUG);
+/* ==================================================================== 启动链 ① */
 
-    /* ---- ② 扫段(纯计算, 无输出: 此刻 console 还没 init) ---- */
+void br_plugin_manager_init(void)
+{
+    /* 扫段是纯计算、**无输出**: 早期 console 属启动链 ② 的 platform 插件(见 br_main.h),
+     * 此刻写 PL011 的 DR 会被 QEMU 丢掉(CR.UARTEN = 0)。 */
     scan();
 
-    /* ---- ④ EARLY 第一步: platform 插件的 early_init ----
-     * ★ 顺序上的**硬约束**: 管理器在 EARLY 相之前不能打任何日志 —— 早期 console 是
-     *   platform 自己的 early_init 里才配好的(`br_console_init`), 在那之前写 PL011
-     *   的 DR 会被 QEMU 丢掉(CR.UARTEN = 0)。所以"扫段 + 找 platform + 跑它的
-     *   early_init"这三步都在**静默**里完成, 日志从这之后才有意义。
-     * ★ 取 platform 靠 `plugin_type` 字段(显式), 不靠拓扑序的巧合: 此刻 PIC/页表/
+    /* ★ 取 platform 靠 `plugin_type` 字段(显式), 不靠拓扑序的巧合: 此刻 PIC/页表/
      *   console 都还没就绪, 拓扑序里谁排第一与"能不能观测"无关。 */
-    {
-        br_u32 plat = (br_u32)-1;
-        for (br_u32 i = 0u; i < s_count; i++) {
-            if (s_plugins[i]->plugin_type == BR_PLUGIN_TYPE_PLATFORM) {
-                plat = i;
-                break;
-            }
+    br_u32 plat = (br_u32)-1;
+    for (br_u32 i = 0u; i < s_count; i++) {
+        if (s_plugins[i]->plugin_type == BR_PLUGIN_TYPE_PLATFORM) {
+            plat = i;
+            break;
         }
-        if (plat == (br_u32)-1) {
-            br_panic("plugin_manager: 段里没有 plugin_type = platform 的插件; "
-                     "EARLY 相的第一步无从谈起(设计 1-01 §9)");
-        }
-        s_phase_reached = BR_PHASE_EARLY;
-        {
-            const br_plugin_t *p = s_plugins[plat];
-            if (p->early_init == BR_PLUGIN_NO_HOOK) {
-                br_panic("plugin_manager: platform 插件 `%s` 没有 early_init 钩子; "
-                         "console/PIC/页表必须由它先建(设计 1-01 §9)", p->name);
-            }
-            s_first_early_name = p->name;
-            const int rc = p->early_init();
-            br_log_info("[PLUGIN] phase=%s name=%s rc=%d", phase_key(BR_PHASE_EARLY), p->name, rc);
-            if (rc != 0) {
-                plugin_fail(p->name, BR_PHASE_EARLY, rc);
-            }
-        }
-        s_plat_index = plat;   /* 后面 EARLY 的其余插件里要跳过它 */
-
-        /* 现在 console 已经可用, 从这里开始才有日志 */
-        br_log_info("[PLUGIN] manager: .br_plugins 段 %u 条描述符", s_count);
-
-        /* 重名自证: 重名 = 组合期(全局唯一)本应拦住的事。 */
-        for (br_u32 i = 0u; i < s_count; i++) {
-            for (br_u32 j = i + 1u; j < s_count; j++) {
-                const char *a = s_plugins[i]->name;
-                const char *b = s_plugins[j]->name;
-                const char *pa = a;
-                const char *pb = b;
-                if (a == BR_NULL || b == BR_NULL) {
-                    continue;
-                }
-                while (*pa != '\0' && *pa == *pb) {
-                    pa++;
-                    pb++;
-                }
-                if (*pa == '\0' && *pb == '\0') {
-                    br_panic("plugin_manager: .br_plugins 里重名 `%s`(全局唯一是组合期硬约束)", a);
-                }
-            }
-        }
-
-        /* ---- ③ init 边 + 拓扑排序 ---- */
-        build_edges();
-        br_log_info("[PLUGIN] manager: %u 条 init 边(只取 kind=init)", s_edge_count);
     }
+    if (plat == (br_u32)-1) {
+        br_panic("plugin_manager: 段里没有 plugin_type = platform 的插件; "
+                 "EARLY 相的第一步无从谈起(设计 1-01 §9)");
+    }
+    s_plat_index = plat;
+    s_init_done  = BR_TRUE;
+}
+
+/* ==================================================================== 启动链 ② */
+
+void br_plugin_manager_platform_init(void)
+{
+    if (s_init_done == BR_FALSE || s_plat_index == (br_u32)-1) {
+        /* 这一行也会被 QEMU 丢掉(console 未起), 但"继续跑一个没扫过段的系统"更糟 */
+        br_panic("plugin_manager: platform_init() 之前必须先 br_plugin_manager_init()");
+    }
+
+    const br_plugin_t *p = s_plugins[s_plat_index];
+    if (p->early_init == BR_PLUGIN_NO_HOOK) {
+        br_panic("plugin_manager: platform 插件 `%s` 没有 early_init 钩子; "
+                 "console/PIC/页表必须由它先建(设计 1-01 §9)", p->name);
+    }
+
+    /* EARLY 相的第一步 = platform 的 early_init(硬约束)。这也是 TC-PLUG-003 的判据
+     * ("第一个真的跑起来的 early_init 属于 platform")的取值点。 */
+    s_phase_reached    = BR_PHASE_EARLY;
+    s_first_early_name = p->name;
+
+    const int rc = p->early_init();
+    br_log_info("[PLUGIN] phase=%s name=%s rc=%d", phase_key(BR_PHASE_EARLY), p->name, rc);
+    if (rc != 0) {
+        plugin_fail(p->name, BR_PHASE_EARLY, rc);
+    }
+}
+
+/* ==================================================================== 启动链 ④ */
+
+BR_NORETURN void br_plugin_manager_run(void)
+{
+    if (s_init_done == BR_FALSE) {
+        br_panic("plugin_manager: br_plugin_manager_run() 之前必须先 br_plugin_manager_init()");
+    }
+
+    /* ---- ① 段条数自证: console 已由启动链 ② 的 platform.early_init 建好,
+     *      从这一行起日志才有意义 ---- */
+    br_log_info("[PLUGIN] manager: .br_plugins 段 %u 条描述符", s_count);
+
+    /* 重名自证: 重名 = 组合期(全局唯一)本应拦住的事。 */
+    for (br_u32 i = 0u; i < s_count; i++) {
+        for (br_u32 j = i + 1u; j < s_count; j++) {
+            const char *a = s_plugins[i]->name;
+            const char *b = s_plugins[j]->name;
+            const char *pa = a;
+            const char *pb = b;
+            if (a == BR_NULL || b == BR_NULL) {
+                continue;
+            }
+            while (*pa != '\0' && *pa == *pb) {
+                pa++;
+                pb++;
+            }
+            if (*pa == '\0' && *pb == '\0') {
+                br_panic("plugin_manager: .br_plugins 里重名 `%s`(全局唯一是组合期硬约束)", a);
+            }
+        }
+    }
+
+    /* ---- ② init 边 + 拓扑排序 ---- */
+    build_edges();
+    br_log_info("[PLUGIN] manager: %u 条 init 边(只取 kind=init)", s_edge_count);
 
     {
         br_u16 cycle[BR_PLUGIN_MAX];
@@ -449,7 +467,7 @@ BR_NORETURN void br_plugin_manager_run(void)
     }
     s_sorted = BR_TRUE;
 
-    /* ---- ④(续) EARLY: 其余插件按拓扑序 ---- */
+    /* ---- ③ EARLY: 其余插件按拓扑序(platform 已在启动链 ② 跑过, 这里跳过) ---- */
     for (br_u32 k = 0u; k < s_count; k++) {
         const br_u32 i = s_order[k];
         const br_plugin_t *p = s_plugins[i];
@@ -466,7 +484,7 @@ BR_NORETURN void br_plugin_manager_run(void)
         }
     }
 
-    /* ---- ⑤⑥ CORE / LATE: 类别决定的 init ---- */
+    /* ---- ④ CORE / LATE: 类别决定的 init ---- */
     for (br_u32 want = BR_PHASE_CORE; want <= BR_PHASE_LATE; want++) {
         s_phase_reached = want;
         for (br_u32 k = 0u; k < s_count; k++) {
@@ -483,11 +501,11 @@ BR_NORETURN void br_plugin_manager_run(void)
         }
     }
 
-    /* ---- ⑦ 全局开中断(LATE 之后, START 之前) ---- */
+    /* ---- ⑤ 全局开中断(LATE 之后, START 之前) ---- */
     br_irq_cpu_enable();
     br_log_info("[PLUGIN] irq=on (LATE 完成, 全部插件 init 已返回)");
 
-    /* ---- ⑧ START: 非 APP 先(拓扑序), APP 后(拓扑序) ---- */
+    /* ---- ⑥ START: 非 APP 先(拓扑序), APP 后(拓扑序) ---- */
     s_phase_reached = BR_PHASE_APP;
     s_non_app_start_total = 0u;
     s_non_app_start_done  = 0u;
@@ -532,7 +550,7 @@ BR_NORETURN void br_plugin_manager_run(void)
         }
     }
 
-    /* ---- ⑨ 调度器: 注册了就交给它; 没注册 ⇒ 最后一个 start() 本该占住 CPU ---- */
+    /* ---- ⑦ 调度器: 注册了就交给它; 没注册 ⇒ 最后一个 start() 本该占住 CPU ---- */
     if (br_sched_registered()) {
         br_log_info("[PLUGIN] manager: 调度器已注册 ⇒ br_sched_run()");
         br_sched_run();

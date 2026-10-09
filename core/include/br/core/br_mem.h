@@ -79,8 +79,9 @@ int br_heap_usage(br_size_t *used, br_size_t *total);
 /* ---------------------------------------------------------------- 初始化 */
 /*
  * 扫 region 表, 按种类认领三池 + DMA 池, 建 TLSF 控制块与页位图。
- * 归属(3-04 §3): **初始化点 = core.init**(早于 EARLY 相), 由 platform 在
- * `br_plat_early_init()` 里"声明 region 之后、开 MMU 之前"调用。
+ * 归属(3-04 §3): **初始化点 = core.init**, 由 core 的入口 `br_core_main()` 在
+ * `platform 插件初始化之后、br_mm_activate() 之前`调用(启动链阶段 ③, ADR-0008):
+ * platform 只声明 region 表(哪块内存是什么), 认领与分配归 core。
  * 错误: `-EINVAL`(region 粒度/对齐不合)/ `-ENODEV`(缺任一必需池)/ `-ENOMEM`(池太小)
  * 幂等: 二次调用返回首次的结果, 不重建池。
  */

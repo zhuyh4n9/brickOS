@@ -47,7 +47,7 @@ include/br/platform/br_plat.h        人写   ← Platform Entry 契约(含 IRQ/
 include/br/platform/br_gicv3.h       人写   ← GICv3 方言契约(ISA 层)
 include/br/platform/br_mmu.h         人写   ← 页表/MMU 观测面(ISA 层)
 include/br/board_irq.h               人写   ← 板级 virq 名(设计 3-02 §3.1 的**退路**: 静态头)
-src/start.S                          人写   ← reset + BSS + br_irq_cpu_init(平台入口链第一跳)
+src/start.S                          人写   ← reset + BSS + 交 core(br_core_main; 平台入口链第一跳)
 src/vectors.S                        人写   ← 16 槽异常向量表 + 保存/恢复桩(ISA 层)
 src/link.ld                          人写   ← 链接脚本(段布局 + .br_extable 收集 + .stack)
 src/console_pl011.c                  人写   ← 早期 console(轮询 PL011)
@@ -55,7 +55,7 @@ src/timer_arch.c                     人写   ← arch timer 读数(CNTFRQ_EL0 /
 src/gicv3.c                          人写   ← GICv3 方言(实现 br_pic_ops_t)
 src/board_irq.c                      人写   ← 绑定表 + br_plat_irq_init + timer PPI + 触发/hwirq 查询
 src/irq_conf.c                       人写   ← in-image 一致性用例(TC-IRQ-*, 见 6-01 §3.7)
-src/memmap.c                         人写   ← region 表声明 + br_mem_init(三池认领)
+src/memmap.c                         人写   ← region 表声明(只声明; 池的认领归 core.init)
 src/mmu.c                            人写   ← 4 KiB 恒等映射页表 + br_mm_ops(ISA 层)
 src/mm_conf.c                        人写   ← in-image 一致性用例(TC-MEM-*/TC-MM-*, 见 6-01 §3.5/§3.6)
 src/plat_qemu_virt.c                 人写   ← 平台实现(name/isa/early_init/park/异常落点)

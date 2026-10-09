@@ -13,7 +13,7 @@ schema = 1
 
 [[case]]
 id       = "TC-PLUG-001"
-pre      = "start.S 已调 br_irq_cpu_init; br_plugin_manager_run() 已扫过 .br_plugins; 生成物已编进镜像"
+pre      = "br_core_main() 阶段 ① 已调 br_irq_cpu_init 与 br_plugin_manager_init()(扫过 .br_plugins); 生成物已编进镜像"
 steps    = ["br_plugin_count()", "读生成物计数符号 br_plugin_gen_total", "比对两者"]
 expect   = "段非空 且 条数 == 生成物数量(生成物计数符号在场)"
 sched    = ["coop"]

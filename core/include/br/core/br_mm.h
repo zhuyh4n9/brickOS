@@ -123,17 +123,20 @@ typedef struct br_mm_ops {
     void (*cache_invalidate)(void *addr, br_size_t size);
 } br_mm_ops_t;
 
-/* platform early_init 注册一次(重复注册 ⇒ 后者被拒, 返回 -EBUSY)。 */
+/* 平台侧注册一次(重复注册 ⇒ 后者被拒, 返回 -EBUSY)。
+ * 由 platform 插件的 `early_init` 在启动链阶段 ② 调用(只注册机制, 不建表)。 */
 int br_mm_register(const br_mm_ops_t *ops);
 
 /*
- * 建表并开 MMU(由 platform 在 region 表声明完、`br_mem_init()` 之后调用)。
- * 语义: 把**当前**的 region 表快照交给 `ops.activate()`; 成功(返回 0)后 core 记
- * "已激活", `br_mm_active()` 自此为真。
+ * 建表并开 MMU —— 地址映射的**建立动作**, 由 core 的入口 `br_core_main()` 在
+ * `br_mem_init()` 之后调用(启动链阶段 ③, ADR-0008)。
+ * 语义: 把**当前**的 region 表快照交给 `ops.activate()`(页表构造的机制在 platform);
+ * 成功(返回 0)后 core 记 "已激活", `br_mm_active()` 自此为真。
+ * ★ 一开 MMU, 之后每次取指/访存都过翻译 ⇒ 它必须是插件 init 之前的最后一格。
  * 错误: `-ENOTSUP`(未注册 ops)/ `-EBUSY`(已激活)/ `-ENOMEM`(页表内存不足)/
  *       其它 = ops 的返回值原样上传。
  * 为什么不把"激活"放进 ops: 那是**状态机**(未注册→已注册→已激活)的归属问题 ——
- * 状态归 core, 构造归 platform(三层模式的边界)。
+ * 状态与编排归 core, 构造机制归 platform(三层模式的边界)。
  */
 int br_mm_activate(void);
 

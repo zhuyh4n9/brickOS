@@ -10,15 +10,19 @@
  *   hello_start()       START 相(全局开中断之后, 且**排在最后** —— 管理器显式把 APP 的
  *                       start 放到所有非 APP 的 start 之后): 启动期自检调用序列 + MainLoop。
  *
- * 启动链(设计 1-01 §9 / 3-05 §2, WORKAROUND br-wa-boot-001 的还债形态):
- *   start.S(reset/BSS) → br_irq_cpu_init → plugin_manager:
- *     EARLY(platform 先) → CORE → LATE → 全局开中断 → START(APP 最后)
- *       → [本文件] 一致性用例(main 线程) + **创建 APP 线程** → return 0
- *         → 管理器 `br_sched_run()` 首次调度 ⇒ APP 线程接管 MainLoop
+ * 启动链(设计 1-01 §9; core 侧的四阶段见 `br/core/br_main.h` 与 ADR-0008):
+ *   start.S(reset/BSS) → br_core_main:
+ *     ① core 平台无关(时钟/日志/中断框架/插件管理扫段)
+ *     ② platform 插件初始化(console/PIC/region 表/页表 ops)
+ *     ③ core 依赖平台(堆 + 恒等映射的建立)
+ *     ④ plugin_manager: EARLY(其余) → CORE → LATE → 全局开中断 → START(APP 最后)
+ *          → [本文件] 一致性用例(main 线程) + **创建 APP 线程** → return 0
+ *            → 管理器 `br_sched_run()` 首次调度 ⇒ APP 线程接管 MainLoop
  *
- * `br_core_main`(M0 的旧入口)与 `core/include/br/core/br_main.h` 已**拆掉**:
- * 它的内容(日志/自检/主循环)分别落到 platform.start、service/dump 的 LATE init、
- * 本文件的 `hello_start()`。裁定与理由见 `docs/decisions/0005-plugin-manager.md` §2.6。
+ * `br_core_main()` 与 `core/include/br/core/br_main.h` 在 ADR-0005 那一刀里曾被**拆掉**
+ * (编排权当时收进了插件管理器); ADR-0008 把 `core.init` 抽成独立入口后又**重建**了它们
+ * —— 现在的形态是"四阶段启动链", 与 M0 那个"在 APP 里直调各子系统"的旧 `br_core_main`
+ * 不是一回事(旧入口的日志/自检/主循环仍归 platform.start / dump 的 LATE init / 本文件)。
  *
  * WORKAROUND(br-wa-boot-001): ① **已还清**(APP 线程 + `br_task_sleep`);
  * 仍欠的 ②(日志/trace 直写 console, 未经服务注册表)的标记在 `core/src/log.c`。
@@ -141,8 +145,9 @@ int hello_start(void)
     br_log_info("platform: %s (%s)", br_plat_name(), br_plat_isa());
     br_log_info("clock: %lu Hz (arch timer), %lu ticks/ms (exact integer conversion)",
                 br_clock_freq_hz(), br_clock_ticks_per_ms());
-    br_log_info("entry chain: start.S -> br_irq_cpu_init -> br_plugin_manager_run "
-                "(EARLY/CORE/LATE -> irq on -> START) -> app thread -> br_sched_run");
+    br_log_info("entry chain: start.S -> br_core_main "
+                "(core.init -> platform.init -> core.plat.init -> plugin_manager: "
+                "EARLY/CORE/LATE -> irq on -> START) -> app thread -> br_sched_run");
 
     /* 插件管理器一致性用例(TC-PLUG-*): 段条数/拓扑序/相位单调/环检测负例。 */
     br_plugin_conformance();

@@ -174,7 +174,7 @@ brickOS/
     │       ├── br_gicv3.h       GICv3 方言契约(ISA 层)
     │       └── br_mmu.h         页表/MMU 观测面 + 窗口常量(ISA 层)
     ├── src/
-    │   ├── start.S              入口: reset / 选核 / BSS / br_irq_cpu_init / 交 core
+    │   ├── start.S              入口: reset / 选核 / BSS / 交 core(br_core_main)
     │   ├── vectors.S            16 槽异常向量表 + 保存/恢复桩(ISA 层)
     │   ├── link.ld              链接脚本(text/rodata/data + .br_extable 收集 + .stack)
     │   ├── plat_qemu_virt.c     平台身份 + early_init + 异常兜底
@@ -183,7 +183,7 @@ brickOS/
     │   ├── gicv3.c              GICv3 方言(实现 br_pic_ops_t)
     │   ├── board_irq.c          绑定表 + 中断初始化 + timer PPI 心跳 + 触发/hwirq 查询
     │   ├── irq_conf.c          中断一致性用例(TC-IRQ-*, 编进镜像)
-    │   ├── memmap.c            region 表声明(镜像/三池/MMIO/保留区)+ br_mem_init
+    │   ├── memmap.c            region 表声明(镜像/三池/MMIO/保留区; 只声明不认领)
     │   ├── mmu.c               4 KiB 恒等映射页表 + 开 MMU + br_mm_ops(ISA 层)
     │   └── mm_conf.c           内存/MMU 一致性用例(TC-MEM-*/TC-MM-*, 编进镜像)
     └── tests/smoke.toml         用例骨架(v0.1 不消费; 已登记 TC-IRQ 梗概)
@@ -192,8 +192,9 @@ brickOS/
 跨层边有两条, 都在 `product.toml [lint].allow_edges` 里**逐条列名豁免**(M0 引导例外;
 设计的正解是 app → interface(iface-min, M2)/ 运行期插件管理器, 二者都还没落地):
 
-- **Platform Entry → Core**: `start.S` 调 `br_irq_cpu_init()` + `br_plat_early_init()`
-  再调 `br_core_main()`;
+- **Platform Entry → Core**: `start.S` 只做 reset/BSS, 然后 `bl br_core_main()`
+  (core 的四阶段启动链: ① 平台无关初始化 → ② platform 插件初始化 → ③ 堆 + 地址映射的
+  建立 → ④ 插件相位驱动; 见 `docs/decisions/0008-core-main-boot-chain.md`);
 - **APP → Platform / 调试服务**: `app/hello` 直调 `platform/qemu-aarch64` 的
   `br_plat_name()` / `br_plat_irq_conformance()` / `br_plat_irq_start()` /
   `br_plat_mem_conformance()`, 以及 `service/dump` 的 `br_dump_conformance()` /
@@ -387,9 +388,9 @@ make print-cross-compile
 [    0.000050] INFO  brickOS-prototype v0.1.0 -- core MainLoop (interrupt heartbeat + delay + logging)
 [    0.000684] INFO  platform: qemu-aarch64/virt (aarch64)
 [    0.002937] INFO  mem: heap=1048576 contig=262144 page=1048576(256 pages) dma=262144
-[    0.003849] INFO  mem: identity map on (SCTLR=0x30d51825, regions=9, heap=1024 KiB, page pool=256 pages)
-[    0.004479] INFO  mem: 4 KiB pages=2048, 2 MiB device blocks=512, TTBR0=0x400a3000 TCR=0x200803d19 MAIR=0x4400ff
-[    0.001157] INFO  entry chain: start.S -> br_irq_cpu_init -> br_plat_early_init -> br_core_main
+[    0.003849] INFO  mem: identity map on (SCTLR=0x30d51825, regions=9, 4 KiB pages=2048, 2 MiB device blocks=512)
+[    0.004479] INFO  mem: TTBR0=0x400a3000 TCR=0x200803d19 MAIR=0x4400ff
+[    0.001157] INFO  entry chain: start.S -> br_core_main (core.init -> platform.init -> core.plat.init -> plugin_manager: EARLY/CORE/LATE -> irq on -> START) -> app thread -> br_sched_run
 ...                                                                    ← 67 项 PASS(见 make irq-test)
 [    0.031887] INFO  [IRQCONF] SUMMARY pass=67 fail=0 total=67
 [    0.032564] INFO  int: conformance ALL PASS (failures=0)
@@ -473,12 +474,12 @@ v0.1.0 有**七条**欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**
 
 | 本原型 | 设计出处(`brickOS-Design` 分支) | 形态差异 |
 |---|---|---|
-| `start.S` 的 reset/BSS | `1-01 §9` 启动序列 | 设计是 Platform **插件**的汇编; 此处随插件 `[build].sources` 编进镜像, 调用点仍是 APP 直调(`br-wa-entry-001`) |
-| `br_plat_early_init()` | `1-01 §9` 的 `platform.early_init`; `1-01 §8` 三层模式 | console + GICv3 PIC 注册 + 绑定表(§14.3 步 1–3)+ **region 表声明 + `br_mem_init()` 三池 + 4 KiB 恒等映射页表/开 MMU** |
+| `start.S` 的 reset/BSS | `1-01 §9` 启动序列 | 设计是 Platform **插件**的汇编; 此处随插件 `[build].sources` 编进镜像。reset/BSS 后只 `bl br_core_main()`, 编排权全在 core(ADR-0008; 旧的"APP 直调"已还清 `br-wa-entry-001`) |
+| `br_plat_early_init()` | `1-01 §9` 的 `platform.early_init`; `1-01 §8` 三层模式 | console + GICv3 PIC 注册 + 绑定表(§14.3 步 1–3)+ **region 表声明 + 页表 ops 注册**(池的认领与 MMU 激活归 core 的阶段 ③, 见 ADR-0008) |
 | `br_console_*` | `1-01 §8` console 双形态; `3-01 §10` 平台侧接口表 | 形态一致(轮询早期 console) |
 | `br_clock_now()` / `br_time_t` | `3-01 §4`(br-sched 组); `3-01 §14` CA-1(us) | 只实现读数; 超时表/唤醒属 M1 |
 | `br_log_*` | `5-01`(trace 观测)/ `11-01`(日志 Service) | v0.1.0 是 core 内的最小打印设施, 不是那个服务 |
-| `br_core_main()` | `1-01 §9` + `§6.2` 阶段表 | 顶替整条 core.init → plugin_manager → EARLY/CORE/LATE → `br_sched_run()`(`br-wa-boot-001`) |
+| `br_core_main()` | `1-01 §9` + `§6.2` 阶段表 | **四阶段启动链**(① 平台无关 → ② platform 插件 → ③ 堆/地址映射 → ④ 插件相位驱动), ADR-0008 |
 | **`br_irq_*` 九件 + 域四件** | `3-01 §8/§8.1`(签名冻结)+ `3-02 §3–§9`(机制) | Stage 1 全量; `register/enable/disable` 的 thread-only 加了**运行期拒绝**(设计侧靠静态扫描) |
 | **`br_pic_register` / `br_irq_bindings_set` / `br_pic_ops_t`** | `3-02 §4.1/§14.3`(platform 侧契约) | 新增的核心符号, 未回灌 `3-01 §10` 的登记(属 Design 仓库, 见 ADR-0002 §4) |
 | **GICv3 方言(`br_gicv3_*`)** | `3-01 §8` 表"中断控制器 → GICv3 驱动"; `3-02 §4.1.1/§5.3/§7.1` | ISA 层代码暂居 platform 目录(`br-wa-isa-001`); 1020–1023 折算 / EOImode=0 / MSB 对齐量化 |
@@ -524,6 +525,14 @@ v0.1.0 有**七条**欠债, 全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)**
 ⇒ 于是剩下的主线其实是**同一条**: **插件管理器 / 阶段机 / 调度器**(它们互为前提)。
 在它们到位之前, `br_core_main` 会一直在那里 —— 但它的归宿是**被拆掉, 不是长大**
 (见 `main.c` 顶部注释); 中断框架这一半已经可以先独立验收了。
+
+> **v0.2.0 现状补记(ADR-0008)**: 第 7 项已交付(插件管理器 + 相位机 + 调度器,
+> `br_sched_run()` 接管首次调度)。`br_core_main` **没有"被拆掉", 而是以"四阶段启动链"
+> 的形态重建** —— 上面那句"归宿是被拆掉"针对的是 M0 那个"在 APP 里直调各子系统"的
+> 替身版本, 不是这个名字。新的分工: `start.S` 只 reset/BSS 再 `bl br_core_main()`;
+> 后者按 ① 平台无关初始化 → ② platform 插件初始化 → ③ 堆 + 地址映射的建立 →
+> ④ 插件相位驱动 编排(`core/include/br/core/br_main.h` / `docs/decisions/0008-*.md`)。
+> timer PPI 的 ISR 仍按 P-IRQ-17 留在 platform 的 `start` 相(权限模型, 见 ADR-0002)。
 
 ### 中断侧的实现裁定(与设计文档的偏差都记在这里, 细节见 ADR-0002)
 

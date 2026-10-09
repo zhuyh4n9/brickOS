@@ -23,7 +23,6 @@
  *   的那条取指、以及之后每一次走表, 都要能被新页表翻译。页表基址 = 链接器给的镜像地址,
  *   落在 8 MiB RAM 窗口内(见 `br_plat_memmap_init` 的窗口守卫)。
  */
-#include <br/core/br_mem.h>
 #include <br/core/br_mm.h>
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -433,6 +432,20 @@ static int mmu_activate(const br_mm_region_t *regions, br_u32 count)
     }
 
     s_activated = BR_TRUE;
+
+    /*
+     * 平台侧对自己的硬件事实留痕(页数/块数/寄存器回读)。core 的 `br_mem_init()` 已
+     * 单独打了"堆/池"摘要(见 ADR-0008 的阶段 ③) —— 两边各说自己的事实, 不互相代打。
+     */
+    {
+        br_plat_mmu_info_t info;
+
+        br_plat_mmu_info(&info);
+        br_log_info("mem: identity map on (SCTLR=0x%lx, regions=%u, 4 KiB pages=%u, 2 MiB device blocks=%u)",
+                    info.sctlr, info.regions, info.mapped_pages, info.device_blocks);
+        br_log_info("mem: TTBR0=0x%lx TCR=0x%lx MAIR=0x%lx",
+                    info.ttbr0, info.tcr, info.mair);
+    }
     return 0;
 }
 
@@ -627,32 +640,13 @@ int br_plat_mmu_translate(br_uintptr_t va, br_uintptr_t *pa)
 }
 
 /* =====================================================================
- * 启动接线(由 br_plat_early_init 调用, 见 br_plat.h 的顺序说明)
+ * 启动接线(由 br_plat_early_init 调用, 见 br_plat.h / br_mmu.h 的顺序说明)
+ *
+ * ★ 本函数只**注册**平台页表 ops; "建表 + 开 MMU"(br_mm_activate)是 core.init 的
+ *   一格(设计 1-01 §9), 由 core 的入口 `br_core_main()` 在 platform 插件初始化之后
+ *   执行 —— 机制在 platform, 编排/状态机在 core(三层模式的边界)。见 ADR-0008。
  * ===================================================================== */
-int br_plat_mmu_init(void)
+int br_plat_mmu_ops_register(void)
 {
-    int rc = br_mm_register(&s_mm_ops);
-    if (rc != 0) {
-        return rc;
-    }
-
-    rc = br_mm_activate();
-    if (rc != 0) {
-        return rc;
-    }
-
-    br_plat_mmu_info_t info;
-    br_mem_layout_t    lay;
-
-    br_plat_mmu_info(&info);
-    if (br_mem_layout(&lay) != 0) {
-        return BR_ERR(BR_ENODEV);
-    }
-
-    br_log_info("mem: identity map on (SCTLR=0x%lx, regions=%u, heap=%lu KiB, page pool=%u pages)",
-                info.sctlr, info.regions,
-                (br_u64)(lay.heap.size / 1024u), lay.page_total);
-    br_log_info("mem: 4 KiB pages=%u, 2 MiB device blocks=%u, TTBR0=0x%lx TCR=0x%lx MAIR=0x%lx",
-                info.mapped_pages, info.device_blocks, info.ttbr0, info.tcr, info.mair);
-    return 0;
+    return br_mm_register(&s_mm_ops);
 }

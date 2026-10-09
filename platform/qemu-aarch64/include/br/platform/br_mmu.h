@@ -84,17 +84,21 @@ int br_plat_mmu_probe(br_uintptr_t addr, br_u32 *out_attrs);
 int br_plat_mmu_translate(br_uintptr_t va, br_uintptr_t *pa);
 
 /* ---------------------------------------------------------------- 启动接线
- * `br_plat_early_init()` 按此顺序调这两步(顺序是硬的: 池先划出来, 页表再按同一张
- * region 表取属性; MMU 一开, 之后所有访存都过翻译 ⇒ 页表必须已覆盖当前 PC/SP)。
+ * `br_plat_early_init()` 按此顺序调这两步(**只做平台侧的数据与机制**)。
+ *
+ * ★ 池的**认领**(`br_mem_init`)与页表的**建立**(`br_mm_activate`)不在这里 ——
+ *   它们是 core.init 的一格(设计 1-01 §9: "堆 · 中断框架 · 注册表 · 调度框架对象"),
+ *   由 core 的入口 `br_core_main()` 在 platform 插件初始化之后执行。分工:
+ *   platform 提供 region 数据 + 页表构造机制, core 提供抽象并执行建立动作。
+ *   见 `docs/decisions/0008-core-main-boot-chain.md` 与 `core/src/main.c` 的阶段 ③。
  */
 
-/* ① 声明 region 表(镜像/栈/五块池/MMIO)→ `br_mem_init()` 认领三池。
- * 返回 0 或负 errno; 池初始化失败属 EARLY 相失败 = 启动失败, 本函数内直接停机。 */
+/* ① 声明 region 表(镜像/栈/五块池/MMIO)。**只登记, 不认领池、不碰页表**。
+ * 返回 0 或负 errno(重叠 / 粒度不合 / 表满 = 启动失败, 调用方负责停机)。 */
 int br_plat_memmap_init(void);
 
-/* ② 注册平台页表 ops(`br_mm_register`)→ 建 4 KiB 恒等映射页表并开 MMU
- * (`br_mm_activate`), 成功后打一行 `mem: ` 摘要。
- * 返回 0 或负 errno(调用方 `br_plat_early_init` 负责 FATAL 停机)。 */
-int br_plat_mmu_init(void);
+/* ② 注册平台页表 ops(`br_mm_register`)—— 只填"建表 + 开 MMU"的机制。
+ * 返回 0 或负 errno(重复注册 ⇒ core 报 -EBUSY)。 */
+int br_plat_mmu_ops_register(void);
 
 #endif /* BR_PLATFORM_BR_MMU_H */

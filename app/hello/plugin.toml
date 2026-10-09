@@ -4,8 +4,10 @@
 # 启动链演示(M0: 直接主循环, 不依赖 iface —— **M0 引导例外**, 此时 Interface
 # 插件尚未交付)"。本件实现三个生命周期钩子 `hello_early_init/init/start`
 # (钩子是组合期契约, **不**进 [[export]], 所以不参与接口 hash)。
-# `br_core_main` 已拆掉(其内容落到 platform.start / service/dump 的 LATE init /
-# hello_start 的 MainLoop) —— 见 docs/decisions/0005-plugin-manager.md §2.6。
+# M0 那个"在 APP 里直调各子系统"的旧 `br_core_main` 已拆掉(其内容落到 platform.start /
+# service/dump 的 LATE init / hello_start 的 MainLoop, 见 docs/decisions/0005-plugin-manager.md §2.6);
+# ADR-0008 之后 core 又有了 `br_core_main` —— 但形态是"四阶段启动链的编排", 不是 APP 替身
+# (见 core/include/br/core/br_main.h)。
 schema = 1
 
 [plugin]

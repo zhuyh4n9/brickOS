@@ -140,14 +140,48 @@ typedef struct br_plugin {
 
 /* ==================================================================== 管理器 */
 
-/* 插件管理器的入口(由 `platform/…/src/start.S` 在 platform.early_init 之后调用)。
+/*
+ * 管理器的三个入口 = 启动链的三格(见 `br/core/br_main.h` 与 ADR-0008):
  *
- * 它做的**全部**事情(1-01 §9 / 3-05 §2):
- *   扫 `.br_plugins` → 建 init 边 → Kahn 拓扑排序(有环 ⇒ panic, 报完整环路径)
- *   → EARLY(逐插件 early_init) → CORE(类别决定的 init) → LATE → 全局开中断
- *   → START(拓扑序, APP 最后) → br_sched_run()(core 的 idle/首次调度)。
+ *   ① br_plugin_manager_init()            core 平台无关初始化(bootstrap 阶段 ①)
+ *   ② br_plugin_manager_platform_init()   platform 插件初始化(bootstrap 阶段 ②)
+ *   ④ br_plugin_manager_run()             拓扑 + 相位驱动(bootstrap 阶段 ④)
  *
- * 不返回。 */
+ * 为什么拆成三格而不是一个大函数: "扫段/找 platform"必须在任何 C 代码之前(且此刻
+ * console 还没起来), "platform 的 early_init"是启动链的第二格, 而"相位驱动"要等到
+ * core 的堆与地址映射都就绪(阶段 ③)才能跑 —— 三者的前提各不相同(ADR-0008 §2)。
+ */
+
+/*
+ * ① 平台无关的静态准备: 扫 `.br_plugins` 段建插件表 + 显式找出 platform 插件。
+ *
+ * **全程静默**(此刻早期 console 还没 init —— 它属 platform 的 `early_init`; 在那之前
+ * 写 PL011 的 DR 会被 QEMU 丢掉)。段空/超静态上界/段里没有 `plugin_type = platform`
+ * ⇒ 直接 panic(镜像本就不可能成立)。
+ *
+ * 由 core 的入口 `br_core_main()` 调用; 建边/拓扑/相位驱动在 ④。
+ */
+void br_plugin_manager_init(void);
+
+/*
+ * ② platform 插件初始化: 显式取 `plugin_type == BR_PLUGIN_TYPE_PLATFORM` 的那一条,
+ * 跑它的 `early_init`(早期 console / PIC 注册与绑定表 / region 表 / 页表 ops)。
+ *
+ * ★ 取 platform 靠**字段**而不是拓扑序的巧合: 此刻 PIC/页表/console 都还没就绪,
+ *   "谁排第一"与"能不能观测"无关。这条也是 TC-PLUG-003 的判据
+ *   ("第一个真的跑起来的 early_init 属于 platform")。
+ *
+ * 前置: `br_plugin_manager_init()` 已跑过。首败即停机(与 ④ 的 init/start 同一纪律)。
+ */
+void br_plugin_manager_platform_init(void);
+
+/*
+ * ④ 建 init 边 → Kahn 拓扑排序(有环 ⇒ panic, 报完整环路径)
+ *   → EARLY(其余插件的 early_init) → CORE(类别决定的 init) → LATE → 全局开中断
+ *   → START(拓扑序, 但 APP 最后是显式规则) → `br_sched_run()`(core 的 idle/首次调度)。
+ *
+ * 前置: ①② 已跑过(启动链顺序, 见 `br/core/br_main.h`)。不返回。
+ */
 BR_NORETURN void br_plugin_manager_run(void);
 
 /* ==================================================================== 观测 */

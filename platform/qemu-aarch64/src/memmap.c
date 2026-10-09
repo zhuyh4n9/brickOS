@@ -13,10 +13,10 @@
  * 本文件是**数据**: 哪块内存是什么(QEMU virt 的地址与尺寸)。
  * 机制在 `src/mmu.c`(页表构造)与 core 的 `br_mem`/`br_mm` 实现里。
  *
- * ★ 两条登记在案的欠债(详见 WORKAROUNDS.md):
- *   - `已还清(ADR-0005)`: 本文件随本插件的 `[build].sources` 编进镜像
- *     (`brickie build` 消费声明面), 但启动链的**调用点**仍是 APP 直调, 还不是
- *     `.br_plugins` 段枚举驱动(插件管理器属 M0 运行期);
+ * ★ 本文件**只声明 region 表**: 池的认领(`br_mem_init`)与页表建立(`br_mm_activate`)
+ *   是 core 的四阶段启动链里的阶段 ③(见 `core/src/main.c` / ADR-0008)。
+ *
+ * ★ 仍登记在案的欠债(详见 WORKAROUNDS.md):
  *   - `WORKAROUND(br-wa-mem-001)`: 下面的**池比例写死在这里**(1 MiB / 256 KiB /
  *     1 MiB / 256 KiB / 16 KiB), 未经 manifest 的 `[budget]`/`[[res]]` 生成 ——
  *     设计 3-04 §2 要的是"比例 = manifest 预算", 而 v0.1 还没有那条生成链路。
@@ -26,9 +26,8 @@
  *      比它更细就没有落点;
  *   ② 互不重叠 —— 重叠 = "同一页有两个属性真值", 那是无法执行的声明。
  */
-#include <br/core/br_console.h>
 #include <br/core/br_error.h>
-#include <br/core/br_mem.h>
+#include <br/core/br_mem.h>      /* BR_PAGE_SIZE(页粒度) */
 #include <br/core/br_mm.h>
 
 #include <br/platform/br_mmu.h>
@@ -173,21 +172,17 @@ static int memmap_declare_regions(void)
 
 int br_plat_memmap_init(void)
 {
-    const int rc = memmap_declare_regions();
-
-    if (rc != 0) {
-        return rc;
-    }
-
     /*
-     * EARLY 相失败 = 启动失败(3-02 §14.3 的错误处理义务, 与 board_irq.c 的 IRQ 初始化
-     * 同一纪律): 此刻还没有堆, 池没建起来的话后面每一步都踩在"半初始化"上 ——
-     * 那种症状(莫名其妙的空指针)离根因最远, 不如现在停机。
+     * ★ 本函数**只声明** region 表(哪块内存是什么)。
+     *   池的**认领**(`br_mem_init()`)与页表**建立**(`br_mm_activate()`)都是 core.init
+     *   的一格(设计 1-01 §9: "堆 · 中断框架 · 注册表 · 调度框架对象"), 由 core 的入口
+     *   `br_core_main()` 在 platform 插件初始化之后执行 —— 见
+     *   `docs/decisions/0008-core-main-boot-chain.md` 与 `core/src/main.c` 的阶段 ③。
+     *   这样 platform 只提供"数据 + 换型号就变的机制", memory 管理/分配与地址映射的
+     *   建立动作归 core。
+     *
+     * 声明失败(重叠 / 粒度不合 / 表满)= 启动失败(3-02 §14.3 的错误处理义务, 与
+     * board_irq.c 的 IRQ 初始化同一纪律)。
      */
-    if (br_mem_init() != 0) {
-        br_console_puts("[FATAL] mem init failed\n");
-        br_plat_park_forever();
-    }
-
-    return 0;
+    return memmap_declare_regions();
 }

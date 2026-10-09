@@ -58,9 +58,11 @@ br_irq_cpu_t *br_irq_cpu(void)
 void br_irq_cpu_init(void)
 {
     /*
-     * ★ 调用时序(头文件 br_irq.h §7): BSS 清零之后、br_plat_early_init() 之前。
-     * 设计侧这一步属 core.init; v0.1.0 没有 core.init(WORKAROUND br-wa-boot-001),
-     * 故由 Platform Entry 的汇编显式调用。
+     * ★ 调用时序(头文件 br_irq.h §7): BSS 清零之后、platform 提交绑定表之前。
+     * 设计侧这一步属 core.init —— v0.2.0 由 core 的入口 `br_core_main()` 在启动链
+     * 阶段 ① 调用(见 ADR-0008); 在这一刀之前它由 Platform Entry 的汇编直接调。
+     * ★ **硬约束**: 本函数把**全部**描述符的 pic_id/dom_id 置 -1(P-IRQ-5), 所以必须
+     *   排在 platform 的 `br_irq_bindings_set()` **之前** —— 顺序颠倒会把绑定抹掉。
      *
      * P-IRQ-5(实现裁定, 必须说明): "BSS 已清零 ⇒ 无其他构造"对 br_irq_cpu_t 成立,
      * 对**描述符池不成立** —— pic_id 与 dom_id 的 0 值都是**合法编码**
@@ -68,7 +70,6 @@ void br_irq_cpu_init(void)
      * dom_id == 0 ⇒ br_irq_register 把"无绑定"误判成"域成员"返回 -EINVAL,
      * 而 §14.3 要求的 -ENODEV(初始化顺序违反要报对错)永远不会命中。
      * ⇒ 这里把两个索引字段置为内部约定的无效值 -1(§3.2: "内部用 -1/越界值表示无效")。
-     * 设计侧的这份静态池初始化本属 core.init, v0.1 并入本函数。
      */
     for (br_u32 v = 0u; v < BR_IRQ_MAX; v++) {
         s_desc[v].pic_id = (br_s8)-1;
@@ -87,7 +88,7 @@ void br_irq_cpu_enable(void)
 {
     /*
      * 全局开中断: 只放行 PSTATE.I(§14.3 链尾"全部插件 init 之后"; F/A/D 保持)。
-     * 设计侧这一步属 core.init 之后的启动链; v0.1 无该链(br-wa-boot-001)⇒ APP 显式调用。
+     * 调用点是插件管理器在 LATE 相之后、START 相之前(见 plugin_mgr.c 的相位驱动)。
      */
     __asm__ volatile("msr daifclr, #2" ::: "memory");
 }

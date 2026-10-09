@@ -5,7 +5,7 @@ schema = 1
 
 [[case]]
 id       = "plat-0001"
-pre      = "start.S 已把异常级别/栈备好, 调用 br_plat_early_init()"
+pre      = "start.S 已把异常级别/栈备好; core 的 br_core_main() 已进入阶段 ②, 即将调用 br_plat_early_init()"
 steps    = ["调用 br_plat_early_init()", "检查 PL011 已可输出"]
 expect   = "早期 console 就绪(br_console_putc 可用)"
 sched    = ["coop"]
@@ -27,7 +27,7 @@ platform = ["qemu-aarch64"]
 
 [[case]]
 id       = "plat-0003"
-pre      = "start.S 已调 br_irq_cpu_init(); br_plat_early_init() 进入中断初始化"
+pre      = "core 的 br_core_main() 阶段 ① 已调 br_irq_cpu_init(); 阶段 ② 的 br_plat_early_init() 进入中断初始化"
 steps    = ["br_plat_irq_init()", "检查 GICv3 的 ICC_CTLR_EL1.EOImode/PRIbits", "检查绑定表 5 条"]
 expect   = "PIC 注册成功(pic_id>=0)、EOImode==0、绑定表提交成功"
 sched    = ["coop"]
@@ -52,17 +52,19 @@ platform = ["qemu-aarch64"]
 # ---- 插件生命周期(设计 1-01 §9 / 3-05 §2; v0.2 起调用点由插件管理器驱动)----
 #
 # ★ 与 v0.1 的差别(正是 WORKAROUND br-wa-entry-001 第 ③ 条的还债点): 这三条钩子
-#   **不再**由 start.S 直调, 而是 core 的 `br_plugin_manager_run()` 按相位调用:
-#     EARLY 相第一步 = qemu_aarch64_early_init(显式按 plugin_type 取, 不靠拓扑序);
-#     CORE 相       = qemu_aarch64_init;
-#     START 相      = qemu_aarch64_start(全局开中断之后, APP 的 start 之前)。
+#   **不再**由 start.S 直调。core 的四阶段启动链(ADR-0008)按相位调用:
+#     EARLY 首要 = qemu_aarch64_early_init(由 br_plugin_manager_platform_init() 显式按
+#                  plugin_type 取, 不靠拓扑序; 它对应启动链阶段 ②);
+#     CORE 相    = qemu_aarch64_init;
+#     START 相   = qemu_aarch64_start(全局开中断之后, APP 的 start 之前)。
+#   CORE/START 由 br_plugin_manager_run()(阶段 ④)驱动。
 #   证据形态 = 日志里的 `[PLUGIN] phase=… name=platform/qemu-aarch64 rc=0` 逐相三行。
 
 [[case]]
 id       = "plat-0008"
-pre      = "start.S 已把 CPU 交给 br_plugin_manager_run()(BSS 已清零、br_irq_cpu_init 已跑)"
+pre      = "start.S 已把 CPU 交给 br_core_main(); 阶段 ①(BSS 已清零、br_irq_cpu_init 已跑)已过"
 steps    = ["管理器扫 .br_plugins 段", "取第一个 plugin_type = platform 的描述符", "调它的 early_init"]
-expect   = "qemu_aarch64_early_init() 是 EARLY 相第一步 ⇒ console/PIC/绑定表/region 表/页表/MMU 就位; 日志可观测"
+expect   = "qemu_aarch64_early_init() 是启动链阶段 ②(也是 EARLY 相第一步) ⇒ console/PIC/绑定表/region 表/页表 ops 就位; 日志可观测"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]
 

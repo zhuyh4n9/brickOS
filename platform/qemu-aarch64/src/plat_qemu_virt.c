@@ -108,13 +108,14 @@ void br_plat_early_init(void)
      *   "降级到无中断"诚实(§14.3 的错误处理义务)。这里刻意不用 br_panic_bare,
      *   因为 fault 路径与 panic 属 core 的观测契约, 而停机入口已由平台提供。
      *
-     * 最后是内存映射子系统(设计 3-04 §1「恒等映射 + 属性隔离」; 1-01 §9 的
-     * "RAM / 恒等映射页表"两步), 顺序同样是硬的:
-     *   ① `br_plat_memmap_init()`: 声明 region 表 → `br_mem_init()` 认领三池。
-     *      必须先有 region 表: 它是"哪块 RAM 是什么"的唯一真值, 页表与 core 的池都从它取。
-     *   ② `br_plat_mmu_init()`: `br_mm_register` → `br_mm_activate` 建 4 KiB 恒等映射
-     *      页表并开 MMU。★ MMU 一开, 之后每一次取指/访存都过翻译 ⇒ 页表必须已经覆盖
-     *      当前 PC/SP(页表自身也在 .bss 的映射范围内)。
+     * 最后是内存映射子系统的**平台侧两件**(设计 3-04 §1「恒等映射 + 属性隔离」):
+     *   ① `br_plat_memmap_init()`: **只声明** region 表(哪块 RAM 是镜像/栈/三池/MMIO)。
+     *   ② `br_plat_mmu_ops_register()`: **只注册**页表构造 ops。
+     * ★ 池的认领(`br_mem_init`)与页表的建立(`br_mm_activate`)是 **core.init 的一格**
+     *   (设计 1-01 §9), 由 core 的入口 `br_core_main()` 在 platform 插件初始化之后执行
+     *   —— 机制/数据在 platform, 编排与"建立动作"在 core。见 ADR-0008。
+     *   MMU 一开, 之后每一次取指/访存都过翻译 ⇒ 页表必须已经覆盖当前 PC/SP(页表自身
+     *   也在 .bss 的映射范围内), 所以建立动作是插件 init 之前的最后一格。
      *   为什么放在 IRQ 之后: GIC 的配置在最前面的三步里完成, 此刻 MMU 还没开, 走的
      *   是"物理地址直取"; 开 MMU 之后 GIC 寄存器走 Device 背景映射(0x08000000/0x080A0000
      *   都在低 1 GiB 的 2 MiB 块里), 两种情形都被覆盖。
@@ -131,8 +132,8 @@ void br_plat_early_init(void)
         br_plat_park_forever();
     }
 
-    if (br_plat_mmu_init() != 0) {
-        br_console_puts("[FATAL] memory mapping init failed\n");
+    if (br_plat_mmu_ops_register() != 0) {
+        br_console_puts("[FATAL] page-table ops register failed\n");
         br_plat_park_forever();
     }
 

@@ -221,18 +221,21 @@ void br_irq_stats_get(br_u32 virq, br_irq_stat_t *out);
  * ===================================================================== */
 
 /*
- * CPU-local 中断状态初始化(BSS 零初始化 ⇒ 无运行期构造; 这里只把 TPIDR_EL1
- * 指向本核的 `br_irq_cpu_t`, 3-02 §14.4「初始化时序」)。
+ * CPU-local 中断状态初始化(BSS 零初始化 ⇒ 无运行期构造; 这里把 TPIDR_EL1 指向本核的
+ * `br_irq_cpu_t`, 并把描述符池的 pic_id/dom_id 置 -1 —— 见 P-IRQ-5)。
  *
- * 设计侧这一步属 **core.init**;**v0.1.0 没有 core.init**(WORKAROUND br-wa-boot-001),
- * 所以由 Platform Entry 的汇编在 BSS 清零之后、`br_plat_early_init()` 之前调用。
+ * 设计侧这一步属 **core.init**, 由 core 的入口 `br_core_main()` 在启动链阶段 ① 调用
+ * (BSS 清零之后、任何 C 子系统之前)。
+ * ★ **硬约束**: 必须排在 platform 提交 PIC 绑定表(`br_irq_bindings_set`)之前 ——
+ *   本函数会把**全部**描述符的 pic_id/dom_id 置 -1, 排在绑定表之后会抹掉已落的绑定。
+ *   见 `core/src/main.c` 的阶段 ① 与 ADR-0008。
  */
 void br_irq_cpu_init(void);
 
 /*
  * 全局开中断(只放行 PSTATE.I; F/A/D 保持)。
  * 设计侧 = "全部插件 init 之后"的那一步(主文档 §6.2 / 3-02 §14.3 第 7 步之后),
- * 同样因为 v0.1.0 没有 core.init 而由 APP 显式调用(br-wa-boot-001)。
+ * 由插件管理器在 LATE 相之后、START 相之前调用(见 plugin_mgr.c 的相位驱动)。
  */
 void br_irq_cpu_enable(void);
 
