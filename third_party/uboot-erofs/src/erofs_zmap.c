@@ -43,7 +43,8 @@
  *   3. **`DBG_BUGON(err < 0 && err != -ENOMEM)`**: 上游在
  *      `z_erofs_map_blocks_iter()` 出口用它把"读路径不该出现的错误"打成停机。本件把它
  *      换成**运行期日志**(见 erofs_compat.h 的 DBG_BUGON), 并在同一出口回传原错误码。
- *   4. **`-EOPNOTSUPP` → `-ENOTSUP`, `-EFSCORRUPTED` → `-EIO`**(见 erofs_compat.h)。
+ *   4. 错误码: 裸名字由 core 的 `<br/core/br_errno.h>` 提供(ADR-0023), 于是**上游的
+ *      `-EFSCORRUPTED` 一处都没改**(`EUCLEAN` = 117; 见 erofs_compat.h)。
  *   5. `erofs_dbg()` 的格式串里那些 `| 0ULL` / `PRIu64` 噪声: 本件的 `PRIu64` 宏自带
  *      `unsigned long long` 强转 ⇒ 去掉 `| 0ULL`(语义不变)。
  * ==========================================================================
@@ -121,7 +122,7 @@ static int z_erofs_fill_inode_lazy(struct erofs_inode *vi)
         !(vi->z_advise & Z_EROFS_ADVISE_BIG_PCLUSTER_2)) {
         erofs_err("big pcluster head1/2 of compact indexes should be consistent for nid %llu",
                   (unsigned long long)vi->nid);
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EFSCORRUPTED);
     }
 
     if (vi->z_advise & Z_EROFS_ADVISE_INLINE_PCLUSTER) {
@@ -133,7 +134,7 @@ static int z_erofs_fill_inode_lazy(struct erofs_inode *vi)
             erofs_blkoff(map.m_pa) + map.m_plen > erofs_blksiz()) {
             erofs_err("invalid tail-packing pclustersize %llu",
                       (unsigned long long)map.m_plen);
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EFSCORRUPTED);
         }
         if (ret < 0) {
             return ret;
@@ -231,7 +232,7 @@ static int legacy_load_cluster_from_disk(struct z_erofs_maprecorder *m,
         if (m->delta[0] & Z_EROFS_LI_D0_CBLKCNT) {
             if (!(vi->z_advise & Z_EROFS_ADVISE_BIG_PCLUSTER_1)) {
                 DBG_BUGON(1);
-                return BR_ERR(BR_EIO);
+                return BR_ERR(EFSCORRUPTED);
             }
             m->compressedblks = (u16)(m->delta[0] & ~(u16)Z_EROFS_LI_D0_CBLKCNT);
             m->delta[0] = 1;
@@ -339,7 +340,7 @@ static int unpack_compacted_index(struct z_erofs_maprecorder *m,
         if (lo & Z_EROFS_LI_D0_CBLKCNT) {
             if (!big_pcluster) {
                 DBG_BUGON(1);
-                return BR_ERR(BR_EIO);
+                return BR_ERR(EFSCORRUPTED);
             }
             m->compressedblks = lo & ~(unsigned)Z_EROFS_LI_D0_CBLKCNT;
             m->delta[0] = 1;
@@ -395,7 +396,7 @@ static int unpack_compacted_index(struct z_erofs_maprecorder *m,
                 if (lo <= 1u) {
                     DBG_BUGON(1);
                     /* --i; ++nblk;	continue; */
-                    return BR_ERR(BR_EIO);
+                    return BR_ERR(EFSCORRUPTED);
                 }
                 i -= (int)(lo - 2u);
                 continue;
@@ -496,7 +497,7 @@ static int z_erofs_extent_lookback(struct z_erofs_maprecorder *m,
     if (lcn < lookback_distance) {
         erofs_err("bogus lookback distance @ nid %llu", (unsigned long long)vi->nid);
         DBG_BUGON(1);
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EFSCORRUPTED);
     }
 
     /* load extent head logical cluster if needed */
@@ -511,7 +512,7 @@ static int z_erofs_extent_lookback(struct z_erofs_maprecorder *m,
         if (!m->delta[0]) {
             erofs_err("invalid lookback distance 0 @ nid %llu", (unsigned long long)vi->nid);
             DBG_BUGON(1);
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EFSCORRUPTED);
         }
         return z_erofs_extent_lookback(m, m->delta[0]);
     case Z_EROFS_LCLUSTER_TYPE_PLAIN:
@@ -588,7 +589,7 @@ static int z_erofs_get_extent_compressedlen(struct z_erofs_maprecorder *m,
         erofs_err("cannot found CBLKCNT @ lcn %lu of nid %llu",
                   lcn, (unsigned long long)vi->nid);
         DBG_BUGON(1);
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EFSCORRUPTED);
     }
 out:
     map->m_plen = (u64)m->compressedblks << uboot_erofs_sbi.blkszbits;
@@ -596,7 +597,7 @@ out:
 err_bonus_cblkcnt:
     erofs_err("bogus CBLKCNT @ lcn %lu of nid %llu", lcn, (unsigned long long)vi->nid);
     DBG_BUGON(1);
-    return BR_ERR(BR_EIO);
+    return BR_ERR(EFSCORRUPTED);
 }
 
 static int z_erofs_get_extent_decompressedlen(struct z_erofs_maprecorder *m)
@@ -687,7 +688,7 @@ static int z_erofs_do_map_blocks(struct erofs_inode *vi,
         /* m.lcn should be >= 1 if endoff < m.clusterofs */
         if (!m.lcn) {
             erofs_err("invalid logical cluster 0 at nid %llu", (unsigned long long)vi->nid);
-            err = BR_ERR(BR_EIO);
+            err = BR_ERR(EFSCORRUPTED);
             goto out;
         }
         end = ((unsigned long long)m.lcn << lclusterbits) | m.clusterofs;
@@ -735,7 +736,7 @@ static int z_erofs_do_map_blocks(struct erofs_inode *vi,
     if (m.headtype == Z_EROFS_LCLUSTER_TYPE_PLAIN) {
         if (map->m_llen > map->m_plen) {
             DBG_BUGON(1);
-            err = BR_ERR(BR_EIO);
+            err = BR_ERR(EFSCORRUPTED);
             goto out;
         }
         if (vi->z_advise & Z_EROFS_ADVISE_INTERLACED_PCLUSTER) {

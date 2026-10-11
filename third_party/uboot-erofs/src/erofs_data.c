@@ -32,7 +32,9 @@
  *      远离根因。这一条与 erofs_vfs.c 的块层 shim(uboot_erofs_dev_read)的越界检查是同一条防线的两个断面。
  *   4. **`raw` 缓冲用 core 堆**: 上游 `realloc(raw, bufsize)` 在压缩路径上按 extent 的
  *      **物理长度**增长。本件的 `br_realloc` 是同一语义(ADR-0014)。最大 32 KiB。
- *   5. `EOPNOTSUPP` → `-ENOTSUP`(见 erofs_compat.h), `-EFSCORRUPTED` → `-EIO`。
+ *   5. 错误码: 裸名字(`EIO`/`ENOTSUP`/`EFSCORRUPTED`/…)由 core 的
+ *      `<br/core/br_errno.h>` 提供(ADR-0023)⇒ 上游的 `-EFSCORRUPTED` 原样成立
+ *      (`EUCLEAN` = 117, 见 `erofs_compat.h`)。
  *   6. **chunk-based 的空洞**: 上游对"未映射"的 extent 填 0。本件照做(见
  *      `erofs_read_raw_data()` 的两个 memset 分支)。
  * ==========================================================================
@@ -98,7 +100,7 @@ static int erofs_map_blocks_flatmode(struct erofs_inode *inode,
             erofs_err("inline data cross block boundary @ nid %llu",
                       (unsigned long long)vi->nid);
             DBG_BUGON(1);
-            err = BR_ERR(BR_EIO);
+            err = BR_ERR(EFSCORRUPTED);
             goto err_out;
         }
 

@@ -55,7 +55,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 third_party/uboot-mmc �
 | 5 | 块读"整扇区读进中转缓冲再按长度拷出" | bdev 的 read 是整扇区语义; 直接给调用方缓冲会越界写 |
 | 6 | `DBG_BUGON` = 打印 + 由 -EIO 收敛(不是停机) | 坏镜像不该把设备打死 |
 | 7 | 多设备(extra devices)⇒ 挂载期 `-ENOTSUP` | 本件一个卷 |
-| 8 | `EFSCORRUPTED` → `BR_EIO`, `EOPNOTSUPP` → `BR_ENOTSUP` | 本仓库错误码表的口径 |
+| 8 | **errno 名字不带映射表**: 裸名字来自 core 的 `<br/core/br_errno.h>` | ADR-0023: 名字是 core 的(有没有 POSIX 运行时都有), 且上游的 `-EFSCORRUPTED`(`EUCLEAN`=117) **一处都没改** —— 本件不再需要 `#define` |
 | 9 | 非目录 inode 也有一张 `iops`(只填 `getattr`) | 契约: "每个支持 `br_stat` 的 inode 都必须带一张 iops"; 只给目录会让 `br_stat(文件)` 得 -ENOTSUP |
 | 10 | 目录项填名**按长度**复制(不是"复制到 NUL") | EROFS 目录块里的名字没有 NUL 结尾(紧挨着拼); 扫 NUL 会把后面所有名字一起吞进来 |
 

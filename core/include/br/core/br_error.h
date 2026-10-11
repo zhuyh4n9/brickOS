@@ -30,8 +30,14 @@
  *   这些都不在 SD-10 的枚举里, 但用 -EINVAL 把它们压成一个会让排障与 errno 映射同时
  *   失真, 故按内核编号补入(`docs/decisions/0009-…` §3 裁定 4)。
  *   `runtime/posix` 的 `errno = -ret` 是**零转换**取负(11-01 §2, ADR-0014)⇒ 本表的编号
- *   **就是**用户态看到的编号 —— 这一条是"对齐内核"的最终理由, 也是 `errno.h` 里每个
- *   `E*` 都写成 `BR_E*` 别名(而不是重新定义数值)的原因。
+ *   **就是**用户态看到的编号 —— 这一条是"对齐内核"的最终理由。
+ *
+ * ## 两套名字、一份数值(ADR-0023)
+ *   本头给的是**内部拼写** `BR_E*`。POSIX 的裸名字(`EIO`/`ENOENT`/…)在
+ *   `br/core/br_errno.h`, 那里逐条写成 `BR_E*` 的**别名**(不是第二张表)。★ 那份名字表
+ *   **归 core**: 无论组合里有没有 `runtime/posix`, 内部与三方插件都拿得到 POSIX 编号。
+ *   在此之前它挂在 POSIX 运行时上 ⇒ 三方移植件只好各自抄一份 `#define EIO BR_EIO`,
+ *   那既是第二处真值, 也是对上游代码的多余改动(ADR-0023 D-3)。
  */
 #ifndef BR_CORE_BR_ERROR_H
 #define BR_CORE_BR_ERROR_H
@@ -87,6 +93,8 @@
 #define BR_EOVERFLOW     75   /* Value too large for defined data type */
 #define BR_ENOTSUP       95   /* Operation not supported(= EOPNOTSUPP) */
 #define BR_ETIMEDOUT    110   /* Connection timed out(阻塞超时统一, INV-1/CA-4) */
+#define BR_EUCLEAN      117   /* Structure needs cleaning —— EROFS 的 EFSCORRUPTED 用它:
+                               * ADR-0023 D-4 "缺的 POSIX 码从内核表里补", 而不是映射到别的码 */
 #define BR_EDQUOT       122   /* Quota exceeded */
 #define BR_ECANCELED    125   /* Operation Canceled */
 #define BR_EOWNERDEAD   130   /* Owner died */

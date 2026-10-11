@@ -357,21 +357,21 @@ static inline u64 uboot_fat_div_u64_rem(u64 dividend, u32 divisor, u32 *remainde
 #define log_err(fmt, ...)   br_log_error("uboot-fat: " fmt, ##__VA_ARGS__)
 #define log_debug(fmt, ...) debug(fmt, ##__VA_ARGS__)
 
-/* ==================================================================== errno 口径 */
-/* 上游直接用 Linux 的裸名字(它在 u-boot 里有 <linux/errno.h>)。本件映射到 BR_E*(值同表,
- * 见 br/core/br_error.h 的"与 Linux 内核逐值对齐"), 于是移植点保持上游拼写。 */
-#define ENXIO     BR_ENXIO
-#define ENODEV    BR_ENODEV
-#define ENOENT    BR_ENOENT
-#define EIO       BR_EIO
-#define EINVAL    BR_EINVAL
-#define EEXIST    BR_EEXIST
-#define EISDIR    BR_EISDIR
-#define ENOTDIR   BR_ENOTDIR
-#define ENOMEM    BR_ENOMEM
-#define ENOSPC    BR_ENOSPC
-#define ENOTEMPTY BR_ENOTEMPTY
-#define EROFS     BR_EROFS
+/* ==================================================================== errno 口径
+ *
+ * 上游直接用 Linux 的裸名字(它在 u-boot 里有 `<linux/errno.h>`)。本件**不自带映射表** ——
+ * 那些名字由 **core** 提供(`<br/core/br_errno.h>`, ADR-0023), 与 `br_error.h` 的数值
+ * 一一对应(值逐字取自 Linux 内核, 宿主 `ft-test` 逐码对拍)。
+ *
+ * ★ 为什么这里以前有一串 `#define EIO BR_EIO`: 那份名字表原先挂在 `runtime/posix` 上,
+ *   而本插件不该依赖 POSIX 运行时(它是介质 FS, 不是 POSIX 面)⇒ 只好自己抄一份。
+ *   那既是**第二处真值**, 也是对上游代码的**多余改动**。现在名字表归 core:
+ *   上游的拼写原样成立, 本件只多一行 include。
+ *
+ * ★ 纪律(脚本门禁 `check-errno` 执法): **全树只许有一处 errno 表**(core 的那一处);
+ *   三方插件若要一个新的码, 走 ADR-0023 D-4 —— 从内核表里补进 `br_error.h`/`br_errno.h`,
+ *   不许在插件里自造编号或映射到别的码上。 */
+#include <br/core/br_errno.h>
 
 /* ==================================================================== 字符串小工具
  *

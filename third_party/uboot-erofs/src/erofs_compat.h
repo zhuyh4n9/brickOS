@@ -21,8 +21,7 @@
  *   printf/pr_err/pr_info/pr_debug         →  br_log_error/info/debug
  *   BUG_ON/DBG_BUGON                       →  DBG_BUGON(见下: 打印 + 不崩)
  *   IS_ERR/ERR_PTR/PTR_ERR                 →  本项目**不用** errno 指针; 裁掉
- *   EFSCORRUPTED(内核 EUCLEAN=117)          →  BR_EIO(本仓库没有 117 号)
- *   EOPNOTSUPP                             →  BR_ENOTSUP
+ *   E* 裸名字 / EFSCORRUPTED(EUCLEAN)      →  **core 的 <br/core/br_errno.h>**(见下)
  *
  * ## 为什么字符串要自己写
  *   硬约束(任务书): `strlen/strcmp/strncmp/strcpy/strnlen/strchr` **必须自己写小的**,
@@ -422,11 +421,19 @@ static inline void uboot_erofs_log_dbg_inline(const char *fmt, ...)
 #define erofs_dbg(fmt, ...)  do { } while (0)
 #endif
 
-/* ==================================================================== errno 口径 */
-/* 本仓库的错误码表(br/core/br_error.h)没有内核的 EUCLEAN(117), 也没有 EOPNOTSUPP
- * (它叫 BR_ENOTSUP)。映射见文件头。 */
-#define EFSCORRUPTED  BR_EIO
-#define EOPNOTSUPP    BR_ENOTSUP
+/* ==================================================================== errno 口径
+ *
+ * 裸名字(`EIO`/`ENOENT`/`EOPNOTSUPP`/…)与 `EUCLEAN` 由 **core** 提供
+ * (`<br/core/br_errno.h>`, ADR-0023), 值与 `br_error.h` 一一对应(逐字取自 Linux 内核,
+ * 宿主 `ft-test` 逐码对拍)。本件**不自带映射表** —— 那既是第二处真值, 也是对上游代码的
+ * 多余改动。
+ *
+ * ★ `EFSCORRUPTED` 这里**照抄上游 `internal.h` 的构造**(`#ifdef EUCLEAN` 那一支),
+ *   一个字都没改; 之所以以前映射到 `BR_EIO`, 是因为本仓库当时没有 117 号 —— 现在
+ *   `BR_EUCLEAN` 已按 ADR-0023 D-4 从内核表补入。 */
+#include <br/core/br_errno.h>
+
+#define EFSCORRUPTED  EUCLEAN
 
 /* ==================================================================== 字符串小工具
  *

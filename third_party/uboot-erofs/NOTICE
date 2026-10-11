@@ -76,8 +76,12 @@ third_party/uboot-erofs — 第三方来源与许可说明
      槽位**全部填上**但一律 `-EROFS`(比空槽位的 -ENOTSUP 更准)。
   6. **`DBG_BUGON` 不再是停机**: 上游 `BUG_ON` 会带走整个内核。读路径上的"不可能发生"
      改成"打印 + 由调用方的 -EIO 收敛"(坏镜像不该打死设备)。
-  7. `EFSCORRUPTED`(内核 EUCLEAN=117) → `BR_EIO`; `EOPNOTSUPP` → `BR_ENOTSUP`
-     (本仓库错误码表没有前者的编号)。
+  7. **errno 名字由 core 提供, 本件不带映射表**(ADR-0023): `EIO`/`EOPNOTSUPP`/
+     `EFSCORRUPTED` 等裸名字来自 `<br/core/br_errno.h>`(与 `br/core/br_error.h` 的数值
+     一一对应, 值逐字取自 Linux 内核并由宿主 `ft-test` 逐码对拍)。
+     ⇒ 上游的 `-EFSCORRUPTED`(= `EUCLEAN` = 117)**一处都没改**: 20 处在未移植的
+     deflate 函数里有 1 处, 其余 19 处(原先把 117 映射成 `BR_EIO` 的那些)已全部回归
+     上游语义。上游 `internal.h` 的 `#ifdef EUCLEAN` 构造因此原样成立。
   8. LZ4 的 `LZ4_decompress_safe*()` 收成 `static`(上游是 lib 级全局符号);
      本插件不导出任何符号, 镜像的符号空间里只该有 `uboot_erofs_*` 那几个钩子。
 

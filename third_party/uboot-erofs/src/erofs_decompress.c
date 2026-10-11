@@ -667,15 +667,15 @@ int z_erofs_decompress(struct z_erofs_decompress_req *rq)
 
         /* XXX: should support inputsize >= erofs_blksiz() later */
         if (rq->inputsize > erofs_blksiz()) {
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EFSCORRUPTED);
         }
 
         if (rq->decodedlength > erofs_blksiz()) {
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EFSCORRUPTED);
         }
 
         if (rq->decodedlength < rq->decodedskip) {
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EFSCORRUPTED);
         }
 
         count = rq->decodedlength - rq->decodedskip;
@@ -686,7 +686,7 @@ int z_erofs_decompress(struct z_erofs_decompress_req *rq)
         return 0;
     } else if (rq->alg == Z_EROFS_COMPRESSION_SHIFTED) {
         if (rq->decodedlength > rq->inputsize) {
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EFSCORRUPTED);
         }
 
         DBG_BUGON(rq->decodedlength < rq->decodedskip);

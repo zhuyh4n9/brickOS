@@ -296,6 +296,15 @@ name    = "check-headers"
 argv    = ["bash", "tools/check-headers.sh"]
 require = ["ok   [0-9]* 个对外头"]
 
+# check-errno: errno 单一真值门禁(ADR-0023)。
+# ★ 它守的是本刀刚立的一条纪律: **POSIX 错误码的名字归 core**(`br/core/br_errno.h`),
+#   于是 ① 有没有 `runtime/posix` 都拿得到 POSIX 编号; ② 三方移植件不必各自抄一份映射表
+#   (那既是第二处真值, 也是对上游代码的多余改动)。三条判据: 名值配对 / 全集覆盖 / 无第二处定义。
+[[script]]
+name    = "check-errno"
+argv    = ["bash", "tools/check-errno.sh"]
+require = ["ok   errno 表"]
+
 [[script]]
 name = "check-workarounds"
 argv = ["bash", "tools/check-workarounds.sh"]
@@ -596,4 +605,4 @@ require_tags = [
 [build]
 # `brickie build` 成功后**自动**跑的短名单(与旧 Makefile 的 `all: … check-string` 同义)。
 # 放在脚本门禁里而不是编进编译流程, 是因为它是**判据**而不是构建步骤。
-post = ["check-string", "check-headers", "fs-images"]
+post = ["check-string", "check-headers", "check-errno", "fs-images"]

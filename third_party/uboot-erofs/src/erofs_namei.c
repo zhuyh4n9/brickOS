@@ -177,7 +177,7 @@ int erofs_read_inode_from_disk(struct erofs_inode *vi)
 bogusimode:
     erofs_err("bogus i_mode (%o) @ nid %llu", (unsigned)vi->i_mode,
               (unsigned long long)vi->nid);
-    return BR_ERR(BR_EIO);      /* 上游 -EFSCORRUPTED = 本件的 -EIO(见 erofs_compat.h) */
+    return BR_ERR(EFSCORRUPTED);   /* 与上游逐字一致(EUCLEAN = 117, 见 erofs_compat.h) */
 }
 
 /*
@@ -219,7 +219,7 @@ static bool find_target_dirent(erofs_nid_t pnid,
             de_namelen > EROFS_NAME_LEN) {
             erofs_err("bogus dirent @ nid %llu", (unsigned long long)pnid);
             DBG_BUGON(1);
-            *err_out = BR_ERR(BR_EIO);
+            *err_out = BR_ERR(EFSCORRUPTED);
             return false;
         }
 
@@ -280,7 +280,7 @@ static int erofs_namei(struct nameidata *nd, const char *name, unsigned int len)
             nameoff >= erofs_blksiz()) {
             erofs_err("invalid de[0].nameoff %u @ nid %llu",
                       nameoff, (unsigned long long)nid);
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EFSCORRUPTED);
         }
 
         (void)find_target_dirent(nid, buf, name, len, nameoff,

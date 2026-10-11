@@ -48,6 +48,11 @@ third_party/uboot-fat — 第三方来源与许可说明
 
 改写要点(相对上游的**有意偏离**)
 --------------------------------
+  0. **errno 名字是 core 给的, 本件不带映射表**(ADR-0023): 上游代码里的裸名字
+     (`-EIO`/`-ENOENT`/`-ENOSPC`/…) 来自 `<br/core/br_errno.h>` —— 那份名字表与
+     `br/core/br_error.h` 的数值一一对应(值逐字取自 Linux 内核, 宿主 `ft-test` 逐码对拍),
+     且**无条件可用**(不依赖 `runtime/posix` 是否在组合里)。此前 compat 层自带 12 行
+     `#define EIO BR_EIO`, 那既是第二处真值, 也是对上游代码的多余改动; 现已删除。
   1. **块层换掉**: `struct blk_desc`/`disk_partition`/`blk_dread`/`blk_dwrite`
      → 一个"当前卷"(uboot_fat_vol_t)+ `br_bdev_ops_t.read/write`。分区的起始扇区恒 0
      ("整设备一个分区"), 于是上游的 `cur_part_info.start + block` 恒等于 `block`。

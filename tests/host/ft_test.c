@@ -145,6 +145,7 @@ static void fill_all(void)
     X(BR_EOVERFLOW, EOVERFLOW); \
     X(BR_ENOTSUP, ENOTSUP);     \
     X(BR_ETIMEDOUT, ETIMEDOUT); \
+    X(BR_EUCLEAN, EUCLEAN);     \
     X(BR_EDQUOT, EDQUOT);       \
     X(BR_ECANCELED, ECANCELED); \
     X(BR_EOWNERDEAD, EOWNERDEAD); \
