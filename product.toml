@@ -1,4 +1,4 @@
-# product.toml — 镜像组合(brickOS prototype v0.1.0, QEMU virt aarch64)
+# product.toml — 镜像组合(brickOS prototype v0.2.0, QEMU virt aarch64)
 #
 # 产品级**只声明"选择与预算"**; 插件的自述(dep/export/privileged)只许在各自的
 # plugin.toml 里(BRV-D4 唯一真值)。
@@ -6,7 +6,12 @@ schema = 1
 
 [product]
 name    = "brickos-prototype"
-version = "0.1.0.0"             # COMPAT_GEN.MAJOR.MINOR.REVISE
+# ★ v0.2.0(定版本): 上一代(v0.1.0)交付的是**声明期**那一半(发现/校验/描述符生成),
+#   这一代交付**运行期**那一半 —— 插件管理器与四阶段启动链、声明面驱动的构建
+#   (`brickie build` 取代组合段 Makefile)、调度/同步/中断下半部、POSIX 运行时与 fd 表、
+#   VFS 存储栈、设备与存储域框架(bdev/pci)、以及架在真 eMMC 上的第三方 FAT/EROFS。
+#   逐条账见 `docs/decisions/` 的 ADR-0008..0022 与 `WORKAROUNDS.md`。
+version = "0.2.0.0"             # COMPAT_GEN.MAJOR.MINOR.REVISE
 app     = "app/hello"           # 恰一个(§3.2)
 core    = ">=0.1.0"
 stage   = "dev"                 # dev | release; CLI 覆盖(§7.5)
@@ -59,6 +64,15 @@ plugins = [
   # ★ ADR-0021 D-3: 第三方模块隔离 —— 移植自 u-boot(GPL-2.0+)的 eMMC/SDHCI 驱动。
   #   它是闭包内**唯一**的 third_party 插件; 框架件与平台侧保持 WTFPL。
   "third_party/uboot-mmc",
+  # ★ ADR-0022: 文件系统这一刀的两件移植件(同源同许可: nxp-imx u-boot `fs/fat` 与
+  #   `fs/erofs`, GPL-2.0+)。它们**必须**是 third_party: 工具链禁 `native` 依赖
+  #   `third_party`(rules.rs::api_type_edge_reason), 而两件都要在 `uboot-mmc` 的 start 相
+  #   (全局开中断后)之后才谈得上挂载 —— 那条顺序只能经 `[[dep]] third_party/uboot-mmc`
+  #   表达。于是 eMMC 与其上的文件系统构成一个**自洽的第三方子图**:
+  #     uboot-mmc(块设备)→ uboot-fat(可写卷 ×3)/ uboot-erofs(只读镜像 ×1)
+  #   四条卷的分工与设备名见 platform 的 `[build.target.qemu].extra` 与 ADR-0022。
+  "third_party/uboot-fat",
+  "third_party/uboot-erofs",
   "fs/tmpfs",
   "fs/devfs",
   "io/uart-pl011",
@@ -85,8 +99,11 @@ enabled = "inherit"
 [budget]
 # 两份上限的分工(brickie-v0.1 §8.1): platform 的 [[res]] = **物理容量**(已抬到 8 MiB:
 # 页表 + 划给 core 的三池), 本项 = **插件预算**(各插件 [[res]] 之和 ≤ 本值)。
-# 所以本值仍取 64 KiB —— 它管的是"插件代码/数据", 不是 platform 交出来的池容量。
-ram_kib   = 64
+# ★ ADR-0022 抬到 256 KiB(原 64): 本刀加了两件**介质类 FS** —— FAT 移植件要静态的扇区/
+#   簇缓冲与三卷记账(u-boot 的 `fsdata` 形状本身就带大缓冲), EROFS 移植件要 4 KiB 块缓冲 +
+#   LZ4 解压缓冲(都不宜放栈上, 见各件 plugin.toml 的 [[res]] 说明); 另外 eMMC 驱动从单例
+#   变成四实例的静态表(+12 KiB)。本值管的仍是"插件代码/数据", 不是 platform 交出来的池容量。
+ram_kib   = 256
 stack_kib = 16
 
 [kernel]

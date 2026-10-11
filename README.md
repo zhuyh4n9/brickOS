@@ -1,6 +1,7 @@
-# brickOS-prototype v0.1.0
+# brickOS-prototype v0.2.0
 
-brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` 开出)。
+brickOS 的**可运行原型**。开发分支 `brickOS-prototype-v0.x.0`; 冻结分支
+`brickOS-prototype-v0.2.0`(版本声明 `product.toml [product].version` = `0.2.0.0`)。
 
 > **仓库是"设计 / 原型"双线分行的**:
 > - 设计文档在 **`brickOS-Design`** 分支(`docs/` + `comment/`);
@@ -14,7 +15,28 @@ brickOS 的**可运行原型**。分支 `brickOS-prototype-v0.1.0`(从 `main` �
 
 ---
 
-## 1. v0.1.0 做什么
+## 0. v0.2.0 相对 v0.1.0 增加了什么
+
+v0.1.0 交付的是**声明期**那一半(插件发现/校验/描述符生成 + `brickie` 组合期工具),
+v0.2.0 交付**运行期**那一半。逐条账在各 ADR 与 [`WORKAROUNDS.md`](WORKAROUNDS.md) 里。
+
+| 域 | 新增 | ADR |
+|---|---|---|
+| core 启动与调度 | 四阶段启动链 `br_core_main`; 心跳/tick HZ 可配; 中断下半部 + 工作队列 + IRQ 出口抢占换栈; 时间片轮转(抢占)调度器 | 0008/0011/0016/0017 |
+| 组合期 | `brickie build`(声明面驱动, 取代组合段 Makefile); 声明依赖的**包含面**执法; 接口发布/冻结状态 | 0004/0018 |
+| 服务与接口 | POSIX 运行时(`runtime/posix`)+ fd 表 + errno 逐值对齐 + `iface/posix` 皮肤; APP 只依赖 Interface | 0012/0014/0015/0019/0020 |
+| 存储 | VFS 存储栈(四层 ops + 瞬态 inode + 链接族); **bdev 块设备子分类**; 真 eMMC(SDHCI)三方驱动; 第三方 **FAT12/16/32** 与 **EROFS(只读 + LZ4)** 文件系统 | 0009/0013/0021/**0022** |
+| 设备 | dev-core/cdev-core 设备框架 + devfs; 通用 **PCI(e)** 枚举/BAR 分配/INTx | 0009/0021 |
+| APP 样例 | POSIX 多线程 7 例 + 介质类文件系统 7 例(经 `iface/posix`, 端到端) | 0019/0022 |
+
+> ★ "文件系统"这一块的**判据来源**值得单独说一句: FAT/EROFS 卷由**外部权威工具**
+> (`mkfs.fat`/`mcopy`/`mkfs.erofs`)造并在真 eMMC 上读写 —— 自研 mkfs 与自研 reader
+> 互为镜像证明不了与真实格式的兼容性。工具版本与 sha256 钉在
+> `prebuilts/toolchain.lock.toml`, 造镜像脚本 = `tools/mk-fs-images.sh`。
+
+---
+
+## 1. v0.2.0 做什么
 
 **一条链, 三个环节:**
 
@@ -91,7 +113,7 @@ ADR-0010 之后它们**全部**由 core 的**自检 pass** 统一驱动(在各�
   能跑上百万次操作);
 - arch timer 的 PPI(INTID 30)在跑, 日志的 `irq_ticks` 每秒 +10 —— 真实中断投递的活证据。
 
-## 2. v0.1.0 刻意不做什么
+## 2. v0.2.0 刻意不做什么
 
 原型最容易失控的地方是"顺手多做一点"。以下是**明确不做**的, 连同理由:
 
@@ -110,6 +132,8 @@ ADR-0010 之后它们**全部**由 core 的**自检 pass** 统一驱动(在各�
 | `br_mm_map`/`br_mm_unmap` 的**运行期实现** | v1 按设计返回 `-ENOTSUP`(`6-01` 的 `TC-MM-003` 就是这个期望): 签名先行、实现随 v2 重定位; 运行期**改属性**走 `br_mm_set_attrs`(已可用, 用例用它做真 RO 保护验证) |
 | 设备注册 / devfs / cdev | M2。早期 console 是**轮询**形态 —— 这是设计内的 M0 形态(`1-01 §8` console 双形态), **不是** workaround |
 | ~~libc / POSIX 运行时~~ | **`runtime/posix` 已交付**(ADR-0014): POSIX 面自带宽窄两族 —— `str*`/`atoi`/`malloc` 别名是**本件定义**的, `mem*` 仍是 core 的(`core/src/string.c`, 因为 core 在 EARLY 相就要用, 而 runtime/posix 是 LATE 相的服务 ⇒ 符号归一**做不到**, 见 ADR-0014 §4)。**仍未做**: `printf` 家族(libc 选型未拍)、`fork`/信号/`mmap`/`gettimeofday`(见 `11-02` 的 TR-C/TR-D) |
+| ~~文件系统(介质类)~~ | **FAT(读写)与 EROFS(只读 + LZ4)已交付**(ADR-0022), 架在 ADR-0021 的真 eMMC 上, 判据由**外部权威工具**造的字节给出。**仍未做**: ① EROFS 只支持未压缩 + LZ4(命中 deflate/zstd ⇒ `-ENOTSUP`); ② 分区表(MBR/GPT)与 `br_bdev_partition`(设计 SD-9, v1.x)⇒ 一块卡 = 一个卷; ③ FAT12/FAT32 的**写**面没有独立用例(`br-wa-emmc-002`); ④ 名字长于 31 字节取不到(`BR_NAME_MAX` 是 vfs 的 v1 契约); ⑤ FAT32 的 FSInfo 空闲计数不维护 |
+| 共享中断线 / MSI | 见 ADR-0022 D-2: core 的 IRQ 框架规定"**每根物理线恰一属主**"(INV-A), 而 QEMU virt 只接 4 根 INTx ⇒ 最多 4 块 `sdhci-pci`。第 5 块卡需要共享线(Level IRQ 多属主)或 MSI —— 两者都是契约变更, 不在本代 |
 
 ## 3. 目录结构
 
@@ -636,6 +660,9 @@ ADR-0015(改名 `runtime/posix` + 新增 `runtime` 命名空间)不改用例, �
 | **`br_mm_ops_t` / `br_mm_register` / `br_mm_activate`** | `3-01 §10`"平台侧接口"行(同 `br_pic` ops 手法)+ `1-01 §8` 三层模式 | 状态机(未注册→已注册→已激活)在 core, 页表构造在 platform; 描述符编码属 ISA 层 ⇒ `br-wa-isa-001` 范围扩大 |
 | **`framework/{vfs-core,dev-core,cdev-core}`** | `7-01`(§1 SD-1/§2 SD-15/§3 SD-7)、`8-01`(§1 框架件归属与形态 A/B/C、§2 注册表与 open_file 钩子、§3 子分类与 D22 预留)、`1-01` §4.5(D19) | 三件的依赖方向**逐条照 §7.3/`8-01` §1.3**: `cdev-core→dev-core`(init)、`cdev-core→vfs-core`(type)、`dev-core→vfs-core`(**type** —— 写成 runtime 会推翻形态 B); `vfs-core` 的 deps **为空**(D21 撤销设备路由后的纯 VFS)。增量: `br_inode_t` 加 `fpriv`、补路径级便捷面与 `br_open_err`、补 5 个存储域错误码(见 ADR-0009 §3) |
 | **`fs/{tmpfs,devfs}`** | `7-03`(§2 tmpfs rootfs / §3 devfs 设备节点 / §6 挂载计划) | tmpfs 挂 "/" 并预建 `/dev /data /tmp`; devfs 把 dev-core 注册表**实时投影**为节点(打开经类 open_file 钩子)⇒ `/dev/uart0` 可 `br_open`。两件的挂载点是**代码常量**(`[[mount]]` 声明面工具侧尚未消费)⇒ `br-wa-fs-001` |
+| **`framework/{bdev-core,pci-core}`** | `7-02` §1(bdev 类形状)、`8-01` §1.3/§3(块设备子分类)、`1-03` §1(bdev-core 在清单里) | **ADR-0021**: bdev 与 cdev 并列的存储域第二条设备链(扇区 read/write/flush + 几何 + DMA/PIO 声明位); PCI(e) 是本刀**新增的域**(设计无条目)⇒ 通用机制在 `pci-core`、板级事实(ECAM/MMIO/INTx 起点)留 `platform`。`br_bdev_get` 是"FS 绑定块设备"的入口 |
+| **`third_party/uboot-mmc`** | `7-02` §1/§4/§5(bdev 形状、DMA/PIO 要能指出、ISR→bh→唤醒) | **ADR-0021**: u-boot `drivers/mmc/**` + `include/{mmc,sdhci}.h` 的移植(GPL-2.0+); 偏离 = 中断驱动(上游轮询)+ ADMA2/PIO 运行期可选 + **多卡静态实例表**(ADR-0022); flush 只做"等卡不忙"⇒ `br-wa-emmc-001` |
+| **`third_party/{uboot-fat,uboot-erofs}`** | `7-01` §1~§3(四层 ops/瞬态 inode)、`7-03` §1~§2(介质 FS) | **ADR-0022**: u-boot `fs/fat/**`(读写)与 `fs/erofs/**`(只读 + LZ4)的移植(GPL-2.0+); inode = **瞬态路径包装**(设计给介质 FS 的形状), 复用上游的路径风格 API ⇒ 上游函数逐一对得上; 两件**只能**是 `api_type = third_party`(源码许可 + "挂载晚于块设备 start 相"那条 init 边的工具链禁则)。EROFS 的写面填槽位返回 `-EROFS`(不是留空得 `-ENOTSUP`) |
 | **`io/uart-pl011`** | `1-03 §1`(M0 轮询 console → **M2 注册 cdev**)、`8-01` §6(驱动编写者契约)、§5(ioctl 编码) | v1 交付**注册 cdev + 轮询式会话**(`/dev/uart0` 可开/读/写/ioctl/poll + 严格独占); **不开 UART 中断**(bh 已在 ADR-0011 就位, 欠的是驱动侧还没用它做 RX 唤醒)⇒ `br-wa-io-001`。与 platform 的 `console_pl011.c` 是同一硬件的两种**设计内**形态(后者是 panic 通道, 不能注册设备) |
 | **`service/{trace,backtrace,hexdump,memleak,dump}`** | `1-03 §1`(v1.0 插件清单: `service/trace`)+ `5-01`(§1 trace / §2 bridge / §3 ramdump 捕获集 / §4 memleak) | `service/trace` 与清单同名; 另四件是本次补的调试服务(6-01 尚无 `TC-DBG-*` 组, 属回灌项); 调用点**不再经 APP** —— 调试域用例归 core 的 selftest pass(ADR-0010), `allow_edges` 现为空(ADR-0016 删掉最后一条, 见 `br-wa-boot-001`) |
 | **`tests/host/mem_test.c` + `make mem-test`** | `1-03` 的"host 平台插件: CI 秒级 + ASan 白捡" | 完整 host 平台插件未落地; 本原型先做到"内存实现编成宿主可执行跑算法压测"(无需交叉工具链/QEMU) |

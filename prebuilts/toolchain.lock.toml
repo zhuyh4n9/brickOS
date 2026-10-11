@@ -71,6 +71,61 @@ provenance = "Ubuntu 26.04 (resolute) universe 归档"
 license  = "Apache-2.0"
 why      = "BR-D4 备选 B(直出 ninja)预留 —— 只就位, 暂不接线"
 
+# ---------------------------------------------------------------- 镜像制作(宿主)
+# ADR-0022: eMMC 上的 FAT/EROFS 卷必须由**外部权威工具**造(自研 mkfs 与自研 reader
+# 互为镜像, 谁也证明不了谁)。于是把三件小工具纳进同一张锁表 —— 与 make/ninja 同一条
+# 纪律: 版本 + URL + sha256 钉死, 取件脚本拒绝没有 sha256 的条目。
+#
+# ★ 为什么这三件可以纳: 它们都是**用户态小工具**, 且体积可忽略(< 500 KB); 相比之下
+#   Arm 工具链 92 MB。它们与 make/ninja 同类 —— **动态链接宿主 glibc**, 所以是"钉住
+#   版本"而不是"与环境无关"(同 ADR-0002 §5-2 的代价, 不另开一笔)。
+# ★ 为什么不是"把镜像提交进仓库": 那样的字节无法重放(改一个测试文件就得重新生成 +
+#   重新提交二进制), 且 FAT32 的最小卷就是 32 MiB —— 版本库里不该有几十 MiB 的稀疏文件。
+#
+# 候选序(与交叉工具链同款, 见 tools/mk-fs-images.sh):
+#   prebuilts/toolchain/<into>/... → PATH 上的同名工具
+[[artifact]]
+id       = "dosfstools"
+version  = "4.2-1.2build1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/main/d/dosfstools/dosfstools_4.2-1.2build1_amd64.deb"
+filename = "dosfstools_4.2-1.2build1_amd64.deb"
+sha256   = "6b1b2bba6458ca4444cae467db7faff6fd2f350373a95be23333d76dd019c58f"
+into     = "dosfstools"
+strip    = 1
+provenance = "Ubuntu 26.04 (resolute) main 归档"
+license  = "GPL-3.0-or-later"
+why      = "mkfs.fat(造 FAT12/16/32 卷)与 fsck.fat(独立校验造出来的卷)"
+
+[[artifact]]
+id       = "erofs-utils"
+# ★ 为什么钉 1.8.10 而不是 resolute 的 1.9.4: 后者链接 `libcrypto.so.4`(OpenSSL 4),
+#   而常见宿主机只有 `libcrypto.so.3` —— 一个"造镜像的工具"不该再牵出一串宿主库依赖。
+#   1.8.10 只依赖宿主本就有的 liblz4/libuuid/libzstd, 且"缺省不压缩"与 `-zlz4` 都在。
+version  = "1.8.10-1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/universe/e/erofs-utils/erofs-utils_1.8.10-1_amd64.deb"
+filename = "erofs-utils_1.8.10-1_amd64.deb"
+sha256   = "9f5047bd59ddad3c809671c8115f383ef0ca4e82b3a3e03dccfaa8325850ba8d"
+into     = "erofs-utils"
+strip    = 1
+provenance = "Ubuntu universe 归档(1.8 系列; 选它的理由见上)"
+license  = "GPL-2.0-or-later / LGPL-2.1-or-later"
+why      = "mkfs.erofs(未压缩与 `-zlz4` 两种镜像)与 dump.erofs(结构回读)"
+
+[[artifact]]
+id       = "mtools"
+version  = "4.0.49-1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/main/m/mtools/mtools_4.0.49-1_amd64.deb"
+filename = "mtools_4.0.49-1_amd64.deb"
+sha256   = "28edc5a0eee3f74a15135ec90ae2dee79270931df1d0c6415ab736b7eed46ad3"
+into     = "mtools"
+strip    = 1
+provenance = "Ubuntu 26.04 (resolute) main 归档"
+license  = "GPL-3.0-or-later"
+why      = "mcopy/mmd(把测试用的文件与目录放进 FAT 卷; 不需要宿主机的 mount/loop 特权)"
+
 # ---------------------------------------------------------------- 落点(供 Makefile 读)
 # fetch-prebuilt.py 据本表生成 `prebuilts/toolchain/toolchain.mk`(路径由这里决定, 不让 Makefile 去猜
 # 发行包解出来的目录名)。Makefile 用 `-include prebuilts/toolchain/toolchain.mk`; 文件不存在 ⇒
@@ -78,7 +133,15 @@ why      = "BR-D4 备选 B(直出 ninja)预留 —— 只就位, 暂不接线"
 #
 # ⚠ 未纳入: **宿主编译器**。Arm GNU Toolchain 只产目标代码, 编不了宿主程序 ——
 #   而 tools/brickie/cxx/(L2 生成器)是宿主 C++。见 ADR-0002 §5-1 与 ADR-0003 §5-2。
+# ★ 路径为什么没有 `usr/` 前缀: `.deb` 的 `./usr/...` 前缀被 `strip = 1` 剥掉了一层
+#   (与 make/ninja 同款)⇒ 落点是 `<into>/sbin/...` 或 `<into>/bin/...`。
 [toolchain]
 make  = "make/bin/make"
 ninja = "ninja/bin/ninja"
 cross = "arm-gnu-toolchain-15.2.rel1/bin/aarch64-none-elf-"
+mkfs-fat   = "dosfstools/sbin/mkfs.fat"
+fsck-fat   = "dosfstools/sbin/fsck.fat"
+mkfs-erofs = "erofs-utils/bin/mkfs.erofs"
+dump-erofs = "erofs-utils/bin/dump.erofs"
+mcopy      = "mtools/bin/mcopy"
+mmd        = "mtools/bin/mmd"

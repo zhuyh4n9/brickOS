@@ -1,0 +1,61 @@
+# third_party/uboot-fat — u-boot FAT 移植(plugin_type = ability, subkind = fs)
+#
+# WORKAROUND(br-wa-tp-001): 本件全部源码是 u-boot `fs/fat/**`(GPL-2.0+)的移植/改写,
+#   按 `api_type = "third_party"` 目录级隔离(自带 LICENSE/NOTICE)。残余许可风险 ——
+#   静态链进同一镜像后整镜像在分发时仍构成 GPL 组合作品 —— 与 uboot-mmc 同源, 同一处登记。
+#
+# ★ 为什么本件**必须**是 third_party(不是二选一): 工具链禁 `native` 依赖 `third_party`
+#   (`rules.rs::api_type_edge_reason`), 而本件的挂载必须发生在 `third_party/uboot-mmc`
+#   的 start 相之后(块设备在那时才注册) ⇒ 那条顺序只能由
+#   `[[dep]] third_party/uboot-mmc kind = "init"` 表达。逐条账见 ADR-0022 D-1。
+schema = 1
+
+[plugin]
+name        = "third_party/uboot-fat"
+plugin_type = "ability"
+api_type    = "third_party"
+subkind     = "fs"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "u-boot FAT 移植(GPL-2.0+): FAT12/16/32 读写齐, 三卷 emmc0/1/2 挂 /fat12 /fat16 /fat32"
+license     = "GPL-2.0-or-later"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 80
+notes    = "静态 FAT 记账 + 扇区/簇缓冲; 运行期 inode 与目录流走 core 堆"
+
+[[mount]]
+path  = "/fat12"
+order = 2
+
+[[mount]]
+path  = "/fat16"
+order = 3
+
+[[mount]]
+path  = "/fat32"
+order = 4
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/bdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "third_party/uboot-mmc"
+range = ">=0.1.0"
+kind  = "init"
+
+[selftest]
+cases = 8
+
+[build]
+sources  = ["src/*.c"]

@@ -338,6 +338,270 @@ static br_bool case_once_and_name(void)
     return ok;
 }
 
+/* ------------------------------------------------------------------ 用例 ⑧–⑭:
+ * 介质类文件系统(第三方 FAT / EROFS 移植件)的端到端样例(ADR-0022)。
+ *
+ * ★ **只 include POSIX 头、只调 POSIX 面**(经 iface/posix 皮肤): 这一族的价值恰在于
+ *   "APP 眼里没有第三个文件系统" —— 它看见的只是 `/fat12`、`/fat16`、`/fat32`、`/assets`
+ *   四个挂载点上的普通 open/read/write/stat/opendir。挂载表、块设备、SDHCI、LZ4 解压
+ *   全在下面若干层, APP 一行都不知道。
+ * ★ 判据是**逐字节**的: 宿主用外部权威工具(mkfs.fat + mcopy / mkfs.erofs)把这些字节
+ *   放进卷里(build/emmc0..3.img, 见 tools/mk-fs-images.sh)—— 自研 mkfs 与自研 reader
+ *   互为镜像证明不了任何东西, 所以"读出来的字节 == 外部工具放进去的字节"是这一族的根判据。
+ * ★ 写面用例**自己收摊**(先 unlink 再建、用完 unlink/rmdir): 门禁可能多次启动同一镜像,
+ *   留垃圾会让下一次的目录断言漂移。
+ */
+
+/* 分块比对的缓冲: 512 B 是有意的 —— APP 线程栈是 4 KiB 级, 最大的被判据文件是 70000 B
+ * (EROFS 的 LZ4 压缩件), 不可能整个读进栈里。 */
+#define FS_CHUNK 512u
+static br_u8 s_fs_buf[FS_CHUNK];
+
+/* 期望字节生成式(id 与 tools/mk-fs-images.sh 的内容生成一一对应) */
+#define FSGEN_CONST   0   /* 常量字符 `ch` */
+#define FSGEN_ABCDEF  1   /* "ABCDEFGH" 无限重复(EROFS 的 LZ4 压缩件) */
+#define FSGEN_IDX     2   /* 第 i 字节 = i & 0xFF */
+#define FSGEN_PRNG    3   /* 与造镜像脚本同一个线性同余式(EROFS 的 raw.bin) */
+
+static br_u8 fs_gen(int gen, char ch, br_u64 i)
+{
+    switch (gen) {
+    case FSGEN_CONST:  return (br_u8)ch;
+    case FSGEN_ABCDEF: return (br_u8)("ABCDEFGH"[i % 8u]);
+    case FSGEN_IDX:    return (br_u8)(i & 0xFFu);
+    case FSGEN_PRNG:   return (br_u8)((((i * 1103515245ull) + 12345ull) >> 16) & 0xFFull);
+    default:           return 0u;
+    }
+}
+
+/* 读满 `len` 字节并逐字节比对; 还要求"恰好在此处 EOF"(再读一字节必须得 0)。 */
+static br_bool fs_check_read(const char *path, br_u64 len, int gen, char ch)
+{
+    const int fd = open(path, O_RDONLY);
+    if (fd < 0) {
+        br_log_info("[APPCONF]   (open %s 失败 errno=%d)", path, errno);
+        return BR_FALSE;
+    }
+
+    br_bool ok  = BR_TRUE;
+    br_u64  got = 0u;
+    while (got < len) {
+        const br_u64 left = len - got;
+        const size_t want = (left < (br_u64)FS_CHUNK) ? (size_t)left : (size_t)FS_CHUNK;
+        const ssize_t n = read(fd, s_fs_buf, want);
+        if (n <= 0) {
+            ok = BR_FALSE;
+            break;
+        }
+        for (ssize_t i = 0; i < n; i++) {
+            if (s_fs_buf[i] != fs_gen(gen, ch, got + (br_u64)i)) {
+                ok = BR_FALSE;
+            }
+        }
+        got += (br_u64)n;
+    }
+
+    if (ok == BR_TRUE) {
+        br_u8 tail = 0u;
+        if (read(fd, &tail, 1u) != 0) {   /* 文件应当恰好在 len 处结束 */
+            ok = BR_FALSE;
+        }
+    }
+    (void)close(fd);
+    return ok;
+}
+
+/* 逐字节比对一个常量串(不走生成式路径, 判据更直白: 出错时日志能看出差在哪)。 */
+static br_bool fs_check_exact(const char *path, const char *text)
+{
+    const size_t len = strlen(text);
+    const int    fd  = open(path, O_RDONLY);
+    if (fd < 0) {
+        return BR_FALSE;
+    }
+    size_t got = 0u;
+    br_bool ok = BR_TRUE;
+    while (got < len) {
+        const size_t  want = ((len - got) < (size_t)FS_CHUNK) ? (len - got) : (size_t)FS_CHUNK;
+        const ssize_t n    = read(fd, s_fs_buf, want);
+        if (n <= 0) { ok = BR_FALSE; break; }
+        for (ssize_t i = 0; i < n; i++) {
+            if (s_fs_buf[i] != (br_u8)text[got + (size_t)i]) { ok = BR_FALSE; }
+        }
+        got += (size_t)n;
+    }
+    if (ok == BR_TRUE) {
+        br_u8 tail = 0u;
+        if (read(fd, &tail, 1u) != 0) { ok = BR_FALSE; }
+    }
+    (void)close(fd);
+    return ok;
+}
+
+/* APP-FS-001: 四个挂载点都在, hello.txt 的类型/大小/内容逐字节正确(未压缩路径) */
+static br_bool case_fs_hello(void)
+{
+    static const struct { const char *path; const char *text; } t[] = {
+        { "/fat12/hello.txt",  "fat12 hello\n" },
+        { "/fat16/hello.txt",  "fat16 hello\n" },
+        { "/fat32/hello.txt",  "fat32 hello\n" },
+        { "/assets/hello.txt", "erofs hello\n" },
+    };
+    br_bool ok = BR_TRUE;
+    for (unsigned i = 0u; i < (sizeof(t) / sizeof(t[0])); i++) {
+        struct stat st;
+        if (stat(t[i].path, &st) != 0) { ok = BR_FALSE; continue; }
+        ok = ok && S_ISREG(st.st_mode);
+        ok = ok && (st.st_size == (off_t)strlen(t[i].text));
+        ok = ok && fs_check_exact(t[i].path, t[i].text);
+    }
+    return ok;
+}
+
+/* APP-FS-002: 各卷的 dir/a.bin 按生成式逐字节比对(跨块/大文件读) */
+static br_bool case_fs_binaries(void)
+{
+    br_bool ok = BR_TRUE;
+    ok = ok && fs_check_read("/fat12/dir/a.bin",  16u,    FSGEN_CONST, 'A');
+    ok = ok && fs_check_read("/fat16/dir/a.bin",  256u,   FSGEN_CONST, 'B');
+    ok = ok && fs_check_read("/fat32/dir/a.bin",  4096u,  FSGEN_CONST, 'C');
+    ok = ok && fs_check_read("/assets/dir/a.bin", 4096u,  FSGEN_IDX,   0);
+    ok = ok && fs_check_exact("/assets/dir/sub/deep.txt", "deep\n");
+    return ok;
+}
+
+/* APP-FS-003: FAT 写闭环(建 → 三段写 → fsync → 关 → 重开读回 → stat → 删) */
+static br_bool case_fs_write_roundtrip(void)
+{
+    const char *path = "/fat16/app-rw.txt";
+    const char *text = "brickOS fat roundtrip";
+
+    (void)unlink(path);
+
+    const int fd = open(path, O_CREAT | O_RDWR | O_TRUNC, 0644);
+    if (fd < 0) {
+        return BR_FALSE;
+    }
+
+    br_bool ok = (write(fd, "brickOS ", 8u) == 8);
+    ok = ok && (write(fd, "fat ", 4u) == 4);
+    ok = ok && (write(fd, "roundtrip", 9u) == 9);
+    ok = ok && (fsync(fd) == 0);
+    ok = ok && (close(fd) == 0);
+
+    struct stat st;
+    ok = ok && (stat(path, &st) == 0) && (st.st_size == (off_t)strlen(text));
+    ok = ok && fs_check_exact(path, text);
+
+    ok = ok && (unlink(path) == 0);
+    return ok;
+}
+
+/* APP-FS-004: FAT 目录面(mkdir → 在其中建文件 → opendir/readdir 看得见 → 收摊) */
+static br_bool case_fs_directory(void)
+{
+    const char *dir  = "/fat32/appdir";
+    const char *file = "/fat32/appdir/in.txt";
+
+    (void)unlink(file);
+    (void)rmdir(dir);
+
+    br_bool ok = (mkdir(dir, 0755) == 0);
+    const int fd = ok ? open(file, O_CREAT | O_WRONLY | O_TRUNC, 0644) : -1;
+    ok = ok && (fd >= 0);
+    if (fd >= 0) {
+        ok = ok && (write(fd, "in\n", 3u) == 3);
+        ok = ok && (close(fd) == 0);
+    }
+
+    DIR *d = opendir(dir);
+    ok = ok && (d != BR_NULL);
+    if (d != BR_NULL) {
+        br_bool seen_dot = BR_FALSE;
+        br_bool seen_dotdot = BR_FALSE;
+        br_bool seen_in = BR_FALSE;
+        struct dirent *e;
+        while ((e = readdir(d)) != BR_NULL) {
+            if (strcmp(e->d_name, ".") == 0)  { seen_dot = BR_TRUE; }
+            if (strcmp(e->d_name, "..") == 0) { seen_dotdot = BR_TRUE; }
+            if (strcmp(e->d_name, "in.txt") == 0) {
+                seen_in = BR_TRUE;
+                ok = ok && (e->d_type == DT_REG);
+            }
+        }
+        ok = ok && seen_dot && seen_dotdot && seen_in;
+        ok = ok && (closedir(d) == 0);
+    }
+
+    ok = ok && (unlink(file) == 0);
+    ok = ok && (rmdir(dir) == 0);
+    return ok;
+}
+
+/* APP-FS-005: FAT 改名 + 截断(改名后旧名不存在; 截断改 size 与内容) */
+static br_bool case_fs_rename_truncate(void)
+{
+    const char *old_path = "/fat12/app-ren.txt";
+    const char *new_path = "/fat12/app-ren2.txt";
+
+    (void)unlink(old_path);
+    (void)unlink(new_path);
+
+    const int fd = open(old_path, O_CREAT | O_RDWR | O_TRUNC, 0644);
+    if (fd < 0) {
+        return BR_FALSE;
+    }
+    br_bool ok = (write(fd, "0123456789", 10u) == 10);
+    ok = ok && (close(fd) == 0);
+
+    struct stat st;
+    ok = ok && (rename(old_path, new_path) == 0);
+    errno = 0;
+    ok = ok && (stat(old_path, &st) == -1) && (errno == ENOENT);
+    ok = ok && (stat(new_path, &st) == 0) && (st.st_size == 10);
+
+    ok = ok && (truncate(new_path, 4) == 0);
+    ok = ok && (stat(new_path, &st) == 0) && (st.st_size == 4);
+    ok = ok && fs_check_exact(new_path, "0123");
+
+    ok = ok && (unlink(new_path) == 0);
+    return ok;
+}
+
+/* APP-FS-006: EROFS 只读执法(写/建目录/删都必须是 EROFS, 而不是别的错) + LZ4 压缩读路径 */
+static br_bool case_fs_erofs_readonly_lz4(void)
+{
+    errno = 0;
+    const int wfd = open("/assets/hello.txt", O_WRONLY);
+    br_bool ok = (wfd == -1) && (errno == EROFS);
+    if (wfd >= 0) {
+        (void)close(wfd);
+    }
+
+    errno = 0;
+    ok = ok && (mkdir("/assets/appdir", 0755) == -1) && (errno == EROFS);
+
+    errno = 0;
+    ok = ok && (unlink("/assets/hello.txt") == -1) && (errno == EROFS);
+
+    /* 压缩路径: 70000 B 的 "ABCDEFGH" 重复(宿主用 mkfs.erofs -zlz4 造的压缩件) */
+    ok = ok && fs_check_read("/assets/comp/lz4.txt", 70000u, FSGEN_ABCDEF, 0);
+    /* 另一条压缩路径: 8192 B 近似随机(压不太动的那一类) */
+    ok = ok && fs_check_read("/assets/raw.bin", 8192u, FSGEN_PRNG, 0);
+    return ok;
+}
+
+/* APP-FS-007: VFAT 长文件名(宿主放的是 "long name file.txt", 短名是 LONGNA~1.TXT) */
+static br_bool case_fs_longname(void)
+{
+    const char *path = "/fat32/long name file.txt";
+    struct stat st;
+    br_bool ok = (stat(path, &st) == 0);
+    ok = ok && S_ISREG(st.st_mode) && (st.st_size == 4);
+    ok = ok && fs_check_exact(path, "lfn\n");
+    return ok;
+}
+
 /* ------------------------------------------------------------------ 入口 */
 
 static void app_pthread_conformance(void)
@@ -352,6 +616,41 @@ static void app_pthread_conformance(void)
     ap(case_errno_isolated(),  "APP-PT-005", "每线程 errno 隔离(两线程各写各的槽位)");
     ap(case_rwlock(),          "APP-PT-006", "rwlock: 读者并发(active_max>=2)、写者独占");
     ap(case_once_and_name(),   "APP-PT-007", "pthread_once 恰一次 + setname/getname_np");
+    br_log_info("[APPCONF] SUMMARY pass=%u fail=%u total=%u", s_app_pass, s_app_fail,
+                s_app_pass + s_app_fail);
+}
+
+/*
+ * 介质类文件系统一致性(ADR-0022)。与上面那套**共用**同一对计数器与同一条 SUMMARY 行 ——
+ * 于是门禁的 `[APPCONF] SUMMARY ... fail=0` 一句话覆盖两族用例, 而 tag 逐条点名又把
+ * "某一族被裁掉"这件事照旧判红。
+ *
+ * ★ 为什么本族落在 **start 相**(由 `hello_start` 直接调用)而不是 APP 线程里:
+ *   自检 pass 跑在"全部 start 之后、`br_sched_run()` 之前", 而 **timer 抢占在此之前就
+ *   已经生效**(ADR-0011 的 IRQ 出口换栈只看"有没有就绪任务", 不看 `br_sched_run()` 是否
+ *   被调用过)—— 实测: 第一版把本族放在 APP 线程里, 它立刻与 `[SELFTEST]` 并发, 于是
+ *   **两边同时访问同一块卡/同一个卷**: EROFS 侧读到 `bdev read 失败 lba=2 rc=-5`,
+ *   eMMC 侧两条用例各等满 2 s 超时(sdhci wait 超时/pending=0), APP 侧 FAT 写闭环也红。
+ *   放在 start 相就没有这个并发窗口: 此刻只有启动上下文一条控制流, 且四个卷都已挂好、
+ *   中断已开、块设备已注册 —— 本族需要的前提**全部成立**。
+ *   (这也把"FS 栈本代不保证多线程并发"这条 v1 边界如实暴露出来: vfs-core / fs/tmpfs /
+ *    两件移植件都没有卷级锁, 与"设备 ops 由驱动自锁"是两回事。)
+ *
+ * WORKAROUND(br-wa-test-001): `APP-FS-*` 与 `APP-PT-*` 一样是**自编号** —— 设计 `6-01`
+ * 的用例表里没有"APP 自己的样例"这一族。与其余各族的编号债同一处登记。
+ */
+static void app_fs_conformance(void)
+{
+    s_app_pass = 0u;
+    s_app_fail = 0u;
+    br_log_info("[APPCONF] ==== 介质类文件系统端到端(FAT12/16/32 + EROFS; 经 iface/posix) ====");
+    ap(case_fs_hello(),             "APP-FS-001", "四挂载点都在; hello.txt 类型/大小/内容逐字节正确");
+    ap(case_fs_binaries(),          "APP-FS-002", "各卷 dir/a.bin 按生成式逐字节比对(跨块读)");
+    ap(case_fs_write_roundtrip(),   "APP-FS-003", "FAT 写闭环: 建→三段写→fsync→重开读回→stat→删");
+    ap(case_fs_directory(),         "APP-FS-004", "FAT 目录面: mkdir→建文件→opendir/readdir 看得见→收摊");
+    ap(case_fs_rename_truncate(),   "APP-FS-005", "FAT 改名(旧名 ENOENT)+ truncate 改 size 与内容");
+    ap(case_fs_erofs_readonly_lz4(),"APP-FS-006", "EROFS 只读执法(EROFS)+ LZ4 压缩件逐字节读回");
+    ap(case_fs_longname(),          "APP-FS-007", "VFAT 长名 \"long name file.txt\" 可 stat/读");
     br_log_info("[APPCONF] SUMMARY pass=%u fail=%u total=%u", s_app_pass, s_app_fail,
                 s_app_pass + s_app_fail);
 }
@@ -416,6 +715,13 @@ int hello_start(void)
                 BR_PROTOTYPE_NAME, BR_VERSION_STRING);
     br_log_info("clock: %lu Hz (arch timer), %lu ticks/ms (exact integer conversion)",
                 br_clock_freq_hz(), br_clock_ticks_per_ms());
+
+    /*
+     * ★ 介质类 FS 的端到端样例在**这里**跑(而不是 APP 线程里): 此刻只有一条控制流,
+     *   不会与"start 之后立刻开始"的插件自检 pass 并发访问同一批卷/同一块卡。
+     *   理由与实测现象见 app_fs_conformance 的注释。
+     */
+    app_fs_conformance();
 
     pthread_t app = BR_NULL;
     const int rc = pthread_create(&app, BR_NULL, hello_mainloop, BR_NULL);

@@ -1,0 +1,80 @@
+# third_party/uboot-erofs — u-boot EROFS 移植(plugin_type = ability, subkind = fs)
+#
+# ============================ 第三方模块隔离(ADR-0021 D-3) ============================
+# 本插件的**全部源码**是 u-boot NXP 分支(`nxp-imx/uboot-imx`, branch `lf_v2026.04`,
+# commit `bb41975aeb4cbd153b49c9fd62da1d64cd65968d`)的 EROFS 只读文件系统
+# (`fs/erofs/**`)与 LZ4 解码器(`lib/lz4.c` + `include/u-boot/lz4.h`)的**移植/改写**。
+# 那些文件是 **GPL-2.0+**(`erofs_fs.h` 是 `GPL-2.0-only OR Apache-2.0`, `lz4.c` 是
+# `GPL 2.0+ OR BSD-2-Clause`)。因此:
+#   - 本插件(且**只有**本插件)声明 `api_type = "third_party"` /
+#     `license = "GPL-2.0-or-later"`; 来源逐文件列在 `NOTICE`, 全文在 `LICENSE.GPL-2.0`;
+#   - `framework/vfs-core`、`framework/bdev-core`、`platform/**` 保持 WTFPL, **不含** GPL 代码;
+#   - ⚠ 残余风险(与 uboot-mmc 同款, 如实记录): 静态链进同一镜像后, 整镜像在分发时
+#     仍构成 GPL 组合作品; "目录隔离"解决的是**代码归属清晰**, 不是许可传染。
+#     登记在 `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。
+# WORKAROUND(br-wa-tp-001): 上面这条残余许可风险(整镜像构成 GPL 组合作品)的登记点。
+# ====================================================================================
+#
+# 设计/行为依据(实现是移植, 但对接面按本项目契约):
+#   - `docs/7-storage/7-03-concrete-fs.md`(EROFS = 只读压缩 FS);
+#   - `framework/vfs-core/include/br/vfs/br_vfs.h`(四层 ops 契约; 本件的唯一权威);
+#   - `docs/decisions/0009-vfs-storage-stack.md`(SD-3: inode 瞬态 = 路径包装)。
+#
+# ★ 依赖面(方向都合法: third_party 消费者不受 native→third_party 禁则约束):
+#   - `framework/vfs-core`(init): 实现 `br_fs_ops`/`br_inode_ops`/`br_file_ops` 并
+#     `br_mount_register("/assets", ...)`;
+#   - `framework/bdev-core`(init): `br_bdev_get("emmc3")` 取块设备;
+#   - `third_party/uboot-mmc`(init): 它在本插件之前注册 `emmc3` —— 相位的先后由
+#     这条 init 边保证(本插件的挂载落在 start 相, 与它同相, 拓扑序在它之后)。
+#
+# ★ 为什么挂载在 `start` 相而不是 `core` 相
+#   与 `third_party/uboot-mmc` 同源的理由: 块设备是在**它的** start 相里注册的
+#   (中断驱动意味着 CORE 相等不到中断)。本插件只消费块设备, 所以"设备在不在"这件事
+#   只有到 start 相才有答案。`early_init`/`init` 因此都是空转。
+schema = 1
+
+[plugin]
+name        = "third_party/uboot-erofs"
+plugin_type = "ability"
+api_type    = "third_party"
+subkind     = "fs"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "u-boot EROFS 移植(GPL-2.0+): 只读, 未压缩 + LZ4 压缩块, emmc3 挂 /assets"
+license     = "GPL-2.0-or-later"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 16
+notes    = "超级块/映射/解压的静态缓冲(4 KiB 块缓冲 + LZ4 输出缓冲); 运行期 inode 与目录流走 core 堆"
+
+[[mount]]
+path  = "/assets"
+order = 5
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/bdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "third_party/uboot-mmc"
+range = ">=0.1.0"
+kind  = "init"
+
+[selftest]
+# ADR-0010: 表在场 = 本插件有自检。用例: TC-EROFS-001..008。
+cases = 8
+
+[build]
+# ★ 无 `includes`: 本件不抛对外头(不导出 API; 消费面是 vfs/bdev 的 native 面)。
+#   内部契约(`erofs_internal.h` / `erofs_compat.h` / `erofs_fs.h`)放 `src/`,
+#   不构成插件对外面。
+sources  = ["src/*.c"]

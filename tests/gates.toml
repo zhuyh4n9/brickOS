@@ -145,10 +145,15 @@ includes = ["core/include", "framework/file-table/include", "tests/host"]
 #   (判据仍各自独立: 宿主的判据是退出码, 目标的判据是 require/forbid/require_tags。)
 
 # ------------------------------------------------------------------ QEMU 门禁
-# smoke: 只看"启动 / MainLoop / 延时判据 / 中断心跳 / 三套一致性用例摘要"。
+# smoke: 只看"启动 / MainLoop / 延时判据 / 中断心跳 / 各套一致性用例摘要"。
+# ★ ADR-0022 把超时从 3 s 抬到 12 s: 本刀加了两件介质类 FS, 启动相要经真 SDHCI 读
+#   ~80 KiB(夹具里的 70000 B 压缩件 + 4096 B 平面件等), 而这些读**每次一个扇区**
+#   (驱动的最强满足口径: 单次 I/O 1 扇区 ≤ max_rw); 自检相因此从 ~0.2 s 变成 ~1.5 s。
+#   再加上 `tick=2 ` 这条判据本身要等两个 1 s 心跳 ⇒ 3 s 已不够(实测: 自检 SUMMARY
+#   正好落在 2.97 s, tick=2 永远赶不上)。
 [[gate]]
 name      = "smoke"
-timeout_s = 3
+timeout_s = 12
 log       = "build/logs/smoke.log"
 require   = [
   # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
@@ -174,6 +179,11 @@ require   = [
   # ★ ADR-0019: APP 侧的 POSIX 多线程样例(经 iface/posix 皮肤)。它证明"多线程在真镜像上
   #   真的跑过且判据全绿", 而不是只靠 runtime/posix 自己的自检。
   "\\[APPCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  # ★ ADR-0022: 两件**介质类文件系统**移植件的套件摘要(FAT12/16/32 三卷 + EROFS 只读镜像)。
+  #   它们与上面几条的分工: 这里是"卷挂上了且用例全绿"的**粗判据**, 逐条点名与
+  #   "外部权威工具造的字节读得对"这两件事由 `fat-test` / `erofs-test` 两关细判。
+  "\\[FATCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "\\[EROFCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
   # 延时自检的判据行("... us: ok"): 它证明"不早醒"这条性质**被测过且通过**,
   # 而不只是"没出现失败字样"。
@@ -193,11 +203,16 @@ forbid    = [
   "\\[BDEVCONF\\] FAIL",
   "\\[PCICONF\\] FAIL",
   "\\[APPCONF\\] FAIL",
+  "\\[FATCONF\\] FAIL",
+  "\\[EROFCONF\\] FAIL",
 ]
 require_tags = [
   # ADR-0019: 逐项点名 —— APP 的多线程用例被裁掉/没跑, 门禁即红。
   "APP-PT-001", "APP-PT-002", "APP-PT-003", "APP-PT-004",
   "APP-PT-005", "APP-PT-006", "APP-PT-007",
+  # ★ ADR-0022: APP 侧的介质类文件系统用例(经 iface/posix)逐项点名。
+  "APP-FS-001", "APP-FS-002", "APP-FS-003", "APP-FS-004",
+  "APP-FS-005", "APP-FS-006", "APP-FS-007",
   # ★ ADR-0021 D-2: PCIe 框架件逐条点名(裁掉用例也算红)。
   "TC-PCI-001", "TC-PCI-002", "TC-PCI-003", "TC-PCI-004",
   "TC-PCI-005", "TC-PCI-006", "TC-PCI-007", "TC-PCI-008",
@@ -289,14 +304,19 @@ argv = ["bash", "tools/check-workarounds.sh"]
 name = "check-build"
 argv = ["bash", "tools/check-build.sh"]
 
-# emmc-image: 造 eMMC 后备镜像(ADR-0021)。
+# fs-images: 造**四块**块设备后备镜像(ADR-0022)。
 # ★ 它同时列在 `[build].post` 里 ⇒ 每次 `brickie build`(以及 `brickie test` 的自动构建)
-#   之后、任何 QEMU 门禁之前, `build/emmc0.img` 一定在位。这解决的是"QEMU 不会自己创建
-#   块设备后备文件"这件工程事实; 脚本幂等(大小对就不重写)。
+#   之后、任何 QEMU 门禁之前, `build/emmc0..3.img` 一定在位。这解决两件事:
+#     ① 工程事实: QEMU 不会自己创建块设备后备文件;
+#     ② 判据来源: FAT/EROFS 卷必须由**外部权威工具**造(mkfs.fat / mkfs.erofs), 自研
+#        mkfs 与自研 reader 互为镜像证明不了任何东西。
+#   ★ 脚本**每次都重建**(不像旧的 emmc-image 那样幂等跳过): 卷里有文件系统的**活状态**,
+#     上一轮 QEMU 跑完写进去的东西必须消失, 否则 rw 用例的判据会被历史污染。
+#   ★ 工具候选序与交叉工具链同款: `prebuilts/toolchain/` → PATH(锁版本见 toolchain.lock.toml)。
 [[script]]
-name    = "emmc-image"
-argv    = ["bash", "tools/mk-emmc-image.sh", "build/emmc0.img", "8"]
-require = ["ok   eMMC 镜像"]
+name    = "fs-images"
+argv    = ["bash", "tools/mk-fs-images.sh", "build"]
+require = ["ok   fs images"]
 
 # sync-test: 同步原语的端到端门禁(线程 + 阻塞 + 超时, 在 QEMU 上)。
 # 依赖 F2 的调度框架与 F1 把 br_sync_selftest() 接到 APP 的 start 里;
@@ -449,20 +469,28 @@ require_tags = [
   "TC-IO-007", "TC-IO-008", "TC-IO-009", "TC-IO-010", "TC-IO-011", "TC-IO-012",
 ]
 
-# emmc-test: eMMC(SDHCI)驱动经 bdev 的端到端门禁(ADR-0021)。
-# 判据 = 识别成功 + bdev 就绪 + 两套框架摘要(PCI 枚举/分配、eMMC 往返)+ 8 条用例逐条点名。
-# 它同时证明: PCIe INTx 真的投递(ISR→bh→信号量)、ADMA2 与 PIO 两条数据通路都能写后读回。
-# 机器参数(platform 的 [build.target.qemu].extra)挂 `-device sdhci-pci` + `-device emmc`,
-# 后备镜像由构建后门禁 `emmc-image` 生成(见上)。
+# emmc-test: eMMC(SDHCI)驱动经 bdev 的端到端门禁(ADR-0021 / 多卡见 ADR-0022)。
+# 判据 = **四块卡**都被枚举并识别 + bdev 就绪 + 两套框架摘要(PCI 枚举/分配、eMMC 往返)
+#        + 8 条用例逐条点名。
+# 它同时证明: PCIe INTx 真的投递(ISR→bh→信号量)、ADMA2 与 PIO 两条数据通路都能写后读回、
+# 以及"多实例"这条改造(一块卡切 PIO 不影响另一块)。
+# 机器参数(platform 的 [build.target.qemu].extra)挂四个 `-device sdhci-pci` + 四块 emmc,
+# 后备镜像由构建后门禁 `fs-images` 生成(见上)。
 [[gate]]
 name      = "emmc-test"
-timeout_s = 20
+timeout_s = 30
 log       = "build/logs/emmc.log"
 require   = [
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
+  # 四个 PCI 端点都枚举到(设备号 3..6 ⇒ INTx swizzle D/A/B/C ⇒ virq 10/7/8/9, 互不撞线)
   "pci: 00:03.0 1b36:0007",
+  "pci: 00:04.0 1b36:0007",
+  "pci: 00:05.0 1b36:0007",
+  "pci: 00:06.0 1b36:0007",
   "uboot-mmc: eMMC ready",
   "uboot-mmc: /dev/emmc0 就绪",
+  "uboot-mmc: /dev/emmc3 就绪",
+  "uboot-mmc: 共接管 4 块 sdhci-pci 卡",
   "\\[PCICONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[EMMCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -475,6 +503,62 @@ forbid    = [
 require_tags = [
   "TC-EMMC-001", "TC-EMMC-002", "TC-EMMC-003", "TC-EMMC-004",
   "TC-EMMC-005", "TC-EMMC-006", "TC-EMMC-007", "TC-EMMC-008",
+]
+
+# fat-test: **第三方 FAT 移植件**(third_party/uboot-fat)的端到端门禁(ADR-0022)。
+# 判据 = 三卷都挂上 + `[FATCONF]` 摘要全绿 + 8 条用例逐条点名。
+# 它证明的是"真介质上的真 FAT 卷": 卷由宿主用 mkfs.fat + mcopy 造(外部权威工具),
+# 驱动读出来的字节要能逐字节对上宿主放进去的内容 —— 自研 mkfs 与自研 reader 互为镜像
+# 证明不了任何东西, 所以这一步必须由外部工具造字节。
+# 三卷刻意选 FAT12/FAT16/FAT32: 三者的**根目录形态与 FAT 表宽度**各不相同
+# (12/16 是固定根目录区、表项 1.5/2 字节; 32 是根目录簇链 + FSInfo)。
+[[gate]]
+name      = "fat-test"
+timeout_s = 30
+log       = "build/logs/fat.log"
+require   = [
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
+  "vfs: mount /fat12 ",
+  "vfs: mount /fat16 ",
+  "vfs: mount /fat32 ",
+  "uboot-fat: /fat12 就绪",
+  "uboot-fat: /fat16 就绪",
+  "uboot-fat: /fat32 就绪",
+  "\\[FATCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[FATCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+require_tags = [
+  "TC-FAT-001", "TC-FAT-002", "TC-FAT-003", "TC-FAT-004",
+  "TC-FAT-005", "TC-FAT-006", "TC-FAT-007", "TC-FAT-008",
+]
+
+# erofs-test: **第三方 EROFS 移植件**(third_party/uboot-erofs)的端到端门禁(ADR-0022)。
+# 判据 = /assets 挂上 + `[EROFCONF]` 摘要全绿 + 8 条用例逐条点名。
+# 它证明两条读路径都真的能读**外部工具造出来的**镜像:
+#   未压缩(FLAT_INLINE / FLAT_PLAIN: hello.txt、dir/a.bin、dir/sub/deep.txt)
+#   与压缩(**LZ4**: comp/lz4.txt 70000 B、raw.bin 8192 B)。
+[[gate]]
+name      = "erofs-test"
+timeout_s = 30
+log       = "build/logs/erofs.log"
+require   = [
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
+  "vfs: mount /assets ",
+  "uboot-erofs: /assets 就绪",
+  "\\[EROFCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[EROFCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+require_tags = [
+  "TC-EROFS-001", "TC-EROFS-002", "TC-EROFS-003", "TC-EROFS-004",
+  "TC-EROFS-005", "TC-EROFS-006", "TC-EROFS-007", "TC-EROFS-008",
 ]
 
 # posix-test: **runtime/posix 的 POSIX 面**端到端门禁(ADR-0014/0015)。
@@ -512,4 +596,4 @@ require_tags = [
 [build]
 # `brickie build` 成功后**自动**跑的短名单(与旧 Makefile 的 `all: … check-string` 同义)。
 # 放在脚本门禁里而不是编进编译流程, 是因为它是**判据**而不是构建步骤。
-post = ["check-string", "check-headers", "emmc-image"]
+post = ["check-string", "check-headers", "fs-images"]

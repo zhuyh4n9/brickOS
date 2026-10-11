@@ -37,14 +37,18 @@ subkind     = "io"
 lang        = "c"
 phase       = "core"
 version     = "0.1.0.0"
-summary     = "u-boot MMC 协议核心 + 通用 SDHCI 主机移植(GPL-2.0+): PCIe INTx 中断驱动, ADMA2/PIO 运行期可选, 经 bdev 注册为 emmc0"
+summary     = "u-boot MMC 协议核心 + 通用 SDHCI 主机移植(GPL-2.0+): PCIe INTx 中断驱动, ADMA2/PIO 运行期可选, 多卡(4 实例)经 bdev 注册为 emmc0..emmc3"
 license     = "GPL-2.0-or-later"
 sched_class = "SAFE_PREEMPT"
 
 [[res]]
 kind     = "ram"
-used_kib = 4
-notes    = "struct mmc(~1 KiB 含 ext_csd 512 B) + ADMA2 描述符表(1 KiB, 走 DMA 池) + 会话状态; 无动态分配(除 DMA 池的 br_dma_alloc)"
+# ★ ADR-0022 抬到 16(原 4): 主机层由"全局单例"改成**静态实例表**(每卡一份 {寄存器窗口,
+#   时钟, 宽度, 通路, 信号量, pending} + ADMA2 描述符表句柄)。按本平台能挂满的卡数
+#   (`BR_EMMC_MAX_DEVS == 4`, 受 4 根 INTx 线约束)封顶, 所以是**编译期确定的上界**,
+#   不是"随枚举数量增长"。
+used_kib = 16
+notes    = "4 × (struct sdhci + br_sem) + 4 × struct mmc(~1 KiB 含 ext_csd 512 B); ADMA2 描述符表(每卡 1 KiB)走 DMA 池, 不计入本项; 无动态分配(除 DMA 池的 br_dma_alloc)"
 # ★ 不声明 stack: 本驱动不创建线程 —— 全部 ops 跑在调用者线程上; ISR/bh 用的是 core 已有的
 #   中断栈与下半部上下文(ADR-0021 D-4)。
 

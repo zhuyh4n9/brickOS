@@ -123,7 +123,14 @@ def download(url: str, dest: Path, expect_sha: str, *, attempts: int = 60) -> bo
       * 分片**保留**, 用 HTTP Range 从它的大小接着下(服务器不支持 Range 则截断重来);
       * 只在**整份下完之后**才判 SHA256;
       * 校验不过**也不删** —— 留下供比对, 并提示用 `--force`(ADR-0002 §2-4)。
+
+    **首次取件必须先建目录**(踩过的坑): `prebuilts/toolchain/` 是**派生目录**、不进版本库,
+    所以一个全新 checkout 里它**根本不存在**; 而落点是 `<它>/.cache/<filename>` ——
+    不先 mkdir, `dest.open()` 每次都抛 FileNotFoundError, 被下面的 except 当成"网络中断"
+    吞掉, 于是 60 次重试各睡最多 15 s: 表现是"卡住十分钟然后报下载未完成"。
     """
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
     for attempt in range(1, attempts + 1):
         if dest.is_file():
             if expect_sha and sha256_of(dest) == expect_sha:

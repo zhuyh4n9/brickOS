@@ -260,8 +260,19 @@ linker_script = "src/link.ld"
 # `highmem=off`(ADR-0021 D-2)也是**硬前提, 不是优化**: 它把 PCIe ECAM 从
 # 0x40_1000_0000(超 4 GiB, 当前 MMU 表达不了)搬到 0x3f00_0000, 与 32 位 MMIO 窗口一起
 # 落进低 1 GiB 的 Device 背景映射 ⇒ 只需 region 声明, 零页表改动。
-# `extra` 里的三件是 eMMC 验证件(ADR-0021): 空 raw 后备镜像由构建后门禁 `emmc-image`
-# 生成(见 tests/gates.toml), sdhci-pci 挂一块 emmc —— 驱动缺席时它们只是"没被认领的设备"。
+# `extra` 里的**四块** sdhci-pci + emmc 是 eMMC/FAT/EROFS 的验证件(ADR-0021 / ADR-0022):
+# 后备镜像由构建后门禁 `fs-images` 生成(见 tests/gates.toml 与 tools/mk-fs-images.sh),
+# 驱动缺席时它们只是"没被认领的设备"。四块卡的分工:
+#   emmc0 = 2 MiB  FAT12 卷 → 挂 /fat12
+#   emmc1 = 16 MiB FAT16 卷 → 挂 /fat16
+#   emmc2 = 32 MiB FAT32 卷 → 挂 /fat32
+#   emmc3 = 16 MiB EROFS 镜像 + 卡尾 512 KiB 设备级擦写区 → 挂 /assets
+#
+# ★ 为什么恰好是 4 块(而不是"想加就加"): 一台 `sdhci-pci` 只挂一张卡, 而 INTx 线的
+#   swizzle 是 `(pin - 1 + slot) % 4` —— 平台上只接了 **4** 根 INTx(SPI 3..6 = virq 7..10),
+#   且 core 的 IRQ 框架规定"每根物理线恰一属主"(INV-A, 无共享线)⇒ slot 3/4/5/6 恰好
+#   把 A/B/C/D 用满; 再加一块(slot 7)就会与 slot 3 撞线, 注册必失败。
+#   这条约束写在 ADR-0022, 也是 `BR_EMMC_MAX_DEVS == 4` 的来由。
 [build.target.qemu]
 binary  = "qemu-system-aarch64"
 machine = "virt,gic-version=3,highmem=off"
@@ -270,6 +281,15 @@ memory  = "128M"
 extra   = [
   "-nographic",
   "-drive", "if=none,id=emmc0,format=raw,file=build/emmc0.img",
+  "-drive", "if=none,id=emmc1,format=raw,file=build/emmc1.img",
+  "-drive", "if=none,id=emmc2,format=raw,file=build/emmc2.img",
+  "-drive", "if=none,id=emmc3,format=raw,file=build/emmc3.img",
   "-device", "sdhci-pci,addr=3",
   "-device", "emmc,drive=emmc0",
+  "-device", "sdhci-pci,addr=4",
+  "-device", "emmc,drive=emmc1",
+  "-device", "sdhci-pci,addr=5",
+  "-device", "emmc,drive=emmc2",
+  "-device", "sdhci-pci,addr=6",
+  "-device", "emmc,drive=emmc3",
 ]

@@ -70,10 +70,21 @@ int br_mmc_flush(br_mmc_t *m);
 #define BR_MMC_PATH_DMA 0u
 #define BR_MMC_PATH_PIO 1u
 
-/* 探测 + 复位 + 上电 + 中断就绪(幂等)。base = BAR0 映射后的寄存器窗口。 */
-int  br_sdhci_probe(br_uintptr_t base, br_u32 intx_virq);
-void br_sdhci_set_path(br_u32 path);      /* BR_MMC_PATH_DMA / _PIO */
-br_u32 br_sdhci_get_path(void);
+/*
+ * SDHCI 主机**实例**(不透明)。ADR-0022: 一台 `sdhci-pci` 只挂一张卡, 而本刀要三卷 FAT
+ * + 一卷 EROFS ⇒ 主机层必须从"全局单例"改成"N 个实例"。实例的句柄就是协议核心
+ * `br_mmc_init(m, ops, host)` 的 `host` —— `br_mmc_host_ops_t` 本来就带这个参数, 所以
+ * 协议核心一行都不用改。
+ * 每个实例各有一份 {寄存器窗口, 时钟, 总线宽度, 通路, 信号量, pending 位} —— 这正是不
+ * 能再用静态单例的原因: 四块卡会互相踩时钟与中断状态。
+ */
+typedef struct br_sdhci br_sdhci_t;
+
+/* 探测 + 复位 + 上电 + 中断就绪(幂等: 同一 base 重复探测交回同一实例)。
+ * base = BAR0 映射后的寄存器窗口; 成功时 `*out` 非空。 */
+int  br_sdhci_probe(br_uintptr_t base, br_u32 intx_virq, br_sdhci_t **out);
+void br_sdhci_set_path(br_sdhci_t *h, br_u32 path);      /* BR_MMC_PATH_DMA / _PIO */
+br_u32 br_sdhci_get_path(const br_sdhci_t *h);
 const br_mmc_host_ops_t *br_sdhci_host_ops(void);   /* 交给协议核心的主机 ops 表 */
 /* 本驱动策略: 传输 < 阈值(扇区)或缓冲未 4 字节对齐 ⇒ 即使选 DMA 也落 PIO(兜底)。 */
 #define BR_SDHCI_PIO_THRESHOLD_SECTORS 4u
@@ -83,7 +94,26 @@ const br_mmc_host_ops_t *br_sdhci_host_ops(void);   /* 交给协议核心的主�
 
 /* ==================================================================== 器件契约(私有) */
 
+/* 本插件最多同时驱动的卡数(= `sdhci-pci` 端点数上界)。取值来自**平台事实**而不是拍脑袋:
+ * QEMU virt 的 GPEX 只把 4 根 INTx 线接到 GIC(SPI 3..6), 而 core 的 IRQ 框架规定
+ * "每根物理线恰一属主"(`irq_core.c` INV-A)⇒ 第 5 块卡的 INTx 会与第 1 块撞线而注册失败。
+ * 所以 4 是本平台**能挂满**的卡数。 */
+#define BR_EMMC_MAX_DEVS     4u
+
+/* 设备名形如 `emmc<d>`(dev-core 命名规则 [a-z][a-z0-9]*, 见 7-02 §1)。 */
 #define BR_EMMC_DEV_NAME     "emmc0"
+#define BR_EMMC_NAME_MAX     8u
+
+/*
+ * 设备级用例的**擦写区**(ADR-0022): 四块卡各有用途(0/1/2 = FAT12/16/32 卷, 3 = EROFS),
+ * FAT 卷被文件系统占满, 而 EROFS 是只读的 —— 它的镜像只占卡首(实测 ≤ 1 MiB), 卡尾
+ * 留给"写特征模式再读回"的设备级用例。**不与任何文件系统的数据区重叠**这条性质由
+ * `tools/mk-fs-images.sh` 断言(EROFS 镜像 > 1 MiB 就直接失败), 不是靠约定。
+ */
+#define BR_EMMC_ASSETS_DEV        "emmc3"
+#define BR_EMMC_SCRATCH_LBA       4096u    /* 2 MiB 起 */
+#define BR_EMMC_SCRATCH_SECTORS   1024u    /* 512 KiB 擦写区(2 MiB..2.5 MiB) */
+
 #define BR_EMMC_IOC_MAGIC    'e'
 #define BR_EMMC_IOC_GET_INFO 0u
 #define BR_EMMC_IOC_SET_PATH 1u

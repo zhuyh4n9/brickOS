@@ -1,0 +1,94 @@
+third_party/uboot-erofs — 第三方来源与许可说明
+==============================================
+
+本目录下的源码是 **u-boot(NXP 下游分支)EROFS 只读文件系统 + LZ4 解码器**
+的移植/改写。
+
+来源
+----
+  仓库    : https://github.com/nxp-imx/uboot-imx
+  分支    : lf_v2026.04
+  commit  : bb41975aeb4cbd153b49c9fd62da1d64cd65968d  (2026-09-03)
+
+逐文件对照(源 → 本目录)
+------------------------
+  fs/erofs/super.c        (108 行, GPL-2.0+)
+      → src/erofs_super.c       超级块解析 / 特性位校验 / 布局兼容性
+  fs/erofs/namei.c        (266 行, GPL-2.0+)
+      → src/erofs_namei.c       inode 解析(COMPACT/EXTENDED)+ 目录块内查找 + 路径走查
+  fs/erofs/data.c         (359 行, GPL-2.0+)
+      → src/erofs_data.c        平面/chunk 映射、读路径、`erofs_pread()`
+  fs/erofs/zmap.c         (698 行, GPL-2.0+)
+      → src/erofs_zmap.c        压缩映射迭代(紧凑/非紧凑索引、big pcluster、lookbehind)
+  fs/erofs/decompress.c   (181 行, GPL-2.0+)
+      → src/erofs_decompress.c  解压分派 + LZ4 分支(INTERLACED/SHIFTED 也在此)
+  fs/erofs/internal.h     (397 行, GPL-2.0+)
+      → src/erofs_internal.h    内部契约(改写: 裁字段、换类型、去 list_head)
+  fs/erofs/erofs_fs.h     (466 行, **GPL-2.0-only OR Apache-2.0**)
+      → src/erofs_fs.h          on-disk 格式(改名/裁剪后保留; SPDX 与版权行原样保留)
+  fs/erofs/fs.c           (273 行, GPL-2.0+)
+      → src/erofs_vfs.c         ①块层 shim(u-boot 的 blk_desc/fs_devread → br_bdev_ops)
+                                ②VFS 对接(四层 ops)+ 生命周期钩子
+                                (上游 fs.c 的两半在本项目里都归"与外界对接", 合为一件)
+  lib/lz4.c               (546 行, **GPL 2.0+ OR BSD-2-Clause**, Copyright 2011-2016 Yann Collet)
+  include/u-boot/lz4.h    (85 行, GPL-2.0+, Copyright 2019 Google LLC / 2025 NXP)
+      → src/erofs_decompress.c   `LZ4_decompress_safe` / `LZ4_decompress_safe_partial`
+                                 (整段搬入, 收成 static; BSD 2-Clause 全文保留在文件头)
+  fs/erofs/Kconfig + Makefile
+      → plugin.toml / src/      构建与特性声明(换成 brickOS 的插件形态)
+
+**未移植**(逐条理由)
+--------------------
+  fs/erofs/xattr.c                : 本件的 VFS 面没有 xattr(xattr 的**长度**仍被算进去,
+                                    用来定位 inline 数据 —— `erofs_xattr_ibody_size()`)。
+  fs/erofs/decompress.c 的 DEFLATE : 要一个 zlib(u-boot 的 `FS_EROFS_ZIP_DEFLATE`
+                                    默认 N)。本插件声明"未压缩 + LZ4"(用户明确要求);
+                                    非 LZ4 算法在运行期分派处返回 -ENOTSUP。
+  fs/erofs 的多设备(extra devices) : 本件一个卷(`emmc3`)⇒ 挂载期发现 `extra_devices != 0`
+                                    就 -ENOTSUP(而不是装作没看见)。
+  fs/erofs/erofs_fs.h 的 xattr 结构/枚举: 没有读者, 裁掉; on-disk 布局自检改用
+                                    `_Static_assert` 保留(等价证据, 不生成代码)。
+  其余 u-boot 依赖                : `linux/compat.h`、`linux/{stat,bug,err,printk,log2}.h`、
+                                    `<asm/unaligned.h>`、`<inttypes.h>`、u-boot 的
+                                    `blk-uclass`/`fs_internal.h`/DM —— 全部换成
+                                    `src/erofs_compat.h` 的最小接地。
+
+改写要点(相对上游的**有意偏离**)
+--------------------------------
+  1. **没有 libc / 没有 u-boot**: 类型与工具宏在 `src/erofs_compat.h` 里接地;
+     `malloc/calloc/realloc/free` → `br_malloc/br_calloc/br_realloc/br_free`;
+     `printf/pr_err/pr_info/pr_debug` → `br_log_error/info/debug`;
+     `strlen/strcmp/strnlen/strchr` 自己写(`static inline` + `uboot_erofs_` 前缀, 再用宏
+     把上游的裸名字接过来 —— 移植代码因此**一行都不用改**);
+     `memcpy/memset/memcmp/memmove` 用 core 的实现(有原型, 无 libc)。
+  2. **`IS_ENABLED(CONFIG_*)` 全部拆掉**: 解压算法改成 `z_erofs_decompress()` 里的
+     **运行期**分派(LZ4 支持, 其余 -ENOTSUP)。
+  3. **栈纪律**: 上游在 `erofs_namei()` 里有 `char buf[4096]`, 在
+     `erofs_read_raw_data()`/`z_erofs_read_data()` 里有内嵌 4 KiB `mpage` 的
+     `struct erofs_map_blocks` —— 内核对 APP 线程的栈是 4 KiB 量级, 这些**全部提到文件域
+     静态**(共享 scratch + `s_map`)。代价与处理见 `src/erofs_internal.h` 与
+     `src/erofs_zmap.c` 的"偏离 1"(索引块缓存的判据从 `map->index` 改挂到录制器上)。
+  4. **块层换成 bdev**: `fs_devread(blk_desc, partition, ...)` → `br_bdev_ops_t`;
+     EROFS 内部按**字节偏移**寻址, bdev 按扇区 ⇒ 逐扇区下发, 并**必须**把整扇区读进
+     中转缓冲再拷出需要的长度(直接交给设备会越界写 480 字节 —— 这是实测踩到的坑)。
+  5. **出口是 VFS 契约**: `br_fs_ops.mount` 产出根 inode; 每个 `lookup` 用 `br_malloc`
+     造**瞬态路径包装**(设计 SD-3), `free_inode` 必须 `br_free`; 只读的名字空间变更
+     槽位**全部填上**但一律 `-EROFS`(比空槽位的 -ENOTSUP 更准)。
+  6. **`DBG_BUGON` 不再是停机**: 上游 `BUG_ON` 会带走整个内核。读路径上的"不可能发生"
+     改成"打印 + 由调用方的 -EIO 收敛"(坏镜像不该打死设备)。
+  7. `EFSCORRUPTED`(内核 EUCLEAN=117) → `BR_EIO`; `EOPNOTSUPP` → `BR_ENOTSUP`
+     (本仓库错误码表没有前者的编号)。
+  8. LZ4 的 `LZ4_decompress_safe*()` 收成 `static`(上游是 lib 级全局符号);
+     本插件不导出任何符号, 镜像的符号空间里只该有 `uboot_erofs_*` 那几个钩子。
+
+许可
+----
+  上游文件除两处外均标 `SPDX-License-Identifier: GPL-2.0+`(即 GPL-2.0 或更新版本):
+    - `fs/erofs/erofs_fs.h` : **GPL-2.0-only OR Apache-2.0**
+                              (Copyright (C) 2017-2018 HUAWEI, Inc.; 2021 Alibaba Cloud)
+    - `lib/lz4.c`           : **GPL 2.0+ OR BSD-2-Clause**
+                              (Copyright (C) 2011-2016, Yann Collet; BSD 全文随源码保留)
+  本移植件统一以 **GPL-2.0-or-later** 分发(全文见同目录 `LICENSE.GPL-2.0`)。
+  本目录与 `third_party/uboot-mmc` 是整个 brickOS 原型树内的 GPL 代码;
+  `framework/**`、`platform/**` 等保持 WTFPL。残余风险(静态链接后整镜像构成 GPL
+  组合作品)登记在 `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。

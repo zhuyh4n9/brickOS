@@ -567,7 +567,16 @@ BR_NORETURN void br_plugin_manager_run(void)
     /* ---- ⑦ 自检 pass(START 之后、调度器接管之前; ADR-0010) ----
      * 为什么必须在这里: 此刻 timer 已 armed、中断已开、设备已注册、挂载已就位 ——
      * 现有全部一致性套件的前提都成立; 而 `br_sched_run()` 一旦接管, 控制流就再也
-     * 回不到"单线程顺序跑测试"的形态。 */
+     * 回不到"单线程顺序跑测试"的形态。
+     *
+     * WORKAROUND(br-wa-boot-002): "调度器接管之前"**不等于**"单线程" —— timer 抢占在
+     * `br_sched_run()` 之前就已生效(ADR-0011 的 IRQ 出口换栈只看"有没有就绪任务"),
+     * 所以**任何一个在 start 相建了线程的插件**(app/hello 就是)都会让那个线程从这一刻起
+     * 与本自检 pass 并发。ADR-0022 真的踩到了: 两边同时访问同一批 eMMC 卡/同一个卷,
+     * 症状是 EROFS 读 EIO、SDHCI 命令等满超时、FAT 写闭环红。当时的处置是把
+     * "碰设备的 APP 用例"搬回 start 相(见 `app/hello/src/main.c`), **没有**改这里 ——
+     * 正确的退出条件是给相位机补一条"自检 pass 期间不允许抢占"的约束(或把自检 pass
+     * 挪到 `br_sched_run()` 之后、由调度器驱动的形态), 那是相位模型的变更, 不在本刀。 */
     br_plugin_manager_selftest();
 
     /* ---- ⑧ 调度器: 注册了就交给它; 没注册 ⇒ 最后一个 start() 本该占住 CPU ---- */
