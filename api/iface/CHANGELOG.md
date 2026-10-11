@@ -134,3 +134,19 @@
 ## iface/min#min v0.1.0.0 (compat_gen=0)
 - hash: sha256:b19825c94836048a12d481d508f525d8c0b76f072ff044f4d7659f5f87a2cfa1
 - 变更: 首次发布(建档)
+
+## framework/bdev-core#bdev v0.1.0.0 (compat_gen=0)
+- hash: sha256:f195b79af9d3a14797bd05417827b47684d8ab932193f0e1f0cf21c3822f39c3
+- 变更: 首次发布(建档)
+
+## platform/qemu-aarch64#pci v0.1.0.0 (compat_gen=0)
+- hash: sha256:72bb203d912658ac5352460061b1ab35069d8801bd7830b4daca7b48d4a50972
+- 变更: 首次发布(建档)
+
+## framework/pci-core#pci v0.1.0.0 (compat_gen=0)
+- hash: sha256:70a388148c492ce7df3eaea8781d9eb0be6cd0f614ae07732d6960ab84c3ccd5
+- 变更: 首次发布(建档)
+
+## platform/qemu-aarch64#pci-host v0.1.0.0 (compat_gen=0)
+- hash: sha256:5d0cfc218c1365a114da4683102957599a6efdac8f1b693dbcef465b93581e2a
+- 变更: 首次发布(建档)

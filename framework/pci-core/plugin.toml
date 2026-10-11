@@ -1,0 +1,112 @@
+# framework/pci-core — 通用 PCI(e) 机制(plugin_type = ability, subkind = framework)
+#
+# 设计出处: **无设计文档条目** —— PCI 是本刀新增的域。裁定见
+# `docs/decisions/0021-bdev-pci-emmc.md` D-2(板级事实留 platform、通用机制在本件、
+# 机器参数 `highmem=off`)与 D-4(INTx 走中断)。
+#
+# ★ 依赖面一条(刻意的方向):
+#   - `platform/qemu-aarch64`(**init**): ECAM 基址 / MMIO 窗口 / 总线范围 / INTx 起始 virq
+#     是**目标事实**, 归 platform(`br_plat_pci_host`); 本件只消费它。依赖方向表允许
+#     `ability → platform`。退出条件(多平台 / core 的 bus 服务出现)见 ADR-0021 §4。
+#
+# ★ 为什么不做成 platform 的一部分: 枚举/BAR 分配/设备表是**机制**, 换任何一台有
+#   PCIe 的板子都成立; 只有"窗口在哪"随板子变。这条边界就是本插件的存在理由。
+schema = 1
+
+[plugin]
+name        = "framework/pci-core"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "framework"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "通用 PCI(e): ECAM 配置空间访问 + 总线枚举 + BAR 尺寸探测/分配 + 命令寄存器(MEM/BUS_MASTER) + INTx swizzle + 设备表"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "设备表 8 条(每条 ~88 B: 身份 + 6 对 BAR 基址/尺寸 + INTx); 无动态分配"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u8        = "uint8_t"
+br_u16       = "uint16_t"
+br_u32       = "uint32_t"
+br_uintptr_t = "uintptr_t"
+
+# ---- 结构依赖 ----
+[[dep]]
+name  = "platform/qemu-aarch64"
+range = ">=0.1.0"
+kind  = "init"
+
+# ---- 导出面 ----
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "pci"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:70a388148c492ce7df3eaea8781d9eb0be6cd0f614ae07732d6960ab84c3ccd5"
+status       = "experimental"
+
+[[export.entries]]
+kind = "macro"
+name = "BR_PCI_MAX_DEVS"
+value = "8"
+[[export.entries]]
+kind = "macro"
+name = "BR_PCI_MAX_BARS"
+value = "6"
+[[export.entries]]
+kind = "macro"
+name = "BR_PCI_CLASS_SDHCI"
+value = "0x0805"
+
+[[export.entries]]
+kind = "type"
+name = "br_pci_dev_t"
+layout = "# {vendor, device, class_code, revision, bus, dev, fn, intx_pin, _pad, intx_virq, bar[6], bar_size[6]}"
+
+[[export.entries]]
+kind = "func"
+name = "br_pci_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_pci_dev_count"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_pci_dev_at"
+sig  = "const br_pci_dev_t* (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_pci_find"
+sig  = "const br_pci_dev_t* (br_u16, br_u16)"
+[[export.entries]]
+kind = "func"
+name = "br_pci_cfg_read32"
+sig  = "int (br_u8, br_u8, br_u8, br_u8, br_u32*)"
+[[export.entries]]
+kind = "func"
+name = "br_pci_cfg_write32"
+sig  = "int (br_u8, br_u8, br_u8, br_u8, br_u32)"
+
+[selftest]
+# ADR-0010: 表在场 = 本插件有自检。用例: TC-PCI-001..008。
+cases = 8
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

@@ -132,6 +132,57 @@ static const br_irq_binding_t s_board_irq[BR_IRQ_BOARD_NR] = {
         .dispatch = BR_IRQ_DISPATCH_BH,
         .rsv      = {0u, 0u, 0u},
     },
+    /*
+     * PCIe INTx A..D(INTID 35..38; ADR-0021)。
+     *   - 触发 = **电平**(QEMU 的 PCIe INTx 在 GIC 侧是 LEVEL_HIGH)⇒ 设备侧必须清源;
+     *   - 分发 = **BH**(设计 `7-02` §5: ISR 只做最少, 传输完成/错误在 bh 里交给等待线程);
+     *   - prio = 0xB0(UART 0xA0 与 SGI 0xC0 之间; 存储完成不该压过 timer/串口);
+     *   - 未注册 ISR 时它们只是"绑好但没人用"的线(与 UART0 同款)。
+     */
+    [BR_IRQ_PCIE_INTX_A] = {
+        .virq     = BR_IRQ_PCIE_INTX_A,
+        .pic_id   = 0u,
+        .flags    = 0u,
+        .hwirq    = 35u,
+        .dom_id   = -1,
+        .prio     = 0xB0u,
+        .trigger  = BR_IRQ_TRIG_LEVEL_HIGH,
+        .dispatch = BR_IRQ_DISPATCH_BH,
+        .rsv      = {0u, 0u, 0u},
+    },
+    [BR_IRQ_PCIE_INTX_B] = {
+        .virq     = BR_IRQ_PCIE_INTX_B,
+        .pic_id   = 0u,
+        .flags    = 0u,
+        .hwirq    = 36u,
+        .dom_id   = -1,
+        .prio     = 0xB0u,
+        .trigger  = BR_IRQ_TRIG_LEVEL_HIGH,
+        .dispatch = BR_IRQ_DISPATCH_BH,
+        .rsv      = {0u, 0u, 0u},
+    },
+    [BR_IRQ_PCIE_INTX_C] = {
+        .virq     = BR_IRQ_PCIE_INTX_C,
+        .pic_id   = 0u,
+        .flags    = 0u,
+        .hwirq    = 37u,
+        .dom_id   = -1,
+        .prio     = 0xB0u,
+        .trigger  = BR_IRQ_TRIG_LEVEL_HIGH,
+        .dispatch = BR_IRQ_DISPATCH_BH,
+        .rsv      = {0u, 0u, 0u},
+    },
+    [BR_IRQ_PCIE_INTX_D] = {
+        .virq     = BR_IRQ_PCIE_INTX_D,
+        .pic_id   = 0u,
+        .flags    = 0u,
+        .hwirq    = 38u,
+        .dom_id   = -1,
+        .prio     = 0xB0u,
+        .trigger  = BR_IRQ_TRIG_LEVEL_HIGH,
+        .dispatch = BR_IRQ_DISPATCH_BH,
+        .rsv      = {0u, 0u, 0u},
+    },
 };
 
 /* 表长必须与 br/board_irq.h 的 BR_IRQ_BOARD_NR 一致: 表不能静默漂移 */

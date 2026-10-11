@@ -35,6 +35,8 @@
 #define BR_GICD_ISACTIVER   0x0300u  /* GICD_ISACTIVER<n>  Set-Active              */
 #define BR_GICD_IPRIORITYR  0x0400u  /* GICD_IPRIORITYR    Priority(**字节**寻址) */
 #define BR_GICD_ICFGR       0x0C00u  /* GICD_ICFGR<n>      Configuration(2 位/线) */
+#define BR_GICD_IGROUPR     0x0080u  /* GICD_IGROUPR<n>    Group(1 位/线; SPI 段) */
+#define BR_GICD_IGRPMODR    0x0D00u  /* GICD_IGRPMODR<n>   Group1 安全/非安全划分 */
 #define BR_GICD_IROUTER     0x6000u  /* GICD_IROUTER<n>    Routing(8 B/SPI, ARE 下有效) */
 
 #define BR_GICD_CTLR_ENABLE_GRP1NS  (1u << 1)   /* EnableGrp1NS: 使能 Group1 非安全 */
@@ -347,6 +349,21 @@ static int gicv3_init(br_pic_t *pic)
     br_gic_mmio_write32(pic->gicr_sgi, BR_GICR_IGRPMODR0, 0u);
     br_gic_mmio_write32(pic->gicr_sgi, BR_GICR_ICFGR0, 0u);
     br_gic_mmio_write32(pic->gicr_sgi, BR_GICR_ICFGR1, 0u);
+
+    /*
+     * ---- 步 5b: SPI 段(INTID 32+)也必须归 Group1NS ----
+     * ★ 这是与 IGROUPR0 **同一个坑的另一半**: GICD_IGROUPR 的复位值是 0(Group0),
+     *   而本核只放行 Group1(GICD_CTLR.EnableGrp1NS + ICC_IGRPEN1)= 1)⇒ **任何 SPI
+     *   都不会被投递**。原型此前没有真正会发中断的 SPI 源(timer 是 PPI, UART 只被
+     *   绑定/回读而不产生中断), 所以这个缺口一直没被踩到 —— eMMC 走 PCIe INTx
+     *   (SPI 38)是第一个真 SPI 消费者, 实测"硬件状态位置了、handler 一次没进"。
+     * GICD_IGROUPR/IGRPMODR 每 32 条 INTID 一个 32 位寄存器; n=0 是私有线(由 GICR 管),
+     * 故从 n=1 起按 nr_irq 覆盖(超实现范围的写是 RAZ/WI)。
+     */
+    for (br_u32 n = 1u; n < (pic->nr_irq / 32u); n++) {
+        br_gic_mmio_write32(pic->gicd_base, BR_GICD_IGROUPR + n * 4u, 0xFFFFFFFFu);
+        br_gic_mmio_write32(pic->gicd_base, BR_GICD_IGRPMODR + n * 4u, 0u);
+    }
     br_gic_dsb_sy();
 
     /* ---- 步 6: ICC_PMR_EL1 = 0xFF(放行全部可实现优先级)----

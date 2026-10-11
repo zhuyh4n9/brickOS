@@ -1,0 +1,67 @@
+# brickie:generated
+# api/iface 快照 api/iface/framework/bdev-core/bdev.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "framework/bdev-core#bdev"
+provider = "framework/bdev-core"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:f195b79af9d3a14797bd05417827b47684d8ab932193f0e1f0cf21c3822f39c3"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "type"
+name = "br_bdev_geom_t"
+layout = "# {sector_size, n_sectors, max_rw, align, flags}"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_bdev_ops_t"
+layout = "# {read, write, flush, geometry, ioctl, suspend, resume}"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_BDEV_F_READONLY"
+value = "0x0001u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_BDEV_F_STACKED"
+value = "0x0002u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_BDEV_F_DMA"
+value = "0x0004u"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_BDEV_F_PIO"
+value = "0x0008u"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_bdev_register"
+sig = "int (const char*, const br_bdev_ops_t*, void*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_bdev_get"
+sig = "const br_bdev_ops_t* (const char*, void**)"
+status = "experimental"

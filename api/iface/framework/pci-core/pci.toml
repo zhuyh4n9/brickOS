@@ -1,0 +1,79 @@
+# brickie:generated
+# api/iface 快照 api/iface/framework/pci-core/pci.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "framework/pci-core#pci"
+provider = "framework/pci-core"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:70a388148c492ce7df3eaea8781d9eb0be6cd0f614ae07732d6960ab84c3ccd5"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "macro"
+name = "BR_PCI_MAX_DEVS"
+value = "8"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_PCI_MAX_BARS"
+value = "6"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_PCI_CLASS_SDHCI"
+value = "0x0805"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_pci_dev_t"
+layout = "# {vendor, device, class_code, revision, bus, dev, fn, intx_pin, _pad, intx_virq, bar[6], bar_size[6]}"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_pci_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_pci_dev_count"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_pci_dev_at"
+sig = "const br_pci_dev_t* (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_pci_find"
+sig = "const br_pci_dev_t* (br_u16, br_u16)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_pci_cfg_read32"
+sig = "int (br_u8, br_u8, br_u8, br_u8, br_u32*)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_pci_cfg_write32"
+sig = "int (br_u8, br_u8, br_u8, br_u8, br_u32)"
+status = "experimental"

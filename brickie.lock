@@ -17,6 +17,11 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.plugins]]
+name = "framework/bdev-core"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
 name = "framework/cdev-core"
 version = "0.1.0.0"
 compat_gen = 0
@@ -28,6 +33,11 @@ compat_gen = 0
 
 [[lock.plugins]]
 name = "framework/file-table"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "framework/pci-core"
 version = "0.1.0.0"
 compat_gen = 0
 
@@ -107,6 +117,17 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.units]]
+id = "framework/bdev-core#bdev"
+provider = "framework/bdev-core"
+unit = "bdev"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:f195b79af9d3a14797bd05417827b47684d8ab932193f0e1f0cf21c3822f39c3"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
 id = "framework/cdev-core#cdev"
 provider = "framework/cdev-core"
 unit = "cdev"
@@ -140,6 +161,17 @@ hash_scope = "decl"
 truth = "decl"
 
 [[lock.units]]
+id = "framework/pci-core#pci"
+provider = "framework/pci-core"
+unit = "pci"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:70a388148c492ce7df3eaea8781d9eb0be6cd0f614ae07732d6960ab84c3ccd5"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
 id = "framework/vfs-core#vfs"
 provider = "framework/vfs-core"
 unit = "vfs"
@@ -147,17 +179,6 @@ api_iface = "native"
 version = "0.1.2.0"
 compat_gen = 0
 hash = "sha256:744bb3605fe427a7ad376dba45600552c14fbe44d8597459b9a0c81fff1ffb57"
-hash_scope = "decl"
-truth = "decl"
-
-[[lock.units]]
-id = "iface-posix#posix-skin"
-provider = "iface-posix"
-unit = "posix-skin"
-api_iface = "runtime_adapter"
-version = "0.1.0.0"
-compat_gen = 0
-hash = "sha256:dbcb4aa6625b130554a0f34b057f8f352e96d2ce2dfe513f3bc436f1bcbb3100"
 hash_scope = "decl"
 truth = "decl"
 
@@ -202,6 +223,17 @@ api_iface = "native"
 version = "0.1.1.0"
 compat_gen = 0
 hash = "sha256:edb5e16d25517877de07fc495ce80209148b746038208cf7be0df01deef0f094"
+hash_scope = "decl"
+truth = "decl"
+
+[[lock.units]]
+id = "platform/qemu-aarch64#pci-host"
+provider = "platform/qemu-aarch64"
+unit = "pci-host"
+api_iface = "native"
+version = "0.1.0.0"
+compat_gen = 0
+hash = "sha256:5d0cfc218c1365a114da4683102957599a6efdac8f1b693dbcef465b93581e2a"
 hash_scope = "decl"
 truth = "decl"
 

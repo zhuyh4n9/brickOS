@@ -60,6 +60,15 @@ extern char __stack_top[];
 #define MEM_UART0_BASE      0x09000000ul
 #define MEM_UART0_SIZE      0x00001000ul    /* PL011: 4 KiB */
 
+/* PCIe(ADR-0021 D-2;数值与 src/pci_plat.c 的 br_plat_pci_host() 同源):
+ *   ECAM        0x3f000000 + 16 MiB  —— **highmem=off** 下的低地址窗口
+ *   MMIO 窗口   0x10000000 + ~752 MiB —— BAR 从这里分配
+ * 两者都在低 1 GiB 的 Device 背景映射里 ⇒ 声明对页表是 no-op(只给 core 一张可查的表)。 */
+#define MEM_PCIE_ECAM_BASE  0x3f000000ul
+#define MEM_PCIE_ECAM_SIZE  0x01000000ul
+#define MEM_PCIE_MMIO_BASE  0x10000000ul
+#define MEM_PCIE_MMIO_SIZE  0x2eff0000ul
+
 /* 一条 region 的登记样板(靠近声明处, 免得读的人要跳来跳去) */
 static int memmap_add(br_uintptr_t base, br_size_t size, br_u32 attrs)
 {
@@ -166,6 +175,25 @@ static int memmap_declare_regions(void)
     }
 
     rc = memmap_add(MEM_UART0_BASE, MEM_UART0_SIZE,
+                    BR_MM_DEVICE | BR_MM_WITH_KIND(0u, BR_MM_KIND_MMIO));
+    if (rc != 0) {
+        return rc;
+    }
+
+    /*
+     * ④ PCIe 两条(ADR-0021 D-2): ECAM 与 32 位 MMIO 窗口。
+     *    与③同理落在低 1 GiB 的 Device 背景里 ⇒ 页表无需改动; **highmem=off 是前提** ——
+     *    默认 highmem 的 ECAM 在 0x40_1000_0000, 越出 `BR_PLAT_DEVICE_SPAN`, 会被
+     *    `mmu_region_apply()` 以 -EINVAL 拒绝(这正是它该有的行为: 声明面与页表布局不一致
+     *    就不能静默忽略)。pci-core 的 BAR 分配也从这个 MMIO 窗口里切。
+     */
+    rc = memmap_add(MEM_PCIE_ECAM_BASE, MEM_PCIE_ECAM_SIZE,
+                    BR_MM_DEVICE | BR_MM_WITH_KIND(0u, BR_MM_KIND_MMIO));
+    if (rc != 0) {
+        return rc;
+    }
+
+    rc = memmap_add(MEM_PCIE_MMIO_BASE, MEM_PCIE_MMIO_SIZE,
                     BR_MM_DEVICE | BR_MM_WITH_KIND(0u, BR_MM_KIND_MMIO));
     return rc;
 }

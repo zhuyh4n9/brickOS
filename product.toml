@@ -50,6 +50,15 @@ plugins = [
   #   它让"文件表在 POSIX 运行时之外也有独立证据"这件事在 `[select]` 里可读, 而且
   #   POSIX 运行时被裁掉的产品(极小 native 组合)仍能单独带上 fd 表。删掉它 `check` 依然 0 错。
   "framework/file-table",
+  # ★ ADR-0021: 块设备子分类框架(bdev-core)。与 cdev-core 并列的存储域第二条设备链;
+  #   本刀先落框架件(暂无驱动消费者), eMMC 驱动(third_party/uboot-mmc)随后接入。
+  "framework/bdev-core",
+  # ★ ADR-0021 D-2: 通用 PCI(e) 机制(枚举/BAR 分配)。它依赖 platform 读板级事实;
+  #   本刀先落它并单独验证(枚举到 sdhci-pci), eMMC 驱动随后以 init 边消费它。
+  "framework/pci-core",
+  # ★ ADR-0021 D-3: 第三方模块隔离 —— 移植自 u-boot(GPL-2.0+)的 eMMC/SDHCI 驱动。
+  #   它是闭包内**唯一**的 third_party 插件; 框架件与平台侧保持 WTFPL。
+  "third_party/uboot-mmc",
   "fs/tmpfs",
   "fs/devfs",
   "io/uart-pl011",

@@ -1,0 +1,79 @@
+# third_party/uboot-mmc — u-boot MMC/SDHCI 移植(plugin_type = ability, subkind = io)
+#
+# ============================ 第三方模块隔离(ADR-0021 D-3) ============================
+# 本插件的**全部源码**是 u-boot NXP 分支(`nxp-imx/uboot-imx`, branch `lf_v2026.04`,
+# commit `bb41975aeb4cbd153b49c9fd62da1d64cd65968d`) `drivers/mmc/**` + `include/mmc.h`
+# + `include/sdhci.h` 的**移植/改写**, 那些文件是 **GPL-2.0+**。
+# 因此:
+#   - 本插件(且**只有**本插件)声明 `api_type = "third_party"` / `license = "GPL-2.0-or-later"`;
+#     来源逐文件列在 `NOTICE`, 全文在 `LICENSE.GPL-2.0`;
+#   - `framework/bdev-core`、`framework/pci-core`、`platform/**` 保持 WTFPL, **不含** GPL 代码;
+#   - 工具链的规则禁止 `native` 插件依赖 `third_party` 插件, 所以"WTFPL 薄胶水包 GPL 库"这种
+#     切法在本工具链里不合法 ⇒ **bdev 对接/PCIe 绑定/中断绑定都写在本插件内**(见 ADR-0021 D-3)。
+#   - ⚠ 残余风险(如实记录): 静态链进同一镜像后, 整镜像在分发时仍构成 GPL 组合作品;
+#     "目录隔离"解决的是**代码归属清晰**, 不是许可传染。这是拍板时明知并接受的取舍。
+# WORKAROUND(br-wa-tp-001): 上述残余许可风险 + 本刀为工具链补了 third_party 描述符模板
+#   (native 模板的逐字节副本)并随 `make tools-prebuilt` 刷新了自举种子 —— 详见
+#   `WORKAROUNDS.md` 的 `br-wa-tp-001`。
+# ====================================================================================
+#
+# 设计/行为依据(实现是移植, 但对接面按本项目契约):
+#   - `docs/7-storage/7-02-bdev.md` §1/§4(bdev 形状; 数据通路要能指出 DMA/PIO)、§5(ISR→bh→唤醒);
+#   - `docs/decisions/0021-bdev-pci-emmc.md` D-3(三方隔离)/D-4(中断 + ADMA2/PIO)/D-5(flush 口径);
+#   - 对照源码与差异分析: `docs/analysis/0001-emmc-bdev-gap.md` §2/§3/附录 B。
+#
+# ★ 依赖面(方向都合法: third_party 消费者不受 native→third_party 禁则约束):
+#   - `framework/bdev-core`(init): 本插件实现 `br_bdev_ops` 并注册设备;
+#   - `framework/pci-core`(init): 取 sdhci-pci 的 BAR0 基址与 INTx virq;
+#   - `framework/dev-core`(type): 用它的 ioctl 编码宏(`BR_IOR/IOW/IO`);
+#   - `framework/vfs-core`(type): `br_dev.h` 的 `open_file` 签名引用 `br_file_ops_t`。
+schema = 1
+
+[plugin]
+name        = "third_party/uboot-mmc"
+plugin_type = "ability"
+api_type    = "third_party"
+subkind     = "io"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "u-boot MMC 协议核心 + 通用 SDHCI 主机移植(GPL-2.0+): PCIe INTx 中断驱动, ADMA2/PIO 运行期可选, 经 bdev 注册为 emmc0"
+license     = "GPL-2.0-or-later"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 4
+notes    = "struct mmc(~1 KiB 含 ext_csd 512 B) + ADMA2 描述符表(1 KiB, 走 DMA 池) + 会话状态; 无动态分配(除 DMA 池的 br_dma_alloc)"
+# ★ 不声明 stack: 本驱动不创建线程 —— 全部 ops 跑在调用者线程上; ISR/bh 用的是 core 已有的
+#   中断栈与下半部上下文(ADR-0021 D-4)。
+
+# ---- 结构依赖 ----
+[[dep]]
+name  = "framework/bdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/pci-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/dev-core"
+range = ">=0.1.0"
+kind  = "type"
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "type"
+
+[selftest]
+# ADR-0010: 表在场 = 本插件有自检。用例: TC-EMMC-*。
+cases = 8
+
+[build]
+# ★ 无 `includes`: 本件不抛对外头(不导出 API; 消费面是 bdev/PCIe 的 native 面)。
+#   内部契约(`emmc_internal.h`/`sdhci_regs.h` 等)放 `src/`, 不构成插件对外面。
+sources  = ["src/*.c"]

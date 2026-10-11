@@ -177,6 +177,26 @@ kind = "macro"
 name = "BR_GICV3_PMR_ALL"
 value = "255"
 
+# ---- PCIe 平台事实(ADR-0021 D-2: 板级地址/线号留在这里, 通用 PCI 机制在 framework/pci-core)----
+[[export]]
+name         = "pci-host"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:5d0cfc218c1365a114da4683102957599a6efdac8f1b693dbcef465b93581e2a"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_plat_pci_host"
+sig  = "int (br_plat_pci_host_t*)"
+[[export.entries]]
+kind = "type"
+name = "br_plat_pci_host_t"
+layout = "# {ecam_base, ecam_size, mmio_base, mmio_size, bus_first, bus_last, intx_virq_a}"
+
 # ---- 特权面(§3.4)----
 # P4(machine): MMU/页表/region 属性/PIC/早期 console 属 platform(3-01 §13.6 的正交表)。
 # memory 三轴按**行**声明(同一行内 op × granularity × regions 必须都在该行允许集内,
@@ -200,11 +220,12 @@ ops         = ["alloc", "free"]
 regions     = ["contig", "page"]
 [[privileged.resources]]
 # 本板用到的中断线(INTID 口径): SGI 0–2(自测/级联父线) + PPI 30(EL1 物理 timer)
-# + SPI 33(PL011 UART0)。域成员的 virq 在域窗口内, 不占物理线。
-irq          = [0, 1, 2, 30, 33]
+# + SPI 1(INTID 33, PL011 UART0) + SPI 3..6(INTID 35..38, PCIe INTx A..D, ADR-0021)。
+# 域成员的 virq 在域窗口内, 不占物理线。
+irq          = [0, 1, 2, 30, 33, 35, 36, 37, 38]
 dma_channels = []
 pins         = []
-device_names = ["pl011", "gicv3"]
+device_names = ["pl011", "gicv3", "pcie", "sdhci"]
 
 [selftest]
 # ADR-0010: **表在场 = 本插件有自检** ⇒ 生成物发 `.selftest = <prefix>selftest`。
@@ -236,9 +257,19 @@ linker_script = "src/link.ld"
 
 # QEMU 型号: `gic-version=3` 是**显式**的 —— QEMU virt 的缺省是 GICv2, 而本插件声明的是
 # GICv3, 不钉住的话驱动会写 GICv2 的地址, 表现为"PIC 初始化后收不到任何中断"。
+# `highmem=off`(ADR-0021 D-2)也是**硬前提, 不是优化**: 它把 PCIe ECAM 从
+# 0x40_1000_0000(超 4 GiB, 当前 MMU 表达不了)搬到 0x3f00_0000, 与 32 位 MMIO 窗口一起
+# 落进低 1 GiB 的 Device 背景映射 ⇒ 只需 region 声明, 零页表改动。
+# `extra` 里的三件是 eMMC 验证件(ADR-0021): 空 raw 后备镜像由构建后门禁 `emmc-image`
+# 生成(见 tests/gates.toml), sdhci-pci 挂一块 emmc —— 驱动缺席时它们只是"没被认领的设备"。
 [build.target.qemu]
 binary  = "qemu-system-aarch64"
-machine = "virt,gic-version=3"
+machine = "virt,gic-version=3,highmem=off"
 cpu     = "cortex-a53"
 memory  = "128M"
-extra   = ["-nographic"]
+extra   = [
+  "-nographic",
+  "-drive", "if=none,id=emmc0,format=raw,file=build/emmc0.img",
+  "-device", "sdhci-pci,addr=3",
+  "-device", "emmc,drive=emmc0",
+]

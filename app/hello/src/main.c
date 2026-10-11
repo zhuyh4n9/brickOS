@@ -1,50 +1,7 @@
-/*
- * brickOS prototype v0.2.0 — APP 插件 `app/hello`: POSIX 多线程样例
- *
- * 本件是 **APP 类别的样例**: 它**只经 Interface 皮肤**取用下层 —— POSIX 面(线程/同步/
- * 延时)走 `iface/posix`(`#include <iface/posix/posix.h>`), core native 面(日志/时钟/
- * tick/版本)走 `iface/min`(`#include <iface/min/min.h>`)—— 设计 `1-01` §7.3 / D18 / A-2 的
- * "APP 只依赖 Interface"; 两条声明边见 plugin.toml。**源码里不出现 `<br/core/...>`**:
- * APP 不直连 iface 层以下的接口(ADR-0020, 由 `brickie check`/`build` 执法)。
- *
- * 三个生命周期钩子(名字 = `symbol_prefix` + 相, 由 `build/gen/app/hello/plugin_desc.c` 引用):
- *   hello_early_init()  EARLY 相: 无动作(此相不用堆/无线程/关中断)。
- *   hello_init()        CORE 相: 放开日志等级。
- *   hello_start()       START 相(全局开中断后, **最后**一个 start): 创建 APP 线程, 返回 0;
- *                       管理器随后 `br_sched_run()` 首次调度 ⇒ APP 线程接管 MainLoop。
- *
- * ## 本样例演示什么
- *   `hello_mainloop()` 的第一件事是 **`app_pthread_conformance()`**: 一段自判红绿的
- *   多线程一致性用例(每项打 `[APPCONF] PASS/FAIL`, 末尾 `[APPCONF] SUMMARY`),
- *   覆盖: barrier 起跑 / mutex 保护计数 / join 搬 retval / condvar 会合 / TLS key 隔离
- *   与析构 / detach(惰性回收) / 每线程 errno / rwlock 读并发写独占 / once / 线程名。
- *   之后进入周期心跳循环(每秒一行 `tick=… irq_ticks=…`), 由 `smoke` 门禁判"不早醒"。
- *
- * ## 与 core 的关系
- *   线程/同步/延时全走 POSIX(`iface/posix`); 日志与时钟读数走 `iface/min`(core native
- *   的直通皮肤)。两处都**不是** APP 直连下层: 名字由皮肤转出, 声明边只落在 Interface。
- *
- * ★ 为什么 APP 不自己碰中断控制(P-IRQ-17): 中断控制归 P3, APP 是 P0 ⇒ 只能**读**心跳
- *   计数(`br_clock_tick_count()`, 由 platform 的 ISR 每拍通知 core; ADR-0016)。
- *
- * ★ WORKAROUNDS: br-wa-boot-001 ①② 已还清(ADR-0008/0016); ③(日志直写 console)的标记
- *   在 `core/src/log.c`。
- */
 #include <hello/hello.h>
-
-/* core native 面(日志/时钟/tick/版本)**经 Interface 皮肤**进来(ADR-0020)。
- * `iface/min` 是直通 core 的极简别名皮肤: 头文件把 core 头原样转出, 实现仍是 core 的
- * 一份。声明边 = plugin.toml 的 `[[dep]] iface/min`; 于是本件源码里**不出现**
- * `#include <br/core/...>` —— APP 不直连 iface 层以下的接口。 */
 #include <iface/min/min.h>
-
-/* POSIX 面**经 Interface 皮肤**进来(设计 D18 / §7.3: APP 只依赖 Interface)。
- * `iface/posix` 是零状态皮肤, 它再导出 `runtime/posix#posix` ⇒ `usleep`、`pthread_*`、
- * `sem_*`、`errno` 的名字在这里就位, 实现仍只有 runtime/posix 一份。
- * 声明边 = plugin.toml 的 `[[dep]] iface/posix`; 编译期可见性 = 声明依赖闭包(ADR-0018)。 */
 #include <iface/posix/posix.h>
 
-/* MainLoop 周期。选 1s 是因为它同时是"人能看清的节奏"与"计时误差能被日志一眼量化"的长度。 */
 #define BR_MAINLOOP_PERIOD_MS   1000u
 
 /* ------------------------------------------------------------------ APPCONF 装置 */

@@ -1,0 +1,47 @@
+third_party/uboot-mmc — 第三方来源与许可说明
+=============================================
+
+本目录下的源码是 **u-boot(NXP 下游分支)MMC/SDHCI 驱动的移植/改写**。
+
+来源
+----
+  仓库    : https://github.com/nxp-imx/uboot-imx
+  分支    : lf_v2026.04
+  commit  : bb41975aeb4cbd153b49c9fd62da1d64cd65968d  (2026-09-03)
+
+逐文件对照(源 → 本目录)
+------------------------
+  drivers/mmc/mmc.c          (3352 行, GPL-2.0+, Copyright 2008 Freescale / 2020 NXP / Andy Fleming)
+      → src/mmc_core.c       协议核心: CMD0/1/2/3/7/8/9/12/13/16/17/18/24/25、EXT_CSD、块读写
+  drivers/mmc/sdhci.c        (1050 行, GPL-2.0+, Copyright 2011 Marvell)
+      → src/sdhci_host.c     SDHCI 寄存器/命令/数据传输/时钟/复位/上电
+  drivers/mmc/sdhci-adma.c   (87 行, GPL-2.0+)
+      → src/sdhci_host.c     的 ADMA2 描述符构造(sdhci_prepare_adma)
+  include/mmc.h              (1093 行, GPL-2.0+)
+  include/sdhci.h            (546 行, GPL-2.0+)
+      → src/mmc_regs.h       命令码/响应位/OCR/EXT_CSD 偏移/SDHCI 寄存器/中断位(摘录子集)
+  drivers/mmc/mmc_private.h  (135 行, GPL-2.0+)
+      → src/emmc_internal.h  内部原型(改写)
+
+**未移植**: `drivers/mmc/mmc-uclass.c`(u-boot DM/uclass/blk 粘合层)、
+`drivers/mmc/fsl_esdhc*.c`(NXP i.MX 专有主机, 与 QEMU 的通用 `sdhci-pci` 无关)、
+SD/UHS/HS200/HS400/tuning/RPMB/BKOPS/SPI 等分支。
+
+改写要点(相对上游的**有意偏离**)
+--------------------------------
+  1. DM/设备树/regulator/gpio/clk 全部去掉: 平台事实由 `framework/pci-core` 给的 BAR 与
+     INTx virq 提供(见 `../../../docs/decisions/0021-bdev-pci-emmc.md` D-2)。
+  2. **中断驱动**: 上游 `sdhci.c` 是 `udelay()` 轮询 `INT_STATUS`; 本移植打开
+     `INT_ENABLE`/`SIGNAL_ENABLE`, ISR 只读状态/清源/给信号量, 传输线程在信号量上等待
+     (设计 `7-02` §5 的 ISR→bh→唤醒)。
+  3. **数据通路可切换**: ADMA2 与 PIO 都实现, 运行期经 ioctl 选择; 小传输/缓冲未对齐自动落
+     PIO; 当前通路在 `br_bdev_geom_t.flags`(`BR_BDEV_F_DMA`/`BR_BDEV_F_PIO`)里报出。
+  4. 出口是 **bdev**(`br_bdev_ops`)而不是 u-boot 的 `blk-uclass`。
+
+许可
+----
+  上游文件均标 `SPDX-License-Identifier: GPL-2.0+`(即 GPL-2.0 或更新版本)。
+  本移植件同样以 **GPL-2.0-or-later** 分发, 全文见同目录 `LICENSE.GPL-2.0`。
+  本目录是整个 brickOS 原型树内**唯一**的 GPL 代码; `framework/**`、`platform/**` 等保持
+  WTFPL。残余风险(静态链接后整镜像构成 GPL 组合作品)登记在
+  `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。

@@ -44,8 +44,24 @@
  * 与"一根线带 N 个子源"的域机制是两回事(§11.4 的"两种入口", 不该混成一个)。 */
 #define BR_IRQ_BH_LINE        6u
 
+/* ---- PCIe INTx(ADR-0021; virq 7..10 → INTID 35..38)----
+ *
+ * QEMU virt 的 PCIe 主机桥(GPEX)把 INTx A..D 经 `a15irqmap[VIRT_PCIE]=3` 映射到
+ * SPI 3..6(INTID 35..38), 且**按设备槽号做标准 swizzle**:
+ *     intid_偏移 = (pin_index + device) % 4        (pin_index: A=0..D=3)
+ * 所以这里把四条线都绑出来(virq A..D ↔ hwirq 35..38), 由 `framework/pci-core` 依据
+ * 设备所在的 slot 与 `PCI_INTERRUPT_PIN` 选出正确的 virq —— 板级知识只到"起始号"为止。
+ *
+ * 分发形态 = **BH**(设计 `7-02` §5 的 ISR→bh→唤醒): SDHCI 的 ISR 只做最少的事,
+ * 传输完成/错误由下半部交给等待线程。触发 = 电平(PCIe INTx 在 QEMU 里是 LEVEL_HIGH,
+ * 见 `hw/arm/virt.c::create_pcie_irq_map`), 所以**必须设备侧清源**否则活锁。 */
+#define BR_IRQ_PCIE_INTX_A    7u
+#define BR_IRQ_PCIE_INTX_B    8u
+#define BR_IRQ_PCIE_INTX_C    9u
+#define BR_IRQ_PCIE_INTX_D   10u
+
 /* 直连线条目数(绑定表长度; 域成员不需要绑定条目 —— 见 README 的实现裁定 P-IRQ-1) */
-#define BR_IRQ_BOARD_NR       7u
+#define BR_IRQ_BOARD_NR      11u
 
 /* 故意**不绑定**的 SGI(INTID 3): "无属主却有硬件投递"的样本,
  * 用于 TC-IRQ-008(spurious_owned 路径)。 */

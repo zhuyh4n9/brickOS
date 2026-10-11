@@ -165,6 +165,12 @@ require   = [
   "\\[WQCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[MEMCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[DBGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  # ★ ADR-0021: 块设备子分类(bdev-core)的套件摘要 —— 存储域第二条设备链的框架件。
+  #   驱动接入前 TC-BDEV-006/008 走"不适用"分支, 框架机制(注册/取回/几何/raw 面)仍逐条判。
+  "\\[BDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  # ★ ADR-0021 D-2: 通用 PCI(e) 框架件的套件摘要(枚举到 sdhci-pci、BAR 已分配、
+  #   命令寄存器开了 MEM/BUS_MASTER、INTx swizzle 正确)。
+  "\\[PCICONF\\] SUMMARY pass=[0-9]* fail=0 ",
   # ★ ADR-0019: APP 侧的 POSIX 多线程样例(经 iface/posix 皮肤)。它证明"多线程在真镜像上
   #   真的跑过且判据全绿", 而不是只靠 runtime/posix 自己的自检。
   "\\[APPCONF\\] SUMMARY pass=[0-9]* fail=0 ",
@@ -184,12 +190,17 @@ forbid    = [
   "\\[WQCONF\\] FAIL",
   "\\[MEMCONF\\] FAIL",
   "\\[DBGCONF\\] FAIL",
+  "\\[BDEVCONF\\] FAIL",
+  "\\[PCICONF\\] FAIL",
   "\\[APPCONF\\] FAIL",
 ]
 require_tags = [
   # ADR-0019: 逐项点名 —— APP 的多线程用例被裁掉/没跑, 门禁即红。
   "APP-PT-001", "APP-PT-002", "APP-PT-003", "APP-PT-004",
   "APP-PT-005", "APP-PT-006", "APP-PT-007",
+  # ★ ADR-0021 D-2: PCIe 框架件逐条点名(裁掉用例也算红)。
+  "TC-PCI-001", "TC-PCI-002", "TC-PCI-003", "TC-PCI-004",
+  "TC-PCI-005", "TC-PCI-006", "TC-PCI-007", "TC-PCI-008",
 ]
 
 # irq-test: **逐用例**门禁(裁掉用例也算红 —— 与 smoke 的分工就在这里)。
@@ -277,6 +288,15 @@ argv = ["bash", "tools/check-workarounds.sh"]
 [[script]]
 name = "check-build"
 argv = ["bash", "tools/check-build.sh"]
+
+# emmc-image: 造 eMMC 后备镜像(ADR-0021)。
+# ★ 它同时列在 `[build].post` 里 ⇒ 每次 `brickie build`(以及 `brickie test` 的自动构建)
+#   之后、任何 QEMU 门禁之前, `build/emmc0.img` 一定在位。这解决的是"QEMU 不会自己创建
+#   块设备后备文件"这件工程事实; 脚本幂等(大小对就不重写)。
+[[script]]
+name    = "emmc-image"
+argv    = ["bash", "tools/mk-emmc-image.sh", "build/emmc0.img", "8"]
+require = ["ok   eMMC 镜像"]
 
 # sync-test: 同步原语的端到端门禁(线程 + 阻塞 + 超时, 在 QEMU 上)。
 # 依赖 F2 的调度框架与 F1 把 br_sync_selftest() 接到 APP 的 start 里;
@@ -396,6 +416,9 @@ require   = [
   "\\[VFSCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[DEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[CDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  # ★ ADR-0021: 块设备子分类框架(bdev-core)。与 CDEVCONF 并列的存储域第二条设备链;
+  #   驱动接入(third_party/uboot-mmc)后其端到端套件另开门禁。
+  "\\[BDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[IOCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
@@ -403,6 +426,7 @@ forbid    = [
   "\\[VFSCONF\\] FAIL",
   "\\[DEVCONF\\] FAIL",
   "\\[CDEVCONF\\] FAIL",
+  "\\[BDEVCONF\\] FAIL",
   "\\[IOCONF\\] FAIL",
   "\\[PANIC\\]",
 ]
@@ -417,8 +441,40 @@ require_tags = [
   "TC-DEV-001", "TC-DEV-002", "TC-DEV-003", "TC-DEV-004", "TC-DEV-005", "TC-DEV-006",
   "TC-CDEV-001", "TC-CDEV-002", "TC-CDEV-003", "TC-CDEV-004", "TC-CDEV-005",
   "TC-CDEV-006", "TC-CDEV-007", "TC-CDEV-008",
+  # ★ ADR-0021: 块设备子分类框架(bdev-core)逐条点名。TC-BDEV-006/008 在驱动缺席时
+  #   走"不适用"分支, 但它们照旧打 tag ⇒ 被裁掉/没跑仍然判红。
+  "TC-BDEV-001", "TC-BDEV-002", "TC-BDEV-003", "TC-BDEV-004",
+  "TC-BDEV-005", "TC-BDEV-006", "TC-BDEV-007", "TC-BDEV-008",
   "TC-IO-001", "TC-IO-002", "TC-IO-003", "TC-IO-004", "TC-IO-005", "TC-IO-006",
   "TC-IO-007", "TC-IO-008", "TC-IO-009", "TC-IO-010", "TC-IO-011", "TC-IO-012",
+]
+
+# emmc-test: eMMC(SDHCI)驱动经 bdev 的端到端门禁(ADR-0021)。
+# 判据 = 识别成功 + bdev 就绪 + 两套框架摘要(PCI 枚举/分配、eMMC 往返)+ 8 条用例逐条点名。
+# 它同时证明: PCIe INTx 真的投递(ISR→bh→信号量)、ADMA2 与 PIO 两条数据通路都能写后读回。
+# 机器参数(platform 的 [build.target.qemu].extra)挂 `-device sdhci-pci` + `-device emmc`,
+# 后备镜像由构建后门禁 `emmc-image` 生成(见上)。
+[[gate]]
+name      = "emmc-test"
+timeout_s = 20
+log       = "build/logs/emmc.log"
+require   = [
+  "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
+  "pci: 00:03.0 1b36:0007",
+  "uboot-mmc: eMMC ready",
+  "uboot-mmc: /dev/emmc0 就绪",
+  "\\[PCICONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "\\[EMMCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
+  "irq_ticks=[1-9]",
+]
+forbid    = [
+  "\\[PCICONF\\] FAIL",
+  "\\[EMMCCONF\\] FAIL",
+  "\\[PANIC\\]",
+]
+require_tags = [
+  "TC-EMMC-001", "TC-EMMC-002", "TC-EMMC-003", "TC-EMMC-004",
+  "TC-EMMC-005", "TC-EMMC-006", "TC-EMMC-007", "TC-EMMC-008",
 ]
 
 # posix-test: **runtime/posix 的 POSIX 面**端到端门禁(ADR-0014/0015)。
@@ -456,4 +512,4 @@ require_tags = [
 [build]
 # `brickie build` 成功后**自动**跑的短名单(与旧 Makefile 的 `all: … check-string` 同义)。
 # 放在脚本门禁里而不是编进编译流程, 是因为它是**判据**而不是构建步骤。
-post = ["check-string", "check-headers"]
+post = ["check-string", "check-headers", "emmc-image"]

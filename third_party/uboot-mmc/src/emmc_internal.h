@@ -1,0 +1,103 @@
+/*
+ * third_party/uboot-mmc — 插件内部契约(不导出)
+ *
+ * 分层(见 docs/analysis/0001-emmc-bdev-gap.md §8 建议架构):
+ *   mmc_core.c    协议核心: CMD/ACMD 状态机、CID/CSD/EXT_CSD、块读写(在 host ops 之上)
+ *   sdhci_host.c  SDHCI 主机: 寄存器/命令/数据传输(ADMA2/PIO)/中断/set_ios
+ *   emmc_bdev.c   bdev 对接 + PCIe 绑定 + 生命周期钩子
+ * 三者之间只有这一个小接口: `br_mmc_host_ops_t`(send_cmd/set_ios)。
+ */
+#ifndef BR_THIRD_PARTY_UBOOT_MMC_INTERNAL_H
+#define BR_THIRD_PARTY_UBOOT_MMC_INTERNAL_H
+
+#include <br/core/br_types.h>
+
+#include "mmc_regs.h"
+
+/* ==================================================================== 主机接口 */
+
+typedef struct br_mmc_cmd {
+    br_u32 cmdidx;
+    br_u32 resp_type;      /* MMC_RSP_* */
+    br_u32 cmdarg;
+    br_u32 response[4];    /* 成功时被 host 填好(136 位响应给满 4 个) */
+} br_mmc_cmd_t;
+
+typedef struct br_mmc_data {
+    void  *buf;            /* READ: 目的; WRITE: 源 */
+    br_u32 flags;          /* MMC_DATA_READ / MMC_DATA_WRITE */
+    br_u32 blocks;         /* 块数(> 0) */
+    br_u32 blocksize;      /* 每块字节(本驱动 = 512) */
+} br_mmc_data_t;
+
+/*
+ * 主机驱动契约(设计的"通用主机"边界):
+ *   send_cmd: 同步完成一次命令(带 data 时包含数据搬运); 返回 0 或负 errno。
+ *   set_ios:  应用 {时钟, 总线宽度, 模式} —— 由协议核心在切换后调用。
+ */
+typedef struct br_mmc_host_ops {
+    int (*send_cmd)(void *host, br_mmc_cmd_t *cmd, br_mmc_data_t *data);
+    int (*set_ios)(void *host, br_u32 clock, br_u32 bus_width, br_u32 mode);
+} br_mmc_host_ops_t;
+
+#define BR_MMC_MODE_LEGACY 0u
+#define BR_MMC_MODE_HS     1u
+
+/* ==================================================================== 协议核心状态 */
+
+typedef struct br_mmc {
+    const br_mmc_host_ops_t *ops;
+    void    *host;
+    br_u32   clock;              /* 当前时钟(Hz) */
+    br_u32   bus_width;          /* 1 / 4 / 8 */
+    br_u32   mode;               /* BR_MMC_MODE_* */
+    br_u16   rca;
+    br_u32   read_bl_len;        /* 逻辑块长(本驱动恒 512) */
+    br_bool  high_capacity;      /* OCR.HCS: LBA 以块为单位 */
+    br_u64   capacity_sectors;   /* 512 B 扇区总数(EXT_CSD SEC_CNT) */
+    br_u32   card_type;          /* EXT_CSD CARD_TYPE */
+    br_u8    ext_csd[512];
+} br_mmc_t;
+
+int br_mmc_init (br_mmc_t *m, const br_mmc_host_ops_t *ops, void *host);
+int br_mmc_read (br_mmc_t *m, br_u64 lba, void *buf, br_size_t n);
+int br_mmc_write(br_mmc_t *m, br_u64 lba, const void *buf, br_size_t n);
+int br_mmc_flush(br_mmc_t *m);
+
+/* ==================================================================== SDHCI 主机层 */
+
+/* 数据通路选择(运行期可切; 见 ADR-0021 D-4) */
+#define BR_MMC_PATH_DMA 0u
+#define BR_MMC_PATH_PIO 1u
+
+/* 探测 + 复位 + 上电 + 中断就绪(幂等)。base = BAR0 映射后的寄存器窗口。 */
+int  br_sdhci_probe(br_uintptr_t base, br_u32 intx_virq);
+void br_sdhci_set_path(br_u32 path);      /* BR_MMC_PATH_DMA / _PIO */
+br_u32 br_sdhci_get_path(void);
+const br_mmc_host_ops_t *br_sdhci_host_ops(void);   /* 交给协议核心的主机 ops 表 */
+/* 本驱动策略: 传输 < 阈值(扇区)或缓冲未 4 字节对齐 ⇒ 即使选 DMA 也落 PIO(兜底)。 */
+#define BR_SDHCI_PIO_THRESHOLD_SECTORS 4u
+
+/* 单次传输上限(扇区): 32 KiB —— 一个 ADMA2 描述符的 len 上限 65532 与超时预算的交点。 */
+#define BR_EMMC_MAX_RW_SECTORS 64u
+
+/* ==================================================================== 器件契约(私有) */
+
+#define BR_EMMC_DEV_NAME     "emmc0"
+#define BR_EMMC_IOC_MAGIC    'e'
+#define BR_EMMC_IOC_GET_INFO 0u
+#define BR_EMMC_IOC_SET_PATH 1u
+
+/* GET_INFO 的回答(ioctl 载荷)。生产(emmc_bdev.c)与自检(emmc_selftest.c)共用一份布局。 */
+typedef struct br_emmc_info {
+    br_uintptr_t base;              /* SDHCI 寄存器窗口(BAR0) */
+    br_u64       capacity_sectors;
+    br_u32       sector_size;
+    br_u32       max_rw;
+    br_u32       bus_width;
+    br_u32       clock_hz;
+    br_u32       path;              /* BR_MMC_PATH_DMA / _PIO */
+    br_u32       card_type;
+} br_emmc_info_t;
+
+#endif /* BR_THIRD_PARTY_UBOOT_MMC_INTERNAL_H */
