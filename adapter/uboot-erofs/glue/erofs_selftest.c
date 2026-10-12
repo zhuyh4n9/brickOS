@@ -111,7 +111,7 @@ static int ef_find_dirent(const char *dir_path, const char *name, br_u32 *type_o
     int         rc = 0;
 
     if (d == BR_NULL) {
-        return BR_ERR(BR_ENOENT);
+        return BR_ERR(ENOENT);
     }
     for (;;) {
         const int r = br_readdir(d, &de);
@@ -400,12 +400,12 @@ static void ef_tc006(void)
 
     const br_bool ok =
         (nf == BR_NULL) &&
-        (nst == BR_ERR(BR_ENOENT)) &&
+        (nst == BR_ERR(ENOENT)) &&
         (dird == 0) && (sd.type == BR_INODE_DIR) &&
         (fild == 0) && (sf.type == BR_INODE_FILE) && (sf.size == (br_u64)EROFS_FX_HELLO_SIZE) &&
         (subd == 0) && (ss.type == BR_INODE_DIR) &&
         (deep == 0) && (sk.type == BR_INODE_FILE) && (sk.size == (br_u64)EROFS_FX_DEEP_SIZE) &&
-        (lrc == BR_ERR(BR_ENOENT));
+        (lrc == BR_ERR(ENOENT));
 
     er_conf(ok, "TC-EROFS-006",
             "lookup 不存在 ⇒ BR_NULL(vfs 得 -ENOENT); br_stat 对目录/文件类型与大小正确");
@@ -433,10 +433,10 @@ static void ef_tc007(void)
 
     const br_bool ok =
         (w == BR_NULL) && (rw == BR_NULL) && (dirok == BR_TRUE) &&
-        (un == BR_ERR(BR_EROFS)) && (mk == BR_ERR(BR_EROFS)) &&
-        (rm == BR_ERR(BR_EROFS)) && (rn == BR_ERR(BR_EROFS)) &&
-        (tr == BR_ERR(BR_EROFS)) &&
-        (sl == BR_ERR(BR_EROFS)) && (lk == BR_ERR(BR_EROFS));
+        (un == BR_ERR(EROFS)) && (mk == BR_ERR(EROFS)) &&
+        (rm == BR_ERR(EROFS)) && (rn == BR_ERR(EROFS)) &&
+        (tr == BR_ERR(EROFS)) &&
+        (sl == BR_ERR(EROFS)) && (lk == BR_ERR(EROFS));
 
     er_conf(ok, "TC-EROFS-007",
             "写打开 ⇒ BR_NULL; unlink/mkdir/rmdir/rename/truncate/symlink/link ⇒ -EROFS");

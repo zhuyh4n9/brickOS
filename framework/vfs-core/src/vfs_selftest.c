@@ -70,7 +70,7 @@ static int conf_count_dir(const char *path, br_u32 *total, br_u32 *files)
 {
     br_dir_t *d = br_opendir(path);
     if (d == BR_NULL) {
-        return BR_ERR(BR_ENOENT);
+        return BR_ERR(ENOENT);
     }
     br_u32 n = 0u;
     br_u32 nf = 0u;
@@ -157,13 +157,13 @@ int vfs_core_selftest(void)
          * fs_ops 再注册一次, 期望 -EEXIST。 */
         const int r = br_mount_register("/", br_vfs_internal_mounts(BR_NULL)[root_idx].ops,
                                         br_vfs_internal_mounts(BR_NULL)[root_idx].priv);
-        if (r != BR_ERR(BR_EEXIST)) {
+        if (r != BR_ERR(EEXIST)) {
             ok = BR_FALSE;
         }
         /* 非法参数: 空 ops / 相对路径 */
-        if (br_mount_register("/x", BR_NULL, BR_NULL) != BR_ERR(BR_EINVAL) ||
-            br_mount_register(BR_NULL, br_vfs_internal_mounts(BR_NULL)[root_idx].ops, BR_NULL) != BR_ERR(BR_EINVAL) ||
-            br_mount_register("relative", br_vfs_internal_mounts(BR_NULL)[root_idx].ops, BR_NULL) != BR_ERR(BR_EINVAL)) {
+        if (br_mount_register("/x", BR_NULL, BR_NULL) != BR_ERR(EINVAL) ||
+            br_mount_register(BR_NULL, br_vfs_internal_mounts(BR_NULL)[root_idx].ops, BR_NULL) != BR_ERR(EINVAL) ||
+            br_mount_register("relative", br_vfs_internal_mounts(BR_NULL)[root_idx].ops, BR_NULL) != BR_ERR(EINVAL)) {
             ok = BR_FALSE;
         }
         pc(ok, "TC-VFS-002", "最长前缀匹配(自个路径命中自个); 重复挂载 -EEXIST; 非法参数 -EINVAL");
@@ -184,13 +184,13 @@ int vfs_core_selftest(void)
 
     /* ---- TC-VFS-003: mkdir / 幂等冲突 / 目录上做文件操作 ---- */
     {
-        br_bool ok = (br_mkdir(dir) == BR_OK) && (br_mkdir(dir) == BR_ERR(BR_EEXIST));
+        br_bool ok = (br_mkdir(dir) == BR_OK) && (br_mkdir(dir) == BR_ERR(EEXIST));
         br_stat_t st;
         ok = ok && (br_stat(dir, &st) == BR_OK) && (st.type == BR_INODE_DIR);
         /* 目录写打开 ⇒ -EISDIR */
         int err = BR_OK;
         br_file_t *f = br_open_err(dir, BR_O_WRONLY, &err);
-        ok = ok && (f == BR_NULL) && (err == BR_ERR(BR_EISDIR));
+        ok = ok && (f == BR_NULL) && (err == BR_ERR(EISDIR));
         /* 把文件当目录走查 ⇒ -ENOTDIR(先造一个文件) */
         int err2 = BR_OK;
         br_file_t *fa = br_open_err(file, BR_O_CREAT | BR_O_RDWR, &err2);
@@ -201,7 +201,7 @@ int vfs_core_selftest(void)
             conf_path(deep, (br_size_t)sizeof(deep), file, "x");
             int err3 = BR_OK;
             br_file_t *fd = br_open_err(deep, BR_O_RDONLY, &err3);
-            ok = ok && (fd == BR_NULL) && (err3 == BR_ERR(BR_ENOTDIR));
+            ok = ok && (fd == BR_NULL) && (err3 == BR_ERR(ENOTDIR));
         }
         pc(ok, "TC-VFS-003", "mkdir/重复 -EEXIST; stat 报 DIR; 目录写打开 -EISDIR; 文件当目录 -ENOTDIR");
     }
@@ -254,10 +254,10 @@ int vfs_core_selftest(void)
         br_file_t *f2 = br_open_err("/vfsconf_no_such_file", BR_O_RDONLY, &e2);
         br_file_t *f3 = br_open_err(BR_NULL, BR_O_RDONLY, &e3);
         br_file_t *f4 = br_open_err("relative/path", BR_O_RDONLY, &e4);
-        const br_bool ok = (f1 == BR_NULL) && (e1 == BR_ERR(BR_EEXIST)) &&
-                           (f2 == BR_NULL) && (e2 == BR_ERR(BR_ENOENT)) &&
-                           (f3 == BR_NULL) && (e3 == BR_ERR(BR_EINVAL)) &&
-                           (f4 == BR_NULL) && (e4 == BR_ERR(BR_EINVAL));
+        const br_bool ok = (f1 == BR_NULL) && (e1 == BR_ERR(EEXIST)) &&
+                           (f2 == BR_NULL) && (e2 == BR_ERR(ENOENT)) &&
+                           (f3 == BR_NULL) && (e3 == BR_ERR(EINVAL)) &&
+                           (f4 == BR_NULL) && (e4 == BR_ERR(EINVAL));
         pc(ok, "TC-VFS-006", "O_CREAT|O_EXCL 已存在 -EEXIST; 不存在 -ENOENT; NULL/相对路径 -EINVAL");
     }
 
@@ -274,7 +274,7 @@ int vfs_core_selftest(void)
         br_bool ok = (br_rename(file, file2) == BR_OK);
         br_stat_t st;
         ok = ok && (br_stat(file2, &st) == BR_OK) && (st.size > 0u);
-        ok = ok && (br_stat(file, &st) == BR_ERR(BR_ENOENT));
+        ok = ok && (br_stat(file, &st) == BR_ERR(ENOENT));
 
         ok = ok && (br_truncate(file2, 7u) == BR_OK) &&
              (br_stat(file2, &st) == BR_OK) && (st.size == 7u);
@@ -307,9 +307,9 @@ int vfs_core_selftest(void)
         br_file_t *f = br_open_err(file2, BR_O_RDWR, &err);
         br_bool ok = (f != BR_NULL);
         if (f != BR_NULL) {
-            ok = ok && (br_file_lseek(f, -1, BR_SEEK_SET) == BR_ERR(BR_EINVAL));
+            ok = ok && (br_file_lseek(f, -1, BR_SEEK_SET) == BR_ERR(EINVAL));
             ok = ok && (br_file_lseek(f, 0, BR_SEEK_END) == 0);
-            ok = ok && (br_file_lseek(f, 1, 99 /* 非法 whence */) == BR_ERR(BR_EINVAL));
+            ok = ok && (br_file_lseek(f, 1, 99 /* 非法 whence */) == BR_ERR(EINVAL));
             ok = ok && (br_file_inode(f) != BR_NULL) &&
                  (br_file_inode(f)->type == BR_INODE_FILE) &&
                  ((br_file_flags(f) & BR_O_ACCMODE) == BR_O_RDWR);
@@ -321,10 +321,10 @@ int vfs_core_selftest(void)
     /* ---- TC-VFS-010: unlink / rmdir(含负例) ---- */
     {
         br_bool ok = (br_unlink(file2) == BR_OK) &&
-                     (br_unlink(file2) == BR_ERR(BR_ENOENT)) &&
-                     (br_stat(file2, &(br_stat_t){0}) == BR_ERR(BR_ENOENT)) &&
+                     (br_unlink(file2) == BR_ERR(ENOENT)) &&
+                     (br_stat(file2, &(br_stat_t){0}) == BR_ERR(ENOENT)) &&
                      (br_rmdir(dir) == BR_OK) &&
-                     (br_rmdir(dir) == BR_ERR(BR_ENOENT));
+                     (br_rmdir(dir) == BR_ERR(ENOENT));
         pc(ok, "TC-VFS-010", "unlink/rmdir 成功且幂等语义正确(重复操作 ⇒ -ENOENT)");
     }
 
@@ -332,18 +332,18 @@ int vfs_core_selftest(void)
     {
         char byte = 0;
         const br_bool ok =
-            (br_file_read(BR_NULL, &byte, 1u) == BR_ERR(BR_EINVAL)) &&
-            (br_file_write(BR_NULL, &byte, 1u) == BR_ERR(BR_EINVAL)) &&
-            (br_file_lseek(BR_NULL, 0, BR_SEEK_SET) == BR_ERR(BR_EINVAL)) &&
-            (br_file_ioctl(BR_NULL, 0u, BR_NULL) == BR_ERR(BR_EINVAL)) &&
-            (br_file_fsync(BR_NULL) == BR_ERR(BR_EINVAL)) &&
+            (br_file_read(BR_NULL, &byte, 1u) == BR_ERR(EINVAL)) &&
+            (br_file_write(BR_NULL, &byte, 1u) == BR_ERR(EINVAL)) &&
+            (br_file_lseek(BR_NULL, 0, BR_SEEK_SET) == BR_ERR(EINVAL)) &&
+            (br_file_ioctl(BR_NULL, 0u, BR_NULL) == BR_ERR(EINVAL)) &&
+            (br_file_fsync(BR_NULL) == BR_ERR(EINVAL)) &&
             (br_file_close(BR_NULL) == BR_OK) &&
-            (br_readdir(BR_NULL, BR_NULL) == BR_ERR(BR_EINVAL)) &&
+            (br_readdir(BR_NULL, BR_NULL) == BR_ERR(EINVAL)) &&
             (br_closedir(BR_NULL) == BR_OK) &&
             (br_opendir("/vfsconf_no_such_dir") == BR_NULL) &&
-            (br_stat(BR_NULL, &(br_stat_t){0}) == BR_ERR(BR_EINVAL)) &&
-            (br_mkdir(BR_NULL) == BR_ERR(BR_EINVAL)) &&
-            (br_truncate(BR_NULL, 0u) == BR_ERR(BR_EINVAL));
+            (br_stat(BR_NULL, &(br_stat_t){0}) == BR_ERR(EINVAL)) &&
+            (br_mkdir(BR_NULL) == BR_ERR(EINVAL)) &&
+            (br_truncate(BR_NULL, 0u) == BR_ERR(EINVAL));
         pc(ok, "TC-VFS-011", "空句柄/空路径: 返回 -EINVAL; close(NULL)/closedir(NULL) 幂等 0");
     }
 
@@ -355,7 +355,7 @@ int vfs_core_selftest(void)
             if (p == BR_NULL || br_vfs_internal_str_eq(p, "/") == BR_TRUE) {
                 continue;               /* 根挂载没?"/.." 的父; 单独跳过 */
             }
-            if (br_rmdir(p) != BR_ERR(BR_EBUSY) || br_unlink(p) != BR_ERR(BR_EBUSY)) {
+            if (br_rmdir(p) != BR_ERR(EBUSY) || br_unlink(p) != BR_ERR(EBUSY)) {
                 ok = BR_FALSE;
             }
         }
@@ -404,7 +404,7 @@ int vfs_core_selftest(void)
                     } else {
                         /* 没有文件面(如 v1 的 raw flash)必须是 -ENOTSUP —— 别的错误码
                          * 说明适配层或节点构造有问题, 判红(不放宽)。 */
-                        ok = ok && (err == BR_ERR(BR_ENOTSUP));
+                        ok = ok && (err == BR_ERR(ENOTSUP));
                     }
                     checked++;
                 }
@@ -450,7 +450,7 @@ int vfs_core_selftest(void)
                              (lst.type == BR_INODE_SYMLINK) &&
                              (lst.size == 10u) &&                    /* "target.bin" = 10 字符 */
                              ((lst.valid & BR_STAT_NLINK) != 0u) && (lst.nlink == 1u);
-        const br_bool dangling = (br_stat(lnk, &fst) == BR_ERR(BR_ENOENT));
+        const br_bool dangling = (br_stat(lnk, &fst) == BR_ERR(ENOENT));
 
         /* 造出目标后再 stat: 同一个名字, 这次跟随成功 */
         int err = BR_OK;
@@ -462,8 +462,8 @@ int vfs_core_selftest(void)
             follow_ok = (br_stat(lnk, &fst) == BR_OK) && (fst.type == BR_INODE_FILE) &&
                         (fst.size == 5u);
         }
-        pc((e1 == BR_OK) && (e2 == BR_ERR(BR_EEXIST)) && (e3 == BR_ERR(BR_EINVAL)) &&
-           (e4 == BR_ERR(BR_EINVAL)) && l_ok && dangling && follow_ok,
+        pc((e1 == BR_OK) && (e2 == BR_ERR(EEXIST)) && (e3 == BR_ERR(EINVAL)) &&
+           (e4 == BR_ERR(EINVAL)) && l_ok && dangling && follow_ok,
            "TC-VFS-014", "symlink: 可悬空 / 重复 -EEXIST / 空目标 -EINVAL; lstat 看链接, stat 跟随");
     }
 
@@ -478,8 +478,8 @@ int vfs_core_selftest(void)
         const int   n_none  = br_readlink("/vfsconf_no_such_link", full, (br_size_t)sizeof(full));
 
         br_bool ok = (n_small == 10) && (small[3] == '\0') &&     /* 截断到 cap-1 + NUL */
-                     (n_full == 10) && (n_null == 10) && (n_file == BR_ERR(BR_EINVAL)) &&
-                     (n_none == BR_ERR(BR_ENOENT)) && (full[0] == 't') && (full[9] == 'n');
+                     (n_full == 10) && (n_null == 10) && (n_file == BR_ERR(EINVAL)) &&
+                     (n_none == BR_ERR(ENOENT)) && (full[0] == 't') && (full[9] == 'n');
         for (br_size_t i = 0u; i < 10u && ok == BR_TRUE; i++) {
             static const char want[] = "target.bin";
             if (full[i] != want[i]) {
@@ -550,7 +550,7 @@ int vfs_core_selftest(void)
             longtgt[i] = 'x';
         }
         longtgt[sizeof(longtgt) - 1u] = '\0';
-        ok = ok && (br_symlink(longtgt, lnk) == BR_ERR(BR_ENAMETOOLONG));
+        ok = ok && (br_symlink(longtgt, lnk) == BR_ERR(ENAMETOOLONG));
 
         (void)br_unlink(abs_link);
         (void)br_unlink(rel_link);
@@ -568,7 +568,7 @@ int vfs_core_selftest(void)
 
         int err = BR_OK;
         br_file_t *nf = br_open_err(lnk, BR_O_RDONLY | BR_O_NOFOLLOW, &err);
-        const br_bool nofollow_ok = (nf == BR_NULL) && (err == BR_ERR(BR_ELOOP));
+        const br_bool nofollow_ok = (nf == BR_NULL) && (err == BR_ERR(ELOOP));
 
         err = BR_OK;
         br_file_t *ff = br_open_err(lnk, BR_O_RDONLY, &err);     /* 不带 NOFOLLOW: 跟随 */
@@ -581,7 +581,7 @@ int vfs_core_selftest(void)
         br_bool loop_ok = (br_symlink("loop_b", loop_a) == BR_OK) &&
                           (br_symlink("loop_a", loop_b) == BR_OK);
         br_stat_t lst;
-        loop_ok = loop_ok && (br_stat(loop_a, &lst) == BR_ERR(BR_ELOOP));
+        loop_ok = loop_ok && (br_stat(loop_a, &lst) == BR_ERR(ELOOP));
         loop_ok = loop_ok && (br_lstat(loop_a, &lst) == BR_OK) &&
                   (lst.type == BR_INODE_SYMLINK);                /* lstat 不看环 */
 
@@ -590,7 +590,7 @@ int vfs_core_selftest(void)
         conf_path(self, (br_size_t)sizeof(self), ldir, "self1");
         (void)br_unlink(self);
         loop_ok = loop_ok && (br_symlink("self1", self) == BR_OK) &&
-                  (br_stat(self, &lst) == BR_ERR(BR_ELOOP));
+                  (br_stat(self, &lst) == BR_ERR(ELOOP));
 
         (void)br_unlink(loop_a);
         (void)br_unlink(loop_b);
@@ -604,7 +604,7 @@ int vfs_core_selftest(void)
         br_stat_t st_t;
         br_stat_t st_h;
         br_bool ok = (br_link(tgt, hard) == BR_OK) &&
-                     (br_link(tgt, hard) == BR_ERR(BR_EEXIST)) &&
+                     (br_link(tgt, hard) == BR_ERR(EEXIST)) &&
                      (br_lstat(tgt, &st_t) == BR_OK) && (st_t.nlink == 2u) &&
                      (br_lstat(hard, &st_h) == BR_OK) && (st_h.nlink == 2u);
 
@@ -641,7 +641,7 @@ int vfs_core_selftest(void)
         }
 
         /* 目录不可硬链接(vfs 层: -EPERM) */
-        ok = ok && (br_link(ldir, lnk) == BR_ERR(BR_EPERM));
+        ok = ok && (br_link(ldir, lnk) == BR_ERR(EPERM));
 
         /* 跨挂载 ⇒ -EXDEV: 用第一个非根挂载里的一个节点当目标(没有就如实记"不适用") */
         {
@@ -660,8 +660,8 @@ int vfs_core_selftest(void)
                 conf_path(deep, (br_size_t)sizeof(deep), other, "uart0");
                 const int r = br_link(deep, hard);
                 /* 目标可能不存在(该挂载里没有 uart0)⇒ 只可能是 -ENOENT 或 -EXDEV */
-                ok = ok && ((r == BR_ERR(BR_EXDEV)) || (r == BR_ERR(BR_ENOENT)));
-                if (r == BR_ERR(BR_EXDEV)) {
+                ok = ok && ((r == BR_ERR(EXDEV)) || (r == BR_ERR(ENOENT)));
+                if (r == BR_ERR(EXDEV)) {
                     br_log_info("[VFSCONF] note: 跨挂载硬链接 ⇒ -EXDEV(%s → %s)", deep, hard);
                 }
             }
@@ -703,7 +703,7 @@ int vfs_core_selftest(void)
         s[1] = (br_symlink("f20.bin", sym20) == BR_OK) &&
                (br_stat(sym20, &st) == BR_OK) && (st.type == BR_INODE_FILE);
         s[2] = (br_unlink(sym20) == BR_OK);
-        s[3] = (br_lstat(sym20, &(br_stat_t){0}) == BR_ERR(BR_ENOENT)) &&
+        s[3] = (br_lstat(sym20, &(br_stat_t){0}) == BR_ERR(ENOENT)) &&
                (br_stat(f20, &st) == BR_OK) && (st.size == 1u);
 
         /* rename 改的是**名字**: 数据与 nlink 都不变 */
@@ -711,10 +711,10 @@ int vfs_core_selftest(void)
         s[5] = (br_stat(hard20, &st) == BR_OK) && (st.nlink == 2u);
         s[6] = (br_rename(hard20, ren20) == BR_OK) &&
                (br_stat(ren20, &st) == BR_OK) && (st.nlink == 2u) &&
-               (br_lstat(hard20, &(br_stat_t){0}) == BR_ERR(BR_ENOENT));
+               (br_lstat(hard20, &(br_stat_t){0}) == BR_ERR(ENOENT));
 
         /* 链接算**目录项**: 目录非空 ⇒ rmdir 拒绝 */
-        s[7] = (br_rmdir(ldir) == BR_ERR(BR_ENOTEMPTY));
+        s[7] = (br_rmdir(ldir) == BR_ERR(ENOTEMPTY));
 
         /* 收尾: ldir 里还剩 link1(TC-VFS-014 的)与 hard1(TC-VFS-019 的) */
         s[8] = (br_unlink(ren20) == BR_OK) && (br_unlink(f20) == BR_OK) &&

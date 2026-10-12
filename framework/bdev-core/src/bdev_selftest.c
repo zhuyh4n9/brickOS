@@ -7,7 +7,7 @@
  * ## 它测什么, 与生产代码的边界在哪
  *   块设备子分类的**机制**(自编号 `TC-BDEV-*`): 名字/ops/几何的注册期校验、取回语义、
  *   注册表簿记、以及"bdev 条目没有文件面"(D21 ⇒ `/dev/<bdev>` 看得见打不开)。
- *   **不**测任何具体介质 —— 真实块的往返在驱动自己的套件里(如 `third_party/uboot-mmc`
+ *   **不**测任何具体介质 —— 真实块的往返在驱动自己的套件里(如 `adapter/uboot-mmc`
  *   的 `TC-EMMC-*`), 那是"设备"的证据, 不是"子分类框架"的证据。
  *
  * ## 为什么大量用例走"合法名字 + 非法输入"这一手
@@ -42,7 +42,7 @@ int bdev_core_selftest(void);
 static int probe_geometry(void *priv, br_bdev_geom_t *g)
 {
     if (priv == BR_NULL || g == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *g = *(const br_bdev_geom_t *)priv;
     return 0;
@@ -155,11 +155,11 @@ int bdev_core_selftest(void)
         const int r_slash = br_bdev_register("b/dev", &s_good_ops, &g);
         const int r_under = br_bdev_register("b_dev", &s_good_ops, &g);
 
-        const br_bool ok = (r_null == BR_ERR(BR_EINVAL)) &&
-                           (r_empty == BR_ERR(BR_EINVAL)) &&
-                           (r_upper == BR_ERR(BR_EINVAL)) &&
-                           (r_slash == BR_ERR(BR_EINVAL)) &&
-                           (r_under == BR_ERR(BR_EINVAL)) &&
+        const br_bool ok = (r_null == BR_ERR(EINVAL)) &&
+                           (r_empty == BR_ERR(EINVAL)) &&
+                           (r_upper == BR_ERR(EINVAL)) &&
+                           (r_slash == BR_ERR(EINVAL)) &&
+                           (r_under == BR_ERR(EINVAL)) &&
                            (br_dev_count() == n0);
         bd_conf(ok, "TC-BDEV-001",
                 "NULL/空/大写/斜杠/下划线名 ⇒ -EINVAL 且注册表不变");
@@ -175,11 +175,11 @@ int bdev_core_selftest(void)
         const int r_fl   = br_bdev_register("bdevtest0", &s_no_flush_ops, &g);
         const int r_gm   = br_bdev_register("bdevtest0", &s_no_geom_ops, &g);
 
-        const br_bool ok = (r_ops == BR_ERR(BR_EINVAL)) &&
-                           (r_rd == BR_ERR(BR_EINVAL)) &&
-                           (r_wr == BR_ERR(BR_EINVAL)) &&
-                           (r_fl == BR_ERR(BR_EINVAL)) &&
-                           (r_gm == BR_ERR(BR_EINVAL)) &&
+        const br_bool ok = (r_ops == BR_ERR(EINVAL)) &&
+                           (r_rd == BR_ERR(EINVAL)) &&
+                           (r_wr == BR_ERR(EINVAL)) &&
+                           (r_fl == BR_ERR(EINVAL)) &&
+                           (r_gm == BR_ERR(EINVAL)) &&
                            (br_dev_count() == n0) &&
                            (br_bdev_get("bdevtest0", BR_NULL) == BR_NULL);
         bd_conf(ok, "TC-BDEV-002",
@@ -208,13 +208,13 @@ int bdev_core_selftest(void)
         const int r_al   = br_bdev_register("bdevtest1", &s_good_ops, &g_align);
         const int r_both = br_bdev_register("bdevtest1", &s_good_ops, &g_both);
 
-        const br_bool ok = (r_sec == BR_ERR(BR_EINVAL)) &&
-                           (r_np2 == BR_ERR(BR_EINVAL)) &&
-                           (r_n == BR_ERR(BR_EINVAL)) &&
-                           (r_rw0 == BR_ERR(BR_EINVAL)) &&
-                           (r_rwbg == BR_ERR(BR_EINVAL)) &&
-                           (r_al == BR_ERR(BR_EINVAL)) &&
-                           (r_both == BR_ERR(BR_EINVAL)) &&
+        const br_bool ok = (r_sec == BR_ERR(EINVAL)) &&
+                           (r_np2 == BR_ERR(EINVAL)) &&
+                           (r_n == BR_ERR(EINVAL)) &&
+                           (r_rw0 == BR_ERR(EINVAL)) &&
+                           (r_rwbg == BR_ERR(EINVAL)) &&
+                           (r_al == BR_ERR(EINVAL)) &&
+                           (r_both == BR_ERR(EINVAL)) &&
                            (br_dev_count() == n0);
         bd_conf(ok, "TC-BDEV-003",
                 "sector=0/非 2 幂, n_sectors=0, max_rw=0/>n, align 非 2 幂, DMA|PIO 同置 ⇒ -EINVAL");
@@ -257,14 +257,14 @@ int bdev_core_selftest(void)
             void           *priv = BR_NULL;
             const br_bdev_ops_t *ops = br_bdev_get(name, &priv);
             br_bdev_geom_t  g = { 0u, 0u, 0u, 0u, 0u };
-            const int       grc = (ops != BR_NULL) ? ops->geometry(priv, &g) : BR_ERR(BR_EINVAL);
+            const int       grc = (ops != BR_NULL) ? ops->geometry(priv, &g) : BR_ERR(EINVAL);
             const int       dup = br_bdev_register(name, ops, priv);
 
             const br_bool ok = (ops != BR_NULL) && (e != BR_NULL) &&
                                (ops == (const br_bdev_ops_t *)e->class_priv) &&
                                (grc == 0) && (g.sector_size > 0u) && (g.n_sectors > 0u) &&
                                (g.max_rw > 0u) && ((br_u64)g.max_rw <= g.n_sectors) &&
-                               (dup == BR_ERR(BR_EEXIST));
+                               (dup == BR_ERR(EEXIST));
             bd_conf(ok, "TC-BDEV-006",
                     "取回 ops==条目 class_priv; 几何自洽; 重名重注册 ⇒ -EEXIST");
         }
@@ -290,7 +290,7 @@ int bdev_core_selftest(void)
             void                *priv = BR_NULL;
             const br_bdev_ops_t *ops = br_bdev_get(name, &priv);
             br_bdev_geom_t       g = { 0u, 0u, 0u, 0u, 0u };
-            const int            grc = (ops != BR_NULL) ? ops->geometry(priv, &g) : BR_ERR(BR_EINVAL);
+            const int            grc = (ops != BR_NULL) ? ops->geometry(priv, &g) : BR_ERR(EINVAL);
             const br_u32         known = BR_BDEV_F_READONLY | BR_BDEV_F_STACKED |
                                          BR_BDEV_F_DMA | BR_BDEV_F_PIO;
             const br_u32         both = BR_BDEV_F_DMA | BR_BDEV_F_PIO;

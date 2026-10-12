@@ -83,7 +83,7 @@ int br_service_selftest(void)
     {
         const int rp2 = br_service_publish(SVC_T_A, &ops_b);
         const void *still = br_service_lookup(SVC_T_A);
-        sc_report((rp2 == BR_ERR(BR_EEXIST)) && (still == (const void *)&ops_a),
+        sc_report((rp2 == BR_ERR(EEXIST)) && (still == (const void *)&ops_a),
                   "TC-SVC-002", "重复 publish ⇒ -EEXIST 且原 ops 未被覆盖");
     }
 
@@ -92,8 +92,8 @@ int br_service_selftest(void)
         const void *miss = br_service_lookup(SVC_T_B);
         const int   e_name = br_service_publish(BR_NULL, &ops_b);
         const int   e_ops  = br_service_publish(SVC_T_B, BR_NULL);
-        sc_report((miss == BR_NULL) && (e_name == BR_ERR(BR_EINVAL))
-                  && (e_ops == BR_ERR(BR_EINVAL)),
+        sc_report((miss == BR_NULL) && (e_name == BR_ERR(EINVAL))
+                  && (e_ops == BR_ERR(EINVAL)),
                   "TC-SVC-003", "lookup 缺失 ⇒ NULL; 空 name/空 ops ⇒ -EINVAL");
     }
 

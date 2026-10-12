@@ -92,10 +92,10 @@ static int uboot_fat_flush_volume(uboot_fat_vol_t *vol)
     int rc;
 
     if (vol == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((vol->bound == BR_FALSE) || (vol->ops == BR_NULL)) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -103,10 +103,10 @@ static int uboot_fat_flush_volume(uboot_fat_vol_t *vol)
     }
     if (uboot_fat_fsdata() != BR_NULL) {
         if (flush_dirty_fat_buffer(uboot_fat_fsdata()) < 0) {
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EIO);
         }
     }
-    return (vol->ops->flush(vol->priv) == 0) ? 0 : BR_ERR(BR_EIO);
+    return (vol->ops->flush(vol->priv) == 0) ? 0 : BR_ERR(EIO);
 }
 
 /* 文件面: 六个槽位填满 + 三个显式 BR_NULL(契约: 不支持的槽位 = BR_NULL ⇒ -ENOTSUP) */
@@ -237,23 +237,23 @@ int uboot_fat_join_path(const char *dir_path, const char *name,
     br_size_t i;
 
     if ((dir_path == BR_NULL) || (name == BR_NULL) || (out == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (dir_path[0] != '\0') {
         for (i = 0u; dir_path[i] != '\0'; i++) {
             if ((n + 1u) >= cap) {
-                return BR_ERR(BR_ENOSPC);
+                return BR_ERR(ENOSPC);
             }
             out[n++] = dir_path[i];
         }
         if ((n + 1u) >= cap) {
-            return BR_ERR(BR_ENOSPC);
+            return BR_ERR(ENOSPC);
         }
         out[n++] = '/';
     }
     for (i = 0u; name[i] != '\0'; i++) {
         if ((n + 1u) >= cap) {
-            return BR_ERR(BR_ENOSPC);
+            return BR_ERR(ENOSPC);
         }
         out[n++] = name[i];
     }
@@ -334,10 +334,10 @@ static int uboot_fat_size_of(const uboot_fat_ino_t *n, br_u32 *out)
 
     vol = uboot_fat_vol_get(n->vol);
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (n->path[0] == '\0') {
-        return BR_ERR(BR_EISDIR);          /* 卷根 ⇒ 目录 */
+        return BR_ERR(EISDIR);          /* 卷根 ⇒ 目录 */
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -346,14 +346,14 @@ static int uboot_fat_size_of(const uboot_fat_ino_t *n, br_u32 *out)
     if (fat_exists(n->path) == 0) {
         /* ★ 关键: 先判存在。u-boot 的 fs_size() 对"是目录"的路径**故意返回成功 + size 0**
          * (它的注释写着 fs_size 不该对目录失败)—— 直接用它会把目录当成 0 字节文件。 */
-        return BR_ERR(BR_ENOENT);
+        return BR_ERR(ENOENT);
     }
     rc = fat_size(n->path, &sz);
     if (rc < 0) {
         return rc;
     }
     if (sz < 0) {
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
     *out = (br_u32)sz;
     return 0;
@@ -366,7 +366,7 @@ static int uboot_fat_kind_of(const uboot_fat_ino_t *n, br_bool *is_dir)
     int rc;
 
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -391,7 +391,7 @@ static int uboot_fat_kind_of(const uboot_fat_ino_t *n, br_bool *is_dir)
         *is_dir = BR_FALSE;
         return 0;
     }
-    return BR_ERR(BR_ENOENT);
+    return BR_ERR(ENOENT);
 }
 
 /* 卷内绝对路径(上游风格): "/hello.txt" / "/dir" / "/"。返回 0 或负 errno。 */
@@ -400,7 +400,7 @@ static int uboot_fat_raw_path(const uboot_fat_ino_t *n, char *out, br_size_t cap
     const br_size_t need = uboot_fat_strlen(n->path) + 2u;
 
     if ((out == BR_NULL) || (need > cap)) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     out[0] = '/';
     memcpy(out + 1, n->path, uboot_fat_strlen(n->path) + 1u);
@@ -413,7 +413,7 @@ static int uboot_fat_fill_dirent(br_dirent_t *de, br_u32 type, const char *name)
     const br_size_t len = uboot_fat_strlen(name);
 
     if (len >= (br_size_t)UB_FAT_NAME_MAX) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     memset(de, 0, sizeof(*de));
     de->type     = type;
@@ -430,7 +430,7 @@ static int uboot_fat_file_open(br_file_t *f, br_u32 flags)
     int rc;
 
     if ((n == BR_NULL) || (n->type != BR_INODE_FILE)) {
-        return BR_ERR(BR_EISDIR);
+        return BR_ERR(EISDIR);
     }
     /* O_TRUNC: 打开即截断到 0(走同一个截断原语, 没有第二条"清空"路径) */
     if ((flags & BR_O_TRUNC) != 0u) {
@@ -471,7 +471,7 @@ static br_s64 uboot_fat_file_read(br_file_t *f, void *buf, br_size_t n)
     int rc;
 
     if ((node == BR_NULL) || (node->type != BR_INODE_FILE)) {
-        return BR_ERR(BR_EISDIR);
+        return BR_ERR(EISDIR);
     }
     if (n == 0u) {
         return 0;                            /* 空读是空操作 */
@@ -482,7 +482,7 @@ static br_s64 uboot_fat_file_read(br_file_t *f, void *buf, br_size_t n)
     }
     off = br_file_offset(f);
     if (off < 0) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((br_u64)off >= (br_u64)size) {
         return 0;                            /* 读到/越过 EOF: 0 字节是**成功** */
@@ -490,7 +490,7 @@ static br_s64 uboot_fat_file_read(br_file_t *f, void *buf, br_size_t n)
 
     vol = uboot_fat_vol_get(node->vol);
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -524,7 +524,7 @@ static br_s64 uboot_fat_file_write(br_file_t *f, const void *buf, br_size_t n)
     int rc;
 
     if ((node == BR_NULL) || (node->type != BR_INODE_FILE)) {
-        return BR_ERR(BR_EISDIR);
+        return BR_ERR(EISDIR);
     }
     /* BR_O_APPEND 的契约是"**每次写前**定位到末尾", 所以零长度写也要先定位 */
     if ((br_file_flags(f) & BR_O_APPEND) != 0u) {
@@ -542,12 +542,12 @@ static br_s64 uboot_fat_file_write(br_file_t *f, const void *buf, br_size_t n)
     }
     off = br_file_offset(f);
     if (off < 0) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     vol = uboot_fat_vol_get(node->vol);
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -578,7 +578,7 @@ static br_s64 uboot_fat_file_lseek(br_file_t *f, br_s64 off, int whence)
     int rc;
 
     if ((node == BR_NULL) || (node->type != BR_INODE_FILE)) {
-        return BR_ERR(BR_EISDIR);
+        return BR_ERR(EISDIR);
     }
     switch (whence) {
     case BR_SEEK_SET:
@@ -599,13 +599,13 @@ static br_s64 uboot_fat_file_lseek(br_file_t *f, br_s64 off, int whence)
         break;
     }
     default:
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (base < 0) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (__builtin_add_overflow(base, off, &pos) || (pos < 0)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     br_file_set_offset(f, pos);
     return pos;
@@ -630,7 +630,7 @@ static int uboot_fat_fsync(br_file_t *f)
     uboot_fat_vol_t *vol;
 
     if (node == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     vol = uboot_fat_vol_get(node->vol);
     return uboot_fat_flush_volume(vol);   /* 与 fs_ops.sync **同一段代码** */
@@ -655,12 +655,12 @@ static int uboot_fat_dir_open(br_file_t *f, br_u32 flags)
     int rc;
 
     if ((node == BR_NULL) || (node->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     (void)flags;                     /* vfs 已挡下"目录写打开 ⇒ -EISDIR" */
     vol = uboot_fat_vol_get(node->vol);
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -687,12 +687,12 @@ static br_s64 uboot_fat_dir_read(br_file_t *f, void *buf, br_size_t n)
     int rc;
 
     if (dir == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 定长记录不可截断(与 fs/tmpfs 同口径): 装不下一条就 -EINVAL ——
      * 返回 0 会被 br_readdir 读成"目录已穷尽", 那是撒谎。 */
     if ((buf == BR_NULL) || (n < (br_size_t)sizeof(br_dirent_t))) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* 头两条就地合成(见文件头): FAT 的根目录里没有 "."/".."。 */
@@ -794,7 +794,7 @@ static br_inode_t *uboot_fat_lookup(br_inode_t *dir, const char *name)
         probe.size = 0u;
         uboot_fat_strcpy(probe.path, child, UB_FAT_PATH_MAX);
         rc = uboot_fat_kind_of(&probe, &is_dir);
-        if (rc == BR_ERR(BR_ENOENT)) {
+        if (rc == BR_ERR(ENOENT)) {
             return BR_NULL;                 /* 未命中: BR_NULL(不是错误码) */
         }
         if (rc != 0) {
@@ -823,22 +823,22 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
     int rc;
 
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *out = BR_NULL;
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     /* 名字规则里"超长"这一支给 -ENOSPC(与 fs/tmpfs 同口径: 本仓库用定长目录项) */
     if (uboot_fat_name_dot(name) == BR_TRUE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (uboot_fat_name_ok(name) == BR_FALSE) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     d = uboot_fat_node(dir);
     if (d == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     rc = uboot_fat_join_path(d->path, name, child, sizeof(child));
     if (rc != 0) {
@@ -856,14 +856,14 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
         if (rc == 0) {
             /* 已存在: O_EXCL ⇒ -EEXIST; 否则复用(Linux 口径; vfs 的走查已经先 lookup 过一次) */
             if ((flags & BR_O_EXCL) != 0u) {
-                return BR_ERR(BR_EEXIST);
+                return BR_ERR(EEXIST);
             }
             if (is_dir == BR_TRUE) {
-                return BR_ERR(BR_EISDIR);
+                return BR_ERR(EISDIR);
             }
             n = uboot_fat_node_new(d->vol, BR_INODE_FILE, child, 0u);
             if (n == BR_NULL) {
-                return BR_ERR(BR_ENOMEM);
+                return BR_ERR(ENOMEM);
             }
             rc = uboot_fat_size_of(n, &n->size);
             if (rc != 0) {
@@ -873,7 +873,7 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
             *out = &n->head;
             return 0;
         }
-        if (rc != BR_ERR(BR_ENOENT)) {
+        if (rc != BR_ERR(ENOENT)) {
             return rc;
         }
     }
@@ -887,7 +887,7 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
         loff_t act = 0;
 
         if (vol == BR_NULL) {
-            return BR_ERR(BR_ENODEV);
+            return BR_ERR(ENODEV);
         }
         rc = uboot_fat_vol_bind(vol);
         if (rc != 0) {
@@ -903,7 +903,7 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
 
     n = uboot_fat_node_new(d->vol, BR_INODE_FILE, child, 0u);
     if (n == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     *out = &n->head;
     return 0;
@@ -919,14 +919,14 @@ static int uboot_fat_unlink(br_inode_t *dir, const char *name)
     int rc;
 
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     if ((uboot_fat_name_dot(name) == BR_TRUE) || (uboot_fat_name_ok(name) == BR_FALSE)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     d = uboot_fat_node(dir);
     if (d == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     rc = uboot_fat_join_path(d->path, name, child, sizeof(child));
     if (rc != 0) {
@@ -944,12 +944,12 @@ static int uboot_fat_unlink(br_inode_t *dir, const char *name)
             return rc;                       /* -ENOENT 原样上传 */
         }
         if (is_dir == BR_TRUE) {
-            return BR_ERR(BR_EISDIR);        /* 目录要 rmdir */
+            return BR_ERR(EISDIR);        /* 目录要 rmdir */
         }
     }
     vol = uboot_fat_vol_get(d->vol);
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -970,14 +970,14 @@ static int uboot_fat_mkdir(br_inode_t *dir, const char *name)
     int rc;
 
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     if ((uboot_fat_name_dot(name) == BR_TRUE) || (uboot_fat_name_ok(name) == BR_FALSE)) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     d = uboot_fat_node(dir);
     if (d == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     rc = uboot_fat_join_path(d->path, name, child, sizeof(child));
     if (rc != 0) {
@@ -985,7 +985,7 @@ static int uboot_fat_mkdir(br_inode_t *dir, const char *name)
     }
     vol = uboot_fat_vol_get(d->vol);
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -1008,14 +1008,14 @@ static int uboot_fat_rmdir(br_inode_t *dir, const char *name)
     int rc;
 
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     if ((uboot_fat_name_dot(name) == BR_TRUE) || (uboot_fat_name_ok(name) == BR_FALSE)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     d = uboot_fat_node(dir);
     if (d == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     rc = uboot_fat_join_path(d->path, name, child, sizeof(child));
     if (rc != 0) {
@@ -1033,12 +1033,12 @@ static int uboot_fat_rmdir(br_inode_t *dir, const char *name)
             return rc;
         }
         if (is_dir == BR_FALSE) {
-            return BR_ERR(BR_ENOTDIR);
+            return BR_ERR(ENOTDIR);
         }
     }
     vol = uboot_fat_vol_get(d->vol);
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -1062,28 +1062,28 @@ static int uboot_fat_rename(br_inode_t *dir, const char *name,
     int rc;
 
     if ((dir == BR_NULL) || (ndir == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((dir->type != BR_INODE_DIR) || (ndir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     /* 源与目标是同一卷(跨挂载由 vfs 在更前面挡下) */
     if (dir->iops != &s_dir_iops) {
-        return BR_ERR(BR_EXDEV);
+        return BR_ERR(EXDEV);
     }
     d  = uboot_fat_node(dir);
     nd = uboot_fat_node(ndir);
     if ((d == BR_NULL) || (nd == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (d->vol != nd->vol) {
-        return BR_ERR(BR_EXDEV);
+        return BR_ERR(EXDEV);
     }
     if ((uboot_fat_name_dot(name) == BR_TRUE) ||
         (uboot_fat_name_dot(nname) == BR_TRUE) ||
         (uboot_fat_name_ok(name) == BR_FALSE) ||
         (uboot_fat_name_ok(nname) == BR_FALSE)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     rc = uboot_fat_join_path(d->path, name, child, sizeof(child));
     if (rc != 0) {
@@ -1095,7 +1095,7 @@ static int uboot_fat_rename(br_inode_t *dir, const char *name,
     }
     vol = uboot_fat_vol_get(d->vol);
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -1115,14 +1115,14 @@ static int uboot_fat_getattr(br_inode_t *ino, br_stat_t *st)
     uboot_fat_ino_t *n;
 
     if ((ino == BR_NULL) || (st == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((ino->type != BR_INODE_DIR) && (ino->type != BR_INODE_FILE)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     n = uboot_fat_node(ino);
     if (n == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     st->valid = BR_STAT_SIZE;      /* nlink 不置位: FAT 没有硬链接(契约允许不填) */
     st->type  = ino->type;
@@ -1150,25 +1150,25 @@ static int uboot_fat_setattr(br_inode_t *ino, const br_stat_t *st)
     int rc;
 
     if ((ino == BR_NULL) || (st == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* v1 只认 size(截断)。不认的位**必须**报 -ENOTSUP —— 假装成功比拒绝危险。 */
     if ((st->valid & ~(br_u32)BR_STAT_SIZE) != 0u) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if ((st->valid & BR_STAT_SIZE) == 0u) {
         return 0;                  /* 没要求改任何东西 */
     }
     if (ino->type != BR_INODE_FILE) {
-        return BR_ERR(BR_EISDIR);
+        return BR_ERR(EISDIR);
     }
     n = uboot_fat_node(ino);
     if (n == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     vol = uboot_fat_vol_get(n->vol);
     if (vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
@@ -1206,11 +1206,11 @@ static int uboot_fat_mount_check(const uboot_fat_vol_t *vol, char *why, br_size_
 
     if (fs->clust_size == 0u) {
         uboot_fat_strcpy(why, "cluster size is zero", cap);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((br_u64)fs->total_sect > n_sectors) {
         uboot_fat_strcpy(why, "BPB total_sect > device sectors", cap);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     if (fs->fatsize == 32) {
@@ -1221,7 +1221,7 @@ static int uboot_fat_mount_check(const uboot_fat_vol_t *vol, char *why, br_size_
     }
     if (data_start >= fs->total_sect) {
         uboot_fat_strcpy(why, "data area starts past volume end", cap);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     total_clusters = (fs->total_sect - data_start) / (br_u32)fs->clust_size;
 
@@ -1240,11 +1240,11 @@ static int uboot_fat_mount_check(const uboot_fat_vol_t *vol, char *why, br_size_
         break;
     default:
         uboot_fat_strcpy(why, "unknown FAT type", cap);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((total_clusters < lo) || (total_clusters > hi)) {
         uboot_fat_strcpy(why, "cluster count inconsistent with FAT type", cap);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     return 0;
 }
@@ -1259,11 +1259,11 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
     int rc;
 
     if ((fs == BR_NULL) || (cfg == BR_NULL) || (cfg->path == BR_NULL) || (root == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *root = BR_NULL;
     if ((fs->vol == BR_NULL) || (fs->root != BR_NULL)) {
-        return BR_ERR(BR_EINVAL);           /* mount 只跑一次(契约: 同一 path 二次注册 = -EEXIST) */
+        return BR_ERR(EINVAL);           /* mount 只跑一次(契约: 同一 path 二次注册 = -EEXIST) */
     }
     vol = fs->vol;
 
@@ -1277,7 +1277,7 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
     if (&vol[0] != uboot_fat_vol_get(id)) {
         br_log_error("uboot-fat: %s maps to a different volume than %s",
                      cfg->path, vol->mnt);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     rc = uboot_fat_vol_bind(vol);
@@ -1296,7 +1296,7 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
     r = uboot_fat_node_new(id, BR_INODE_DIR, "", 0u);
     if (r == BR_NULL) {
         uboot_fat_vol_unbind();
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     fs->root = &r->head;
 
@@ -1325,7 +1325,7 @@ static int uboot_fat_sync(void *fs_priv)
     uboot_fat_fs_t *fs = (uboot_fat_fs_t *)fs_priv;
 
     if (fs == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     return uboot_fat_flush_volume(fs->vol);
 }
@@ -1341,7 +1341,7 @@ int uboot_fat_test_sync(const char *mnt)
             return uboot_fat_sync(s_slots[i].fs);
         }
     }
-    return BR_ERR(BR_ENOENT);
+    return BR_ERR(ENOENT);
 }
 
 int uboot_fat_mount_vol_info(const char *mnt, uboot_fat_vol_info_t *out)
@@ -1349,7 +1349,7 @@ int uboot_fat_mount_vol_info(const char *mnt, uboot_fat_vol_info_t *out)
     br_u32 i;
 
     if ((mnt == BR_NULL) || (out == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     for (i = 0u; i < (br_u32)UB_FAT_VOL_MAX; i++) {
         if ((s_slots[i].mnt != BR_NULL) &&
@@ -1357,7 +1357,7 @@ int uboot_fat_mount_vol_info(const char *mnt, uboot_fat_vol_info_t *out)
             return uboot_fat_vol_info(i, out);
         }
     }
-    return BR_ERR(BR_ENOENT);
+    return BR_ERR(ENOENT);
 }
 
 /* ==================================================================== 生命周期
@@ -1401,11 +1401,11 @@ int uboot_fat_start(void)
         rc = uboot_fat_mount_to_vol(s_slots[i].mnt, &id);
         if ((rc != 0) || (id != i)) {
             br_log_error("uboot-fat: slot table inconsistent at %s", s_slots[i].mnt);
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
         fs = (uboot_fat_fs_t *)br_malloc(sizeof(*fs));
         if (fs == BR_NULL) {
-            return BR_ERR(BR_ENOMEM);
+            return BR_ERR(ENOMEM);
         }
         fs->vol  = uboot_fat_vol_get(id);
         fs->root = BR_NULL;

@@ -142,8 +142,8 @@ static void host_case_slice(void)
         br_task_yield();
     }
 
-    const int j1 = (ta != BR_NULL) ? br_task_join(ta, BR_NULL) : BR_ERR(BR_EINVAL);
-    const int j2 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j1 = (ta != BR_NULL) ? br_task_join(ta, BR_NULL) : BR_ERR(EINVAL);
+    const int j2 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(EINVAL);
 
     const char *p = (const char *)s_trace;
     printf("[HOSTTEST] TRACE rr slice seq=%.8s (n=%d, slice=%u ticks)\n",
@@ -199,8 +199,8 @@ static void host_case_no_tick(void)
 
     const int r1 = br_task_create(&tb, &ab, host_busy_notick, BR_NULL);
     const int r2 = br_task_create(&tv, &av, host_victim, BR_NULL);
-    const int j1 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(BR_EINVAL);
-    const int j2 = (tv != BR_NULL) ? br_task_join(tv, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j1 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(EINVAL);
+    const int j2 = (tv != BR_NULL) ? br_task_join(tv, BR_NULL) : BR_ERR(EINVAL);
 
     host_check((r1 == 0) && (r2 == 0) && (j1 == 0) && (j2 == 0) &&
                (s_notick_victim == 1),

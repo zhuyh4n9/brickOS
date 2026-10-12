@@ -79,7 +79,7 @@
 #define UB_FAT_SECTOR_SIZE   512u
 
 /* 名字上界(本仓库 BR_NAME_MAX = 32, br_dirent_t.name[32])。
- * 长名(LFN)字节数超过它就 ⇒ BR_ERR(BR_ENOSPC)(与 fs/tmpfs 同口径)。 */
+ * 长名(LFN)字节数超过它就 ⇒ BR_ERR(ENOSPC)(与 fs/tmpfs 同口径)。 */
 #define UB_FAT_NAME_MAX      BR_NAME_MAX
 
 /* 拼接后路径缓冲上界(挂载点 ≤ 8 + '/' + 名字 ≤ 31 + '\0' = 40; 留 256 给未来的深路径)。

@@ -270,7 +270,7 @@ static void case_task_002(void)
     int code = -1;
 
     const int r = br_task_create(&t, &a, conf_entry_code, (void *)(br_intptr_t)42);
-    const int j = (t != BR_NULL) ? br_task_join(t, &code) : BR_ERR(BR_EINVAL);
+    const int j = (t != BR_NULL) ? br_task_join(t, &code) : BR_ERR(EINVAL);
 
     conf_result((r == 0) && (j == 0) && (code == 42), "TC-TASK-002",
                 "join 拿到退出码 42");
@@ -295,7 +295,7 @@ static void case_task_003_interleave(void)
     const int rf = br_task_create(&tf, &af, conf_entry_flag, BR_NULL);
     br_task_yield();
     const br_bool ran = (s_flag_a == 1);
-    const int jf = (tf != BR_NULL) ? br_task_join(tf, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int jf = (tf != BR_NULL) ? br_task_join(tf, BR_NULL) : BR_ERR(EINVAL);
     conf_result((rf == 0) && (jf == 0) && ran, "TC-TASK-003",
                 "yield 让出后另一个线程真的跑过");
 
@@ -311,8 +311,8 @@ static void case_task_003_interleave(void)
     const int r1 = br_task_create(&ta, &a1, conf_entry_ab, (void *)(br_intptr_t)'A');
     const int r2 = br_task_create(&tb, &a2, conf_entry_ab, (void *)(br_intptr_t)'B');
 
-    const int j1 = (ta != BR_NULL) ? br_task_join(ta, &code_a) : BR_ERR(BR_EINVAL);
-    const int j2 = (tb != BR_NULL) ? br_task_join(tb, &code_b) : BR_ERR(BR_EINVAL);
+    const int j1 = (ta != BR_NULL) ? br_task_join(ta, &code_a) : BR_ERR(EINVAL);
+    const int j2 = (tb != BR_NULL) ? br_task_join(tb, &code_b) : BR_ERR(EINVAL);
 
     const char *p = (const char *)s_seq;
     const br_bool seq_ok = (s_seq_n == 8) &&
@@ -337,7 +337,7 @@ static void case_task_004(void)
     br_task_yield();                    /* 让它跑完(entry 返回 ⇒ trampoline ⇒ exit) */
 
     const br_bool zombie = (t != BR_NULL) && (br_task_state(t) == BR_TASK_ZOMBIE);
-    const int j = (t != BR_NULL) ? br_task_join(t, &code) : BR_ERR(BR_EINVAL);
+    const int j = (t != BR_NULL) ? br_task_join(t, &code) : BR_ERR(EINVAL);
 
     conf_result((r == 0) && zombie && (j == 0) && (code == 0), "TC-TASK-004",
                 "exit 后 state=ZOMBIE 且 join 回收");
@@ -366,7 +366,7 @@ static void case_task_005(void)
 
     br_bool all = BR_TRUE;
     for (br_u32 i = 0u; i < BR_ARRAY_SIZE(r); i++) {
-        if (r[i] != BR_ERR(BR_EINVAL)) {
+        if (r[i] != BR_ERR(EINVAL)) {
             all = BR_FALSE;
         }
     }
@@ -391,7 +391,7 @@ static void case_task_006(void)
         }
     }
 
-    conf_result(last == BR_ERR(BR_ENOMEM), "TC-TASK-006",
+    conf_result(last == BR_ERR(ENOMEM), "TC-TASK-006",
                 "TCB 池满 ⇒ -ENOMEM(池上限是硬上界)");
 
     for (br_u32 i = 0u; i < n; i++) {
@@ -406,7 +406,7 @@ static void case_task_007(void)
 
     s_probe_addr = 0u;
     const int r = br_task_create(&t, &a, conf_entry_probe, BR_NULL);
-    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(EINVAL);
 
     const br_uintptr_t top = (br_uintptr_t)a.stack;
     const br_uintptr_t lo  = top - (br_uintptr_t)a.stack_size;
@@ -424,7 +424,7 @@ static void case_time_001(void)
     s_sleep_delta = 0u;
     s_sleep_rc = -1;
     const int r = br_task_create(&t, &a, conf_entry_sleep, BR_NULL);
-    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(EINVAL);
 
     conf_result((r == 0) && (j == 0) && (s_sleep_rc == 0) && (s_sleep_delta >= 2000u),
                 "TC-TIME-001", "sleep(2000us) 不早醒(实测 >= 请求值)");
@@ -450,7 +450,7 @@ static void case_time_003(void)
 {
     const int r = br_task_sleep(BR_TIMEOUT_INF);
 
-    conf_result(r == BR_ERR(BR_EINVAL), "TC-TIME-003", "sleep(INF) ⇒ -EINVAL(裁定 G13)");
+    conf_result(r == BR_ERR(EINVAL), "TC-TIME-003", "sleep(INF) ⇒ -EINVAL(裁定 G13)");
 }
 
 /*
@@ -479,7 +479,7 @@ static void case_task_104_ready_set(void)
     br_task_yield();
     const br_u32 after_exit = br_sched_ready_count();
 
-    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(EINVAL);
     const br_u32 after_join = br_sched_ready_count();
 
     br_log_info("[TASKCONF] TRACE ready-set base=%u +create=%u +exit=%u +join=%u",
@@ -517,8 +517,8 @@ static void case_task_101_coop(void)
     /* 先建 busy 再建 victim ⇒ 就绪队序 [busy, victim]; join(busy) 后 busy 先跑。 */
     const int r1 = br_task_create(&tb, &ab, conf_entry_busy, BR_NULL);
     const int r2 = br_task_create(&tv, &av, conf_entry_victim, BR_NULL);
-    const int j1 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(BR_EINVAL);
-    const int j2 = (tv != BR_NULL) ? br_task_join(tv, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j1 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(EINVAL);
+    const int j2 = (tv != BR_NULL) ? br_task_join(tv, BR_NULL) : BR_ERR(EINVAL);
 
     conf_result((r1 == 0) && (r2 == 0) && (j1 == 0) && (j2 == 0) &&
                 (s_preempt_seen == 0) && (s_victim_after_yield == 1) &&
@@ -549,8 +549,8 @@ static void case_task_102_preempt(void)
 
     const int r1 = br_task_create(&tb, &ab, conf_entry_busy_preempt, BR_NULL);
     const int r2 = br_task_create(&tv, &av, conf_entry_victim, BR_NULL);
-    const int j1 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(BR_EINVAL);
-    const int j2 = (tv != BR_NULL) ? br_task_join(tv, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j1 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(EINVAL);
+    const int j2 = (tv != BR_NULL) ? br_task_join(tv, BR_NULL) : BR_ERR(EINVAL);
     const br_time_t elapsed = br_clock_now() - t0;
 
     br_log_info("[TASKCONF] TRACE preempt busy_us=%lu victim_ticks=%u seen=%d",
@@ -586,8 +586,8 @@ static void case_task_103_critical(void)
 
     const int r1 = br_task_create(&tc, &ac, conf_entry_crit, BR_NULL);
     const int r2 = br_task_create(&tv, &av, conf_entry_victim, BR_NULL);
-    const int j1 = (tc != BR_NULL) ? br_task_join(tc, BR_NULL) : BR_ERR(BR_EINVAL);
-    const int j2 = (tv != BR_NULL) ? br_task_join(tv, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j1 = (tc != BR_NULL) ? br_task_join(tc, BR_NULL) : BR_ERR(EINVAL);
+    const int j2 = (tv != BR_NULL) ? br_task_join(tv, BR_NULL) : BR_ERR(EINVAL);
 
     br_log_info("[TASKCONF] TRACE crit spins=%u violation=%d after_yield=%d",
                 (unsigned)s_crit_ticks, s_crit_violation, s_victim_after_yield);

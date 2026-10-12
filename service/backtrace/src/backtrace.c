@@ -182,7 +182,7 @@ br_u32 br_bt_capture_from(br_uintptr_t fp, br_uintptr_t pc,
 int br_bt_set_stack_bounds(br_uintptr_t bottom, br_uintptr_t top)
 {
     if ((bottom == 0u) || (top <= bottom)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     s_stack_bottom = bottom;
     s_stack_top    = top;

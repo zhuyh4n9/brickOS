@@ -268,7 +268,7 @@ static void pl011_drain_rx(pl011_sess_t *s)
 static int pl011_divisors_for(br_u32 baud, br_u32 *ibrd_out, br_u32 *fbrd_out)
 {
     if (baud == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_u32 ibrd = BR_PL011_DIV_IBRD(BR_PL011_REFCLK_HZ, baud);
@@ -279,7 +279,7 @@ static int pl011_divisors_for(br_u32 baud, br_u32 *ibrd_out, br_u32 *fbrd_out)
         fbrd -= 64u;
     }
     if ((ibrd == 0u) || (ibrd > 0xffffu)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     *ibrd_out = ibrd;
@@ -332,16 +332,16 @@ static int pl011_open(void *dev_priv, br_u32 flags, void **sess)
     /* v1 只有一个实例: CORE 相注册时给的私有必然是 &s_dev。核验而不是静默忽略 ——
      * 框架送来别的私有, 说明注册/查找配错了对, 早失败比"打开了一个影子设备"好。 */
     if ((dev_priv != (void *)&s_dev) || (sess == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     if (s_dev.opened != BR_FALSE) {
-        return BR_ERR(BR_EBUSY);   /* 独占: 策略在驱动, 见抬头 ③ */
+        return BR_ERR(EBUSY);   /* 独占: 策略在驱动, 见抬头 ③ */
     }
 
     pl011_sess_t *s = (pl011_sess_t *)br_malloc(sizeof(pl011_sess_t));
     if (s == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
 
     s->flags      = flags;   /* 原样存: v1 只解释 BR_O_NONBLOCK, 其余留给后续(不假装支持) */
@@ -361,7 +361,7 @@ static int pl011_open(void *dev_priv, br_u32 flags, void **sess)
 static br_s64 pl011_read(void *sess, void *buf, br_size_t n)
 {
     if ((sess == BR_NULL) || ((buf == BR_NULL) && (n > 0u))) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     pl011_sess_t *s   = (pl011_sess_t *)sess;
@@ -383,7 +383,7 @@ static br_s64 pl011_read(void *sess, void *buf, br_size_t n)
             break;                                          /* 短读返回 */
         }
         if ((s->flags & BR_O_NONBLOCK) != 0u) {
-            return BR_ERR(BR_EAGAIN);                       /* SD-7 v1: 非阻塞 = 问一次 */
+            return BR_ERR(EAGAIN);                       /* SD-7 v1: 非阻塞 = 问一次 */
         }
 
         /* 阻塞等: sleep 而不是自旋 —— 等的是外部世界, 可能等很久, 不能占着 CPU 空转
@@ -403,7 +403,7 @@ static br_s64 pl011_read(void *sess, void *buf, br_size_t n)
 static br_s64 pl011_write(void *sess, const void *buf, br_size_t n)
 {
     if ((sess == BR_NULL) || ((buf == BR_NULL) && (n > 0u))) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_u8 *p = (const br_u8 *)buf;
@@ -428,7 +428,7 @@ static br_s64 pl011_write(void *sess, const void *buf, br_size_t n)
 static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
 {
     if (sess == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     pl011_sess_t *s = (pl011_sess_t *)sess;
@@ -436,13 +436,13 @@ static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
     /* 族魔数不对 ⇒ 这条命令不归本器件管。用 -ENOTSUP 而不是 -EINVAL: 命令本身可能是合法的
      * (别的器件族), 只是没人实现 —— 与"给我的参数不对"必须分开(SD-10)。 */
     if (BR_IOC_TYPE(cmd) != (br_u32)BR_UART_IOC_MAGIC) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     switch (BR_IOC_NR(cmd)) {
     case BR_UART_IOC_GET_INFO: {
         if (arg == BR_NULL) {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
 
         /* 顺带采样一次 overrun(抬头 ④): 查询时把"上次读之后又丢过字节"如实反映出来。
@@ -465,7 +465,7 @@ static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
 
     case BR_UART_IOC_SET_BAUD: {
         if (arg == BR_NULL) {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
 
         /* arg = br_u32 波特率(值传递, 不是结构体)。解引用由调用方保证对齐(vfs 传的是
@@ -486,7 +486,7 @@ static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
 
     default:
         /* 未知 nr(wrong magic 已在上面挡掉): 明确地"不支持", 不静默成功 */
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 }
 
@@ -499,7 +499,7 @@ static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
 static int pl011_poll(void *sess, br_u32 *events)
 {
     if ((sess == BR_NULL) || (events == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_u32 fr = pl011_reg_read(BR_PL011_FR);
@@ -524,7 +524,7 @@ static int pl011_poll(void *sess, br_u32 *events)
 static int pl011_close(void *sess)
 {
     if (sess == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_free(sess);
@@ -542,13 +542,13 @@ static int pl011_close(void *sess)
 static int pl011_suspend(void *dev_priv)
 {
     (void)dev_priv;
-    return BR_ERR(BR_ENOTSUP);
+    return BR_ERR(ENOTSUP);
 }
 
 static int pl011_resume(void *dev_priv)
 {
     (void)dev_priv;
-    return BR_ERR(BR_ENOTSUP);
+    return BR_ERR(ENOTSUP);
 }
 
 /* ops 表(静态 const: 布局与内容都是契约; 全槽位显式给出, 不靠 C 的零初始化) */

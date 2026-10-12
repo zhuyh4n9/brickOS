@@ -116,7 +116,7 @@ static void sync_mutex_release_locked(br_mutex_t *m)
 int br_mutex_init(br_mutex_t *m)
 {
     if (m == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -132,7 +132,7 @@ int br_mutex_init(br_mutex_t *m)
 int br_mutex_lock_to(br_mutex_t *m, br_time_t timeout)
 {
     if (!SYNC_MUTEX_OK(m)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_thread_t   *self = br_task_self();
@@ -152,17 +152,17 @@ int br_mutex_lock_to(br_mutex_t *m, br_time_t timeout)
          * 是本刀的偏离, 已按设计改回(ADR-0007 §2.7); spinlock 的 trylock 仍用
          * `-EBUSY`(它不在设计面内, 是本刀新增, 见 br_sync.h 头注)。 */
         br_irq_unlock(st);
-        return BR_ERR(BR_ETIMEDOUT);
+        return BR_ERR(ETIMEDOUT);
     }
 
     if (self == BR_NULL) {                       /* 有锁要等, 但没有线程上下文 */
         br_irq_unlock(st);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     br_waitq_push(&m->head, self);
     m->waiters++;
-    self->wait_status = BR_ERR(BR_ETIMEDOUT);    /* ICB: 乐观之前先立悲观默认 */
+    self->wait_status = BR_ERR(ETIMEDOUT);    /* ICB: 乐观之前先立悲观默认 */
     br_irq_unlock(st);
 
     const int rc = br_sched_block_current(sync_deadline(timeout));
@@ -178,7 +178,7 @@ int br_mutex_lock(br_mutex_t *m)
 int br_mutex_unlock(br_mutex_t *m)
 {
     if (!SYNC_MUTEX_OK(m)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_thread_t   *self = br_task_self();
@@ -186,7 +186,7 @@ int br_mutex_unlock(br_mutex_t *m)
 
     if ((m->locked == 0u) || (m->owner != self)) {
         br_irq_unlock(st);
-        return BR_ERR(BR_EPERM);
+        return BR_ERR(EPERM);
     }
 
     sync_mutex_release_locked(m);
@@ -217,7 +217,7 @@ br_thread_t *br_mutex_owner(const br_mutex_t *m)
 int br_sem_init(br_sem_t *s, unsigned initial)
 {
     if (s == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -232,7 +232,7 @@ int br_sem_init(br_sem_t *s, unsigned initial)
 int br_sem_take(br_sem_t *s, br_time_t timeout)
 {
     if (!SYNC_SEM_OK(s)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_thread_t   *self = br_task_self();
@@ -246,17 +246,17 @@ int br_sem_take(br_sem_t *s, br_time_t timeout)
 
     if (timeout == BR_TIMEOUT_ZERO) {            /* 零期限 = 立刻到期 */
         br_irq_unlock(st);
-        return BR_ERR(BR_ETIMEDOUT);
+        return BR_ERR(ETIMEDOUT);
     }
 
     if (self == BR_NULL) {
         br_irq_unlock(st);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     br_waitq_push(&s->head, self);
     s->waiters++;
-    self->wait_status = BR_ERR(BR_ETIMEDOUT);
+    self->wait_status = BR_ERR(ETIMEDOUT);
     br_irq_unlock(st);
 
     const int rc = br_sched_block_current(sync_deadline(timeout));
@@ -271,7 +271,7 @@ int br_sem_take(br_sem_t *s, br_time_t timeout)
 int br_sem_give(br_sem_t *s)
 {
     if (!SYNC_SEM_OK(s)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -305,7 +305,7 @@ br_u32 br_sem_count(const br_sem_t *s)
 int br_cond_init(br_cond_t *c)
 {
     if (c == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -319,7 +319,7 @@ int br_cond_init(br_cond_t *c)
 int br_cond_wait(br_cond_t *c, br_mutex_t *m, br_time_t timeout)
 {
     if (!SYNC_COND_OK(c) || !SYNC_MUTEX_OK(m)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_thread_t *self = br_task_self();
@@ -327,7 +327,7 @@ int br_cond_wait(br_cond_t *c, br_mutex_t *m, br_time_t timeout)
 
     if ((m->locked == 0u) || (m->owner != self)) {   /* cond_wait 的前提: 持有 m */
         br_irq_unlock(st);
-        return BR_ERR(BR_EPERM);
+        return BR_ERR(EPERM);
     }
 
     /*
@@ -340,17 +340,17 @@ int br_cond_wait(br_cond_t *c, br_mutex_t *m, br_time_t timeout)
         sync_mutex_release_locked(m);
         br_irq_unlock(st);
         const int rl = br_mutex_lock(m);
-        return (rl != 0) ? rl : BR_ERR(BR_ETIMEDOUT);
+        return (rl != 0) ? rl : BR_ERR(ETIMEDOUT);
     }
 
     if (self == BR_NULL) {                           /* 要阻塞, 但没有线程上下文 */
         br_irq_unlock(st);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     br_waitq_push(&c->head, self);
     c->waiters++;
-    self->wait_status = BR_ERR(BR_ETIMEDOUT);
+    self->wait_status = BR_ERR(ETIMEDOUT);
     sync_mutex_release_locked(m);                    /* 原子: 放锁(可能交接给 mutex 等待者) */
     br_irq_unlock(st);
 
@@ -380,7 +380,7 @@ int br_cond_wait(br_cond_t *c, br_mutex_t *m, br_time_t timeout)
 int br_cond_signal(br_cond_t *c)
 {
     if (!SYNC_COND_OK(c)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -401,7 +401,7 @@ int br_cond_signal(br_cond_t *c)
 int br_cond_broadcast(br_cond_t *c)
 {
     if (!SYNC_COND_OK(c)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -438,7 +438,7 @@ static volatile br_u32 s_spin_contention;   /* 进过自旋循环的次数 */
 int br_spinlock_init(br_spinlock_t *s)
 {
     if (s == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -475,14 +475,14 @@ br_irq_state_t br_spinlock_lock(br_spinlock_t *s)
 int br_spinlock_trylock(br_spinlock_t *s, br_irq_state_t *saved)
 {
     if (!SYNC_SPIN_OK(s)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
 
     if (s->lock != 0u) {
         br_irq_unlock(st);                   /* 忙: 不持锁、不改 *saved */
-        return BR_ERR(BR_EBUSY);
+        return BR_ERR(EBUSY);
     }
 
     s->lock = 1u;

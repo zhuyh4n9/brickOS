@@ -303,7 +303,7 @@ void br_sched_wake(br_thread_t *t)
 /* 超时到期: 只对 BLOCKED 且到期的线程(ICB 步 4)。 */
 static void make_timed_out(br_thread_t *t)
 {
-    t->wait_status = BR_ERR(BR_ETIMEDOUT);
+    t->wait_status = BR_ERR(ETIMEDOUT);
     t->wake_at = BR_TIMEOUT_INF;
     make_ready(t);
 }
@@ -570,7 +570,7 @@ int br_sched_block_current(br_time_t abs_deadline)
     br_thread_t *t = s_current;
 
     if (t == BR_NULL || s_ops == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /*
      * ★ bh 禁令(I6, ADR-0011): 下半部在关中断的异常出口上跑, 它**没有**可回退的调度
@@ -580,10 +580,10 @@ int br_sched_block_current(br_time_t abs_deadline)
      */
     if (br_work_in_bh() != BR_FALSE) {
         br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 2u, 0u);
-        return BR_ERR(BR_EPERM);
+        return BR_ERR(EPERM);
     }
     if (t->state != BR_TASK_RUNNING) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -601,9 +601,9 @@ int br_sched_block_current(br_time_t abs_deadline)
 
     /* 期限已到(含相对 0 的绝对形态)⇒ 立即按超时收场(INV-1), 不切栈、不睡到下一个 tick */
     if (abs_deadline != BR_TIMEOUT_INF && abs_deadline <= br_clock_now()) {
-        t->wait_status = BR_ERR(BR_ETIMEDOUT);
+        t->wait_status = BR_ERR(ETIMEDOUT);
         br_irq_unlock(st);
-        return BR_ERR(BR_ETIMEDOUT);
+        return BR_ERR(ETIMEDOUT);
     }
 
     t->wake_at = abs_deadline;          /* BR_TIMEOUT_INF = 无期限 */
@@ -675,23 +675,23 @@ int br_task_create(br_thread_t **out, const br_task_attr_t *attr,
                    void (*entry)(void *), void *arg)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *out = BR_NULL;
 
     if (attr == BR_NULL || entry == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (attr->stack == BR_NULL || attr->stack_size < BR_STACK_MIN) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_ops == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     br_thread_t *t = tcb_alloc();
     if (t == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
 
     t->name       = (attr->name != BR_NULL) ? attr->name : "task";
@@ -701,7 +701,7 @@ int br_task_create(br_thread_t **out, const br_task_attr_t *attr,
     t->entry      = entry;
     t->arg        = arg;
     t->exit_code  = 0;
-    t->wait_status = BR_ERR(BR_ETIMEDOUT);       /* ICB: 开窗前先置"未唤醒" */
+    t->wait_status = BR_ERR(ETIMEDOUT);       /* ICB: 开窗前先置"未唤醒" */
     t->wake_at    = BR_TIMEOUT_INF;
 
     /*
@@ -730,20 +730,20 @@ int br_task_create(br_thread_t **out, const br_task_attr_t *attr,
 int br_task_join(br_thread_t *t, int *exit_code)
 {
     if (t == BR_NULL || t->magic != BR_THREAD_MAGIC) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (t == s_current) {
-        return BR_ERR(BR_EINVAL);                   /* 自 join */
+        return BR_ERR(EINVAL);                   /* 自 join */
     }
 
     const br_u32 i = tcb_index(t);
     if (i >= BR_TASK_MAX || s_joiner[i] != BR_NULL) {
-        return BR_ERR(BR_EINVAL);                   /* 池外 / 已被别人 join */
+        return BR_ERR(EINVAL);                   /* 池外 / 已被别人 join */
     }
 
     if (t->state != BR_TASK_ZOMBIE) {
         s_joiner[i] = s_current;
-        s_current->wait_status = BR_ERR(BR_ETIMEDOUT);   /* ICB: 开窗 */
+        s_current->wait_status = BR_ERR(ETIMEDOUT);   /* ICB: 开窗 */
         const int w = br_sched_block_current(BR_TIMEOUT_INF);
         s_joiner[i] = BR_NULL;
         if (w != 0) {
@@ -826,7 +826,7 @@ void br_task_yield(void)
 int br_task_sleep(br_time_t rel_us)
 {
     if (rel_us == BR_TIMEOUT_INF) {
-        return BR_ERR(BR_EINVAL);       /* 裁定 G13: 相对睡眠没有"无限"语义 */
+        return BR_ERR(EINVAL);       /* 裁定 G13: 相对睡眠没有"无限"语义 */
     }
     if (rel_us == 0u) {
         return 0;                       /* 立即返回(TC-TIME-002) */
@@ -837,13 +837,13 @@ int br_task_sleep(br_time_t rel_us)
 int br_task_sleep_until(br_time_t abs_us)
 {
     if (s_current == BR_NULL || s_ops == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (abs_us == 0u || (abs_us != BR_TIMEOUT_INF && abs_us <= br_clock_now())) {
         return 0;                       /* 期限已过 ⇒ 立即返回 0(TC-TASK-005 口径) */
     }
 
-    s_current->wait_status = BR_ERR(BR_ETIMEDOUT);   /* ICB: 开窗 */
+    s_current->wait_status = BR_ERR(ETIMEDOUT);   /* ICB: 开窗 */
 
     const int r = br_sched_block_current(abs_us);
 
@@ -851,7 +851,7 @@ int br_task_sleep_until(br_time_t abs_us)
      * 裁定 G13b(ADR-0006 §2): 睡眠的**到期是成功路径** ⇒ 返回 0;
      * -ETIMEDOUT 只属于"等某个事件而超时"的 API(mutex/sem/cond/join, INV-1)。
      */
-    return (r == BR_ERR(BR_ETIMEDOUT)) ? 0 : r;
+    return (r == BR_ERR(ETIMEDOUT)) ? 0 : r;
 }
 
 br_thread_t *br_task_self(void)

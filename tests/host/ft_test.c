@@ -19,13 +19,131 @@
  *
  * 判据 = 退出码(0 = 全绿), 与其它 [[hosttest]] 一致。
  */
+#include <errno.h>          /* ★ 必须在**我们自己的** errno 头之前: 见下面的捕获 */
+
+/*
+ * ★ errno 对拍的**顺序要求**(ADR-0027): 本仓的 errno 名字现在就是 POSIX 原名
+ *   (`EPERM`/`EIO`/…, 无 `BR_` 前缀)⇒ 若先包含我们的头, `X(EPERM, EPERM)` 就成了
+ *   "自己跟自己比"(恒真, 静默丢掉覆盖)。所以这里**先**把宿主 <errno.h> 的真值抓进
+ *   数组, 之后再让我们的头参与比较 —— 比的是"我们的名字"vs"宿主的值"。
+ */
+#define BR_ERRNO_NAMES(X)     \
+    X(EPERM) \
+    X(ENOENT) \
+    X(ESRCH) \
+    X(EINTR) \
+    X(EIO) \
+    X(ENXIO) \
+    X(E2BIG) \
+    X(ENOEXEC) \
+    X(EBADF) \
+    X(ECHILD) \
+    X(EAGAIN) \
+    X(ENOMEM) \
+    X(EACCES) \
+    X(EFAULT) \
+    X(ENOTBLK) \
+    X(EBUSY) \
+    X(EEXIST) \
+    X(EXDEV) \
+    X(ENODEV) \
+    X(ENOTDIR) \
+    X(EISDIR) \
+    X(EINVAL) \
+    X(ENFILE) \
+    X(EMFILE) \
+    X(ENOTTY) \
+    X(ETXTBSY) \
+    X(EFBIG) \
+    X(ENOSPC) \
+    X(ESPIPE) \
+    X(EROFS) \
+    X(EMLINK) \
+    X(EPIPE) \
+    X(EDOM) \
+    X(ERANGE) \
+    X(EDEADLK) \
+    X(ENAMETOOLONG) \
+    X(ENOLCK) \
+    X(ENOSYS) \
+    X(ENOTEMPTY) \
+    X(ELOOP) \
+    X(EOVERFLOW) \
+    X(ENOTSUP) \
+    X(ETIMEDOUT) \
+    X(EUCLEAN) \
+    X(EDQUOT) \
+    X(ECANCELED) \
+    X(EOWNERDEAD) \
+    X(ENOTRECOVERABLE) \
+    X(EOPNOTSUPP) \
+    X(EWOULDBLOCK)
+
+static const int s_host_errno[] = {
+#define BR_HOST_CAP(n) (int)(n),
+    BR_ERRNO_NAMES(BR_HOST_CAP)
+#undef BR_HOST_CAP
+};
+
+/* 撤掉宿主的同名宏: 真值已在上面捕获, 下面要让我们自己的定义生效。 */
+#undef EPERM
+#undef ENOENT
+#undef ESRCH
+#undef EINTR
+#undef EIO
+#undef ENXIO
+#undef E2BIG
+#undef ENOEXEC
+#undef EBADF
+#undef ECHILD
+#undef EAGAIN
+#undef ENOMEM
+#undef EACCES
+#undef EFAULT
+#undef ENOTBLK
+#undef EBUSY
+#undef EEXIST
+#undef EXDEV
+#undef ENODEV
+#undef ENOTDIR
+#undef EISDIR
+#undef EINVAL
+#undef ENFILE
+#undef EMFILE
+#undef ENOTTY
+#undef ETXTBSY
+#undef EFBIG
+#undef ENOSPC
+#undef ESPIPE
+#undef EROFS
+#undef EMLINK
+#undef EPIPE
+#undef EDOM
+#undef ERANGE
+#undef EDEADLK
+#undef ENAMETOOLONG
+#undef ENOLCK
+#undef ENOSYS
+#undef ENOTEMPTY
+#undef ELOOP
+#undef EOVERFLOW
+#undef ENOTSUP
+#undef ETIMEDOUT
+#undef EUCLEAN
+#undef EDQUOT
+#undef ECANCELED
+#undef EOWNERDEAD
+#undef ENOTRECOVERABLE
+#undef EOPNOTSUPP
+#undef EWOULDBLOCK
+
+
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
 #include <br/core/br_log.h>
 #include <br/core/br_types.h>
 #include <br/ft/br_ft.h>
 
-#include <errno.h>
 #include <stdarg.h>
 #include <stdio.h>
 
@@ -101,70 +219,20 @@ static void fill_all(void)
 /* ==================================================================== ① errno 对拍 */
 
 /* 一张"本仓名 ↔ 内核名"的表; 每个 `BR_E*` 都必须在这里出现一次(漏了就是漏了对拍)。 */
-#define BR_ERRNO_PAIRS(X)      \
-    X(BR_EPERM, EPERM);         \
-    X(BR_ENOENT, ENOENT);       \
-    X(BR_ESRCH, ESRCH);         \
-    X(BR_EINTR, EINTR);         \
-    X(BR_EIO, EIO);             \
-    X(BR_ENXIO, ENXIO);         \
-    X(BR_E2BIG, E2BIG);         \
-    X(BR_ENOEXEC, ENOEXEC);     \
-    X(BR_EBADF, EBADF);         \
-    X(BR_ECHILD, ECHILD);       \
-    X(BR_EAGAIN, EAGAIN);       \
-    X(BR_ENOMEM, ENOMEM);       \
-    X(BR_EACCES, EACCES);       \
-    X(BR_EFAULT, EFAULT);       \
-    X(BR_ENOTBLK, ENOTBLK);     \
-    X(BR_EBUSY, EBUSY);         \
-    X(BR_EEXIST, EEXIST);       \
-    X(BR_EXDEV, EXDEV);         \
-    X(BR_ENODEV, ENODEV);       \
-    X(BR_ENOTDIR, ENOTDIR);     \
-    X(BR_EISDIR, EISDIR);       \
-    X(BR_EINVAL, EINVAL);       \
-    X(BR_ENFILE, ENFILE);       \
-    X(BR_EMFILE, EMFILE);       \
-    X(BR_ENOTTY, ENOTTY);       \
-    X(BR_ETXTBSY, ETXTBSY);     \
-    X(BR_EFBIG, EFBIG);         \
-    X(BR_ENOSPC, ENOSPC);       \
-    X(BR_ESPIPE, ESPIPE);       \
-    X(BR_EROFS, EROFS);         \
-    X(BR_EMLINK, EMLINK);       \
-    X(BR_EPIPE, EPIPE);         \
-    X(BR_EDOM, EDOM);           \
-    X(BR_ERANGE, ERANGE);       \
-    X(BR_EDEADLK, EDEADLK);     \
-    X(BR_ENAMETOOLONG, ENAMETOOLONG); \
-    X(BR_ENOLCK, ENOLCK);       \
-    X(BR_ENOSYS, ENOSYS);       \
-    X(BR_ENOTEMPTY, ENOTEMPTY); \
-    X(BR_ELOOP, ELOOP);         \
-    X(BR_EOVERFLOW, EOVERFLOW); \
-    X(BR_ENOTSUP, ENOTSUP);     \
-    X(BR_ETIMEDOUT, ETIMEDOUT); \
-    X(BR_EUCLEAN, EUCLEAN);     \
-    X(BR_EDQUOT, EDQUOT);       \
-    X(BR_ECANCELED, ECANCELED); \
-    X(BR_EOWNERDEAD, EOWNERDEAD); \
-    X(BR_ENOTRECOVERABLE, ENOTRECOVERABLE); \
-    X(BR_EOPNOTSUPP, EOPNOTSUPP); \
-    X(BR_EWOULDBLOCK, EWOULDBLOCK)
-
 static int s_errno_bad;
 static int s_errno_checked;
 
-#define BR_ERRNO_CMP(br, sys)                                        \
+static int s_errno_i;
+#define BR_ERRNO_CMP(n)                                              \
     do {                                                             \
         s_errno_checked++;                                           \
-        if ((int)(br) != (int)(sys)) {                               \
+        if ((int)(n) != s_host_errno[s_errno_i]) {                   \
             s_errno_bad++;                                           \
-            printf("[FTTEST] MISMATCH %s = %d, 内核 %s = %d\n",       \
-                   #br, (int)(br), #sys, (int)(sys));                \
+            printf("[FTTEST] MISMATCH %s = %d, 宿主 = %d\n",          \
+                   #n, (int)(n), s_host_errno[s_errno_i]);           \
         }                                                            \
-    } while (0)
+        s_errno_i++;                                                 \
+    } while (0);
 
 /* ==================================================================== ③ 宿主独有边界 */
 
@@ -179,8 +247,8 @@ static void host_only_cases(void)
         const int neg  = br_ft_get_flags(-1, &fl);
         const int high = br_ft_get_flags((int)BR_FT_MAX, &fl);
         const int far  = br_ft_get_flags(0x7fffffff, &fl);
-        rep((over == BR_ERR(BR_EMFILE)) && (neg == BR_ERR(BR_EBADF)) &&
-            (high == BR_ERR(BR_EBADF)) && (far == BR_ERR(BR_EBADF)) &&
+        rep((over == BR_ERR(EMFILE)) && (neg == BR_ERR(EBADF)) &&
+            (high == BR_ERR(EBADF)) && (far == BR_ERR(EBADF)) &&
             (br_ft_get((int)BR_FT_MAX) == BR_NULL),
             "TC-FT-H01", "表满 ⇒ -EMFILE; 越界/极端 fd(含 INT_MAX)一律 -EBADF");
     }
@@ -190,7 +258,7 @@ static void host_only_cases(void)
         (void)br_ft_reset();
         fill_all();
         const int d = br_ft_dup(0);
-        rep((d == BR_ERR(BR_EMFILE)) && (br_ft_count() == BR_FT_MAX) &&
+        rep((d == BR_ERR(EMFILE)) && (br_ft_count() == BR_FT_MAX) &&
             (br_ft_get(0) == fake(0)),
             "TC-FT-H02", "dup 表满 ⇒ -EMFILE 且已有 fd 不被改动");
     }
@@ -203,8 +271,8 @@ static void host_only_cases(void)
         (void)br_ft_alloc(fake(0), 0u);
         br_file_t *one = BR_NULL;
         const int r_cap0 = br_ft_release_all(&one, 0u);            /* 有 1 条要报却 cap=0 */
-        rep((r_null_cap == BR_ERR(BR_EINVAL)) && (r_empty == 0) &&
-            (r_cap0 == BR_ERR(BR_ENOSPC)) && (br_ft_count() == 1u),
+        rep((r_null_cap == BR_ERR(EINVAL)) && (r_empty == 0) &&
+            (r_cap0 == BR_ERR(ENOSPC)) && (br_ft_count() == 1u),
             "TC-FT-H03", "release_all: out=NULL+cap!=0 ⇒ -EINVAL; cap 不足 ⇒ -ENOSPC 且表不变");
     }
 
@@ -239,7 +307,7 @@ int main(void)
     printf("=== ft-test: framework/file-table(宿主) ===\n");
 
     /* ① errno 与内核逐码对拍 */
-    BR_ERRNO_PAIRS(BR_ERRNO_CMP);
+    BR_ERRNO_NAMES(BR_ERRNO_CMP);
     rep(s_errno_bad == 0, "TC-FT-H05", "errno 编号与 Linux <errno.h> 逐码一致");
     printf("[FTTEST] errno 对拍: %d 码, 不一致 %d 个\n", s_errno_checked, s_errno_bad);
 

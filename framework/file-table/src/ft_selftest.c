@@ -105,7 +105,7 @@ int file_table_selftest(void)
         const int nul  = br_ft_alloc(BR_NULL, 0u);
         const br_bool intact = (br_ft_count() == BR_FT_MAX) && (br_ft_get(0) == fake(0));
 
-        pc((over == BR_ERR(BR_EMFILE)) && (nul == BR_ERR(BR_EINVAL)) && (intact == BR_TRUE),
+        pc((over == BR_ERR(EMFILE)) && (nul == BR_ERR(EINVAL)) && (intact == BR_TRUE),
            "TC-FT-003", "表满 ⇒ -EMFILE; 空句柄 ⇒ -EINVAL; 已有 fd 不受影响");
     }
 
@@ -120,10 +120,10 @@ int file_table_selftest(void)
             (br_ft_get(-1) == BR_NULL) &&
             (br_ft_get((int)BR_FT_MAX) == BR_NULL) &&
             (br_ft_get(1) == BR_NULL) &&
-            (br_ft_get_flags(-1, &fl) == BR_ERR(BR_EBADF)) &&
-            (br_ft_get_flags(1, &fl) == BR_ERR(BR_EBADF)) &&       /* 空槽 */
-            (br_ft_set_flags(1, 0u) == BR_ERR(BR_EBADF)) &&
-            (br_ft_release(1, BR_NULL) == BR_ERR(BR_EBADF));
+            (br_ft_get_flags(-1, &fl) == BR_ERR(EBADF)) &&
+            (br_ft_get_flags(1, &fl) == BR_ERR(EBADF)) &&       /* 空槽 */
+            (br_ft_set_flags(1, 0u) == BR_ERR(EBADF)) &&
+            (br_ft_release(1, BR_NULL) == BR_ERR(EBADF));
         pc(ok, "TC-FT-004", "越界 / 空槽 / 负数 ⇒ 一律 -EBADF, get ⇒ BR_NULL");
     }
 
@@ -139,7 +139,7 @@ int file_table_selftest(void)
         (void)br_ft_get_flags(0, &got2);
 
         pc((r_get == 0) && (got == 0x0021u) && (r_set == 0) && (got2 == 0x0042u) &&
-           (r_neg == BR_ERR(BR_EINVAL)),
+           (r_neg == BR_ERR(EINVAL)),
            "TC-FT-005", "get/set flags 往返; 空 out ⇒ -EINVAL");
     }
 
@@ -164,7 +164,7 @@ int file_table_selftest(void)
         const int r3 = br_ft_release(d, &last4);    /* 最后一个 ⇒ 回报 */
 
         pc((r1 == 0) && (last == fake(0)) &&
-           (bad == BR_ERR(BR_EBADF)) && (last2 == BR_NULL) &&
+           (bad == BR_ERR(EBADF)) && (last2 == BR_NULL) &&
            (d == 1) && (r2 == 0) && (last3 == BR_NULL) &&
            (r3 == 0) && (last4 == fake(1)),
            "TC-FT-006", "独占 ⇒ 回报句柄; 共享 ⇒ 回报 NULL; 非法 ⇒ -EBADF + 清零");
@@ -182,7 +182,7 @@ int file_table_selftest(void)
         const int dup_bad = br_ft_dup(7);
         const br_bool ok =
             (d == 1) && (br_ft_get(d) == fake(2)) && (fl0 == fl1) &&
-            (br_ft_count() == 2u) && (dup_bad == BR_ERR(BR_EBADF));
+            (br_ft_count() == 2u) && (dup_bad == BR_ERR(EBADF));
         pc(ok, "TC-FT-007", "dup: 同句柄 + flags 快照一致; 非法 oldfd ⇒ -EBADF");
     }
 
@@ -217,8 +217,8 @@ int file_table_selftest(void)
             (r1 == 2) && (disp1 == fake(2)) &&
             (r2 == 2) && (disp2 == BR_NULL) &&
             (r3 == 1) && (disp3 == BR_NULL) &&
-            (r4 == BR_ERR(BR_EBADF)) && (r5 == BR_ERR(BR_EBADF)) &&
-            (r6 == BR_ERR(BR_EBADF)) && (disp4 == BR_NULL) &&
+            (r4 == BR_ERR(EBADF)) && (r5 == BR_ERR(EBADF)) &&
+            (r6 == BR_ERR(EBADF)) && (disp4 == BR_NULL) &&
             (br_ft_get(0) == fake(0)) && (br_ft_get(1) == fake(1)) &&
             (br_ft_get(2) == fake(1)) && (br_ft_count() == 3u);
 
@@ -245,7 +245,7 @@ int file_table_selftest(void)
             (((got[0] == fake(0)) && (got[1] == fake(1))) ||
              ((got[0] == fake(1)) && (got[1] == fake(0))));
 
-        pc((too_small == BR_ERR(BR_ENOSPC)) && (intact == BR_TRUE) &&
+        pc((too_small == BR_ERR(ENOSPC)) && (intact == BR_TRUE) &&
            (dedup == BR_TRUE) && (br_ft_count() == 0u) && (br_ft_get(0) == BR_NULL),
            "TC-FT-009", "release_all: 同句柄只报一条; cap 不足 ⇒ -ENOSPC 且表不变");
     }
@@ -253,10 +253,10 @@ int file_table_selftest(void)
     /* ---- TC-FT-010: errno 取值(与 Linux 内核对齐; 宿主 ft-test 拿 <errno.h> 逐码对拍) ---- */
     {
         const br_bool ok =
-            (BR_EINVAL == 22) && (BR_EBADF == 9) && (BR_EMFILE == 24) && (BR_ENFILE == 23) &&
-            (BR_ENOENT == 2) && (BR_ENOTEMPTY == 39) && (BR_ENOTSUP == 95) &&
-            (BR_ETIMEDOUT == 110) && (BR_EACCES == 13) && (BR_ESPIPE == 29) &&
-            (BR_EOPNOTSUPP == BR_ENOTSUP) && (BR_EWOULDBLOCK == BR_EAGAIN);
+            (EINVAL == 22) && (EBADF == 9) && (EMFILE == 24) && (ENFILE == 23) &&
+            (ENOENT == 2) && (ENOTEMPTY == 39) && (ENOTSUP == 95) &&
+            (ETIMEDOUT == 110) && (EACCES == 13) && (ESPIPE == 29) &&
+            (EOPNOTSUPP == ENOTSUP) && (EWOULDBLOCK == EAGAIN);
         pc(ok, "TC-FT-010", "errno 编号 = Linux(内核 errno-base/errno.h); 别名同值");
     }
 

@@ -267,7 +267,7 @@ static int gicv3_init(br_pic_t *pic)
     br_gic_write_icc_sre_el1(sre);
     br_gic_isb();
     if ((br_gic_read_icc_sre_el1() & 1u) == 0u) {
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
 
     /* ---- 步 2: GICD_CTLR = ARE_NS | EnableGrp1NS ----
@@ -287,7 +287,7 @@ static int gicv3_init(br_pic_t *pic)
         }
     }
     if (spins == BR_GICV3_POLL_SPINS) {
-        return BR_ERR(BR_ETIMEDOUT);
+        return BR_ERR(ETIMEDOUT);
     }
 
     /* ---- 步 3: 按 MPIDR 亲和性找**本核**的 redistributor 帧 ----
@@ -315,7 +315,7 @@ static int gicv3_init(br_pic_t *pic)
         }
     }
     if (frame_found == 0u) {
-        return BR_ERR(BR_ENODEV);   /* 扫描范围内没有属于本核的帧 */
+        return BR_ERR(ENODEV);   /* 扫描范围内没有属于本核的帧 */
     }
     pic->gicr_frame = frame;
     pic->gicr_sgi   = frame + BR_GICR_SGI_OFFSET;
@@ -335,7 +335,7 @@ static int gicv3_init(br_pic_t *pic)
             }
         }
         if (spins == BR_GICV3_POLL_SPINS) {
-            return BR_ERR(BR_ETIMEDOUT);
+            return BR_ERR(ETIMEDOUT);
         }
     }
 
@@ -437,7 +437,7 @@ static int gicv3_init(br_pic_t *pic)
 static int gicv3_caps_get(br_pic_t *pic, br_pic_caps_t *out)
 {
     if (pic == BR_NULL || out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     out->prio_bits = pic->prio_bits;
     out->nr_irq    = pic->nr_irq;
@@ -535,10 +535,10 @@ static int gicv3_pending(br_pic_t *pic, br_u32 hwirq, int *out)
     br_u32 val;
 
     if (pic == BR_NULL || out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (hwirq >= pic->nr_irq) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (hwirq < BR_GICV3_INTID_SPI_BASE) {
         val = br_gic_mmio_read32(pic->gicr_sgi, BR_GICR_ISPENDR0);
@@ -555,10 +555,10 @@ static int gicv3_active(br_pic_t *pic, br_u32 hwirq, int *out)
     br_u32 val;
 
     if (pic == BR_NULL || out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (hwirq >= pic->nr_irq) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (hwirq < BR_GICV3_INTID_SPI_BASE) {
         val = br_gic_mmio_read32(pic->gicr_sgi, BR_GICR_ISACTIVER0);
@@ -579,13 +579,13 @@ static int gicv3_set_prio(br_pic_t *pic, br_u32 hwirq, br_u8 prio)
     br_u32 enc;
 
     if (pic == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (hwirq >= pic->nr_irq) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (pic->prio_bits == 0u) {
-        return BR_ERR(BR_ENOTSUP);   /* CAP_PRIO 未报时就该走这里 */
+        return BR_ERR(ENOTSUP);   /* CAP_PRIO 未报时就该走这里 */
     }
 
     /*
@@ -611,7 +611,7 @@ static int gicv3_set_prio(br_pic_t *pic, br_u32 hwirq, br_u8 prio)
 
     const br_u32 deliverable_max = (0xFFu & ~(step - 1u)) - step;
     if (enc > deliverable_max) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     if (hwirq < BR_GICV3_INTID_SPI_BASE) {
@@ -633,10 +633,10 @@ static int gicv3_set_trigger(br_pic_t *pic, br_u32 hwirq, br_u8 trigger)
     br_u32 cfg;
 
     if (pic == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (hwirq >= pic->nr_irq) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* DEFAULT = "core 已按绑定表解析过, 这里无需改动"(父 agent 的澄清) */
@@ -646,7 +646,7 @@ static int gicv3_set_trigger(br_pic_t *pic, br_u32 hwirq, br_u8 trigger)
 
     /* SGI(0–15)**恒为边沿**(架构固定, ICFGR0 对它无效) */
     if (hwirq <= BR_GICV3_INTID_SGI_MAX) {
-        return (trigger == BR_IRQ_TRIG_EDGE_RISE) ? 0 : BR_ERR(BR_ENOTSUP);
+        return (trigger == BR_IRQ_TRIG_EDGE_RISE) ? 0 : BR_ERR(ENOTSUP);
     }
 
     switch (trigger) {
@@ -661,7 +661,7 @@ static int gicv3_set_trigger(br_pic_t *pic, br_u32 hwirq, br_u8 trigger)
         break;
     default:
         /* EDGE_FALL / EDGE_BOTH: GICv3 不支持 ⇒ 绝不静默改写(§4.2 铁律) */
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     if (hwirq < BR_GICV3_INTID_SPI_BASE) {
@@ -712,10 +712,10 @@ static void gicv3_sgi1r_write(const struct br_pic *pic, br_u32 intid)
 static int gicv3_trigger(br_pic_t *pic, br_u32 hwirq)
 {
     if (pic == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (hwirq > BR_GICV3_INTID_SGI_MAX) {
-        return BR_ERR(BR_ENOTSUP);   /* 非 SGI 不能软件触发 */
+        return BR_ERR(ENOTSUP);   /* 非 SGI 不能软件触发 */
     }
     gicv3_sgi1r_write(pic, hwirq);
     return 0;
@@ -757,23 +757,23 @@ static int gicv3_set_affinity(br_pic_t *pic, br_u32 hwirq, br_u32 cpu_mask)
     br_u32 aff0 = 0u;
 
     if (pic == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* SGI 每次发送自带目标; PPI 每核私有 —— 二者都不可路由(§13.1) */
     if (hwirq < BR_GICV3_INTID_SPI_BASE) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if (hwirq >= pic->nr_irq) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (cpu_mask == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     while (aff0 < 32u && ((cpu_mask >> aff0) & 1u) == 0u) {
         aff0++;
     }
     if (aff0 >= 32u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* GICD_IROUTER<n>(8 B/SPI): 本原型只表达"Aff0 = 目标核下标, Aff1/2/3 = 0"
@@ -825,16 +825,16 @@ int br_gicv3_register(const br_gicv3_cfg_t *cfg)
     int rc;
 
     if (cfg == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (cfg->gicd_base == 0u || cfg->gicr_base == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (cfg->gicr_frame_size == 0u || cfg->gicr_max_frames == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (cfg->nr_irq == 0u || cfg->nr_irq > (BR_GICV3_INTID_MAX + 1u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* 平台数据拷入实例(ISA 层不保留指向 platform 数据的指针) */
@@ -871,10 +871,10 @@ void br_gicv3_info(br_gicv3_info_t *out)
 int br_gicv3_sgi_trigger(br_u32 intid)
 {
     if (s_gicv3.ready == 0u) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (intid > BR_GICV3_INTID_SGI_MAX) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     gicv3_sgi1r_write(&s_gicv3, intid);
     return 0;
@@ -886,13 +886,13 @@ int br_gicv3_readback_enabled(br_u32 intid, int *out)
     br_u32 val;
 
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_gicv3.ready == 0u) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (intid >= s_gicv3.nr_irq) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (intid < BR_GICV3_INTID_SPI_BASE) {
         val = br_gic_mmio_read32(s_gicv3.gicr_sgi, BR_GICR_ISENABLER0);
@@ -907,13 +907,13 @@ int br_gicv3_readback_enabled(br_u32 intid, int *out)
 int br_gicv3_readback_prio(br_u32 intid, br_u8 *out)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_gicv3.ready == 0u) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (intid >= s_gicv3.nr_irq) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (intid < BR_GICV3_INTID_SPI_BASE) {
         *out = br_gic_mmio_read8(s_gicv3.gicr_sgi, BR_GICR_IPRIORITYR + intid);
@@ -928,13 +928,13 @@ int br_gicv3_readback_pending(br_u32 intid, int *out)
     br_u32 val;
 
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_gicv3.ready == 0u) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (intid >= s_gicv3.nr_irq) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (intid < BR_GICV3_INTID_SPI_BASE) {
         val = br_gic_mmio_read32(s_gicv3.gicr_sgi, BR_GICR_ISPENDR0);
@@ -964,10 +964,10 @@ int br_gicv3_readback_pending(br_u32 intid, int *out)
 int br_gicv3_raw_line_enable(br_u32 intid, int enable)
 {
     if (s_gicv3.ready == 0u) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (intid >= s_gicv3.nr_irq) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     if (enable != 0) {

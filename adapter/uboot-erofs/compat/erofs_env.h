@@ -606,8 +606,8 @@ static inline bool IS_ERR_OR_NULL(const void *ptr)
  * 多余改动。
  *
  * ★ `EFSCORRUPTED` 这里**照抄上游 `internal.h` 的构造**(`#ifdef EUCLEAN` 那一支),
- *   一个字都没改; 之所以以前映射到 `BR_EIO`, 是因为本仓库当时没有 117 号 —— 现在
- *   `BR_EUCLEAN` 已按 ADR-0023 D-4 从内核表补入。 */
+ *   一个字都没改; 之所以以前映射到 `EIO`, 是因为本仓库当时没有 117 号 —— 现在
+ *   `EUCLEAN` 已按 ADR-0023 D-4 从内核表补入。 */
 #include <br/core/br_errno.h>
 
 #define EFSCORRUPTED  EUCLEAN

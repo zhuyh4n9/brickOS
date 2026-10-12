@@ -102,7 +102,7 @@ int trace_selftest(void)
 
     /* -Warray-compare: 直接比较数组名会被警告, 这里显式比首元素地址 */
     fails += trc_conf((da >= (int)BR_TRACE_SVC_ID_BASE)
-                      && (db == BR_ERR(BR_ENOSPC))
+                      && (db == BR_ERR(ENOSPC))
                       && (&TRC_TAG_DUP_A[0] != &TRC_TAG_DUP_B[0]),
                       "TC-DBG-001",
                       "内容同名但指针不同 ⇒ -ENOSPC(不复用、不新建)");

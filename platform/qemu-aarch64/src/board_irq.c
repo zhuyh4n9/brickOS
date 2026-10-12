@@ -342,19 +342,19 @@ int br_plat_irq_trigger(br_u32 virq)
     for (br_size_t i = 0; i < BR_ARRAY_SIZE(s_board_irq); i++) {
         if ((br_u32)s_board_irq[i].virq == virq) {
             if (s_board_irq[i].hwirq > BR_GICV3_INTID_SGI_MAX) {
-                return BR_ERR(BR_ENOTSUP);   /* 只有 SGI(0–15)能软件触发 */
+                return BR_ERR(ENOTSUP);   /* 只有 SGI(0–15)能软件触发 */
             }
             return br_gicv3_sgi_trigger(s_board_irq[i].hwirq);
         }
     }
-    return BR_ERR(BR_ENODEV);
+    return BR_ERR(ENODEV);
 }
 
 /* virq → 绑定表里的 hwirq(只给 conformance 做影子 vs 硬件交叉校验, §4.3 第 5 条) */
 int br_plat_irq_hwirq(br_u32 virq, br_u32 *out)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     for (br_size_t i = 0; i < BR_ARRAY_SIZE(s_board_irq); i++) {
         if ((br_u32)s_board_irq[i].virq == virq) {
@@ -362,5 +362,5 @@ int br_plat_irq_hwirq(br_u32 virq, br_u32 *out)
             return 0;
         }
     }
-    return BR_ERR(BR_ENODEV);
+    return BR_ERR(ENODEV);
 }

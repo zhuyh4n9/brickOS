@@ -121,7 +121,7 @@ static br_bool trc_streq(const char *a, const char *b)
 static int trc_acquire_slot(const char *name)
 {
     if (name == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_u32 start = trc_slot_of(name);
@@ -137,10 +137,10 @@ static int trc_acquire_slot(const char *name)
             return (int)slot;
         }
         if (trc_streq(s_names[slot], name)) {
-            return BR_ERR(BR_ENOSPC);      /* 同名(内容)但指针不同 */
+            return BR_ERR(ENOSPC);      /* 同名(内容)但指针不同 */
         }
     }
-    return BR_ERR(BR_ENOSPC);              /* 全表满 */
+    return BR_ERR(ENOSPC);              /* 全表满 */
 }
 
 /* 槽位下标 → 事件 id(唯一一处换算, marker/register 共用) */

@@ -95,7 +95,7 @@ static int sdhci_wait(sdhci_t *h, br_u32 want, br_u32 timeout_ms, br_u32 *out_st
             h->pending = 0u;
             br_irq_unlock(s);
             if (out_stat != BR_NULL) { *out_stat = p; }
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EIO);
         }
         if ((p & want) != 0u) {
             h->pending = p & ~want;
@@ -112,7 +112,7 @@ static int sdhci_wait(sdhci_t *h, br_u32 want, br_u32 timeout_ms, br_u32 *out_st
                          (unsigned)sdhci_rd32(h, SDHCI_INT_STATUS),
                          (unsigned)h->pending, (unsigned)sdhci_rd32(h, SDHCI_PRESENT_STATE));
             if (out_stat != BR_NULL) { *out_stat = 0u; }
-            return BR_ERR(BR_ETIMEDOUT);
+            return BR_ERR(ETIMEDOUT);
         }
 
         /* 有调度器就阻塞等信号量(ISR→bh 会给); 没有(纯启动上下文)就短睡重查。 */
@@ -130,7 +130,7 @@ static int sdhci_wait(sdhci_t *h, br_u32 want, br_u32 timeout_ms, br_u32 *out_st
                              (unsigned)ist.spurious_owned, (unsigned)ist.bh_deferred,
                              (unsigned)ist.flags, (unsigned)ist.trigger);
                 if (out_stat != BR_NULL) { *out_stat = 0u; }
-                return BR_ERR(BR_ETIMEDOUT);
+                return BR_ERR(ETIMEDOUT);
             }
         } else {
             br_delay_us(20);
@@ -147,7 +147,7 @@ static int sdhci_reset(const sdhci_t *h, br_u8 mask)
     const br_time_t deadline = br_deadline_from_now((br_time_t)100u * BR_US_PER_MS);
     while ((sdhci_rd8(h, SDHCI_SOFTWARE_RESET) & mask) != 0u) {
         if (br_clock_now() >= deadline) {
-            return BR_ERR(BR_ETIMEDOUT);
+            return BR_ERR(ETIMEDOUT);
         }
         br_delay_us(1000);
     }
@@ -162,7 +162,7 @@ static int sdhci_set_clock(sdhci_t *h, br_u32 clock)
     br_time_t deadline = br_deadline_from_now((br_time_t)20u * BR_US_PER_MS);
     while ((sdhci_rd32(h, SDHCI_PRESENT_STATE) & (SDHCI_CMD_INHIBIT | SDHCI_DATA_INHIBIT)) != 0u) {
         if (br_clock_now() >= deadline) {
-            return BR_ERR(BR_EBUSY);
+            return BR_ERR(EBUSY);
         }
         br_delay_us(100);
     }
@@ -196,7 +196,7 @@ static int sdhci_set_clock(sdhci_t *h, br_u32 clock)
             break;
         }
         if (br_clock_now() >= deadline) {
-            return BR_ERR(BR_EBUSY);
+            return BR_ERR(EBUSY);
         }
         br_delay_us(1000);
     }
@@ -210,7 +210,7 @@ static int sdhci_set_ios(void *host, br_u32 clock, br_u32 bus_width, br_u32 mode
 {
     sdhci_t *h = (sdhci_t *)host;
     if (h == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     if (clock != h->clock) {
@@ -289,7 +289,7 @@ static int sdhci_send_command(void *host, br_mmc_cmd_t *cmd, br_mmc_data_t *data
 {
     sdhci_t *h = (sdhci_t *)host;
     if (h == BR_NULL || h->ready != BR_TRUE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     /* ① 等 inhibit 落下 */
@@ -300,7 +300,7 @@ static int sdhci_send_command(void *host, br_mmc_cmd_t *cmd, br_mmc_data_t *data
     }
     while ((sdhci_rd32(h, SDHCI_PRESENT_STATE) & inhibit_mask) != 0u) {
         if (br_clock_now() >= deadline) {
-            return BR_ERR(BR_EBUSY);
+            return BR_ERR(EBUSY);
         }
         br_delay_us(1000);
     }
@@ -453,19 +453,19 @@ static sdhci_t *sdhci_slot_take(br_uintptr_t base)
 int br_sdhci_probe(br_uintptr_t base, br_u32 intx_virq, br_sdhci_t **out)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *out = BR_NULL;
 
     if (base == 0u || intx_virq == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     sdhci_t *h = sdhci_slot_take(base);
     if (h == BR_NULL) {
         br_log_error("uboot-mmc: SDHCI 实例表满(%u), 无法接管 base=0x%lx",
                      (unsigned)BR_SDHCI_MAX, (unsigned long)base);
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     if (h->ready == BR_TRUE) {
         *out = h;                    /* 幂等路径: 已就绪 ⇒ 直接交回 */

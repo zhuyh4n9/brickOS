@@ -117,7 +117,7 @@ int pci_core_selftest(void)
             const int r_bad = br_pci_cfg_read32(sdhci->bus, sdhci->dev, sdhci->fn, 0x02u, &v);
             const int r_nul = br_pci_cfg_read32(sdhci->bus, sdhci->dev, sdhci->fn, 0x00u, BR_NULL);
             ok = (r_ok == 0) && (v == ((br_u32)PCI_CONF_SDHCI_DEVICE << 16 | PCI_CONF_SDHCI_VENDOR)) &&
-                 (r_bad == BR_ERR(BR_EINVAL)) && (r_nul == BR_ERR(BR_EINVAL));
+                 (r_bad == BR_ERR(EINVAL)) && (r_nul == BR_ERR(EINVAL));
         }
         pc_conf(ok, "TC-PCI-006",
                 "cfg_read32 vendor 往返正确; 错对齐/空出参 ⇒ -EINVAL");

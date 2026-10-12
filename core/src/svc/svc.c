@@ -57,15 +57,15 @@ br_bool name_equal(const char *a, const char *b)
 int br_service_publish(const char *name, const void *ops)
 {
     if (name == BR_NULL || ops == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     for (br_u32 i = 0u; i < s_count; i++) {
         if (name_equal(s_svc[i].name, name)) {
-            return BR_ERR(BR_EEXIST);   /* 不覆盖 */
+            return BR_ERR(EEXIST);   /* 不覆盖 */
         }
     }
     if (s_count >= BR_SERVICE_MAX) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     s_svc[s_count].name = name;
     s_svc[s_count].ops  = ops;

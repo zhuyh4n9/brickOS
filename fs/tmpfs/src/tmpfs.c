@@ -361,9 +361,9 @@ static tmpfs_node_t *tmpfs_session_node(br_file_t *f)
 static int tmpfs_require_file(const tmpfs_node_t *n)
 {
     if (n == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
-    return (n->head.type == BR_INODE_FILE) ? BR_OK : BR_ERR(BR_EISDIR);
+    return (n->head.type == BR_INODE_FILE) ? BR_OK : BR_ERR(EISDIR);
 }
 
 /* 子链查找/摘链。线性即可: 目录项上界 = TMPFS_NODE_MAX = 48, 没有做哈希/排序的理由。 */
@@ -431,7 +431,7 @@ static int tmpfs_body_new(tmpfs_body_t **out)
     tmpfs_body_t *b = (tmpfs_body_t *)br_malloc(sizeof *b);
 
     if (b == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     b->data = BR_NULL;
     b->size = 0u;
@@ -468,11 +468,11 @@ static int tmpfs_node_add(tmpfs_node_t *dir, const char *name, br_u32 type,
     tmpfs_node_t *n;
 
     if (tmpfs_node_room() == BR_FALSE) {
-        return BR_ERR(BR_ENOSPC);         /* 节点配额用尽 */
+        return BR_ERR(ENOSPC);         /* 节点配额用尽 */
     }
     n = (tmpfs_node_t *)br_malloc(sizeof *n);
     if (n == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     tmpfs_node_init(n, type, dir, name, body);
 
@@ -546,7 +546,7 @@ static int tmpfs_file_reserve(tmpfs_body_t *b, br_u32 need)
         return 0;
     }
     if (need > TMPFS_DATA_MAX) {
-        return BR_ERR(BR_ENOSPC);         /* 单次请求本身就超上界 */
+        return BR_ERR(ENOSPC);         /* 单次请求本身就超上界 */
     }
 
     new_cap = (b->cap > 0u) ? b->cap : TMPFS_MIN_CAP;
@@ -560,12 +560,12 @@ static int tmpfs_file_reserve(tmpfs_body_t *b, br_u32 need)
 
     /* 配额执法: 换上 new_cap 之后的**全 FS 容量和**必须仍在界内 */
     if ((s_fs.data_used - b->cap + new_cap) > TMPFS_DATA_MAX) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
 
     p = (br_u8 *)br_realloc(b->data, (br_size_t)new_cap);
     if (p == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);         /* 原块保持有效(br_realloc 的 POSIX 语义) */
+        return BR_ERR(ENOMEM);         /* 原块保持有效(br_realloc 的 POSIX 语义) */
     }
     s_fs.data_used = s_fs.data_used - b->cap + new_cap;
     b->data = p;
@@ -592,7 +592,7 @@ static int tmpfs_file_truncate(tmpfs_node_t *n, br_u64 size)
 
     if (size > b->size) {                              /* 扩张(可能带空洞) */
         if (size > (br_u64)TMPFS_DATA_MAX) {
-            return BR_ERR(BR_ENOSPC);
+            return BR_ERR(ENOSPC);
         }
         rc = tmpfs_file_reserve(b, (br_u32)size);
         if (rc != 0) {
@@ -609,7 +609,7 @@ static int tmpfs_file_truncate(tmpfs_node_t *n, br_u64 size)
     }
     p = (br_u8 *)br_realloc(b->data, (br_size_t)size);
     if (p == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     s_fs.data_used = s_fs.data_used - b->cap + (br_u32)size;
     b->data = p;
@@ -659,15 +659,15 @@ static br_s64 tmpfs_file_read(br_file_t *f, void *buf, br_size_t n)
         return rc;
     }
     if ((buf == BR_NULL) && (n > 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((node->body->size > 0u) && (node->body->data == BR_NULL)) {
-        return BR_ERR(BR_EIO);            /* 不变量被破坏(size>0 ⇒ data 非空): 报错而不是解引用 */
+        return BR_ERR(EIO);            /* 不变量被破坏(size>0 ⇒ data 非空): 报错而不是解引用 */
     }
 
     off = br_file_offset(f);
     if (off < 0) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((br_u64)off >= node->body->size) {
         return 0;                         /* 读到/越过 EOF: 0 字节是**成功**(不是 -EIO) */
@@ -693,7 +693,7 @@ static br_s64 tmpfs_file_write(br_file_t *f, const void *buf, br_size_t n)
         return rc;
     }
     if ((buf == BR_NULL) && (n > 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* BR_O_APPEND 的契约是"**每次写前**定位到末尾", 所以零长度写也要先定位(与 Linux 的
@@ -707,14 +707,14 @@ static br_s64 tmpfs_file_write(br_file_t *f, const void *buf, br_size_t n)
 
     off = br_file_offset(f);
     if (off < 0) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     need = (br_u64)off + (br_u64)n;
     if (need < (br_u64)off) {
-        return BR_ERR(BR_EINVAL);         /* 偏移算术绕回 */
+        return BR_ERR(EINVAL);         /* 偏移算术绕回 */
     }
     if (need > (br_u64)TMPFS_DATA_MAX) {
-        return BR_ERR(BR_ENOSPC);         /* 写越 128 KiB 配额: 这里就是那条判据的落点 */
+        return BR_ERR(ENOSPC);         /* 写越 128 KiB 配额: 这里就是那条判据的落点 */
     }
 
     rc = tmpfs_file_reserve(node->body, (br_u32)need);
@@ -748,15 +748,15 @@ static br_s64 tmpfs_file_lseek(br_file_t *f, br_s64 off, int whence)
     case BR_SEEK_SET: base = 0; break;
     case BR_SEEK_CUR: base = br_file_offset(f); break;
     case BR_SEEK_END: base = (br_s64)node->body->size; break;
-    default:          return BR_ERR(BR_EINVAL);
+    default:          return BR_ERR(EINVAL);
     }
     if (base < 0) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 只允许落在 br_s64 的非负区间; 用内建判溢出, 免得有符号加溢出(UB)。
      * 允许越过 EOF(POSIX): 之后读得 0, 写则形成空洞。 */
     if (__builtin_add_overflow(base, off, &pos) || (pos < 0)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     br_file_set_offset(f, pos);
     return pos;
@@ -780,7 +780,7 @@ static int tmpfs_dir_open(br_file_t *f, br_u32 flags)
     tmpfs_dir_iter_t *it;
 
     if ((node == BR_NULL) || (node->head.type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTSUP);        /* 目录面落在非目录节点上: 没有对应 errno, 按"不支持" */
+        return BR_ERR(ENOTSUP);        /* 目录面落在非目录节点上: 没有对应 errno, 按"不支持" */
     }
     /* "目录写打开 ⇒ -EISDIR"由 vfs 在 br_open 里就挡下(见 br_vfs.c); 这里不重复执法,
      * 于是 flags 本槽位只读不判(参数保留: 契约签名如此)。 */
@@ -788,7 +788,7 @@ static int tmpfs_dir_open(br_file_t *f, br_u32 flags)
 
     it = (tmpfs_dir_iter_t *)br_malloc(sizeof *it);
     if (it == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     it->dir    = node;
     it->cursor = 0u;
@@ -804,12 +804,12 @@ static br_s64 tmpfs_dir_read(br_file_t *f, void *buf, br_size_t n)
     br_u32 idx;
 
     if ((it == BR_NULL) || (it->dir == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 定长记录不可截断: 装不下一条就 -EINVAL(返回 0 会被 br_readdir 读成"目录已穷尽",
      * 那是撒谎; 返回半条则被 br_readdir 判 -EIO 的 FS 违约)。vfs 恒传 sizeof(br_dirent_t)。 */
     if ((buf == BR_NULL) || (n < (br_size_t)sizeof(br_dirent_t))) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* "." 与 ".." 不是真目录项, 由枚举**就地合成**(与 lookup 的解析口径一致) */
@@ -896,28 +896,28 @@ static int tmpfs_create(br_inode_t *dir, const char *name, br_u32 flags, br_inod
     int rc;
 
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *out = BR_NULL;
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTSUP);        /* 只有目录能建目录项 */
+        return BR_ERR(ENOTSUP);        /* 只有目录能建目录项 */
     }
     if (tmpfs_name_ok(name) == BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     d = tmpfs_ino_node(dir);
 
     ex = tmpfs_child_find(d, name);
     if (ex != BR_NULL) {
         if ((flags & BR_O_EXCL) != 0u) {
-            return BR_ERR(BR_EEXIST);
+            return BR_ERR(EEXIST);
         }
         /* O_CREAT 无 O_EXCL 命中已存在: 复用(Linux 口径)。vfs 的走查已先 lookup 过一次,
          * 这里再查是"create 自己也自洽"的防御 —— 语义在两层都成立, 单看任一层都不缺。
          * `SYMLINK` 到不了这里: vfs 的走查会把末级链接**展开**后再 create(悬空链接也展开,
          * 于是建的是目标), 而 `O_NOFOLLOW` 在更前面就被 -ELOOP 挡下(ADR-0013)。 */
         if (ex->head.type != BR_INODE_FILE) {
-            return BR_ERR(BR_EISDIR);     /* create 只产文件; 目录要走 mkdir */
+            return BR_ERR(EISDIR);     /* create 只产文件; 目录要走 mkdir */
         }
         *out = &ex->head;
         return 0;
@@ -944,22 +944,22 @@ static int tmpfs_unlink(br_inode_t *dir, const char *name)
     tmpfs_node_t *victim;
 
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     /* 变更用的名字走完整规则: "." / ".." / 含 '/' / 空 / 超长 ⇒ -EINVAL。
      * (Linux 的 unlink(".") 是 -EISDIR, 这里取与 rmdir/rename 的显式条款同一口径。) */
     if (tmpfs_name_ok(name) == BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     d = tmpfs_ino_node(dir);
     victim = tmpfs_child_find(d, name);
     if (victim == BR_NULL) {
-        return BR_ERR(BR_ENOENT);
+        return BR_ERR(ENOENT);
     }
     /* ★ ADR-0013: 符号链接也是"文件类"目录项 —— `unlink` 删的正是**链接本身**
      *   (POSIX 如此; 目标是死是活都与本操作无关)。只有目录必须走 rmdir。 */
     if ((victim->head.type != BR_INODE_FILE) && (victim->head.type != BR_INODE_SYMLINK)) {
-        return BR_ERR(BR_EISDIR);         /* 目录要 rmdir(删树的语义归调用方) */
+        return BR_ERR(EISDIR);         /* 目录要 rmdir(删树的语义归调用方) */
     }
     /* ★ 硬链接语义: 这里删的是**一个名字**。数据体的生死由引用计数决定 —— 还有别的
      *   名字指向它(refs > 1)时数据必须留着, 否则另一个名字会读到已释放的内存。 */
@@ -972,14 +972,14 @@ static int tmpfs_mkdir(br_inode_t *dir, const char *name)
     tmpfs_node_t *d;
 
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if (tmpfs_name_ok(name) == BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     d = tmpfs_ino_node(dir);
     if (tmpfs_child_find(d, name) != BR_NULL) {
-        return BR_ERR(BR_EEXIST);         /* 已存在(含"是文件"的情形): 都是 EEXIST */
+        return BR_ERR(EEXIST);         /* 已存在(含"是文件"的情形): 都是 EEXIST */
     }
     /* out = BR_NULL: mkdir 只回答 rc(vfs 会自己再 lookup 一次拿 inode, 见 br_vfs.c) */
     return tmpfs_node_add(d, name, BR_INODE_DIR, BR_NULL, BR_NULL);
@@ -991,24 +991,24 @@ static int tmpfs_rmdir(br_inode_t *dir, const char *name)
     tmpfs_node_t *victim;
 
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if (tmpfs_name_ok(name) == BR_FALSE) {
-        return BR_ERR(BR_EINVAL);         /* "." / ".." 在这一并被挡下 */
+        return BR_ERR(EINVAL);         /* "." / ".." 在这一并被挡下 */
     }
     d = tmpfs_ino_node(dir);
     victim = tmpfs_child_find(d, name);
     if (victim == BR_NULL) {
-        return BR_ERR(BR_ENOENT);
+        return BR_ERR(ENOENT);
     }
     if (victim->head.type != BR_INODE_DIR) {
-        return BR_ERR(BR_ENOTDIR);        /* 对文件用 rmdir = 用错工具(不是"非空") */
+        return BR_ERR(ENOTDIR);        /* 对文件用 rmdir = 用错工具(不是"非空") */
     }
     if (victim->child != BR_NULL) {
         /* "非空目录"在 SD-10 子集里没有对应的码时曾取 -EBUSY, 但那是"挂载点不可删"的语义
          * (vfs 的 TC-VFS-012 正是这么判的)⇒ 会撞码。core 头已补入 -ENOTEMPTY(编号 39),
          * 这里用它 —— 排障与 runtime/posix 的 errno 映射都要这个区分。 */
-        return BR_ERR(BR_ENOTEMPTY);
+        return BR_ERR(ENOTEMPTY);
     }
     /* 根**不可能**被 rmdir: 它在任何父目录里都没有目录项(根没有父), 于是没有名字能指向它;
      * "." / ".." 上面已被名字规则挡下 ⇒ "不许删根"这条不需要特判代码。 */
@@ -1024,40 +1024,40 @@ static int tmpfs_rename(br_inode_t *dir, const char *name, br_inode_t *ndir, con
     tmpfs_node_t *t;
 
     if ((dir == BR_NULL) || (ndir == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((dir->type != BR_INODE_DIR) || (ndir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     /* 目标目录必须是**本插件**的节点: child/next/parent 是 tmpfs 的私有尾语义, 把别家 FS 的
      * 节点链进自己的链 = 用错布局解释内存。vfs 已在挂载层面挡下跨挂载 rename(-ENOTSUP),
      * 这里是"私有尾只能由本 FS 解释"的第二道(也是将来多 tmpfs 挂载时的等价保证)。 */
     if (ndir->iops != &s_iops) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     /* "." / ".." 显式拒绝(-EINVAL), 与 rmdir/unlink 同口径 */
     if ((tmpfs_name_ok(name) == BR_FALSE) || (tmpfs_name_ok(nname) == BR_FALSE)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     d = tmpfs_ino_node(dir);
     nd = tmpfs_ino_node(ndir);
     victim = tmpfs_child_find(d, name);
     if (victim == BR_NULL) {
-        return BR_ERR(BR_ENOENT);
+        return BR_ERR(ENOENT);
     }
     if (tmpfs_child_find(nd, nname) != BR_NULL) {
         /* v1 不做"覆盖已存在目标"(Linux 允许覆盖文件、拒绝非空目录): 目标存在即 -EEXIST,
          * 一个码把所有情形说清楚; 也顺带把"同名重命名"判成调用方错误(POSIX 的 no-op 语义
          * 在这里没有需要, 反而会掩盖脚本 bug)。 */
-        return BR_ERR(BR_EEXIST);
+        return BR_ERR(EEXIST);
     }
     /* 拒绝把目录搬进自己的子树: 那会做出 a→…→a 的环, 之后**任何**走查都不会终止
      * (lookup("..") 链与 child 链互咬)。Linux 对同一情形报 -EINVAL。上溯 ≤ 节点数。 */
     if (victim->head.type == BR_INODE_DIR) {
         for (t = nd; t != BR_NULL; t = t->parent) {
             if (t == victim) {
-                return BR_ERR(BR_EINVAL);
+                return BR_ERR(EINVAL);
             }
             if (t->parent == t) {
                 break;                    /* 到根 */
@@ -1079,15 +1079,15 @@ static int tmpfs_getattr(br_inode_t *ino, br_stat_t *st)
     tmpfs_node_t *n;
 
     if ((ino == BR_NULL) || (st == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((ino->type != BR_INODE_DIR) && (ino->type != BR_INODE_FILE) &&
         (ino->type != BR_INODE_SYMLINK)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     n = tmpfs_ino_node(ino);
     if (n == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* getattr 是"取属性", 不看入参的 valid(那是 setattr 的输入面)。
@@ -1117,13 +1117,13 @@ static int tmpfs_symlink(br_inode_t *dir, const char *name, const char *target)
     int           rc;
 
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if (target == BR_NULL || target[0] == '\0') {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (tmpfs_name_ok(name) == BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 目标串**不校验存在性**(悬空链接合法), 只执法长度上界 —— 先扫到 NUL 或窗口尽头,
      * 于是未终止的串也只读 BR_SYMLINK_MAX 字节(与 tmpfs_name_ok 同一纪律)。 */
@@ -1133,12 +1133,12 @@ static int tmpfs_symlink(br_inode_t *dir, const char *name, const char *target)
         }
     }
     if (tlen >= BR_SYMLINK_MAX) {
-        return BR_ERR(BR_ENAMETOOLONG);
+        return BR_ERR(ENAMETOOLONG);
     }
 
     d = tmpfs_ino_node(dir);
     if (tmpfs_child_find(d, name) != BR_NULL) {
-        return BR_ERR(BR_EEXIST);
+        return BR_ERR(EEXIST);
     }
 
     rc = tmpfs_body_new(&body);
@@ -1172,14 +1172,14 @@ static int tmpfs_readlink(br_inode_t *ino, char *buf, br_size_t cap)
     tmpfs_node_t *n;
 
     if (ino == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (ino->type != BR_INODE_SYMLINK) {
-        return BR_ERR(BR_EINVAL);         /* POSIX: 非符号链接 ⇒ EINVAL */
+        return BR_ERR(EINVAL);         /* POSIX: 非符号链接 ⇒ EINVAL */
     }
     n = tmpfs_ino_node(ino);
     if (n == BR_NULL || n->body == BR_NULL || n->body->data == BR_NULL) {
-        return BR_ERR(BR_EIO);            /* 体在而不见了: FS 侧不一致 */
+        return BR_ERR(EIO);            /* 体在而不见了: FS 侧不一致 */
     }
 
     const br_size_t len = (br_size_t)n->body->size;
@@ -1199,28 +1199,28 @@ static int tmpfs_link(br_inode_t *dir, const char *name, br_inode_t *target)
     int           rc;
 
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR) || (target == BR_NULL)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if (tmpfs_name_ok(name) == BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 目录不参与硬链接(会造成父子环); POSIX 的答复是 EPERM —— vfs 已在更前面挡下,
      * 这里是"第二道", 覆盖 vfs 之外的直接调用者(自检就属于这一类)。 */
     if (target->type == BR_INODE_DIR) {
-        return BR_ERR(BR_EPERM);
+        return BR_ERR(EPERM);
     }
     /* 目标必须是**本插件**的节点: 私有尾只能由本 FS 解释(与 rename 同一条纪律)。 */
     if (target->iops != &s_iops) {
-        return BR_ERR(BR_EXDEV);
+        return BR_ERR(EXDEV);
     }
     t = tmpfs_ino_node(target);
     if (t == BR_NULL || t->body == BR_NULL) {
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
 
     d = tmpfs_ino_node(dir);
     if (tmpfs_child_find(d, name) != BR_NULL) {
-        return BR_ERR(BR_EEXIST);
+        return BR_ERR(EEXIST);
     }
 
     /* 直接搬指针: 体已经存在, 只多一个引用(这就是硬链接的全部机制)。 */
@@ -1238,19 +1238,19 @@ static int tmpfs_setattr(br_inode_t *ino, const br_stat_t *st)
     tmpfs_node_t *n;
 
     if ((ino == BR_NULL) || (st == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* v1 只认 size(截断)。不认的位**必须**报 -ENOTSUP 而不是装作成功 —— 假装成功会让调用方
      * 以为属性真的生效了(比拒绝危险得多)。 */
     if ((st->valid & ~(br_u32)BR_STAT_SIZE) != 0u) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if ((st->valid & BR_STAT_SIZE) == 0u) {
         return 0;                         /* 没要求改任何东西: 空操作是正确答案 */
     }
     n = tmpfs_ino_node(ino);
     if ((n == BR_NULL) || (ino->type != BR_INODE_FILE)) {
-        return BR_ERR(BR_EISDIR);         /* 目录没有"文件长度"可截断 */
+        return BR_ERR(EISDIR);         /* 目录没有"文件长度"可截断 */
     }
     return tmpfs_file_truncate(n, st->size);
 }
@@ -1285,7 +1285,7 @@ static int tmpfs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root)
     int           rc = 0;
 
     if ((cfg == BR_NULL) || (root == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *root = BR_NULL;
 
@@ -1296,7 +1296,7 @@ static int tmpfs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root)
     /* 记账体只有一份(节点/inode ops 的签名里没有 fs_priv, 它们只能走文件域静态), 于是要求
      * vfs 交回来的**就是**那一个。两套访问路径指向不同对象时日志会撒谎 —— 与其静默不如报错。 */
     if (fs_priv != (void *)&s_fs) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* mount 是**单次**的(同一 path 二次注册由 vfs 以 -EEXIST 挡下)⇒ 记账清零 = "从这里开始
@@ -1306,7 +1306,7 @@ static int tmpfs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root)
 
     r = (tmpfs_node_t *)br_malloc(sizeof *r);
     if (r == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     tmpfs_node_init(r, BR_INODE_DIR, r, "/", BR_NULL);   /* 根: parent = 自己, 目录无体 */
     s_fs.nodes_used = 1u;

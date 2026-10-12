@@ -60,14 +60,14 @@ static int mmc_poll_for_busy(br_mmc_t *m, br_u32 timeout_ms)
             return rc;
         }
         if ((st & MMC_STATUS_SWITCH_ERROR) != 0u) {
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EIO);
         }
         if (((st & MMC_STATUS_RDY_FOR_DATA) != 0u) &&
             ((st & MMC_STATUS_CURR_STATE) != MMC_STATE_PRG)) {
             return 0;
         }
         if (br_clock_now() >= deadline) {
-            return BR_ERR(BR_ETIMEDOUT);
+            return BR_ERR(ETIMEDOUT);
         }
         br_delay_us(MMC_POLL_US);
     }
@@ -125,7 +125,7 @@ static int mmc_send_op_cond(br_mmc_t *m)
             return 0;
         }
         if (br_clock_now() >= deadline) {
-            return BR_ERR(BR_ETIMEDOUT);
+            return BR_ERR(ETIMEDOUT);
         }
         br_delay_us(MMC_POLL_US);
     }
@@ -331,7 +331,7 @@ int br_mmc_init(br_mmc_t *m, const br_mmc_host_ops_t *ops, void *host)
     (void)mmc_set_blocklen(m, MMC_MAX_BLOCK_LEN);   /* eMMC 恒 512; 不接受也不致命 */
 
     if (m->capacity_sectors == 0u) {
-        return BR_ERR(BR_EIO);           /* 容量读不出来 = 识别没完成, 不往下走 */
+        return BR_ERR(EIO);           /* 容量读不出来 = 识别没完成, 不往下走 */
     }
 
     br_log_info("uboot-mmc: eMMC ready (rca=%u, %lu sectors = %lu MiB, %u-bit, %s, %u Hz)",
@@ -346,10 +346,10 @@ int br_mmc_init(br_mmc_t *m, const br_mmc_host_ops_t *ops, void *host)
 int br_mmc_read(br_mmc_t *m, br_u64 lba, void *buf, br_size_t n)
 {
     if (buf == BR_NULL || n == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((lba + (br_u64)n) > m->capacity_sectors) {
-        return BR_ERR(BR_EIO);           /* 越界: 不发给卡, 免得触发未定义行为 */
+        return BR_ERR(EIO);           /* 越界: 不发给卡, 免得触发未定义行为 */
     }
 
     br_u8 *p = (br_u8 *)buf;
@@ -373,10 +373,10 @@ int br_mmc_read(br_mmc_t *m, br_u64 lba, void *buf, br_size_t n)
 int br_mmc_write(br_mmc_t *m, br_u64 lba, const void *buf, br_size_t n)
 {
     if (buf == BR_NULL || n == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((lba + (br_u64)n) > m->capacity_sectors) {
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
 
     const br_u8 *p = (const br_u8 *)buf;

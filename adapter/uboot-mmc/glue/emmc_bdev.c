@@ -79,7 +79,7 @@ static int emmc_geometry(void *priv, br_bdev_geom_t *g)
 {
     const emmc_dev_t *d = (const emmc_dev_t *)priv;
     if (d == BR_NULL || g == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     br_bdev_geom_t x = d->geom;
     x.flags = (br_sdhci_get_path(d->host) == BR_MMC_PATH_PIO) ? BR_BDEV_F_PIO : BR_BDEV_F_DMA;
@@ -91,17 +91,17 @@ static int emmc_ioctl(void *priv, br_u32 cmd, void *arg)
 {
     emmc_dev_t *d = (emmc_dev_t *)priv;
     if (d == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     if (BR_IOC_TYPE(cmd) != (br_u32)BR_EMMC_IOC_MAGIC) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     switch (BR_IOC_NR(cmd)) {
     case BR_EMMC_IOC_GET_INFO: {
         if (arg == BR_NULL) {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
         br_emmc_info_t *info = (br_emmc_info_t *)arg;
         info->base             = d->base;
@@ -116,11 +116,11 @@ static int emmc_ioctl(void *priv, br_u32 cmd, void *arg)
     }
     case BR_EMMC_IOC_SET_PATH: {
         if (arg == BR_NULL) {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
         const br_u32 path = *(const br_u32 *)arg;
         if (path != BR_MMC_PATH_DMA && path != BR_MMC_PATH_PIO) {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
         br_sdhci_set_path(d->host, path);
         br_log_info("uboot-mmc: %s 数据通路切到 %s", d->name,
@@ -128,12 +128,12 @@ static int emmc_ioctl(void *priv, br_u32 cmd, void *arg)
         return 0;
     }
     default:
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 }
 
-static int emmc_suspend(void *priv) { (void)priv; return BR_ERR(BR_ENOTSUP); }   /* D22 预留 */
-static int emmc_resume (void *priv) { (void)priv; return BR_ERR(BR_ENOTSUP); }
+static int emmc_suspend(void *priv) { (void)priv; return BR_ERR(ENOTSUP); }   /* D22 预留 */
+static int emmc_resume (void *priv) { (void)priv; return BR_ERR(ENOTSUP); }
 
 static const br_bdev_ops_t s_emmc_ops = {
     .read     = emmc_read,
@@ -174,7 +174,7 @@ static int emmc_bring_up(const br_pci_dev_t *pci, emmc_dev_t *d)
     if (pci->bar[0] == 0u || pci->bar_size[0] < 0x100u) {
         br_log_error("uboot-mmc: %s 的 sdhci BAR0 未分配或过小(bar0=0x%lx size=%u)",
                      d->name, (unsigned long)pci->bar[0], (unsigned)pci->bar_size[0]);
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     int rc = br_sdhci_probe(pci->bar[0], pci->intx_virq, &d->host);
@@ -225,7 +225,7 @@ int uboot_mmc_start(void)
         if (s_dev_n >= BR_EMMC_MAX_DEVS) {
             br_log_error("uboot-mmc: 卡数超上限 %u(第 %lu 个 sdhci-pci 未被接管)",
                          (unsigned)BR_EMMC_MAX_DEVS, (unsigned long)(found + 1u));
-            return BR_ERR(BR_ENOSPC);
+            return BR_ERR(ENOSPC);
         }
 
         emmc_dev_t *dev = &s_dev[s_dev_n];
@@ -242,7 +242,7 @@ int uboot_mmc_start(void)
     if (found == 0u) {
         br_log_error("uboot-mmc: 组合里有 pci-core, 但没找到 sdhci-pci (%04x:%04x)",
                      (unsigned)BR_EMMC_PCI_VENDOR, (unsigned)BR_EMMC_PCI_DEVICE);
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     br_log_info("uboot-mmc: 共接管 %lu 块 sdhci-pci 卡", (unsigned long)found);

@@ -11,7 +11,7 @@
  * ★ 为什么"名字上收到 core"是对的(ADR-0023): 在那一版之前, POSIX 名字表挂在本插件上 ⇒
  *   ① 产品不选 `runtime/posix` 就一个 POSIX 名字都没有(而"内部错误码沿用 POSIX 编号"
  *      这条纪律不该依赖可选插件在不在场); ② 三方移植件(uboot-fat / uboot-erofs)只好各自
- *      抄一份 `#define EIO BR_EIO` —— 既是第二处真值, 也是对上游代码的多余改动。
+ *      抄一份 `#define EIO EIO` —— 既是第二处真值, 也是对上游代码的多余改动。
  *
  * ★ `errno` 是**宏**, 指向**每线程**槽位(v0.2 起): 槽位在本服务自己的线程记录里
  *   (`runtime/posix/src/posix.c` 的 `svc_thread_t`), 由 `br_posix_errno()` 取地址。

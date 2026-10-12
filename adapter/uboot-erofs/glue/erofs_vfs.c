@@ -36,7 +36,7 @@
  *     - 其余每一个都是瞬态 ⇒ `free_inode` 必须 `br_free`(不然走查一次泄漏一个)。
  *
  * ## 只读执法
- *   任务书的硬性口径: 名字空间变更槽位**也要填**, 但一律返回 `BR_ERR(BR_EROFS)` ——
+ *   任务书的硬性口径: 名字空间变更槽位**也要填**, 但一律返回 `BR_ERR(EROFS)` ——
  *   这比 vfs 对空槽位给的 -ENOTSUP 更准(EROFS 不是"不支持", 是"只读")。
  *   同理 `br_file_ops.write` 与"写权限打开"(`br_open(path, BR_O_WRONLY)`)都报 -EROFS:
  *   vfs 的 `open` 不替 FS 判访问模式(只读 fd 能不能写是 fd 层的事), 所以
@@ -164,11 +164,11 @@ int uboot_erofs_bdev_bind(void)
     const br_bdev_ops_t *ops = br_bdev_get(BR_EROFS_DEV_NAME, &priv);
     if ((ops == BR_NULL) || (priv == BR_NULL)) {
         br_log_error("uboot-erofs: 找不到块设备 %s", BR_EROFS_DEV_NAME);
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if ((ops->read == BR_NULL) || (ops->geometry == BR_NULL)) {
         br_log_error("uboot-erofs: %s 的 bdev ops 缺 read/geometry 槽位", BR_EROFS_DEV_NAME);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_bdev_geom_t g;
@@ -181,7 +181,7 @@ int uboot_erofs_bdev_bind(void)
         br_log_error("uboot-erofs: %s 几何非法(sector=%u n=%llu max_rw=%u)",
                      BR_EROFS_DEV_NAME, (unsigned)g.sector_size,
                      (unsigned long long)g.n_sectors, (unsigned)g.max_rw);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     uboot_erofs_dev.ops         = ops;
@@ -202,10 +202,10 @@ int erofs_dev_read(int device_id, void *buf, u64 offset, size_t len)
     (void)device_id;
 
     if (uboot_erofs_dev.ops == BR_NULL) {
-        return BR_ERR(BR_EIO);                 /* 没绑定就读: FS 侧时序错误 */
+        return BR_ERR(EIO);                 /* 没绑定就读: FS 侧时序错误 */
     }
     if ((buf == BR_NULL) && (len != 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (len == 0u) {
         return 0;
@@ -237,7 +237,7 @@ int erofs_dev_read(int device_id, void *buf, u64 offset, size_t len)
             br_log_error("uboot-erofs: 读越界 off=0x%llx len=%llu (> %llu 字节介质)",
                          (unsigned long long)offset, (unsigned long long)len,
                          (unsigned long long)media_bytes);
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EIO);
         }
         if (cnt > left) {
             cnt = left;
@@ -249,12 +249,12 @@ int erofs_dev_read(int device_id, void *buf, u64 offset, size_t len)
              *   收成 -EIO)。保留上游的码, 但把设备的真实返回值打进日志 —— 排障要它。 */
             br_log_error("uboot-erofs: bdev read 失败 lba=%llu rc=%d",
                          (unsigned long long)lba, rc);
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EIO);
         }
         if (rc != 1) {
             br_log_error("uboot-erofs: bdev 短读 lba=%llu rc=%d(短读是坏介质)",
                          (unsigned long long)lba, rc);
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EIO);
         }
         (void)__builtin_memcpy(p, stage + in_sec, cnt);
 
@@ -396,10 +396,10 @@ static int uboot_erofs_join(char *dst, br_size_t cap, const char *parent, const 
     const br_size_t need = plen + ((plen != 0u) ? 1u : 0u) + nlen + 1u;
 
     if ((nlen == 0u) || (nlen >= (br_size_t)BR_NAME_MAX)) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     if (need > cap) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     /* 按**长度**拼, 不靠 TPL 的 "\0"(名字来自 vfs 的分量缓冲, 一定是 C 串; 但这里
      * 统一用长度版, 免得将来有非 C 串的调用者踩到同一个坑)。 */
@@ -424,15 +424,15 @@ static int uboot_erofs_file_open(br_file_t *f, br_u32 flags)
     const uboot_erofs_ino_t *n = uboot_erofs_session(f);
 
     if ((n == BR_NULL) || (f == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (n->head.type == BR_INODE_DIR) {
-        return BR_ERR(BR_EISDIR);
+        return BR_ERR(EISDIR);
     }
     /* ★ 只读执法(见文件头): 写权限打开在**这里**就失败, 而不是等到第一次 write。
      *   这样"打开一个只读卷上的文件要写"的调用方立刻拿到正确的 -EROFS。 */
     if (BR_O_WRITABLE(flags) || ((flags & BR_O_TRUNC) != 0u) || ((flags & BR_O_CREAT) != 0u)) {
-        return BR_ERR(BR_EROFS);
+        return BR_ERR(EROFS);
     }
     return 0;
 }
@@ -444,13 +444,13 @@ static br_s64 uboot_erofs_file_read(br_file_t *f, void *buf, br_size_t n)
     br_s64 off;
 
     if ((node == BR_NULL) || ((buf == BR_NULL) && (n != 0u))) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (node->head.type == BR_INODE_DIR) {
-        return BR_ERR(BR_EISDIR);
+        return BR_ERR(EISDIR);
     }
     if (node->head.type != BR_INODE_FILE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (n == 0u) {
         return 0;
@@ -458,7 +458,7 @@ static br_s64 uboot_erofs_file_read(br_file_t *f, void *buf, br_size_t n)
 
     off = br_file_offset(f);
     if (off < 0) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((erofs_off_t)off >= node->vi.i_size) {
         return 0;                          /* 读到/越过 EOF: 0 字节是**成功** */
@@ -484,7 +484,7 @@ static br_s64 uboot_erofs_file_write(br_file_t *f, const void *buf, br_size_t n)
     (void)f;
     (void)buf;
     (void)n;
-    return BR_ERR(BR_EROFS);
+    return BR_ERR(EROFS);
 }
 
 static br_s64 uboot_erofs_file_lseek(br_file_t *f, br_s64 off, int whence)
@@ -494,20 +494,20 @@ static br_s64 uboot_erofs_file_lseek(br_file_t *f, br_s64 off, int whence)
     br_s64 pos;
 
     if ((n == BR_NULL) || (n->head.type != BR_INODE_FILE)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     switch (whence) {
     case BR_SEEK_SET: base = 0; break;
     case BR_SEEK_CUR: base = br_file_offset(f); break;
     case BR_SEEK_END: base = (br_s64)n->vi.i_size; break;
-    default:          return BR_ERR(BR_EINVAL);
+    default:          return BR_ERR(EINVAL);
     }
     if (base < 0) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 允许越过 EOF(POSIX): 之后读得 0。用内建判溢出, 免得有符号加溢出(UB)。 */
     if (__builtin_add_overflow(base, off, &pos) || (pos < 0)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     br_file_set_offset(f, pos);
     return pos;
@@ -548,12 +548,12 @@ static int uboot_erofs_dir_open(br_file_t *f, br_u32 flags)
 
     (void)flags;    /* vfs 已在 br_open 里挡下"目录写打开 ⇒ -EISDIR" */
     if ((n == BR_NULL) || (n->head.type != BR_INODE_DIR)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     it = (uboot_erofs_dir_iter_t *)br_malloc(sizeof *it);
     if (it == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     it->ino     = n;
     it->pos     = 0;
@@ -613,7 +613,7 @@ static int uboot_erofs_dir_load_block(uboot_erofs_dir_iter_t *it, br_u32 blk)
     if ((de_end < sizeof(struct erofs_dirent)) || (de_end > erofs_blksiz())) {
         erofs_err("invalid de[0].nameoff %u @ nid %llu", de_end,
                   (unsigned long long)n->vi.nid);
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
 
     it->blk    = blk;
@@ -639,12 +639,12 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
     br_dirent_t *de = (br_dirent_t *)buf;
 
     if ((it == BR_NULL) || (it->ino == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 定长记录不可截断: 装不下一条就 -EINVAL(返回 0 会被 br_readdir 读成"目录已穷尽",
      * 返回半条会被判 -EIO 的 FS 违约)。vfs 恒传 sizeof(br_dirent_t)。 */
     if ((buf == BR_NULL) || (n < (br_size_t)sizeof(br_dirent_t))) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* "." 与 ".." 就地合成(EROFS 的目录块里**不含**这两条 —— 上游同样如此) */
@@ -703,7 +703,7 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
         if (nameoff >= it->max) {
             erofs_err("bogus dirent nameoff %u @ nid %llu", nameoff,
                       (unsigned long long)it->ino->vi.nid);
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EIO);
         }
 
         if (next_off < 0) {
@@ -722,7 +722,7 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
         /* 损坏的条目: 与上游同款判据 */
         if ((nameoff + de_namelen > it->max) || (de_namelen > EROFS_DIRENT_MAX_NAME)) {
             erofs_err("bogus dirent @ nid %llu", (unsigned long long)it->ino->vi.nid);
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EIO);
         }
         if (de_namelen == 0u) {
             continue;                       /* 空名字不是合法目录项: 跳过 */
@@ -940,11 +940,11 @@ static int uboot_erofs_getattr(br_inode_t *ino, br_stat_t *st)
     const uboot_erofs_ino_t *n;
 
     if ((ino == BR_NULL) || (st == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     n = uboot_erofs_wrap(ino);
     if (n == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* 目录的 size 按本仓库的口径报 0(tmpfs 同款: `br_stat_t.size` 对目录没有意义);
@@ -968,14 +968,14 @@ static int uboot_erofs_ro_create(br_inode_t *dir, const char *name, br_u32 flags
     if (out != BR_NULL) {
         *out = BR_NULL;
     }
-    return BR_ERR(BR_EROFS);
+    return BR_ERR(EROFS);
 }
 
 static int uboot_erofs_ro_name(br_inode_t *dir, const char *name)
 {
     (void)dir;
     (void)name;
-    return BR_ERR(BR_EROFS);
+    return BR_ERR(EROFS);
 }
 
 static int uboot_erofs_ro_rename(br_inode_t *dir, const char *name, br_inode_t *ndir,
@@ -985,7 +985,7 @@ static int uboot_erofs_ro_rename(br_inode_t *dir, const char *name, br_inode_t *
     (void)name;
     (void)ndir;
     (void)nname;
-    return BR_ERR(BR_EROFS);
+    return BR_ERR(EROFS);
 }
 
 static int uboot_erofs_ro_symlink(br_inode_t *dir, const char *name, const char *target)
@@ -993,7 +993,7 @@ static int uboot_erofs_ro_symlink(br_inode_t *dir, const char *name, const char 
     (void)dir;
     (void)name;
     (void)target;
-    return BR_ERR(BR_EROFS);
+    return BR_ERR(EROFS);
 }
 
 static int uboot_erofs_ro_link(br_inode_t *dir, const char *name, br_inode_t *target)
@@ -1001,14 +1001,14 @@ static int uboot_erofs_ro_link(br_inode_t *dir, const char *name, br_inode_t *ta
     (void)dir;
     (void)name;
     (void)target;
-    return BR_ERR(BR_EROFS);
+    return BR_ERR(EROFS);
 }
 
 static int uboot_erofs_setattr(br_inode_t *ino, const br_stat_t *st)
 {
     (void)ino;
     (void)st;
-    return BR_ERR(BR_EROFS);
+    return BR_ERR(EROFS);
 }
 
 /*
@@ -1023,14 +1023,14 @@ static int uboot_erofs_readlink(br_inode_t *ino, char *buf, br_size_t cap)
     int rc;
 
     if (ino == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (ino->type != BR_INODE_SYMLINK) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     n = uboot_erofs_wrap(ino);
     if (n == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     len = n->vi.i_size;
     if (len == 0u) {
@@ -1079,7 +1079,7 @@ static int uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t *
     (void)fs_priv;                         /* 本件没有 FS 级记账体: 卷状态就是 sbi */
 
     if ((cfg == BR_NULL) || (root == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *root = BR_NULL;
 
@@ -1088,7 +1088,7 @@ static int uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t *
     if ((cfg->path == BR_NULL) || (uboot_erofs_strcmp(cfg->path, BR_EROFS_MOUNT_PATH) != 0)) {
         br_log_error("uboot-erofs: 挂载点必须是 %s(实得 %s)", BR_EROFS_MOUNT_PATH,
                      (cfg->path != BR_NULL) ? cfg->path : "(null)");
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* 1) 块设备: 取 emmc3 并记住几何(扇区大小/介质字节数) */
@@ -1107,7 +1107,7 @@ static int uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t *
          * 静态缓冲按 4 KiB 设计 ⇒ 统一要求 4 KiB(README 的裁剪口径写明了)。 */
         br_log_error("uboot-erofs: 只支持 %u 字节块(镜像 blkszbits=%u)",
                      (unsigned)EROFS_MAX_BLOCK_SIZE, (unsigned)sbi.blkszbits);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     /* 3) 根 inode(路径 = 空串 = 卷根) */
@@ -1119,13 +1119,13 @@ static int uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t *
     }
     if (!S_ISDIR(vi.i_mode)) {
         br_log_error("uboot-erofs: 根 inode 不是目录(mode=%o)", (unsigned)vi.i_mode);
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
 
     /* 4) 造根 inode(由挂载表长期持有; 同样是 br_malloc, 只是永不 free) */
     r = uboot_erofs_new(&vi, "", &s_dir_fops);
     if (r == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     r->head.iops = &s_iops;
     *root = &r->head;

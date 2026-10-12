@@ -115,12 +115,12 @@ static int cf_open(br_file_t *f, br_u32 flags)
     /* inode 携带的 fpriv = 本件的设备槽位(见 cdev_open_file) */
     const cdev_slot_t *slot = (const cdev_slot_t *)br_file_fpriv(f);
     if (slot == BR_NULL || slot->used == BR_FALSE || slot->ops == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     cdev_file_t *cf = (cdev_file_t *)br_malloc((br_size_t)sizeof(cdev_file_t));
     if (cf == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     cf->slot = slot;
     cf->sess = BR_NULL;
@@ -164,7 +164,7 @@ static br_s64 cf_read(br_file_t *f, void *buf, br_size_t n)
 {
     const cdev_file_t *cf = cf_of(f);
     if (cf == BR_NULL || cf->slot->ops->read == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return cf->slot->ops->read(cf->sess, buf, n);
 }
@@ -173,7 +173,7 @@ static br_s64 cf_write(br_file_t *f, const void *buf, br_size_t n)
 {
     const cdev_file_t *cf = cf_of(f);
     if (cf == BR_NULL || cf->slot->ops->write == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return cf->slot->ops->write(cf->sess, buf, n);
 }
@@ -182,7 +182,7 @@ static int cf_ioctl(br_file_t *f, br_u32 cmd, void *arg)
 {
     const cdev_file_t *cf = cf_of(f);
     if (cf == BR_NULL || cf->slot->ops->ioctl == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return cf->slot->ops->ioctl(cf->sess, cmd, arg);
 }
@@ -191,7 +191,7 @@ static int cf_poll(br_file_t *f, br_u32 *events)
 {
     const cdev_file_t *cf = cf_of(f);
     if (cf == BR_NULL || cf->slot->ops->poll == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return cf->slot->ops->poll(cf->sess, events);
 }
@@ -214,7 +214,7 @@ static const br_file_ops_t s_cdev_file_ops = {
 static int cdev_open_file(void *dev_priv, const br_file_ops_t **fops, void **fpriv)
 {
     if (dev_priv == BR_NULL || fops == BR_NULL || fpriv == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *fops  = &s_cdev_file_ops;
     *fpriv = dev_priv;
@@ -226,14 +226,14 @@ static int cdev_open_file(void *dev_priv, const br_file_ops_t **fops, void **fpr
 int br_cdev_register(const char *name, const br_cdev_ops_t *ops, void *dev_priv)
 {
     if (ops == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* open/close 是**必填**(设计 `8-01` §3: 会话模型的两个端点); 其余槽位可空。 */
     if (ops->open == BR_NULL || ops->close == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_cdev_n >= (br_u32)BR_CDEV_MAX) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
 
     cdev_slot_t *slot = &s_cdevs[s_cdev_n];
@@ -305,22 +305,22 @@ int br_flash_register(const char *name, const br_flash_ops_t *ops,
                       const br_flash_geom_t *geom, void *priv)
 {
     if (ops == BR_NULL || geom == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 几何必须自洽: 0 尺寸的读/编程粒度或 0 块数 ⇒ 任何 FS 都算不出地址。
      * 在注册期拒绝, 免得 littlefs 侧拿到一张"看起来能算、其实除以 0"的表。 */
     if (geom->read_size == 0u || geom->prog_size == 0u ||
         geom->block_size == 0u || geom->block_count == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (ops->read == BR_NULL || ops->program == BR_NULL || ops->erase == BR_NULL) {
-        return BR_ERR(BR_EINVAL);   /* flash 子型的三个必填动作(设计 `8-01` §3) */
+        return BR_ERR(EINVAL);   /* flash 子型的三个必填动作(设计 `8-01` §3) */
     }
     if (flash_find(name) != BR_NULL) {
-        return BR_ERR(BR_EEXIST);
+        return BR_ERR(EEXIST);
     }
     if (s_flash_n >= (br_u32)BR_FLASH_MAX) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
 
     flash_slot_t *slot = &s_flash[s_flash_n];
@@ -361,11 +361,11 @@ const br_flash_ops_t *br_flash_get(const char *name, void **priv)
 int br_flash_geom_get(const char *name, br_flash_geom_t *out)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     flash_slot_t *slot = flash_find(name);
     if (slot == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     *out = slot->geom;
     return BR_OK;

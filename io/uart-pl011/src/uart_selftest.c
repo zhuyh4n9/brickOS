@@ -88,7 +88,7 @@ int uart_pl011_selftest(void)
         br_file_t *f2 = br_open_err(IO_CONF_PATH, BR_O_RDONLY | BR_O_NONBLOCK, &e2);
 
         const br_bool ok = (f1 != BR_NULL) && (e1 == 0) &&
-                           (f2 == BR_NULL) && (e2 == BR_ERR(BR_EBUSY));
+                           (f2 == BR_NULL) && (e2 == BR_ERR(EBUSY));
         io_conf(ok, "TC-IO-002",
                 "首次 open 成功; 已被打开时第二次 open ⇒ -EBUSY");
 
@@ -106,7 +106,7 @@ int uart_pl011_selftest(void)
         int                  err  = 0;
         br_file_t           *f    = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
         br_uart_pl011_info_t info = { 0u, 0u, 0u, 0u, 0u };
-        int                  rc   = BR_ERR(BR_EINVAL);
+        int                  rc   = BR_ERR(EINVAL);
 
         if (f != BR_NULL) {
             rc = br_file_ioctl(f, IO_CONF_CMD_GET_INFO, &info);
@@ -132,7 +132,7 @@ int uart_pl011_selftest(void)
                                   " write path OK\r\n";
         int        err = 0;
         br_file_t *f   = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
-        br_s64     n   = BR_ERR(BR_EINVAL);
+        br_s64     n   = BR_ERR(EINVAL);
 
         if (f != BR_NULL) {
             n = br_file_write(f, msg, (br_size_t)(sizeof msg - 1u));
@@ -161,7 +161,7 @@ int uart_pl011_selftest(void)
             n = br_file_read(f, &one, 1u);
         }
 
-        const br_bool ok = (f != BR_NULL) && (err == 0) && (n == BR_ERR(BR_EAGAIN));
+        const br_bool ok = (f != BR_NULL) && (err == 0) && (n == BR_ERR(EAGAIN));
         io_conf(ok, "TC-IO-005", "空 RX FIFO + BR_O_NONBLOCK: read ⇒ -EAGAIN");
 
         if (f != BR_NULL) {
@@ -174,7 +174,7 @@ int uart_pl011_selftest(void)
         int        err = 0;
         br_file_t *f   = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
         br_u32     ev  = 0xffffffffu;   /* 预置全 1: 验证"未置位的位必须被清掉" */
-        int        rc  = BR_ERR(BR_EINVAL);
+        int        rc  = BR_ERR(EINVAL);
 
         if (f != BR_NULL) {
             rc = br_file_poll(f, &ev);
@@ -194,8 +194,8 @@ int uart_pl011_selftest(void)
     {
         int        err  = 0;
         br_file_t *f    = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
-        int        r_magic = BR_ERR(BR_EINVAL);
-        int        r_nr    = BR_ERR(BR_EINVAL);
+        int        r_magic = BR_ERR(EINVAL);
+        int        r_nr    = BR_ERR(EINVAL);
 
         if (f != BR_NULL) {
             r_magic = br_file_ioctl(f, BR_IO('z', 0u), BR_NULL);
@@ -203,8 +203,8 @@ int uart_pl011_selftest(void)
         }
 
         const br_bool ok = (f != BR_NULL) && (err == 0) &&
-                           (r_magic == BR_ERR(BR_ENOTSUP)) &&
-                           (r_nr == BR_ERR(BR_ENOTSUP));
+                           (r_magic == BR_ERR(ENOTSUP)) &&
+                           (r_nr == BR_ERR(ENOTSUP));
         io_conf(ok, "TC-IO-007",
                 "错魔数 BR_IO('z',0) 与未知 nr 均 ⇒ -ENOTSUP");
 
@@ -226,8 +226,8 @@ int uart_pl011_selftest(void)
         }
 
         const br_bool ok = (f != BR_NULL) && (err == 0) &&
-                           (r_seek == (br_s64)BR_ERR(BR_ENOTSUP)) &&
-                           (r_sync == BR_ERR(BR_ENOTSUP));
+                           (r_seek == (br_s64)BR_ERR(ENOTSUP)) &&
+                           (r_sync == BR_ERR(ENOTSUP));
         io_conf(ok, "TC-IO-008",
                 "cdev 句柄的 lseek/fsync ⇒ -ENOTSUP(v1 形态: 适配层槽位为空)");
 
@@ -241,9 +241,9 @@ int uart_pl011_selftest(void)
         int         e1 = 0;
         int         e2 = 0;
         br_file_t  *f  = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &e1);
-        const int   r_close  = (f != BR_NULL) ? br_file_close(f) : BR_ERR(BR_EINVAL);
+        const int   r_close  = (f != BR_NULL) ? br_file_close(f) : BR_ERR(EINVAL);
         br_file_t  *g  = br_open_err(IO_CONF_PATH, BR_O_RDONLY | BR_O_NONBLOCK, &e2);
-        const int   r_close2 = (g != BR_NULL) ? br_file_close(g) : BR_ERR(BR_EINVAL);
+        const int   r_close2 = (g != BR_NULL) ? br_file_close(g) : BR_ERR(EINVAL);
 
         const br_bool ok = (f != BR_NULL) && (e1 == 0) && (r_close == 0) &&
                            (g != BR_NULL) && (e2 == 0) && (r_close2 == 0);
@@ -265,9 +265,9 @@ int uart_pl011_selftest(void)
         }
 
         const br_bool ok = (f != BR_NULL) && (err == 0) &&
-                           (r_poll == BR_ERR(BR_EINVAL)) &&
-                           (r_info == BR_ERR(BR_EINVAL)) &&
-                           (r_baud == BR_ERR(BR_EINVAL));
+                           (r_poll == BR_ERR(EINVAL)) &&
+                           (r_info == BR_ERR(EINVAL)) &&
+                           (r_baud == BR_ERR(EINVAL));
         io_conf(ok, "TC-IO-010",
                 "poll(NULL events) / GET_INFO / SET_BAUD 的 NULL arg ⇒ -EINVAL");
 
@@ -305,8 +305,8 @@ int uart_pl011_selftest(void)
         }
 
         const br_bool ok = (f != BR_NULL) && (err == 0) &&
-                           (r_hi == BR_ERR(BR_EINVAL)) &&
-                           (r_zero == BR_ERR(BR_EINVAL)) &&
+                           (r_hi == BR_ERR(EINVAL)) &&
+                           (r_zero == BR_ERR(EINVAL)) &&
                            (r_good == 0) && (r_info1 == 0) && (info1.baud == good) &&
                            (r_back == 0) && (r_info2 == 0) && (info2.baud == BR_PL011_BAUD);
         io_conf(ok, "TC-IO-011",

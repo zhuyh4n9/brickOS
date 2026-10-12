@@ -67,7 +67,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
   `br_log_warn` 报总数。为什么不是 `-ENOSPC`: 目录迭代是"流", 一条超长名字不该让整个
   枚举失败(调用方连已经能看见的条目都拿不到了)。
 - **`lookup`**: `br_dirent_t`/分量缓冲都装不下 ≥32 字节的名字 ⇒ 本件让 `lookup` 返回
-  `BR_NULL`(vfs 得 `-ENOENT`)。任务书写的"lookup 上返回 `BR_ERR(BR_ENOSPC)`"在本件的
+  `BR_NULL`(vfs 得 `-ENOENT`)。任务书写的"lookup 上返回 `BR_ERR(ENOSPC)`"在本件的
   落点是 **vfs 自己**: `resolve_norm()` 对 `clen >= BR_NAME_MAX` 的分量返回 `-ENOSPC`,
   于是同一个超长名字从路径面看仍是 `-ENOSPC`。`lookup` 的签名没有错误码通道
   (返回 inode 指针), 所以 FS 侧只能 `BR_NULL`。

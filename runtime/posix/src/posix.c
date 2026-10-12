@@ -145,11 +145,11 @@ static int svc_rc(int rc)
 static int svc_abs(const char *path, char *out, size_t cap)
 {
     if (path == BR_NULL || path[0] == '\0') {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (path[0] == '/') {
         if (svc_strlen(path) + 1u > cap) {
-            return BR_ERR(BR_ENAMETOOLONG);
+            return BR_ERR(ENAMETOOLONG);
         }
         svc_copy(out, path, cap);
         return BR_OK;
@@ -159,7 +159,7 @@ static int svc_abs(const char *path, char *out, size_t cap)
     const size_t pl = svc_strlen(path);
     const int    need_slash = (cl > 0u && s_cwd[cl - 1u] != '/') ? 1 : 0;
     if ((cl + (size_t)need_slash + pl + 1u) > cap) {
-        return BR_ERR(BR_ENAMETOOLONG);
+        return BR_ERR(ENAMETOOLONG);
     }
     size_t n = 0u;
     for (size_t i = 0u; i < cl; i++) {
@@ -290,7 +290,7 @@ int open(const char *path, int flags, ...)
     if (((flags & O_DIRECTORY) != 0) &&
         (br_file_inode(f) != BR_NULL) && (br_file_inode(f)->type != BR_INODE_DIR)) {
         (void)br_file_close(f);
-        return svc_fail(BR_ERR(BR_ENOTDIR));
+        return svc_fail(BR_ERR(ENOTDIR));
     }
 
     const int fd = br_ft_alloc(f, (br_u32)flags);
@@ -306,7 +306,7 @@ int openat(int dirfd, const char *path, int flags, ...)
     /* 只支持 `AT_FDCWD`: 相对某个**目录 fd** 的解析需要"由 fd 反查目录路径", 而 vfs
      * 的句柄不携带路径(它可能已被 rename/unlink)。如实返回 -ENOTSUP, 不假装支持。 */
     if (dirfd != AT_FDCWD) {
-        return svc_fail(BR_ERR(BR_ENOTSUP));
+        return svc_fail(BR_ERR(ENOTSUP));
     }
     return open(path, flags);
 }
@@ -321,7 +321,7 @@ ssize_t read(int fd, void *buf, size_t n)
 {
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL || svc_fd_readable(fd) == 0) {
-        return (ssize_t)svc_fail(BR_ERR(BR_EBADF));
+        return (ssize_t)svc_fail(BR_ERR(EBADF));
     }
     const br_s64 r = br_file_read(f, buf, n);
     if (r < 0) {
@@ -341,7 +341,7 @@ static ssize_t svc_write_common(int fd, const void *buf, size_t n, off_t off, in
 {
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL || svc_fd_writable(fd) == 0) {
-        return (ssize_t)svc_fail(BR_ERR(BR_EBADF));
+        return (ssize_t)svc_fail(BR_ERR(EBADF));
     }
 
     br_u32 fl = 0u;
@@ -352,13 +352,13 @@ static ssize_t svc_write_common(int fd, const void *buf, size_t n, off_t off, in
 
     if (have_off != 0) {
         if (br_file_lseek(f, (br_s64)off, BR_SEEK_SET) < 0) {
-            return (ssize_t)svc_fail(BR_ERR(BR_ESPIPE));
+            return (ssize_t)svc_fail(BR_ERR(ESPIPE));
         }
         moved = 1;
     } else if (((fl & (br_u32)O_APPEND) != 0u) &&
                (br_file_inode(f) != BR_NULL) && (br_file_inode(f)->type == BR_INODE_FILE)) {
         if (br_file_lseek(f, 0, BR_SEEK_END) < 0) {
-            return (ssize_t)svc_fail(BR_ERR(BR_ESPIPE));
+            return (ssize_t)svc_fail(BR_ERR(ESPIPE));
         }
     }
 
@@ -387,11 +387,11 @@ ssize_t pread(int fd, void *buf, size_t n, off_t off)
 {
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL || svc_fd_readable(fd) == 0) {
-        return (ssize_t)svc_fail(BR_ERR(BR_EBADF));
+        return (ssize_t)svc_fail(BR_ERR(EBADF));
     }
     const br_s64 saved = br_file_offset(f);
     if (br_file_lseek(f, (br_s64)off, BR_SEEK_SET) < 0) {
-        return (ssize_t)svc_fail(BR_ERR(BR_ESPIPE));
+        return (ssize_t)svc_fail(BR_ERR(ESPIPE));
     }
     const br_s64 r = br_file_read(f, buf, n);
     br_file_set_offset(f, saved);
@@ -428,7 +428,7 @@ off_t lseek(int fd, off_t off, int whence)
 {
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL) {
-        return (off_t)svc_fail(BR_ERR(BR_EBADF));
+        return (off_t)svc_fail(BR_ERR(EBADF));
     }
     /* BR_SEEK_SET/CUR/END 与 POSIX SEEK_SET/CUR/END 同值(0/1/2) —— 直接传。 */
     const br_s64 r = br_file_lseek(f, (br_s64)off, (int)whence);
@@ -462,7 +462,7 @@ int fsync(int fd)
 {
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
     const int r = br_file_fsync(f);
     /* vfs 的 fsync 槽位对 tmpfs 是 BR_NULL ⇒ -ENOTSUP。POSIX 允许 fsync 对不支持它的
@@ -479,18 +479,18 @@ int fdatasync(int fd)
 int ftruncate(int fd, off_t len)
 {
     if (len < 0) {
-        return svc_fail(BR_ERR(BR_EINVAL));
+        return svc_fail(BR_ERR(EINVAL));
     }
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
     if (svc_fd_writable(fd) == 0) {
-        return svc_fail(BR_ERR(BR_EINVAL));         /* Linux: 只读 fd 上 ftruncate ⇒ EINVAL */
+        return svc_fail(BR_ERR(EINVAL));         /* Linux: 只读 fd 上 ftruncate ⇒ EINVAL */
     }
     br_inode_t *ino = br_file_inode(f);
     if (ino == BR_NULL || ino->iops == BR_NULL || ino->iops->setattr == BR_NULL) {
-        return svc_fail(BR_ERR(BR_ENOTSUP));
+        return svc_fail(BR_ERR(ENOTSUP));
     }
     const br_stat_t st = { .valid = BR_STAT_SIZE, .type = ino->type,
                            .size = (br_u64)len, .nlink = 0u };
@@ -501,7 +501,7 @@ int ftruncate(int fd, off_t len)
 int truncate(const char *path, off_t len)
 {
     if (len < 0) {
-        return svc_fail(BR_ERR(BR_EINVAL));
+        return svc_fail(BR_ERR(EINVAL));
     }
     char abs[SVC_PATH_MAX];
     int  rc = svc_abs(path, abs, (size_t)sizeof(abs));
@@ -516,7 +516,7 @@ int truncate(const char *path, off_t len)
 int isatty(int fd)
 {
     if (svc_fd_file(fd) == BR_NULL) {
-        (void)svc_fail(BR_ERR(BR_EBADF));
+        (void)svc_fail(BR_ERR(EBADF));
         return 0;                                   /* errno = EBADF, 保持不动 */
     }
     errno = ENOTTY;                                 /* 有效 fd 但不是终端(无 tty 层) */
@@ -527,7 +527,7 @@ int isatty(int fd)
 ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
 {
     if (iov == BR_NULL || iovcnt <= 0) {
-        return (ssize_t)svc_fail(BR_ERR(BR_EINVAL));
+        return (ssize_t)svc_fail(BR_ERR(EINVAL));
     }
     ssize_t total = 0;
     for (int i = 0; i < iovcnt; i++) {
@@ -549,7 +549,7 @@ ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
 ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
 {
     if (iov == BR_NULL || iovcnt <= 0) {
-        return (ssize_t)svc_fail(BR_ERR(BR_EINVAL));
+        return (ssize_t)svc_fail(BR_ERR(EINVAL));
     }
     ssize_t total = 0;
     for (int i = 0; i < iovcnt; i++) {
@@ -602,7 +602,7 @@ static int svc_lock_set(int fd, struct flock *fl)
 {
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL || fl == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
 
     off_t s = 0;
@@ -631,7 +631,7 @@ static int svc_lock_set(int fd, struct flock *fl)
                                                : (s_locks[i].start + s_locks[i].len);
         if (svc_overlap(s, e, os, oe) != 0 &&
             (s_locks[i].type == F_WRLCK || fl->l_type == F_WRLCK)) {
-            return svc_fail(BR_ERR(BR_EAGAIN));     /* POSIX 允许 EACCES/EAGAIN */
+            return svc_fail(BR_ERR(EAGAIN));     /* POSIX 允许 EACCES/EAGAIN */
         }
     }
 
@@ -650,7 +650,7 @@ static int svc_lock_set(int fd, struct flock *fl)
         }
     }
     if (slot == (br_u32)SVC_LOCK_MAX) {
-        return svc_fail(BR_ERR(BR_ENOLCK));         /* 锁表满 */
+        return svc_fail(BR_ERR(ENOLCK));         /* 锁表满 */
     }
     s_locks[slot].used  = 1u;
     s_locks[slot].f     = f;
@@ -665,7 +665,7 @@ static int svc_lock_get(int fd, struct flock *fl)
 {
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL || fl == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
     off_t s = 0;
     off_t e = 0;
@@ -714,7 +714,7 @@ int fcntl(int fd, int cmd, ...)
 
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
 
     switch (cmd) {
@@ -725,7 +725,7 @@ int fcntl(int fd, int cmd, ...)
         case F_GETFL: {
             br_u32 fl = 0u;
             if (br_ft_get_flags(fd, &fl) != 0) {
-                return svc_fail(BR_ERR(BR_EBADF));
+                return svc_fail(BR_ERR(EBADF));
             }
             return (int)fl;
         }
@@ -733,7 +733,7 @@ int fcntl(int fd, int cmd, ...)
             /* 只接受"状态位"的改动; 访问模式不可改(POSIX 亦然)。 */
             br_u32 fl = 0u;
             if (br_ft_get_flags(fd, &fl) != 0) {
-                return svc_fail(BR_ERR(BR_EBADF));
+                return svc_fail(BR_ERR(EBADF));
             }
             const br_u32 want   = (br_u32)(br_uintptr_t)arg;
             const br_u32 change = (br_u32)(O_APPEND | O_NONBLOCK);
@@ -745,7 +745,7 @@ int fcntl(int fd, int cmd, ...)
             /* 复制到 **≥ arg** 的最小可用 fd(POSIX F_DUPFD 的语义) */
             const int lo = (int)(br_intptr_t)arg;
             if (lo < 0) {
-                return svc_fail(BR_ERR(BR_EINVAL));
+                return svc_fail(BR_ERR(EINVAL));
             }
             for (int cand = lo; cand < (int)BR_FT_MAX; cand++) {
                 if (br_ft_get(cand) == BR_NULL) {
@@ -760,7 +760,7 @@ int fcntl(int fd, int cmd, ...)
                     return cand;
                 }
             }
-            return svc_fail(BR_ERR(BR_EMFILE));
+            return svc_fail(BR_ERR(EMFILE));
         }
         case F_SETLK:
             return svc_lock_set(fd, (struct flock *)arg);
@@ -768,9 +768,9 @@ int fcntl(int fd, int cmd, ...)
             return svc_lock_get(fd, (struct flock *)arg);
         case F_SETLKW:
             /* 见文件头的说明: 阻塞式记录锁要等待队列, 本代不做。 */
-            return svc_fail(BR_ERR(BR_ENOTSUP));
+            return svc_fail(BR_ERR(ENOTSUP));
         default:
-            return svc_fail(BR_ERR(BR_EINVAL));
+            return svc_fail(BR_ERR(EINVAL));
     }
 }
 
@@ -796,7 +796,7 @@ static void svc_fill_stat(const br_stat_t *b, struct stat *st)
 static int svc_stat_common(const char *path, struct stat *st, int nofollow)
 {
     if (st == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EINVAL));
+        return svc_fail(BR_ERR(EINVAL));
     }
     char abs[SVC_PATH_MAX];
     int  rc = svc_abs(path, abs, (size_t)sizeof(abs));
@@ -825,11 +825,11 @@ int lstat(const char *path, struct stat *st)
 int fstat(int fd, struct stat *st)
 {
     if (st == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EINVAL));
+        return svc_fail(BR_ERR(EINVAL));
     }
     br_file_t *f = svc_fd_file(fd);
     if (f == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
     br_stat_t b;
     const int rc = br_fstat(f, &b);                 /* vfs 的句柄级原语(ADR-0013) */
@@ -948,7 +948,7 @@ int remove(const char *path)
         return svc_fail(rc);
     }
     rc = br_unlink(abs);
-    if (rc == BR_ERR(BR_EISDIR)) {
+    if (rc == BR_ERR(EISDIR)) {
         rc = br_rmdir(abs);
     }
     return (rc != 0) ? svc_fail(rc) : 0;
@@ -989,7 +989,7 @@ int link(const char *old_path, const char *new_path)
 int symlink(const char *target, const char *linkpath)
 {
     if (target == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EINVAL));
+        return svc_fail(BR_ERR(EINVAL));
     }
     char abs[SVC_PATH_MAX];
     int  rc = svc_abs(linkpath, abs, (size_t)sizeof(abs));
@@ -1084,7 +1084,7 @@ struct dirent *readdir(DIR *d)
 int closedir(DIR *d)
 {
     if (d == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
     const int rc = br_closedir(d->d);
     br_free(d);
@@ -1120,7 +1120,7 @@ int chdir(const char *path)
         return svc_fail(rc);
     }
     if (b.type != BR_INODE_DIR) {
-        return svc_fail(BR_ERR(BR_ENOTDIR));
+        return svc_fail(BR_ERR(ENOTDIR));
     }
     svc_copy(s_cwd, clean, (size_t)sizeof(s_cwd));
     return 0;
@@ -1148,12 +1148,12 @@ static void svc_us_to_ts(br_u64 us, struct timespec *ts)
 int clock_gettime(clockid_t id, struct timespec *ts)
 {
     if (ts == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EINVAL));
+        return svc_fail(BR_ERR(EINVAL));
     }
     /* ★ 只有 MONOTONIC: 没有墙钟源(P-1), 所以 REALTIME **如实**返回 -ENOTSUP,
      *   而不是编一个假装是"1970 年至今"的数字(那会让排序/超时逻辑静默错)。 */
     if (id != CLOCK_MONOTONIC) {
-        return svc_fail(BR_ERR(BR_ENOTSUP));
+        return svc_fail(BR_ERR(ENOTSUP));
     }
     svc_us_to_ts(br_clock_now(), ts);
     return 0;
@@ -1162,10 +1162,10 @@ int clock_gettime(clockid_t id, struct timespec *ts)
 int clock_getres(clockid_t id, struct timespec *ts)
 {
     if (ts == BR_NULL) {
-        return svc_fail(BR_ERR(BR_EINVAL));
+        return svc_fail(BR_ERR(EINVAL));
     }
     if (id != CLOCK_MONOTONIC) {
-        return svc_fail(BR_ERR(BR_ENOTSUP));
+        return svc_fail(BR_ERR(ENOTSUP));
     }
     ts->tv_sec  = 0;
     ts->tv_nsec = BR_POSIX_CLOCK_RES_NS;            /* 如实报一拍 = 1/HZ(周期 tick) */
@@ -1175,7 +1175,7 @@ int clock_getres(clockid_t id, struct timespec *ts)
 int nanosleep(const struct timespec *req, struct timespec *rem)
 {
     if (req == BR_NULL || req->tv_sec < 0 || req->tv_nsec < 0) {
-        return svc_fail(BR_ERR(BR_EINVAL));
+        return svc_fail(BR_ERR(EINVAL));
     }
     if (rem != BR_NULL) {
         rem->tv_sec  = 0;                           /* 本代不会被信号打断 ⇒ 没有剩余 */
@@ -1227,7 +1227,7 @@ static int svc_poll_once(struct pollfd *fds, nfds_t n, int *bad)
             if ((ev & BR_POLLIN) != 0u)  { re = (short)(re | POLLIN); }
             if ((ev & BR_POLLOUT) != 0u) { re = (short)(re | POLLOUT); }
             if ((ev & BR_POLLERR) != 0u) { re = (short)(re | POLLERR); }
-        } else if (rc == BR_ERR(BR_ENOTSUP)) {
+        } else if (rc == BR_ERR(ENOTSUP)) {
             /* 没有 poll 槽位(如 tmpfs 的内存文件): POSIX 的答复是"恒就绪" ——
              * 内存文件永远可读写, 这比返回错误更接近事实。 */
             re = (short)(fds[i].events & (POLLIN | POLLOUT));
@@ -1245,7 +1245,7 @@ static int svc_poll_once(struct pollfd *fds, nfds_t n, int *bad)
 int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms)
 {
     if (fds == BR_NULL && nfds != 0u) {
-        return svc_fail(BR_ERR(BR_EINVAL));
+        return svc_fail(BR_ERR(EINVAL));
     }
     if (nfds == 0u) {
         /* 纯延时: 照 POSIX 睡满 timeout 再返回 0 */
@@ -1284,7 +1284,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms)
 int select(int nfds, fd_set *rd, fd_set *wr, fd_set *ex, struct timeval *timeout)
 {
     if (nfds < 0 || nfds > (int)SVC_SELECT_MAX) {
-        return svc_fail(BR_ERR(BR_EINVAL));         /* 超界**报错**而不是静默截断 */
+        return svc_fail(BR_ERR(EINVAL));         /* 超界**报错**而不是静默截断 */
     }
     struct pollfd fds[SVC_SELECT_MAX];
     int           map[SVC_SELECT_MAX];
@@ -1403,7 +1403,7 @@ static void svc_file_drop(FILE *f)
 static int svc_mode_parse(const char *mode, int *flags, int *rd, int *wr, int *ap)
 {
     if (mode == BR_NULL || mode[0] == '\0') {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *rd = 0;
     *wr = 0;
@@ -1413,7 +1413,7 @@ static int svc_mode_parse(const char *mode, int *flags, int *rd, int *wr, int *a
         case 'r': *flags = O_RDONLY; *rd = 1; break;
         case 'w': *flags = O_WRONLY | O_CREAT | O_TRUNC; *wr = 1; break;
         case 'a': *flags = O_WRONLY | O_CREAT | O_APPEND; *wr = 1; *ap = 1; break;
-        default:  return BR_ERR(BR_EINVAL);
+        default:  return BR_ERR(EINVAL);
     }
     for (int i = 1; mode[i] != '\0'; i++) {
         if (mode[i] == '+') {
@@ -1427,7 +1427,7 @@ static int svc_mode_parse(const char *mode, int *flags, int *rd, int *wr, int *a
         } else if (mode[i] == 'b' || mode[i] == 'e' || mode[i] == 'x') {
             /* 'b' = 二进制(无区分); 'e'/'x' 不在本代 ⇒ 忽略 */
         } else {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
     }
     return BR_OK;
@@ -1473,7 +1473,7 @@ FILE *fdopen(int fd, const char *mode)
         return BR_NULL;
     }
     if (svc_fd_file(fd) == BR_NULL) {
-        (void)svc_fail(BR_ERR(BR_EBADF));
+        (void)svc_fail(BR_ERR(EBADF));
         return BR_NULL;
     }
     FILE *f = svc_file_slot();
@@ -1499,7 +1499,7 @@ FILE *fdopen(int fd, const char *mode)
 int fflush(FILE *f)
 {
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
     if (f->wlen == 0u) {
         return 0;
@@ -1509,7 +1509,7 @@ int fflush(FILE *f)
         const ssize_t r = write(f->fd, f->wbuf + done, f->wlen - done);
         if (r <= 0) {
             f->err = 1;
-            return svc_fail(BR_ERR(BR_EIO));
+            return svc_fail(BR_ERR(EIO));
         }
         done += (size_t)r;
     }
@@ -1554,7 +1554,7 @@ static size_t svc_file_push(FILE *f, const unsigned char *src, size_t n)
 size_t fwrite(const void *buf, size_t size, size_t n, FILE *f)
 {
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC || f->writable == 0) {
-        (void)svc_fail(BR_ERR(BR_EBADF));
+        (void)svc_fail(BR_ERR(EBADF));
         return 0u;
     }
     if (size == 0u || n == 0u) {
@@ -1568,7 +1568,7 @@ size_t fwrite(const void *buf, size_t size, size_t n, FILE *f)
 size_t fread(void *buf, size_t size, size_t n, FILE *f)
 {
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC || f->readable == 0) {
-        (void)svc_fail(BR_ERR(BR_EBADF));
+        (void)svc_fail(BR_ERR(EBADF));
         return 0u;
     }
     if (size == 0u || n == 0u) {
@@ -1589,7 +1589,7 @@ size_t fread(void *buf, size_t size, size_t n, FILE *f)
 int fseek(FILE *f, long off, int whence)
 {
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
     if (fflush(f) != 0) {
         return -1;
@@ -1605,7 +1605,7 @@ int fseek(FILE *f, long off, int whence)
 long ftell(FILE *f)
 {
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC) {
-        (void)svc_fail(BR_ERR(BR_EBADF));
+        (void)svc_fail(BR_ERR(EBADF));
         return -1;
     }
     const off_t pos = lseek(f->fd, 0, SEEK_CUR);
@@ -1629,7 +1629,7 @@ void rewind(FILE *f)
 int fclose(FILE *f)
 {
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
     int rc = fflush(f);
     if (f->owned != 0 && f->fd >= 0) {
@@ -1663,7 +1663,7 @@ void clearerr(FILE *f)
 int fileno(FILE *f)
 {
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC) {
-        (void)svc_fail(BR_ERR(BR_EBADF));
+        (void)svc_fail(BR_ERR(EBADF));
         return -1;
     }
     return f->fd;
@@ -1672,7 +1672,7 @@ int fileno(FILE *f)
 int setvbuf(FILE *f, char *buf, int mode, size_t size)
 {
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC) {
-        return svc_fail(BR_ERR(BR_EBADF));
+        return svc_fail(BR_ERR(EBADF));
     }
     (void)size;
     /* 调用方给的 `buf` **不接管**: 它的生命周期由调用方管, 而本实现要能自己释放
@@ -1696,7 +1696,7 @@ int fputc(int c, FILE *f)
 {
     const unsigned char b = (unsigned char)c;
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC || f->writable == 0) {
-        (void)svc_fail(BR_ERR(BR_EBADF));
+        (void)svc_fail(BR_ERR(EBADF));
         return EOF;
     }
     return (svc_file_push(f, &b, 1u) == 1u) ? (int)b : EOF;
@@ -1705,7 +1705,7 @@ int fputc(int c, FILE *f)
 int fputs(const char *s, FILE *f)
 {
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC || f->writable == 0) {
-        (void)svc_fail(BR_ERR(BR_EBADF));
+        (void)svc_fail(BR_ERR(EBADF));
         return EOF;
     }
     const size_t n = svc_strlen(s);
@@ -1729,7 +1729,7 @@ int fgetc(FILE *f)
 {
     unsigned char b = 0u;
     if (f == BR_NULL || f->magic != SVC_FILE_MAGIC || f->readable == 0) {
-        (void)svc_fail(BR_ERR(BR_EBADF));
+        (void)svc_fail(BR_ERR(EBADF));
         return EOF;
     }
     const ssize_t r = read(f->fd, &b, 1u);
@@ -2172,7 +2172,7 @@ int *br_posix_errno(void)
 int pthread_attr_init(pthread_attr_t *a)
 {
     if (a == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->stack_size  = BR_POSIX_STACK_DEFAULT;
     a->stack       = BR_NULL;
@@ -2190,7 +2190,7 @@ int pthread_attr_destroy(pthread_attr_t *a)
 int pthread_attr_setstacksize(pthread_attr_t *a, size_t size)
 {
     if (a == BR_NULL || size < BR_STACK_MIN) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->stack_size = size;
     return 0;
@@ -2199,7 +2199,7 @@ int pthread_attr_setstacksize(pthread_attr_t *a, size_t size)
 int pthread_attr_getstacksize(const pthread_attr_t *a, size_t *size)
 {
     if (a == BR_NULL || size == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *size = a->stack_size;
     return 0;
@@ -2208,7 +2208,7 @@ int pthread_attr_getstacksize(const pthread_attr_t *a, size_t *size)
 int pthread_attr_setstack(pthread_attr_t *a, void *stack, size_t size)
 {
     if (a == BR_NULL || stack == BR_NULL || size < BR_STACK_MIN) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->stack      = stack;
     a->stack_size = size;
@@ -2218,7 +2218,7 @@ int pthread_attr_setstack(pthread_attr_t *a, void *stack, size_t size)
 int pthread_attr_getstack(const pthread_attr_t *a, void **stack, size_t *size)
 {
     if (a == BR_NULL || stack == BR_NULL || size == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *stack = a->stack;
     *size  = a->stack_size;
@@ -2229,7 +2229,7 @@ int pthread_attr_setdetachstate(pthread_attr_t *a, int state)
 {
     if (a == BR_NULL ||
         (state != PTHREAD_CREATE_JOINABLE && state != PTHREAD_CREATE_DETACHED)) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->detachstate = state;
     return 0;
@@ -2238,7 +2238,7 @@ int pthread_attr_setdetachstate(pthread_attr_t *a, int state)
 int pthread_attr_getdetachstate(const pthread_attr_t *a, int *state)
 {
     if (a == BR_NULL || state == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *state = a->detachstate;
     return 0;
@@ -2247,7 +2247,7 @@ int pthread_attr_getdetachstate(const pthread_attr_t *a, int *state)
 int pthread_attr_setguardsize(pthread_attr_t *a, size_t size)
 {
     if (a == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     /* core 没有 guard 页(栈是调用方给的连续内存)⇒ 只记录, 不改行为。如实返回成功
      * 会让 get 读回自己设的值; 想让调用方知道"没生效"就靠文档与这里的一句注释。 */
@@ -2258,7 +2258,7 @@ int pthread_attr_setguardsize(pthread_attr_t *a, size_t size)
 int pthread_attr_getguardsize(const pthread_attr_t *a, size_t *size)
 {
     if (a == BR_NULL || size == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *size = a->guard_size;
     return 0;
@@ -2269,7 +2269,7 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
 {
     svc_reap_detached();
     if (out == BR_NULL || fn == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
 
     svc_thread_t *rec = BR_NULL;
@@ -2280,7 +2280,7 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
         }
     }
     if (rec == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EAGAIN));         /* 线程表满(与 core 的 TCB 池同量级) */
+        return svc_rc(BR_ERR(EAGAIN));         /* 线程表满(与 core 的 TCB 池同量级) */
     }
 
     size_t      ssize = BR_POSIX_STACK_DEFAULT;
@@ -2301,7 +2301,7 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
         /* ★ 栈从 core 堆上切(POSIX 的签名里没有栈; 见 pthread.h ①) */
         stack = br_malloc((br_size_t)ssize);
         if (stack == BR_NULL) {
-            return svc_rc(BR_ERR(BR_EAGAIN));
+            return svc_rc(BR_ERR(EAGAIN));
         }
         owned = 1;
     }
@@ -2341,17 +2341,17 @@ int pthread_join(pthread_t t, void **retval)
 {
     svc_reap_detached();
     if (t == BR_NULL) {
-        return svc_rc(BR_ERR(BR_ESRCH));
+        return svc_rc(BR_ERR(ESRCH));
     }
     if (t == br_task_self()) {
-        return svc_rc(BR_ERR(BR_EDEADLK));
+        return svc_rc(BR_ERR(EDEADLK));
     }
     svc_thread_t *rec = svc_thread_find(t);
     if (rec == BR_NULL) {
-        return svc_rc(BR_ERR(BR_ESRCH));          /* 从未创建 / 已被 join 过 */
+        return svc_rc(BR_ERR(ESRCH));          /* 从未创建 / 已被 join 过 */
     }
     if (rec->detached != 0) {
-        return svc_rc(BR_ERR(BR_EINVAL));         /* join detached 线程 = 未定义(glibc EINVAL) */
+        return svc_rc(BR_ERR(EINVAL));         /* join detached 线程 = 未定义(glibc EINVAL) */
     }
     int       code = 0;
     const int rc   = br_task_join(t, &code);
@@ -2382,14 +2382,14 @@ int pthread_detach(pthread_t t)
 {
     svc_reap_detached();
     if (t == BR_NULL) {
-        return svc_rc(BR_ERR(BR_ESRCH));
+        return svc_rc(BR_ERR(ESRCH));
     }
     svc_thread_t *rec = svc_thread_find(t);
     if (rec == BR_NULL) {
-        return svc_rc(BR_ERR(BR_ESRCH));
+        return svc_rc(BR_ERR(ESRCH));
     }
     if (rec->detached != 0) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     rec->detached = 1;
     return 0;                                       /* 回收是惰性的(见文件头 ③) */
@@ -2421,7 +2421,7 @@ int pthread_setname_np(pthread_t t, const char *name)
     svc_thread_t *rec = (t == br_task_self()) ? svc_thread_self_rec()
                                               : svc_thread_find(t);
     if (rec == BR_NULL) {
-        return svc_rc(BR_ERR(BR_ESRCH));
+        return svc_rc(BR_ERR(ESRCH));
     }
     svc_copy(rec->name, name, sizeof(rec->name));
     return 0;
@@ -2431,7 +2431,7 @@ int pthread_getname_np(pthread_t t, char *buf, size_t len)
 {
     svc_reap_detached();
     if (buf == BR_NULL || len == 0u) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     if (t == BR_NULL) {
         t = br_task_self();
@@ -2439,7 +2439,7 @@ int pthread_getname_np(pthread_t t, char *buf, size_t len)
     svc_thread_t *rec = (t == br_task_self()) ? svc_thread_self_rec()
                                               : svc_thread_find(t);
     if (rec == BR_NULL) {
-        return svc_rc(BR_ERR(BR_ESRCH));
+        return svc_rc(BR_ERR(ESRCH));
     }
     svc_copy(buf, rec->name, len);
     return 0;
@@ -2451,7 +2451,7 @@ int pthread_once(pthread_once_t *once, void (*init)(void))
 {
     svc_reap_detached();
     if (once == BR_NULL || init == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     if (once->done != 0) {
         return 0;                                   /* 无锁快路径(已完成后只读) */
@@ -2474,7 +2474,7 @@ int pthread_key_create(pthread_key_t *key, void (*destructor)(void *))
 {
     svc_reap_detached();
     if (key == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     for (br_u32 i = 0u; i < (br_u32)SVC_KEY_MAX; i++) {
         if ((s_key_used & (1u << i)) == 0u) {
@@ -2484,14 +2484,14 @@ int pthread_key_create(pthread_key_t *key, void (*destructor)(void *))
             return 0;
         }
     }
-    return svc_rc(BR_ERR(BR_EAGAIN));               /* key 用尽 */
+    return svc_rc(BR_ERR(EAGAIN));               /* key 用尽 */
 }
 
 int pthread_key_delete(pthread_key_t key)
 {
     svc_reap_detached();
     if (key >= (pthread_key_t)SVC_KEY_MAX || (s_key_used & (1u << key)) == 0u) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     s_key_used &= ~(1u << key);
     s_key_dtor[key] = BR_NULL;
@@ -2502,11 +2502,11 @@ int pthread_setspecific(pthread_key_t key, const void *value)
 {
     svc_reap_detached();
     if (key >= (pthread_key_t)SVC_KEY_MAX || (s_key_used & (1u << key)) == 0u) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     svc_thread_t *rec = svc_thread_self_rec();
     if (rec == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EAGAIN));
+        return svc_rc(BR_ERR(EAGAIN));
     }
     rec->key_values[key] = (void *)value;
     return 0;
@@ -2526,7 +2526,7 @@ void *pthread_getspecific(pthread_key_t key)
 int pthread_mutexattr_init(pthread_mutexattr_t *a)
 {
     if (a == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->type     = PTHREAD_MUTEX_NORMAL;
     a->pshared  = PTHREAD_PROCESS_PRIVATE;
@@ -2545,7 +2545,7 @@ int pthread_mutexattr_settype(pthread_mutexattr_t *a, int type)
     if (a == BR_NULL ||
         (type != PTHREAD_MUTEX_NORMAL && type != PTHREAD_MUTEX_RECURSIVE &&
          type != PTHREAD_MUTEX_ERRORCHECK)) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->type = (unsigned)type;
     return 0;
@@ -2554,7 +2554,7 @@ int pthread_mutexattr_settype(pthread_mutexattr_t *a, int type)
 int pthread_mutexattr_gettype(const pthread_mutexattr_t *a, int *type)
 {
     if (a == BR_NULL || type == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *type = (int)a->type;
     return 0;
@@ -2564,7 +2564,7 @@ int pthread_mutexattr_setpshared(pthread_mutexattr_t *a, int pshared)
 {
     if (a == BR_NULL ||
         (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     /* 单地址空间: PROCESS_SHARED 可记录但没有跨进程语义(如实)。 */
     a->pshared = pshared;
@@ -2574,7 +2574,7 @@ int pthread_mutexattr_setpshared(pthread_mutexattr_t *a, int pshared)
 int pthread_mutexattr_getpshared(const pthread_mutexattr_t *a, int *pshared)
 {
     if (a == BR_NULL || pshared == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *pshared = a->pshared;
     return 0;
@@ -2583,7 +2583,7 @@ int pthread_mutexattr_getpshared(const pthread_mutexattr_t *a, int *pshared)
 int pthread_mutexattr_setprotocol(pthread_mutexattr_t *a, int protocol)
 {
     if (a == BR_NULL || protocol != PTHREAD_PRIO_NONE) {
-        return svc_rc(BR_ERR(BR_ENOTSUP));          /* PI 属 v2(无优先级) */
+        return svc_rc(BR_ERR(ENOTSUP));          /* PI 属 v2(无优先级) */
     }
     a->protocol = protocol;
     return 0;
@@ -2592,7 +2592,7 @@ int pthread_mutexattr_setprotocol(pthread_mutexattr_t *a, int protocol)
 int pthread_mutexattr_getprotocol(const pthread_mutexattr_t *a, int *protocol)
 {
     if (a == BR_NULL || protocol == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *protocol = a->protocol;
     return 0;
@@ -2602,7 +2602,7 @@ int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr)
 {
     svc_reap_detached();
     if (m == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int rc = br_mutex_init(&m->m);
     if (rc != 0) {
@@ -2624,7 +2624,7 @@ int pthread_mutex_lock(pthread_mutex_t *m)
 {
     svc_reap_detached();
     if (m == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     br_thread_t *self = br_task_self();
 
@@ -2635,7 +2635,7 @@ int pthread_mutex_lock(pthread_mutex_t *m)
             return 0;
         }
         if (m->type == PTHREAD_MUTEX_ERRORCHECK) {
-            return svc_rc(BR_ERR(BR_EDEADLK));
+            return svc_rc(BR_ERR(EDEADLK));
         }
         /* NORMAL: POSIX 说自锁是未定义 ⇒ 落到 core(core 会自死锁, 与 Linux NORMAL 同型) */
     }
@@ -2652,7 +2652,7 @@ int pthread_mutex_trylock(pthread_mutex_t *m)
 {
     svc_reap_detached();
     if (m == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     br_thread_t *self = br_task_self();
     if (m->owner == self && m->count > 0u) {
@@ -2660,14 +2660,14 @@ int pthread_mutex_trylock(pthread_mutex_t *m)
             m->count++;
             return 0;
         }
-        return svc_rc(BR_ERR(BR_EBUSY));            /* NORMAL/ERRORCHECK: 自持 ⇒ EBUSY */
+        return svc_rc(BR_ERR(EBUSY));            /* NORMAL/ERRORCHECK: 自持 ⇒ EBUSY */
     }
     /* core 的 `lock_to(ZERO)` = trylock: 忙 ⇒ **-ETIMEDOUT**(INV-1 的统一超时码)。
      * POSIX 的 trylock 要 EBUSY —— 这一处**必须**翻译, 否则调用方按 EBUSY 写的分支
      * 永远不进(这是本文件里极少数的"非零转换"点)。 */
     const int rc = br_mutex_lock_to(&m->m, BR_TIMEOUT_ZERO);
-    if (rc == BR_ERR(BR_ETIMEDOUT)) {
-        return svc_rc(BR_ERR(BR_EBUSY));
+    if (rc == BR_ERR(ETIMEDOUT)) {
+        return svc_rc(BR_ERR(EBUSY));
     }
     if (rc != 0) {
         return svc_rc(rc);
@@ -2681,7 +2681,7 @@ int pthread_mutex_timedlock(pthread_mutex_t *m, const struct timespec *abstime)
 {
     svc_reap_detached();
     if (m == BR_NULL || abstime == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     br_thread_t *self = br_task_self();
     if (m->owner == self && m->count > 0u) {
@@ -2690,12 +2690,12 @@ int pthread_mutex_timedlock(pthread_mutex_t *m, const struct timespec *abstime)
             return 0;
         }
         if (m->type == PTHREAD_MUTEX_ERRORCHECK) {
-            return svc_rc(BR_ERR(BR_EDEADLK));
+            return svc_rc(BR_ERR(EDEADLK));
         }
     }
     const int rc = br_mutex_lock_to(&m->m, svc_abstime_to_rel(abstime));
-    if (rc == BR_ERR(BR_ETIMEDOUT)) {
-        return svc_rc(BR_ERR(BR_ETIMEDOUT));
+    if (rc == BR_ERR(ETIMEDOUT)) {
+        return svc_rc(BR_ERR(ETIMEDOUT));
     }
     if (rc != 0) {
         return svc_rc(rc);
@@ -2709,12 +2709,12 @@ int pthread_mutex_unlock(pthread_mutex_t *m)
 {
     svc_reap_detached();
     if (m == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     br_thread_t *self = br_task_self();
     if (m->type != PTHREAD_MUTEX_NORMAL) {
         if (m->owner != self) {
-            return svc_rc(BR_ERR(BR_EPERM));        /* ERRORCHECK/RECURSIVE: 非属主解锁 */
+            return svc_rc(BR_ERR(EPERM));        /* ERRORCHECK/RECURSIVE: 非属主解锁 */
         }
     }
     if (m->type == PTHREAD_MUTEX_RECURSIVE && m->count > 1u) {
@@ -2732,7 +2732,7 @@ int pthread_mutex_unlock(pthread_mutex_t *m)
 int pthread_condattr_init(pthread_condattr_t *a)
 {
     if (a == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->clock   = CLOCK_MONOTONIC;
     a->pshared = PTHREAD_PROCESS_PRIVATE;
@@ -2748,11 +2748,11 @@ int pthread_condattr_destroy(pthread_condattr_t *a)
 int pthread_condattr_setclock(pthread_condattr_t *a, int clock)
 {
     if (a == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     /* 本代只有单调钟(P-1: 无墙钟)⇒ REALTIME 明确拒绝, 不假装支持。 */
     if (clock != CLOCK_MONOTONIC) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->clock = clock;
     return 0;
@@ -2761,7 +2761,7 @@ int pthread_condattr_setclock(pthread_condattr_t *a, int clock)
 int pthread_condattr_getclock(const pthread_condattr_t *a, int *clock)
 {
     if (a == BR_NULL || clock == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *clock = a->clock;
     return 0;
@@ -2771,7 +2771,7 @@ int pthread_condattr_setpshared(pthread_condattr_t *a, int pshared)
 {
     if (a == BR_NULL ||
         (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->pshared = pshared;
     return 0;
@@ -2780,7 +2780,7 @@ int pthread_condattr_setpshared(pthread_condattr_t *a, int pshared)
 int pthread_condattr_getpshared(const pthread_condattr_t *a, int *pshared)
 {
     if (a == BR_NULL || pshared == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *pshared = a->pshared;
     return 0;
@@ -2790,7 +2790,7 @@ int pthread_cond_init(pthread_cond_t *c, const pthread_condattr_t *attr)
 {
     svc_reap_detached();
     if (c == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int rc = br_cond_init(&c->c);
     if (rc != 0) {
@@ -2810,7 +2810,7 @@ int pthread_cond_wait(pthread_cond_t *c, pthread_mutex_t *m)
 {
     svc_reap_detached();
     if (c == BR_NULL || m == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int rc = br_cond_wait(&c->c, &m->m, BR_TIMEOUT_INF);
     return (rc != 0) ? svc_rc(rc) : 0;
@@ -2821,15 +2821,15 @@ int pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m,
 {
     svc_reap_detached();
     if (c == BR_NULL || m == BR_NULL || abstime == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     /* ★ 绝对时刻按 **MONOTONIC** 解释: 本代没有墙钟(P-1), 于是"绝对时间"的唯一可用
      *   时基就是单调钟。POSIX 默认是 CLOCK_REALTIME ⇒ 这是一条**语义偏离**, 与
      *   `clock_gettime(CLOCK_REALTIME) = -ENOTSUP` 是同一条事实的两面; 用
      *   `pthread_condattr_setclock(CLOCK_MONOTONIC)` 可把意图写进声明。 */
     const int rc = br_cond_wait(&c->c, &m->m, svc_abstime_to_rel(abstime));
-    if (rc == BR_ERR(BR_ETIMEDOUT)) {
-        return svc_rc(BR_ERR(BR_ETIMEDOUT));      /* POSIX 的 ETIMEDOUT */
+    if (rc == BR_ERR(ETIMEDOUT)) {
+        return svc_rc(BR_ERR(ETIMEDOUT));      /* POSIX 的 ETIMEDOUT */
     }
     return (rc != 0) ? svc_rc(rc) : 0;
 }
@@ -2837,7 +2837,7 @@ int pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m,
 int pthread_cond_signal(pthread_cond_t *c)
 {
     if (c == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int rc = br_cond_signal(&c->c);
     return (rc != 0) ? svc_rc(rc) : 0;
@@ -2846,7 +2846,7 @@ int pthread_cond_signal(pthread_cond_t *c)
 int pthread_cond_broadcast(pthread_cond_t *c)
 {
     if (c == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int rc = br_cond_broadcast(&c->c);
     return (rc != 0) ? svc_rc(rc) : 0;
@@ -2857,7 +2857,7 @@ int pthread_cond_broadcast(pthread_cond_t *c)
 int pthread_rwlockattr_init(pthread_rwlockattr_t *a)
 {
     if (a == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->kind    = PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP;
     a->pshared = PTHREAD_PROCESS_PRIVATE;
@@ -2875,7 +2875,7 @@ int pthread_rwlockattr_setkind_np(pthread_rwlockattr_t *a, int kind)
     if (a == BR_NULL ||
         (kind != PTHREAD_RWLOCK_PREFER_READER_NP &&
          kind != PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP)) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->kind = kind;
     return 0;
@@ -2884,7 +2884,7 @@ int pthread_rwlockattr_setkind_np(pthread_rwlockattr_t *a, int kind)
 int pthread_rwlockattr_getkind_np(const pthread_rwlockattr_t *a, int *kind)
 {
     if (a == BR_NULL || kind == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *kind = a->kind;
     return 0;
@@ -2894,7 +2894,7 @@ int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *a, int pshared)
 {
     if (a == BR_NULL ||
         (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->pshared = pshared;
     return 0;
@@ -2903,7 +2903,7 @@ int pthread_rwlockattr_setpshared(pthread_rwlockattr_t *a, int pshared)
 int pthread_rwlockattr_getpshared(const pthread_rwlockattr_t *a, int *pshared)
 {
     if (a == BR_NULL || pshared == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *pshared = a->pshared;
     return 0;
@@ -2913,7 +2913,7 @@ int pthread_rwlock_init(pthread_rwlock_t *rw, const pthread_rwlockattr_t *attr)
 {
     svc_reap_detached();
     if (rw == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int rm = br_mutex_init(&rw->m);
     if (rm != 0) {
@@ -2958,12 +2958,12 @@ static int svc_rwlock_rdlock_to(pthread_rwlock_t *rw, br_time_t timeout)
         }
         if (timeout == BR_TIMEOUT_ZERO) {
             (void)br_mutex_unlock(&rw->m);
-            return svc_rc(BR_ERR(BR_EBUSY));
+            return svc_rc(BR_ERR(EBUSY));
         }
         const int w = br_cond_wait(&rw->c, &rw->m, timeout);
-        if (w == BR_ERR(BR_ETIMEDOUT)) {
+        if (w == BR_ERR(ETIMEDOUT)) {
             (void)br_mutex_unlock(&rw->m);
-            return svc_rc(BR_ERR(BR_ETIMEDOUT));
+            return svc_rc(BR_ERR(ETIMEDOUT));
         }
         if (w != 0) {
             (void)br_mutex_unlock(&rw->m);
@@ -2985,7 +2985,7 @@ static int svc_rwlock_wrlock_to(pthread_rwlock_t *rw, br_time_t timeout)
             return 0;
         }
         (void)br_mutex_unlock(&rw->m);
-        return svc_rc(BR_ERR(BR_EBUSY));
+        return svc_rc(BR_ERR(EBUSY));
     }
     rw->writers_waiting++;
     for (;;) {
@@ -2996,11 +2996,11 @@ static int svc_rwlock_wrlock_to(pthread_rwlock_t *rw, br_time_t timeout)
             return 0;
         }
         const int w = br_cond_wait(&rw->c, &rw->m, timeout);
-        if (w == BR_ERR(BR_ETIMEDOUT)) {
+        if (w == BR_ERR(ETIMEDOUT)) {
             rw->writers_waiting--;
             (void)br_cond_broadcast(&rw->c);        /* 可能空出了一个读名额 */
             (void)br_mutex_unlock(&rw->m);
-            return svc_rc(BR_ERR(BR_ETIMEDOUT));
+            return svc_rc(BR_ERR(ETIMEDOUT));
         }
         if (w != 0) {
             rw->writers_waiting--;
@@ -3014,7 +3014,7 @@ int pthread_rwlock_rdlock(pthread_rwlock_t *rw)
 {
     svc_reap_detached();
     if (rw == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     return svc_rwlock_rdlock_to(rw, BR_TIMEOUT_INF);
 }
@@ -3023,7 +3023,7 @@ int pthread_rwlock_tryrdlock(pthread_rwlock_t *rw)
 {
     svc_reap_detached();
     if (rw == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     return svc_rwlock_rdlock_to(rw, BR_TIMEOUT_ZERO);
 }
@@ -3032,7 +3032,7 @@ int pthread_rwlock_timedrdlock(pthread_rwlock_t *rw, const struct timespec *abst
 {
     svc_reap_detached();
     if (rw == BR_NULL || abstime == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     return svc_rwlock_rdlock_to(rw, svc_abstime_to_rel(abstime));
 }
@@ -3041,7 +3041,7 @@ int pthread_rwlock_wrlock(pthread_rwlock_t *rw)
 {
     svc_reap_detached();
     if (rw == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     return svc_rwlock_wrlock_to(rw, BR_TIMEOUT_INF);
 }
@@ -3050,7 +3050,7 @@ int pthread_rwlock_trywrlock(pthread_rwlock_t *rw)
 {
     svc_reap_detached();
     if (rw == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     return svc_rwlock_wrlock_to(rw, BR_TIMEOUT_ZERO);
 }
@@ -3059,7 +3059,7 @@ int pthread_rwlock_timedwrlock(pthread_rwlock_t *rw, const struct timespec *abst
 {
     svc_reap_detached();
     if (rw == BR_NULL || abstime == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     return svc_rwlock_wrlock_to(rw, svc_abstime_to_rel(abstime));
 }
@@ -3068,7 +3068,7 @@ int pthread_rwlock_unlock(pthread_rwlock_t *rw)
 {
     svc_reap_detached();
     if (rw == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int lk = br_mutex_lock(&rw->m);
     if (lk != 0) {
@@ -3084,7 +3084,7 @@ int pthread_rwlock_unlock(pthread_rwlock_t *rw)
         }
     } else {
         (void)br_mutex_unlock(&rw->m);
-        return svc_rc(BR_ERR(BR_EPERM));            /* 没持锁就解锁 */
+        return svc_rc(BR_ERR(EPERM));            /* 没持锁就解锁 */
     }
     (void)br_mutex_unlock(&rw->m);
     return 0;
@@ -3095,7 +3095,7 @@ int pthread_rwlock_unlock(pthread_rwlock_t *rw)
 int pthread_barrierattr_init(pthread_barrierattr_t *a)
 {
     if (a == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->pshared = PTHREAD_PROCESS_PRIVATE;
     return 0;
@@ -3111,7 +3111,7 @@ int pthread_barrierattr_setpshared(pthread_barrierattr_t *a, int pshared)
 {
     if (a == BR_NULL ||
         (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     a->pshared = pshared;
     return 0;
@@ -3120,7 +3120,7 @@ int pthread_barrierattr_setpshared(pthread_barrierattr_t *a, int pshared)
 int pthread_barrierattr_getpshared(const pthread_barrierattr_t *a, int *pshared)
 {
     if (a == BR_NULL || pshared == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *pshared = a->pshared;
     return 0;
@@ -3132,7 +3132,7 @@ int pthread_barrier_init(pthread_barrier_t *b, const pthread_barrierattr_t *attr
     svc_reap_detached();
     (void)attr;
     if (b == BR_NULL || count == 0u) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int rm = br_mutex_init(&b->m);
     if (rm != 0) {
@@ -3158,7 +3158,7 @@ int pthread_barrier_wait(pthread_barrier_t *b)
 {
     svc_reap_detached();
     if (b == BR_NULL || b->count == 0u) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int lk = br_mutex_lock(&b->m);
     if (lk != 0) {
@@ -3189,7 +3189,7 @@ int pthread_barrier_wait(pthread_barrier_t *b)
 int sem_init(sem_t *s, int pshared, unsigned value)
 {
     if (s == BR_NULL || value > BR_POSIX_SEM_VALUE_MAX) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     (void)pshared;                                  /* 单地址空间 ⇒ pshared 无意义 */
     const int rc = br_sem_init(s, value);
@@ -3205,7 +3205,7 @@ int sem_destroy(sem_t *s)
 int sem_wait(sem_t *s)
 {
     if (s == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int rc = br_sem_take(s, BR_TIMEOUT_INF);
     return (rc != 0) ? svc_rc(rc) : 0;
@@ -3214,12 +3214,12 @@ int sem_wait(sem_t *s)
 int sem_trywait(sem_t *s)
 {
     if (s == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     /* core 的 `take(ZERO)` 忙 ⇒ -ETIMEDOUT(INV-1); POSIX 要 EAGAIN ⇒ 翻译一次。 */
     const int rc = br_sem_take(s, BR_TIMEOUT_ZERO);
-    if (rc == BR_ERR(BR_ETIMEDOUT)) {
-        return svc_rc(BR_ERR(BR_EAGAIN));
+    if (rc == BR_ERR(ETIMEDOUT)) {
+        return svc_rc(BR_ERR(EAGAIN));
     }
     return (rc != 0) ? svc_rc(rc) : 0;
 }
@@ -3227,7 +3227,7 @@ int sem_trywait(sem_t *s)
 int sem_timedwait(sem_t *s, const struct timespec *abstime)
 {
     if (s == BR_NULL || abstime == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const br_u64 abs_us = ((br_u64)abstime->tv_sec * 1000000u) +
                           ((br_u64)abstime->tv_nsec / 1000u);
@@ -3240,7 +3240,7 @@ int sem_timedwait(sem_t *s, const struct timespec *abstime)
 int sem_post(sem_t *s)
 {
     if (s == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     const int rc = br_sem_give(s);                  /* ISR-safe(core 的契约) */
     return (rc != 0) ? svc_rc(rc) : 0;
@@ -3249,7 +3249,7 @@ int sem_post(sem_t *s)
 int sem_getvalue(sem_t *s, int *out)
 {
     if (s == BR_NULL || out == BR_NULL) {
-        return svc_rc(BR_ERR(BR_EINVAL));
+        return svc_rc(BR_ERR(EINVAL));
     }
     *out = (int)br_sem_count(s);
     return 0;

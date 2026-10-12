@@ -129,9 +129,9 @@ platform = ["qemu-aarch64"]
 id       = "TC-FT-010"
 pre      = "无(纯编译期常量)"
 steps    = [
-    "BR_EINVAL==22 / BR_EBADF==9 / BR_EMFILE==24 / BR_ENFILE==23 / BR_ENOENT==2",
-    "BR_ENOTEMPTY==39 / BR_ENOTSUP==95 / BR_ETIMEDOUT==110 / BR_EACCES==13 / BR_ESPIPE==29",
-    "别名同值: BR_EOPNOTSUPP == BR_ENOTSUP; BR_EWOULDBLOCK == BR_EAGAIN",
+    "EINVAL==22 / EBADF==9 / EMFILE==24 / ENFILE==23 / ENOENT==2",
+    "ENOTEMPTY==39 / ENOTSUP==95 / ETIMEDOUT==110 / EACCES==13 / ESPIPE==29",
+    "别名同值: EOPNOTSUPP == ENOTSUP; EWOULDBLOCK == EAGAIN",
     "真值来源 = Linux 内核 errno-base.h / errno.h; 宿主 ft-test 拿 <errno.h> 逐码对拍",
 ]
 expect   = "[FTCONF] PASS TC-FT-010 ..."

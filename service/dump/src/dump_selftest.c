@@ -78,7 +78,7 @@ static void cf_case_031(void)
     const int strict = br_dump_memory(undeclared, (br_size_t)16u, BR_DUMP_F_STRICT);
     const int forced = br_dump_memory(undeclared, (br_size_t)16u, BR_DUMP_F_FORCE);
 
-    cf_report(strict == BR_ERR(BR_EINVAL), "TC-DBG-031",
+    cf_report(strict == BR_ERR(EINVAL), "TC-DBG-031",
               "未声明地址(0x42000000) + STRICT ⇒ -EINVAL");
     cf_report(forced >= 0, "TC-DBG-031",
               "同地址 + FORCE ⇒ >= 0(表外不读取, 不崩)");

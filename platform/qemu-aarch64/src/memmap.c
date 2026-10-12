@@ -117,7 +117,7 @@ static int memmap_declare_regions(void)
     /* 守卫: 池窗口必须整个落在页表的 4 KiB 页区里。溢出 ⇒ 声明面与页表布局不一致,
      * 明确失败(ENOSPC)而不是"映射到一半"或静默截断。 */
     if (pool_end > BR_PLAT_RAM_WINDOW_END) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
 
     /* TLSF 字节堆: malloc/calloc/realloc/free 的唯一来源(3-01 §6) */

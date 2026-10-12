@@ -146,7 +146,7 @@ static br_inode_t *devfs_lookup(br_inode_t *dir, const char *name)
 static int devfs_getattr(br_inode_t *ino, br_stat_t *st)
 {
     if (ino == BR_NULL || st == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     st->valid = BR_STAT_SIZE;
     st->type  = ino->type;
@@ -189,7 +189,7 @@ static int devfs_dir_open(br_file_t *f, br_u32 flags)
     (void)flags;
     devfs_iter_t *it = (devfs_iter_t *)br_malloc((br_size_t)sizeof(devfs_iter_t));
     if (it == BR_NULL) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     it->cursor = 0u;
     it->phase  = 0u;
@@ -200,11 +200,11 @@ static int devfs_dir_open(br_file_t *f, br_u32 flags)
 static br_s64 devfs_dir_read(br_file_t *f, void *buf, br_size_t n)
 {
     if (buf == BR_NULL || n < (br_size_t)sizeof(br_dirent_t)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     devfs_iter_t *it = (devfs_iter_t *)br_file_fpriv(f);
     if (it == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_dirent_t *de = (br_dirent_t *)buf;
@@ -276,14 +276,14 @@ static int devfs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root)
 {
     (void)fs_priv;
     if (cfg == BR_NULL || root == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (devfs_str_eq(cfg->path, BR_DEVFS_MOUNT_PATH) == BR_FALSE) {
         /* 挂载点与代码里的常量不符 ⇒ 拒挂。为什么不是"按 cfg 走":
          * 那会让 devfs 的节点前缀(它自己不关心)与用例/文档里的 /dev 漂移;
          * v1 的挂载点是编译期事实, 对不上就是接线错误(等生成链路落地后这条会自然消失)。 */
         br_log_error("devfs: 挂载点 %s 与预期 %s 不符", cfg->path, BR_DEVFS_MOUNT_PATH);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     s_root.type  = BR_INODE_DIR;

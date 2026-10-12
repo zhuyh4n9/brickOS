@@ -108,9 +108,9 @@ static void host_case_fifo(void)
     const int r2 = br_task_create(&tb, &a2, host_worker_seq, (void *)(br_intptr_t)'B');
     const int r3 = br_task_create(&tc, &a3, host_worker_seq, (void *)(br_intptr_t)'C');
 
-    j1 = (ta != BR_NULL) ? br_task_join(ta, BR_NULL) : BR_ERR(BR_EINVAL);
-    j2 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(BR_EINVAL);
-    j3 = (tc != BR_NULL) ? br_task_join(tc, BR_NULL) : BR_ERR(BR_EINVAL);
+    j1 = (ta != BR_NULL) ? br_task_join(ta, BR_NULL) : BR_ERR(EINVAL);
+    j2 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(EINVAL);
+    j3 = (tc != BR_NULL) ? br_task_join(tc, BR_NULL) : BR_ERR(EINVAL);
 
     const char *p = (const char *)s_fifo_seq;
     printf("[HOSTTEST] TRACE fifo seq=%.9s (n=%d)\n", p, (int)s_fifo_n);
@@ -133,7 +133,7 @@ static void host_waiter_inf(void *arg)
     (void)arg;
     br_thread_t *me = br_task_self();
 
-    me->wait_status = BR_ERR(BR_ETIMEDOUT);   /* ICB 握手: 开窗前置"未唤醒" */
+    me->wait_status = BR_ERR(ETIMEDOUT);   /* ICB 握手: 开窗前置"未唤醒" */
     s_bw_rc = br_sched_block_current(BR_TIMEOUT_INF);
 }
 
@@ -155,7 +155,7 @@ static void host_case_blockwake(void)
     br_task_yield();                     /* 让它恢复: block_current 返回 wait_status(0) */
     zombie = (t != BR_NULL) && (br_task_state(t) == BR_TASK_ZOMBIE);
 
-    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(EINVAL);
 
     host_check((r == 0) && blocked && ready && zombie && (j == 0) && (s_bw_rc == 0),
                "HOST-SCHED-BLOCKWAKE",
@@ -171,7 +171,7 @@ static void host_waiter_to(void *arg)
     (void)arg;
     br_thread_t *me = br_task_self();
 
-    me->wait_status = BR_ERR(BR_ETIMEDOUT);
+    me->wait_status = BR_ERR(ETIMEDOUT);
     s_to_rc = br_sched_block_current(host_sched_now() + 5000u);
 }
 
@@ -182,9 +182,9 @@ static void host_case_timeout(void)
 
     s_to_rc = -12345;
     const int r = br_task_create(&t, &a, host_waiter_to, BR_NULL);
-    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(EINVAL);
 
-    host_check((r == 0) && (j == 0) && (s_to_rc == BR_ERR(BR_ETIMEDOUT)),
+    host_check((r == 0) && (j == 0) && (s_to_rc == BR_ERR(ETIMEDOUT)),
                "HOST-SCHED-TIMEOUT",
                "有限期限到期 ⇒ -ETIMEDOUT(wake_at 表在 tick 扫描里唤醒)");
 }
@@ -211,7 +211,7 @@ static void host_case_sleep_until(void)
     s_su_rc = -12345;
     s_su_delta = 0u;
     const int r = br_task_create(&t, &a, host_waiter_su, BR_NULL);
-    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(EINVAL);
 
     host_check((r == 0) && (j == 0) && (s_su_rc == 0) && (s_su_delta >= 3000u),
                "HOST-SCHED-SLEEPUNTIL",

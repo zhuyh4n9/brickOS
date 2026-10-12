@@ -96,12 +96,12 @@ static int fat_write_all(const char *path, const void *buf, br_size_t n)
     br_s64 w;
 
     if (f == BR_NULL) {
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
     w = br_file_write(f, buf, n);
     (void)br_file_close(f);
     if (w != (br_s64)n) {
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
     return 0;
 }
@@ -473,7 +473,7 @@ int uboot_fat_selftest(void)
             }
             p = br_file_lseek(f, -1, BR_SEEK_SET);
             if (p >= 0) {                  /* 负偏移 ⇒ -EINVAL */
-                fat_diag("TC-FAT-005", "negative_seek", (long)p, (long)BR_ERR(BR_EINVAL));
+                fat_diag("TC-FAT-005", "negative_seek", (long)p, (long)BR_ERR(EINVAL));
                 ok = BR_FALSE;
             }
             (void)br_file_close(f);
@@ -542,7 +542,7 @@ int uboot_fat_selftest(void)
             
             ok = BR_FALSE;
         }
-        if (br_stat(oldp, &st) != BR_ERR(BR_ENOENT)) {
+        if (br_stat(oldp, &st) != BR_ERR(ENOENT)) {
             
             ok = BR_FALSE;
         }
@@ -644,7 +644,7 @@ int uboot_fat_selftest(void)
                 ok = BR_FALSE;
             }
         }
-        if (br_stat(path, &st) != BR_ERR(BR_ENOENT)) {
+        if (br_stat(path, &st) != BR_ERR(ENOENT)) {
             fat_diag_str("TC-FAT-008", "stat_after_unlink", path, "(ENOENT)");
             ok = BR_FALSE;
         }
@@ -676,9 +676,9 @@ int uboot_fat_selftest(void)
                 (void)br_file_close(ff);
             }
         }
-        if (br_file_fsync(BR_NULL) != BR_ERR(BR_EINVAL)) {
+        if (br_file_fsync(BR_NULL) != BR_ERR(EINVAL)) {
             fat_diag("TC-FAT-008", "fsync(NULL)",
-                     (long)br_file_fsync(BR_NULL), (long)BR_ERR(BR_EINVAL));
+                     (long)br_file_fsync(BR_NULL), (long)BR_ERR(EINVAL));
             ok = BR_FALSE;             /* 空句柄是参数错(契约: f == NULL ⇒ -EINVAL) */
         }
         fat_conf(ok, "TC-FAT-008",

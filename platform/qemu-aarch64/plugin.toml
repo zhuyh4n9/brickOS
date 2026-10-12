@@ -273,6 +273,13 @@ linker_script = "src/link.ld"
 #   且 core 的 IRQ 框架规定"每根物理线恰一属主"(INV-A, 无共享线)⇒ slot 3/4/5/6 恰好
 #   把 A/B/C/D 用满; 再加一块(slot 7)就会与 slot 3 撞线, 注册必失败。
 #   这条约束写在 ADR-0022, 也是 `BR_EMMC_MAX_DEVS == 4` 的来由。
+#
+# ⚠ **`-device emmc` 要求 QEMU >= 10.2, 这是硬前提**: eMMC 卡模型 9.1 就进了 QEMU, 但那时的
+#   `emmc_class_init()` 里写着 `dc->user_creatable = false`(注释 "Soldered on board")⇒
+#   `-device emmc` 被判成"不可插拔的设备类型"; 那一行 **10.2.0** 才删掉(仓库参考环境 =
+#   Ubuntu 26.04 的 10.2.1)。旧版的现象是一句 `'emmc' is not a valid device model name`。
+#   宿主自带的不够新时: `bash tools/fetch-qemu.sh` 把 10.2.1 就地解包到 `prebuilts/toolchain/`
+#   (无需 root, 无需换发行版), `brickie` 的工具解析先看 `prebuilts/toolchain/bin/` ⇒ 不用改这里。
 [build.target.qemu]
 binary  = "qemu-system-aarch64"
 machine = "virt,gic-version=3,highmem=off"

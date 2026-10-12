@@ -390,12 +390,12 @@ static void trace_prio_quantized(br_u32 virq, br_u8 prio, const br_pic_caps_t *c
 static int direct_api_guard(br_u32 irq, br_irq_desc_t **out)
 {
     if (br_irq_in_atomic() != BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     br_irq_desc_t *d = br_irq_desc_of(irq);
     /* 越界 / 域成员(两族互斥, §14.1)/ 未注册 一律 -EINVAL */
     if (d == BR_NULL || d->dom_id >= 0 || d->isr == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *out = d;
     return BR_OK;
@@ -405,25 +405,25 @@ int br_irq_register(br_u32 irq, void (*isr)(void *), void *arg,
                     const br_irq_attr_t *attr)
 {
     if (br_irq_in_atomic() != BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_irq_desc_t *d = br_irq_desc_of(irq);
     if (d == BR_NULL || isr == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 两族互斥(§14.1): 对域成员调直连 register 必须在**注册期**就拒绝,
      * 否则后面会把 sub 当 hwirq 去 mask 一根毫不相干的物理线。 */
     if (d->dom_id >= 0) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* INV-A: 每根物理线恰一属主 */
     if (d->isr != BR_NULL) {
-        return BR_ERR(BR_EBUSY);
+        return BR_ERR(EBUSY);
     }
     /* §14.3: 无绑定 ⇒ -ENODEV(初始化顺序违反必须报对错, 不能"注册成功却永不响应") */
     if (d->pic_id < 0) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     const br_u32 pic_id = (br_u32)d->pic_id;
@@ -431,7 +431,7 @@ int br_irq_register(br_u32 irq, void (*isr)(void *), void *arg,
     const br_pic_ops_t *ops = br_irq_pic_ops(pic_id);
     const br_pic_caps_t *caps = br_irq_pic_caps(pic_id);
     if (pic == BR_NULL || ops == BR_NULL || caps == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     /* 绑定表带来的静态事实(§3.4: PERCPU "通常不用手填, 由绑定表推导") */
@@ -448,16 +448,16 @@ int br_irq_register(br_u32 irq, void (*isr)(void *), void *arg,
         /* ★ §3.4: 未知位置位 ⇒ -EINVAL(刻意不静默忽略: 否则新头文件编的插件
          * 在老 core 上会悄悄失去它请求的属性, 属最难查的兼容性 bug)。 */
         if ((flags & ~(br_u32)BR_IRQ_F_KNOWN_MASK) != 0u) {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
         /* 共享线 = v1 非目标(§3.4) */
         if ((flags & BR_IRQ_F_SHARED) != 0u) {
-            return BR_ERR(BR_ENOTSUP);
+            return BR_ERR(ENOTSUP);
         }
         /* §3.4: 手填 PERCPU 与硬件(绑定表)不符 ⇒ -EINVAL(防"把 PPI 当 SPI 去均衡");
          * 反方向(绑定是 PPI 而驱动没填)合法 —— 该位由绑定表推导后补进描述符。 */
         if ((flags & BR_IRQ_F_PERCPU) != 0u && bound_percpu == BR_FALSE) {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
         /*
          * 分发形态(§12.1)。
@@ -473,7 +473,7 @@ int br_irq_register(br_u32 irq, void (*isr)(void *), void *arg,
             flags &= ~(br_u32)BR_IRQ_F_DISPATCH_THREAD;
         }
         if ((flags & BR_IRQ_F_STATS) != 0u && (BR_IRQ_STATS == 0)) {
-            return BR_ERR(BR_ENOTSUP);       /* §3.4: 统计开关未开时置位 ⇒ -ENOTSUP */
+            return BR_ERR(ENOTSUP);       /* §3.4: 统计开关未开时置位 ⇒ -ENOTSUP */
         }
 
         /* `prio`/`trigger` 的解释权在 platform(§7.1/§8.1): DEFAULT ⇒ 用绑定静态值 */
@@ -488,7 +488,7 @@ int br_irq_register(br_u32 irq, void (*isr)(void *), void *arg,
 
     /* 触发方式编码合法域(§8.1) */
     if (trigger > (br_u8)BR_IRQ_TRIG_EDGE_BOTH) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /*
@@ -502,11 +502,11 @@ int br_irq_register(br_u32 irq, void (*isr)(void *), void *arg,
      */
     if (trigger_requested == BR_TRUE &&
         (caps->caps & BR_PIC_CAP_TRIG_EDGE) == 0u) {
-        return BR_ERR(BR_ENOTSUP);           /* 非 DEFAULT 请求而控制器无可编程触发 ⇒ 拒绝 */
+        return BR_ERR(ENOTSUP);           /* 非 DEFAULT 请求而控制器无可编程触发 ⇒ 拒绝 */
     }
     if (trigger_requested == BR_TRUE && trigger == (br_u8)BR_IRQ_TRIG_EDGE_BOTH &&
         (caps->caps & BR_PIC_CAP_TRIG_BOTH) == 0u) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     const br_bool caps_prio = ((caps->caps & BR_PIC_CAP_PRIO) != 0u) ? BR_TRUE : BR_FALSE;

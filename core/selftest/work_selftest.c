@@ -108,7 +108,7 @@ static void wq_item_context(void *arg)
 
     br_thread_t *me = br_task_self();
     if (me != BR_NULL) {
-        me->wait_status = BR_ERR(BR_ETIMEDOUT);    /* ICB 契约: 开窗前先置"未唤醒" */
+        me->wait_status = BR_ERR(ETIMEDOUT);    /* ICB 契约: 开窗前先置"未唤醒" */
     }
     s_wq_block_rc = br_sched_block_current(BR_TIMEOUT_INF);   /* TC-WQ-005 */
 
@@ -138,7 +138,7 @@ static void case_wq_001_bound(void)
     full_rc = br_work_submit(wq_item_note, (void *)(br_uintptr_t)2u);
     br_work_stats_get(&st);
 
-    const br_bool ok = (full_rc == BR_ERR(BR_EAGAIN)) &&
+    const br_bool ok = (full_rc == BR_ERR(EAGAIN)) &&
                        (st.pending == (br_u32)BR_WORKQ_DEPTH) &&
                        (st.max_pending == (br_u32)BR_WORKQ_DEPTH) &&
                        (st.dropped_full > base_drop);
@@ -213,7 +213,7 @@ static void case_wq_003_006_context(void)
     wq_result(s_wq_nested == 0, "TC-WQ-003",
               "非重入: 工作项里再调 drain ⇒ 0(栈不随队列长度增长)");
 
-    wq_result(s_wq_block_rc == BR_ERR(BR_EPERM), "TC-WQ-005",
+    wq_result(s_wq_block_rc == BR_ERR(EPERM), "TC-WQ-005",
               "bh 内 br_sched_block_current ⇒ -EPERM(没有可回退的调度上下文)");
 
     wq_result((s_wq_self_before == s_wq_self_after) && (s_wq_bh_after_yield == 1) &&

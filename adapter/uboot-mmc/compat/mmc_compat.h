@@ -21,7 +21,7 @@
  *   memalign()(DMA 对齐)       →  br_dma_alloc(…, BR_DMA_F_ALIGN4K, …)
  *   irq_register/enable        →  br_irq_register/enable/lock/unlock/stats_get
  *   信号量(u-boot 无对应物)     →  br_sem_init/take/give
- *   errno(-EIO/…)              →  BR_ERR(BR_EIO/…)
+ *   errno(-EIO/…)              →  BR_ERR(EIO/…)
  *
  * ★ 依赖方向: `src/` → `adapter/`(**单向**)。`adapter/` 里的东西反过来 include
  *   `src/` 的头是允许的(那是"适配层认识被适配的代码"); 但 `src/` 只许经本头拿环境。

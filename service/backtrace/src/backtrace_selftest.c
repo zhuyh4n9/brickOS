@@ -93,8 +93,8 @@ int backtrace_selftest(void)
     ok11 = ok11 && (br_bt_capture_from(0x1234u, 0x40080000u, frames, 8u) == 0u);
 
     /* 非法边界被拒(setter 先校验后写入 ⇒ 不改状态, 这里顺带验证不变式) */
-    ok11 = ok11 && (br_bt_set_stack_bounds(0u, 0x1000u) == BR_ERR(BR_EINVAL));
-    ok11 = ok11 && (br_bt_set_stack_bounds(0x2000u, 0x1000u) == BR_ERR(BR_EINVAL));
+    ok11 = ok11 && (br_bt_set_stack_bounds(0u, 0x1000u) == BR_ERR(EINVAL));
+    ok11 = ok11 && (br_bt_set_stack_bounds(0x2000u, 0x1000u) == BR_ERR(EINVAL));
 
     /* 合法但极窄的边界: 当前栈在界外 ⇒ 捕获必须掐成 0 帧(证明边界真的被查) */
     ok11 = ok11 && (br_bt_set_stack_bounds(0x1000u, 0x2000u) == 0);

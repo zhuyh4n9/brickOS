@@ -68,15 +68,15 @@ int br_page_pool_init(br_uintptr_t base, br_size_t size)
 {
     if ((base == 0u) ||
         ((base & (br_uintptr_t)(BR_PAGE_SIZE - 1u)) != 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((size == 0u) || ((size & (br_size_t)(BR_PAGE_SIZE - 1u)) != 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_u32 pages = (br_u32)(size / (br_size_t)BR_PAGE_SIZE);
     if (pages > (br_u32)BR_PAGE_MAX_PAGES) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
 
     s_page.base  = base;
@@ -181,10 +181,10 @@ void br_page_free(void *vaddr, br_size_t n_pages)
 int br_page_stats(br_page_stats_t *out)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_page.ready == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     /* 当前最大连续空闲 run: 观测面, 线性扫描足够。 */

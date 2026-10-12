@@ -112,7 +112,7 @@ static int conf_wait_count(volatile br_u32 *counter, br_u32 target, br_time_t ti
 
     while (*counter < target) {
         if ((br_clock_now() - t0) > timeout_us) {
-            return BR_ERR(BR_ETIMEDOUT);
+            return BR_ERR(ETIMEDOUT);
         }
     }
     return 0;
@@ -282,13 +282,13 @@ static void conf_extable(void)
     v = 0u;
     const int r2 = conf_probe_read32(CONF_UNMAPPED_ADDR, &v);
     br_log_info("[IRQCONF] info probe(unmapped=0x%lx) ret=%d", (br_u64)CONF_UNMAPPED_ADDR, r2);
-    conf_report(r2 == BR_ERR(BR_EFAULT), "TC-IRQ-010",
+    conf_report(r2 == BR_ERR(EFAULT), "TC-IRQ-010",
                 "extable 命中: 未映射地址(translation fault)降级为 -EFAULT, 系统存活");
 
     /* 第二个 fault: 若 in_fault 没复位, 这一次会被当成 double fault(裸 panic) */
     v = 0u;
     const int r3 = conf_probe_read32(CONF_UNMAPPED_ADDR, &v);
-    conf_report(r3 == BR_ERR(BR_EFAULT), "TC-IRQ-022",
+    conf_report(r3 == BR_ERR(EFAULT), "TC-IRQ-022",
                 "命中修复后 in_fault 已复位(第二个 fault 仍走修复路径, 不是 double fault)");
 
     conf_report(conf_trace_has(BR_TRACE_FAULT_FIXUP), "TC-IRQ-010",
@@ -324,7 +324,7 @@ static void conf_duplicate_register(void)
     const br_irq_attr_t attr = { BR_IRQ_PRIO_DEFAULT, BR_IRQ_TRIG_DEFAULT, 0u };
     const int r = br_irq_register(BR_IRQ_TEST_SGI, conf_test_isr, BR_NULL, &attr);
 
-    conf_report(r == BR_ERR(BR_EBUSY), "TC-IRQ-002",
+    conf_report(r == BR_ERR(EBUSY), "TC-IRQ-002",
                 "重复 register -> -EBUSY(每根物理线恰一属主, INV-A)");
 }
 
@@ -349,7 +349,7 @@ static void conf_priority_readback(void)
         const br_irq_attr_t too_low = { .prio = BR_IRQ_PRIO_LOWEST,
                                         .trigger = BR_IRQ_TRIG_DEFAULT, .flags = 0u };
         const int rr_low = br_irq_register(BR_IRQ_UART0, conf_test_isr, BR_NULL, &too_low);
-        conf_report(rr_low == BR_ERR(BR_ENOTSUP), "TC-IRQ-014",
+        conf_report(rr_low == BR_ERR(ENOTSUP), "TC-IRQ-014",
                     "请求逻辑最低档(0xFF)落在'被 PMR 永久屏蔽'的硬件档 -> -ENOTSUP(不静默提权)");
     }
 
@@ -604,7 +604,7 @@ static void conf_bh_disable_then_dispatch(void)
     br_log_info("[IRQCONF] info bh: submit(disable_in_bh)=%d drained=%u rc=%d suppressed=%u",
                 sub1, ran, s_bh_disable_rc, st0.suppressed_dispatch);
 
-    conf_report(sub1 == 0 && ran >= 1u && s_bh_disable_rc == BR_ERR(BR_EINVAL),
+    conf_report(sub1 == 0 && ran >= 1u && s_bh_disable_rc == BR_ERR(EINVAL),
                 "TC-IRQ-016", "bh 内调 thread-only API(br_irq_disable)⇒ -EINVAL(原子上下文执法)");
 
     /* (b) 抑制分支: 按上面的时序图构造"handler 那份已排队, 而该线已被 disable"。 */
@@ -822,9 +822,9 @@ static void conf_domain_fast(void)
         conf_report(rc0 == 0, "TC-IRQ-101", "register_child(sub=0) -> 0");
         conf_report(rc2 == 0, "TC-IRQ-101", "register_child(sub=2) -> 0");
     }
-    conf_report(br_irq_register_child(s_dom, 0u, conf_child0_isr, BR_NULL, BR_NULL) == BR_ERR(BR_EBUSY),
+    conf_report(br_irq_register_child(s_dom, 0u, conf_child0_isr, BR_NULL, BR_NULL) == BR_ERR(EBUSY),
                 "TC-IRQ-101", "重复 register_child -> -EBUSY");
-    conf_report(br_irq_register_child(s_dom, 9u, conf_child0_isr, BR_NULL, BR_NULL) == BR_ERR(BR_EINVAL),
+    conf_report(br_irq_register_child(s_dom, 9u, conf_child0_isr, BR_NULL, BR_NULL) == BR_ERR(EINVAL),
                 "TC-IRQ-101", "sub 越界 -> -EINVAL");
 
     conf_report(br_irq_enable_child(s_dom, 0u) == 0, "TC-IRQ-101", "enable_child(0)");
@@ -863,11 +863,11 @@ static void conf_domain_api_misuse(void)
     const br_u32 child_virq = BR_IRQ_DOMAIN_BASE;   /* 窗口的第一个子中断 */
     const br_irq_attr_t attr = { BR_IRQ_PRIO_DEFAULT, BR_IRQ_TRIG_DEFAULT, 0u };
 
-    conf_report(br_irq_register(child_virq, conf_child0_isr, BR_NULL, &attr) == BR_ERR(BR_EINVAL),
+    conf_report(br_irq_register(child_virq, conf_child0_isr, BR_NULL, &attr) == BR_ERR(EINVAL),
                 "TC-IRQ-018", "对域成员调直连 register -> -EINVAL(register 期就报出)");
-    conf_report(br_irq_disable(child_virq) == BR_ERR(BR_EINVAL),
+    conf_report(br_irq_disable(child_virq) == BR_ERR(EINVAL),
                 "TC-IRQ-018", "对域成员调直连 disable -> -EINVAL");
-    conf_report(br_irq_enable_child(s_dom, 7u) == BR_ERR(BR_EINVAL),
+    conf_report(br_irq_enable_child(s_dom, 7u) == BR_ERR(EINVAL),
                 "TC-IRQ-018", "域 API 反向: sub 越界 -> -EINVAL");
 
     br_u32 parent_hw = 0u;

@@ -312,7 +312,7 @@ int br_truncate(const char *path, br_u64 size);
  * `br_link(old_path, new_path)`: 硬链接 —— 两个名字指向**同一份数据与同一个 inode**。
  *   `old_path` 不存在 ⇒ -ENOENT; 中间分量跟随符号链接, **末级不跟随**? —— 不:
  *   POSIX `link(2)` 对末级**默认不跟随**(Linux 语义), 这里照做(要跟随请先 `br_stat`)。
- *   目录 ⇒ -EPERM; 跨挂载 ⇒ -EXDEV(`BR_EXDEV` 已在错误码表里, 本刀首次启用)。 */
+ *   目录 ⇒ -EPERM; 跨挂载 ⇒ -EXDEV(`EXDEV` 已在错误码表里, 本刀首次启用)。 */
 int br_symlink (const char *target, const char *path);
 int br_readlink(const char *path, char *buf, br_size_t cap);
 int br_link    (const char *old_path, const char *new_path);

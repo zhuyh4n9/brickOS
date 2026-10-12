@@ -105,21 +105,21 @@ static br_u32 find_index(const char *name)
 int br_dev_add(const char *name, const br_dev_class_entry_t *entry)
 {
     if (entry == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (br_dev_name_valid(name) == BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* class_id = NONE 的条目没有形状解释者 ⇒ 谁也没法打开它, 属调用方的错。
      * 显式拒绝比"存下来但永远打不开"诚实。 */
     if (entry->class_id == BR_CLASS_NONE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (find_index(name) != (br_u32)-1) {
-        return BR_ERR(BR_EEXIST);
+        return BR_ERR(EEXIST);
     }
     if (s_count >= (br_u32)BR_DEV_MAX) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
 
     dev_slot_t *s = &s_devs[s_count];

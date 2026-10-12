@@ -16,7 +16,7 @@
 int br_plat_pci_host(br_plat_pci_host_t *out)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     out->ecam_base   = 0x3f000000ul;

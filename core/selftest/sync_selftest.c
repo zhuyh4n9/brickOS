@@ -219,7 +219,7 @@ static void conf_sync_002(br_u32 *pass, br_u32 *fail)
     const int r4 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* 又空闲 ⇒ 0 */
     const int r5 = br_mutex_unlock(&s_m);
 
-    const br_bool ok = (r1 == BR_OK) && (r2 == BR_ERR(BR_ETIMEDOUT)) && (r3 == BR_OK)
+    const br_bool ok = (r1 == BR_OK) && (r2 == BR_ERR(ETIMEDOUT)) && (r3 == BR_OK)
                     && (r4 == BR_OK) && (r5 == BR_OK)
                     && (br_mutex_is_locked(&s_m) == BR_FALSE);
     conf_line("TC-SYNC-002", ok, "mutex lock_to(ZERO): 空闲 0 / 忙 -ETIMEDOUT(不阻塞)", pass, fail);
@@ -238,13 +238,13 @@ static void conf_sync_003(br_u32 *pass, br_u32 *fail, br_bool sched)
         int code = 0;
         const br_bool j = conf_join(t, &code);
         const int rr = br_mutex_unlock(&s_m);
-        ok = (j == BR_TRUE) && (s_wrc[1] == BR_ERR(BR_EPERM)) && (rr == BR_OK);
+        ok = (j == BR_TRUE) && (s_wrc[1] == BR_ERR(EPERM)) && (rr == BR_OK);
     } else {
         /* 没有第二个线程 ⇒ 白盒地伪造"锁被别的线程持有", 仍走同一条 owner 判定。 */
         s_m.locked = 1u;
         s_m.owner  = &s_foreign_owner;
         const int rr = br_mutex_unlock(&s_m);
-        ok = (rr == BR_ERR(BR_EPERM)) ? BR_TRUE : BR_FALSE;
+        ok = (rr == BR_ERR(EPERM)) ? BR_TRUE : BR_FALSE;
         (void)br_mutex_init(&s_m);
     }
 
@@ -281,7 +281,7 @@ static void conf_sync_004(br_u32 *pass, br_u32 *fail, br_bool sched)
         (void)br_mutex_unlock(&s_m);
     }
 
-    const br_bool ok = (j == BR_TRUE) && (s_wrc[2] == BR_ERR(BR_ETIMEDOUT))
+    const br_bool ok = (j == BR_TRUE) && (s_wrc[2] == BR_ERR(ETIMEDOUT))
                     && (ghost_free == BR_TRUE) && (u == BR_OK) && (released_clean == BR_TRUE)
                     && (again == BR_OK)
                     && (br_mutex_is_locked(&s_m) == BR_FALSE)
@@ -301,7 +301,7 @@ static void conf_sync_005(br_u32 *pass, br_u32 *fail, br_bool sched)
     const int g = br_sem_give(&s_sem);                    /* count -> 1 */
     const int d = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* count -> 0 */
 
-    br_bool ok = (a == BR_OK) && (b == BR_OK) && (c == BR_ERR(BR_ETIMEDOUT)) && (g == BR_OK)
+    br_bool ok = (a == BR_OK) && (b == BR_OK) && (c == BR_ERR(ETIMEDOUT)) && (g == BR_OK)
               && (d == BR_OK) && (br_sem_count(&s_sem) == 0u)
               && (br_waitq_len(s_sem.head) == 0u);
 
@@ -370,7 +370,7 @@ static void conf_sync_007(br_u32 *pass, br_u32 *fail, br_bool sched)
                         && (br_mutex_is_locked(&s_m) == BR_TRUE);
     (void)br_mutex_unlock(&s_m);
 
-    br_bool ok = (s0 == BR_OK) && (w0 == 0u) && (z == BR_ERR(BR_ETIMEDOUT))
+    br_bool ok = (s0 == BR_OK) && (w0 == 0u) && (z == BR_ERR(ETIMEDOUT))
               && (held_z == BR_TRUE);
 
     if (sched != BR_TRUE) {
@@ -430,7 +430,7 @@ static void conf_sync_008(br_u32 *pass, br_u32 *fail, br_bool sched)
     const br_bool clean = (br_cond_waiters(&s_cv) == 0u) && (br_waitq_len(s_cv.head) == 0u);
     (void)br_mutex_unlock(&s_m);
 
-    const br_bool ok = (rc == BR_ERR(BR_ETIMEDOUT)) && (held == BR_TRUE) && (clean == BR_TRUE)
+    const br_bool ok = (rc == BR_ERR(ETIMEDOUT)) && (held == BR_TRUE) && (clean == BR_TRUE)
                     && (br_mutex_is_locked(&s_m) == BR_FALSE)
                     && (br_mutex_owner(&s_m) == BR_NULL)
                     && (br_waitq_len(s_m.head) == 0u) && (s_m.waiters == 0u);
@@ -487,10 +487,10 @@ static void conf_sync_009(br_u32 *pass, br_u32 *fail)
 
     const br_bool ok = (got == base) && (base == after)
                     && (locked == BR_TRUE) && (unlocked == BR_TRUE)
-                    && (tb == BR_ERR(BR_EBUSY)) && (saved_kept == BR_TRUE) && (tf == BR_OK)
+                    && (tb == BR_ERR(EBUSY)) && (saved_kept == BR_TRUE) && (tf == BR_OK)
                     && (br_spinlock_contention() == 0u)   /* 单核: 自旋计数恒 0 */
-                    && (em == BR_ERR(BR_EINVAL)) && (es == BR_ERR(BR_EINVAL))
-                    && (ec == BR_ERR(BR_EINVAL)) && (et == BR_ERR(BR_EINVAL));
+                    && (em == BR_ERR(EINVAL)) && (es == BR_ERR(EINVAL))
+                    && (ec == BR_ERR(EINVAL)) && (et == BR_ERR(EINVAL));
     conf_line("TC-SYNC-009", ok,
               "spinlock lock/unlock 中断状态一致 + trylock -EBUSY + 争用计数 0 + magic -EINVAL",
               pass, fail);
@@ -559,7 +559,7 @@ static void conf_time_003(br_u32 *pass, br_u32 *fail)
             ? BR_TRUE : BR_FALSE;
     }
 
-    const br_bool ok = (rc == BR_ERR(BR_EINVAL))
+    const br_bool ok = (rc == BR_ERR(EINVAL))
                     && (d_inf == BR_TIMEOUT_INF)
                     && (d_edge == BR_TIMEOUT_INF)
                     && (d_near >= now)                    /* 绝不回绕到 now 之前 */

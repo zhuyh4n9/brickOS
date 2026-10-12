@@ -302,14 +302,14 @@ static void contig_merge(br_contig_pool_t *cp)
 static int contig_alloc(br_contig_pool_t *cp, br_size_t size, br_size_t align, void **out)
 {
     if (cp->ready == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (size == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* align 必须是 2 的幂(0 与含多个 1 位的值都拒)。 */
     if ((align == 0u) || ((align & (align - 1u)) != 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (align < (br_size_t)BR_TLSF_ALIGN) {
         align = (br_size_t)BR_TLSF_ALIGN;
@@ -332,11 +332,11 @@ static int contig_alloc(br_contig_pool_t *cp, br_size_t size, br_size_t align, v
         const br_size_t tail = fsize - front - need;
 
         if (cp->n_alloc >= (br_u32)BR_CONTIG_MAX_ALLOC) {
-            return BR_ERR(BR_ENOMEM);
+            return BR_ERR(ENOMEM);
         }
         const br_u32 extra = ((front > 0u) ? 1u : 0u) + ((tail > 0u) ? 1u : 0u);
         if ((cp->n_free + extra - 1u) > (br_u32)BR_CONTIG_MAX_FREE) {
-            return BR_ERR(BR_ENOMEM);
+            return BR_ERR(ENOMEM);
         }
 
         cp->allocs[cp->n_alloc].addr  = astart;
@@ -360,7 +360,7 @@ static int contig_alloc(br_contig_pool_t *cp, br_size_t size, br_size_t align, v
         return BR_OK;
     }
 
-    return BR_ERR(BR_ENOMEM);
+    return BR_ERR(ENOMEM);
 }
 
 static void contig_free(br_contig_pool_t *cp, void *ptr, br_size_t size)
@@ -610,10 +610,10 @@ void *br_realloc(void *p, br_size_t n)
 int br_heap_usage(br_size_t *used, br_size_t *total)
 {
     if (s_mem.ready == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if ((used == BR_NULL) || (total == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 与 br_heap_stats_get 的 used/total 是同一投影: 两者都直接问 TLSF 计数,
      * 不做第二份缓存 —— 否则"记账"与"实况"会各自漂移。 */
@@ -625,10 +625,10 @@ int br_heap_usage(br_size_t *used, br_size_t *total)
 int br_heap_stats_get(br_heap_stats_t *out)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_mem.ready == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     out->total          = s_mem.layout.heap.size;
@@ -651,10 +651,10 @@ int br_heap_stats_get(br_heap_stats_t *out)
 int br_heap_walk(br_heap_walk_fn fn, void *ctx)
 {
     if (s_mem.ready == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (fn == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* 存活链是 push-front ⇒ 头→尾 seq 严格递减。原地反转即得升序, 回调后翻回。
@@ -740,10 +740,10 @@ br_u32 br_heap_check(void)
 int br_mem_alloc_contig(br_size_t size, br_size_t align, void **out)
 {
     if (s_mem.ready == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *out = BR_NULL;
     return contig_alloc(&s_contig, size, align, out);
@@ -760,20 +760,20 @@ void br_mem_free_contig(void *ptr, br_size_t size)
 int br_dma_alloc(br_size_t n, br_u32 attrs, br_dma_buf_t *out)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     out->vaddr    = BR_NULL;
     out->dma_addr = 0u;
     out->size     = 0u;
 
     if (s_mem.ready == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (s_mem.have_dma == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);   /* region 表没声明 DMA 池 */
+        return BR_ERR(ENODEV);   /* region 表没声明 DMA 池 */
     }
     if (n == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* v1 默认即 4 KiB 对齐(CA-6 恒等映射 + 设备侧一致性); BR_DMA_F_ALIGN4K 置位
@@ -797,23 +797,23 @@ int br_dma_alloc(br_size_t n, br_u32 attrs, br_dma_buf_t *out)
 int br_dma_free(const br_dma_buf_t *b)
 {
     if (b == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_mem.ready == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (s_mem.have_dma == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (b->vaddr == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (b->dma_addr != (br_uintptr_t)b->vaddr) {
         /* CA-6 的一致性判据: 两个地址是同一处真值的两个视图, 对不上就不归还
          * (归还错地址会把池切坏)。 */
         br_log_error("mem: dma_free 地址不一致 vaddr=%p dma=0x%lx",
                      b->vaddr, (unsigned long)b->dma_addr);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     contig_free(&s_dma, b->vaddr, b->size);
     return BR_OK;
@@ -844,7 +844,7 @@ static int mem_claim_pools(void)
             ((r->size & (br_size_t)(BR_PAGE_SIZE - 1u)) != 0u)) {
             br_log_error("mem: region[%u] 粒度不合法 base=%p size=%lu",
                          (unsigned)i, (void *)r->base, (unsigned long)r->size);
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
 
         switch (BR_MM_KIND(r->attrs)) {
@@ -882,21 +882,21 @@ static int mem_claim_pools(void)
         br_log_error("mem: 缺必需池(heap=%lu contig=%lu page=%lu)",
                      (unsigned long)heap.size, (unsigned long)contig.size,
                      (unsigned long)page.size);
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     /* 池太小: 分别给出下界, 避免建出一个"永远分配不出东西"的池。 */
     if (heap.size < ((br_size_t)BR_TLSF_OVERHEAD * 2u)) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     if (contig.size < ((br_size_t)BR_TLSF_ALIGN * 2u)) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     if (page.size < (br_size_t)BR_PAGE_SIZE) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
     if ((have_dma == BR_TRUE) && (dma.size < (br_size_t)BR_PAGE_SIZE)) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
 
     int rc = br_tlsf_init((void *)heap.base, heap.size);
@@ -950,10 +950,10 @@ br_bool br_mem_ready(void)
 int br_mem_layout(br_mem_layout_t *out)
 {
     if (s_mem.ready == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *out = s_mem.layout;
     return BR_OK;

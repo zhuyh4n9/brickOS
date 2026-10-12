@@ -116,7 +116,7 @@ static int uboot_fat_disk_rw(__u32 block, __u32 nr_blocks, void *buf, int write)
     if (s_cur_vol == BR_NULL) {
         br_log_error("uboot-fat: disk_%s with no volume bound",
                      (write != 0) ? "write" : "read");
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (nr_blocks == 0u) {
         return 0;
@@ -125,16 +125,16 @@ static int uboot_fat_disk_rw(__u32 block, __u32 nr_blocks, void *buf, int write)
         br_log_error("uboot-fat: %s lba %u out of volume (n_sectors=%llu)",
                      (write != 0) ? "write" : "read", block,
                      (unsigned long long)s_cur_vol->geom.n_sectors);
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
     lba = lba_of(block);
     if ((lba + nr_blocks) > s_cur_vol->geom.n_sectors) {
         br_log_error("uboot-fat: %s %u sectors at lba %u crosses volume end",
                      (write != 0) ? "write" : "read", nr_blocks, block);
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
     if (s_cur_vol->ops == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     chunk = (s_cur_vol->geom.max_rw != 0u) ? s_cur_vol->geom.max_rw : nr_blocks;
@@ -156,7 +156,7 @@ static int uboot_fat_disk_rw(__u32 block, __u32 nr_blocks, void *buf, int write)
             br_log_error("uboot-fat: %s lba %llu n=%u rc=%d",
                          (write != 0) ? "write" : "read",
                          (unsigned long long)lba, n, rc);
-            return (rc < 0) ? rc : BR_ERR(BR_EIO);
+            return (rc < 0) ? rc : BR_ERR(EIO);
         }
         lba  += n;
         p    += (br_size_t)n * UB_FAT_SECTOR_SIZE;
@@ -187,7 +187,7 @@ int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
     int rc;
 
     if (vol == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (vol->bound == BR_TRUE) {
         /* 已绑定: 只把它切成当前卷(等价于上游 fat_set_blk_dev 的"换设备"语义)。
@@ -200,7 +200,7 @@ int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
     vol->geom = (br_bdev_geom_t){ 0u, 0u, 0u, 0u, 0u };
     if ((vol->ops == BR_NULL) || (vol->priv == BR_NULL)) {
         br_log_error("uboot-fat: bdev %s not found", vol->dev);
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     rc = vol->ops->geometry(vol->priv, &vol->geom);
     if (rc != 0) {
@@ -211,7 +211,7 @@ int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
         br_log_error("uboot-fat: %s sector_size=%u n_sectors=%llu (需要 512 B 扇区)",
                      vol->dev, vol->geom.sector_size,
                      (unsigned long long)vol->geom.n_sectors);
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     s_cur_vol = vol;                     /* 后续所有 I/O 都落在这个卷上 */
@@ -253,7 +253,7 @@ int uboot_fat_mount_to_vol(const char *path, br_u32 *id)
     br_u32 i;
 
     if ((path == BR_NULL) || (id == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     for (i = 0u; i < (br_u32)UB_FAT_VOL_MAX; i++) {
         if (uboot_fat_strcmp(table[i].mnt, path) == 0) {
@@ -263,7 +263,7 @@ int uboot_fat_mount_to_vol(const char *path, br_u32 *id)
             return 0;
         }
     }
-    return BR_ERR(BR_ENOENT);
+    return BR_ERR(ENOENT);
 }
 
 /* 卷的事实观测(自检 TC-FAT-001 用): 只读, 不改任何状态。 */
@@ -272,7 +272,7 @@ int uboot_fat_vol_info(br_u32 id, uboot_fat_vol_info_t *out)
     uboot_fat_vol_t *v = uboot_fat_vol_get(id);
 
     if ((v == BR_NULL) || (out == BR_NULL)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     out->dev                 = v->dev;
     out->mnt                 = v->mnt;
@@ -831,7 +831,7 @@ int uboot_fat_get_fs_info(fsdata *mydata)
 
     /* 调用者的作用域里必须有当前卷(上游同理: cur_dev/cur_part_info) */
     if (s_cur_vol == BR_NULL) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     /*
@@ -843,7 +843,7 @@ int uboot_fat_get_fs_info(fsdata *mydata)
     if ((mydata->fatbuf != BR_NULL) && (mydata->fat_dirty != 0)) {
         if (flush_dirty_fat_buffer(mydata) < 0) {
             log_err("FAT: cannot flush dirty FAT buffer before re-identify");
-            return BR_ERR(BR_EIO);
+            return BR_ERR(EIO);
         }
     }
     uboot_fat_fatbuf_release(mydata);

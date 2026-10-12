@@ -330,17 +330,17 @@ br_u32 br_irq_domain_drop_of(const br_irq_desc_t *d)
 static int child_api_guard(br_irq_domain_t *dom, br_u32 sub, br_irq_desc_t **out)
 {
     if (br_irq_in_atomic() != BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (dom == BR_NULL || dom->ops == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (sub >= (br_u32)dom->n_sub) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     br_irq_desc_t *sd = domain_sub_desc(dom, sub);
     if (sd->isr == BR_NULL) {
-        return BR_ERR(BR_EINVAL);           /* 未注册的子中断 */
+        return BR_ERR(EINVAL);           /* 未注册的子中断 */
     }
     *out = sd;
     return BR_OK;
@@ -350,18 +350,18 @@ int br_irq_register_child(br_irq_domain_t *dom, br_u32 sub,
                           void (*isr)(void *), void *arg, const br_irq_attr_t *attr)
 {
     if (br_irq_in_atomic() != BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (dom == BR_NULL || dom->ops == BR_NULL || isr == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (sub >= (br_u32)dom->n_sub) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_irq_desc_t *sd = domain_sub_desc(dom, sub);
     if (sd->isr != BR_NULL) {
-        return BR_ERR(BR_EBUSY);            /* INV-A */
+        return BR_ERR(EBUSY);            /* INV-A */
     }
 
     const br_u32 child_virq = (br_u32)dom->virq_base + sub;
@@ -376,10 +376,10 @@ int br_irq_register_child(br_irq_domain_t *dom, br_u32 sub,
         flags = attr->flags;
 
         if ((flags & ~(br_u32)BR_IRQ_F_KNOWN_MASK) != 0u) {
-            return BR_ERR(BR_EINVAL);       /* 未知位 ⇒ 拒绝(§3.4) */
+            return BR_ERR(EINVAL);       /* 未知位 ⇒ 拒绝(§3.4) */
         }
         if ((flags & BR_IRQ_F_SHARED) != 0u) {
-            return BR_ERR(BR_ENOTSUP);      /* 共享线 = v1 非目标 */
+            return BR_ERR(ENOTSUP);      /* 共享线 = v1 非目标 */
         }
         /*
          * PERCPU 对域成员没有来源: 该位的权威是绑定表(§3.4), 而子中断没有绑定条目。
@@ -387,7 +387,7 @@ int br_irq_register_child(br_irq_domain_t *dom, br_u32 sub,
          * 记 P-IRQ-12(实现裁定)。
          */
         if ((flags & BR_IRQ_F_PERCPU) != 0u) {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
         /* 逐子的分发形态: **上下文由域类型决定**(FAST ⇒ ISR / SLOW ⇒ bh, ADR-0011),
          * 子中断的 `DISPATCH_BH/_THREAD` 没有额外语义 ⇒ 置位即忽略 + 留痕, 落库时清掉
@@ -399,7 +399,7 @@ int br_irq_register_child(br_irq_domain_t *dom, br_u32 sub,
             flags &= ~(br_u32)(BR_IRQ_F_DISPATCH_BH | BR_IRQ_F_DISPATCH_THREAD);
         }
         if ((flags & BR_IRQ_F_STATS) != 0u && (BR_IRQ_STATS == 0)) {
-            return BR_ERR(BR_ENOTSUP);
+            return BR_ERR(ENOTSUP);
         }
 
         /* 域成员不经 PIC caps 校验 prio/trigger: 子中断的逐子配置全在 domain_ops
@@ -420,7 +420,7 @@ int br_irq_register_child(br_irq_domain_t *dom, br_u32 sub,
      *   ⇒ 只对"显式给出的具体编码"做范围校验。记 P-IRQ-13。
      */
     if (trigger != (br_u8)BR_IRQ_TRIG_DEFAULT && trigger > (br_u8)BR_IRQ_TRIG_EDGE_BOTH) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* 与直连 register 对称(§6.2): 注册 = depth 1 + 硬件屏蔽。

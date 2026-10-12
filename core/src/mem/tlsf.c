@@ -215,17 +215,17 @@ br_size_t br_tlsf_overhead(void)
 int br_tlsf_init(void *arena, br_size_t bytes)
 {
     if ((arena == BR_NULL) || (bytes < (br_size_t)(2u * BR_TLSF_MIN_BLOCK))) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (((br_uintptr_t)arena & (br_uintptr_t)(BR_TLSF_ALIGN - 1u)) != 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 一级索引上界: fl = log2(size) - 5 必须 < 32 ⇒ arena <= 2^36(64 GiB)。 */
     if (bytes > ((br_size_t)1u << 36)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_tlsf.init != BR_FALSE) {
-        return BR_ERR(BR_EBUSY);
+        return BR_ERR(EBUSY);
     }
 
     s_tlsf.arena      = (br_u8 *)arena;

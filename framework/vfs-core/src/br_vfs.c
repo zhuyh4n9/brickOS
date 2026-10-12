@@ -152,7 +152,7 @@ br_bool br_vfs_internal_mem_eq(const void *a, const void *b, br_size_t n)
 static int path_norm(const char *in, char *out, br_size_t cap)
 {
     if (in == BR_NULL || in[0] != '/') {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     br_size_t n = 0u;
@@ -168,7 +168,7 @@ static int path_norm(const char *in, char *out, br_size_t cap)
             prev_slash = BR_FALSE;
         }
         if (n + 1u >= cap) {
-            return BR_ERR(BR_ENOSPC);
+            return BR_ERR(ENOSPC);
         }
         out[n++] = in[i];
     }
@@ -253,7 +253,7 @@ static void ino_put(const vfs_mount_t *m, br_inode_t *ino, br_bool is_root)
 static int np_push(char *np, br_size_t *n, char c)
 {
     if (*n + 1u >= (br_size_t)BR_VFS_PATH_MAX) {
-        return BR_ERR(BR_ENAMETOOLONG);
+        return BR_ERR(ENAMETOOLONG);
     }
     np[(*n)++] = c;
     return BR_OK;
@@ -283,7 +283,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
         }
         const vfs_mount_t *m = mount_match(path);
         if (m == BR_NULL) {
-            return BR_ERR(BR_ENOENT);
+            return BR_ERR(ENOENT);
         }
 
         const char   *rest     = mount_rest(m, path);
@@ -307,11 +307,11 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
              *   下会得到不同的 errno(文件当目录走查会变成 -ENOENT 而不是 -ENOTDIR)。 */
             if (cur->type != BR_INODE_DIR || cur->iops == BR_NULL || cur->iops->lookup == BR_NULL) {
                 ino_put(m, cur, cur_is_root);
-                return BR_ERR(BR_ENOTDIR);
+                return BR_ERR(ENOTDIR);
             }
             if (clen == 0u || clen >= (br_size_t)BR_NAME_MAX) {
                 ino_put(m, cur, cur_is_root);
-                return BR_ERR(BR_ENOSPC);
+                return BR_ERR(ENOSPC);
             }
 
             char comp[BR_NAME_MAX];
@@ -323,14 +323,14 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
             br_inode_t *next = cur->iops->lookup(cur, comp);
             if (next == BR_NULL) {
                 ino_put(m, cur, cur_is_root);
-                return BR_ERR(BR_ENOENT);
+                return BR_ERR(ENOENT);
             }
 
             /* ---- 符号链接展开(末级 nofollow 时跳过) ---- */
             if ((next->type == BR_INODE_SYMLINK) &&
                 !((last == BR_TRUE) && (nofollow_last == BR_TRUE))) {
                 char tgt[BR_SYMLINK_MAX + 1u];
-                int  rl = BR_ERR(BR_ENOTSUP);
+                int  rl = BR_ERR(ENOTSUP);
 
                 if (next->iops != BR_NULL && next->iops->readlink != BR_NULL) {
                     rl = next->iops->readlink(next, tgt, (br_size_t)BR_SYMLINK_MAX);
@@ -370,7 +370,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                     np[n] = '\0';
                     pr = path_norm(np, path, (br_size_t)sizeof(path));
                     if (pr != BR_OK) {
-                        pr = BR_ERR(BR_ENAMETOOLONG);   /* 拼接后超缓冲 ⇒ 语义上的名字过长 */
+                        pr = BR_ERR(ENAMETOOLONG);   /* 拼接后超缓冲 ⇒ 语义上的名字过长 */
                     }
                 }
 
@@ -401,7 +401,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
         return BR_OK;
     }
 
-    return BR_ERR(BR_ELOOP);
+    return BR_ERR(ELOOP);
 }
 
 /*
@@ -425,14 +425,14 @@ static int resolve_parent(const char *path,
 
     const vfs_mount_t *m = mount_match(norm);
     if (m == BR_NULL) {
-        return BR_ERR(BR_ENOENT);
+        return BR_ERR(ENOENT);
     }
 
     /* 目标是**挂载点本身** ⇒ 没有可操作的"末级名字"。
      * 挂载根 vs 子目录要分清: "/dev/x" 的末级是 x(合法), "/dev" 是挂载点(非法)。 */
     const char *rest = mount_rest(m, norm);
     if (rest[0] == '\0') {
-        return BR_ERR(BR_EBUSY);
+        return BR_ERR(EBUSY);
     }
 
     const br_size_t rest_off = (br_size_t)(rest - norm);
@@ -470,11 +470,11 @@ static int resolve_parent(const char *path,
 
     if (llen == 0u || llen >= (br_size_t)BR_NAME_MAX) {
         ino_put(*m_out, *parent_out, *parent_is_root_out);
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     if (llen + 1u > cap) {
         ino_put(*m_out, *parent_out, *parent_is_root_out);
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     for (br_size_t k = 0u; k < llen; k++) {
         buf[k] = leaf_src[k];
@@ -528,7 +528,7 @@ static int mkdir_p(const char *full_norm)
         br_bool            ir = BR_FALSE;
         int rc = resolve_norm(pfx, BR_FALSE, &mm, &ino, &ir, BR_NULL, 0u);
 
-        if (rc == BR_ERR(BR_ENOENT)) {
+        if (rc == BR_ERR(ENOENT)) {
             char        pbuf[BR_VFS_PATH_MAX];
             const vfs_mount_t *pm = BR_NULL;
             br_inode_t *parent = BR_NULL;
@@ -538,12 +538,12 @@ static int mkdir_p(const char *full_norm)
             rc = resolve_parent(pfx, pbuf, (br_size_t)sizeof(pbuf), &pm, &parent, &pir, &leaf);
             if (rc == BR_OK) {
                 if (parent->type != BR_INODE_DIR) {
-                    rc = BR_ERR(BR_ENOTDIR);
+                    rc = BR_ERR(ENOTDIR);
                 } else if (parent->iops == BR_NULL || parent->iops->mkdir == BR_NULL) {
-                    rc = BR_ERR(BR_ENOTSUP);
+                    rc = BR_ERR(ENOTSUP);
                 } else {
                     rc = parent->iops->mkdir(parent, leaf);
-                    if (rc == BR_ERR(BR_EEXIST)) {
+                    if (rc == BR_ERR(EEXIST)) {
                         rc = BR_OK;                     /* 竞态/已存在 ⇒ 不是错误(原语义) */
                     }
                 }
@@ -551,7 +551,7 @@ static int mkdir_p(const char *full_norm)
             }
         } else if (rc == BR_OK) {
             if (ino->type != BR_INODE_DIR) {
-                rc = BR_ERR(BR_ENOTDIR);
+                rc = BR_ERR(ENOTDIR);
             }
             ino_put(mm, ino, ir);
         }
@@ -572,7 +572,7 @@ static int mkdir_p(const char *full_norm)
 int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
 {
     if (ops == BR_NULL || ops->mount == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     char norm[BR_VFS_PATH_MAX];
@@ -581,13 +581,13 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
         return rc;
     }
     if (s_mount_n >= (br_u32)BR_VFS_MAX_MOUNTS) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
     /* 重复挂载同一路径(规范化后比较)⇒ -EEXIST。为什么不是"覆盖": 覆盖会让旧 FS 的
      * 根 inode 与它的 fs_priv 失去唯一持有者 —— 静默泄漏比报错糟。 */
     for (br_u32 i = 0u; i < s_mount_n; i++) {
         if (s_mounts[i].used == BR_TRUE && vfs_str_eq(s_mounts[i].path, norm) == BR_TRUE) {
-            return BR_ERR(BR_EEXIST);
+            return BR_ERR(EEXIST);
         }
     }
 
@@ -595,11 +595,11 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
     if (vfs_str_eq(norm, "/") == BR_FALSE) {
         const vfs_mount_t *parent = mount_match(norm);
         if (parent == BR_NULL) {
-            return BR_ERR(BR_ENODEV);          /* 没有父 FS 承接挂载点 */
+            return BR_ERR(ENODEV);          /* 没有父 FS 承接挂载点 */
         }
         const char *rest = mount_rest(parent, norm);
         if (rest[0] == '\0') {
-            return BR_ERR(BR_EEXIST);          /* 与已有挂载点同路径(上面已挡, 纯防御) */
+            return BR_ERR(EEXIST);          /* 与已有挂载点同路径(上面已挡, 纯防御) */
         }
         rc = mkdir_p(norm);                    /* ADR-0013: 按全路径前缀逐级建(展开链接) */
         if (rc != BR_OK) {
@@ -619,7 +619,7 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
         return rc;
     }
     if (root == BR_NULL) {
-        return BR_ERR(BR_EINVAL);              /* mount 成功却不给根 inode: FS 违约 */
+        return BR_ERR(EINVAL);              /* mount 成功却不给根 inode: FS 违约 */
     }
 
     vfs_mount_t *m = &s_mounts[s_mount_n];
@@ -659,13 +659,13 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
     const br_u32 acc = flags & BR_O_ACCMODE;
     if (acc != BR_O_RDONLY && acc != BR_O_WRONLY && acc != BR_O_RDWR) {
         if (err != BR_NULL) {
-            *err = BR_ERR(BR_EINVAL);
+            *err = BR_ERR(EINVAL);
         }
         return BR_NULL;
     }
     if ((flags & ~(br_u32)BR_VFS_KNOWN_FLAGS) != 0u) {
         if (err != BR_NULL) {
-            *err = BR_ERR(BR_EINVAL);
+            *err = BR_ERR(EINVAL);
         }
         return BR_NULL;
     }
@@ -679,7 +679,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
 
     if (rc != BR_OK) {
         /* 未命中 + O_CREAT ⇒ 在父目录上 create(设计 §2 的"未命中且 O_CREAT") */
-        if (rc != BR_ERR(BR_ENOENT) || (flags & BR_O_CREAT) == 0u) {
+        if (rc != BR_ERR(ENOENT) || (flags & BR_O_CREAT) == 0u) {
             if (err != BR_NULL) {
                 *err = rc;
             }
@@ -705,14 +705,14 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
         if (parent->type != BR_INODE_DIR) {
             ino_put(m, parent, parent_is_root);
             if (err != BR_NULL) {
-                *err = BR_ERR(BR_ENOTDIR);     /* "父"其实是文件 ⇒ 与"中间级不是目录"同码 */
+                *err = BR_ERR(ENOTDIR);     /* "父"其实是文件 ⇒ 与"中间级不是目录"同码 */
             }
             return BR_NULL;
         }
         if (parent->iops == BR_NULL || parent->iops->create == BR_NULL) {
             ino_put(m, parent, parent_is_root);
             if (err != BR_NULL) {
-                *err = BR_ERR(BR_ENOTSUP);     /* 该 FS 不支持创建(只读 / 设备投影) */
+                *err = BR_ERR(ENOTSUP);     /* 该 FS 不支持创建(只读 / 设备投影) */
             }
             return BR_NULL;
         }
@@ -731,7 +731,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
     } else if ((flags & (BR_O_CREAT | BR_O_EXCL)) == (BR_O_CREAT | BR_O_EXCL)) {
         ino_put(m, ino, ino_is_root);
         if (err != BR_NULL) {
-            *err = BR_ERR(BR_EEXIST);
+            *err = BR_ERR(EEXIST);
         }
         return BR_NULL;
     }
@@ -741,7 +741,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
     if (ino->type == BR_INODE_SYMLINK) {
         ino_put(m, ino, ino_is_root);
         if (err != BR_NULL) {
-            *err = BR_ERR(BR_ELOOP);
+            *err = BR_ERR(ELOOP);
         }
         return BR_NULL;
     }
@@ -751,14 +751,14 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
     if (ino->type == BR_INODE_DIR && (flags & BR_O_ACCMODE) != BR_O_RDONLY) {
         ino_put(m, ino, ino_is_root);
         if (err != BR_NULL) {
-            *err = BR_ERR(BR_EISDIR);
+            *err = BR_ERR(EISDIR);
         }
         return BR_NULL;
     }
     if (ino->fops == BR_NULL) {
         ino_put(m, ino, ino_is_root);
         if (err != BR_NULL) {
-            *err = BR_ERR(BR_ENOTSUP);
+            *err = BR_ERR(ENOTSUP);
         }
         return BR_NULL;
     }
@@ -767,7 +767,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
     if (f == BR_NULL) {
         ino_put(m, ino, ino_is_root);
         if (err != BR_NULL) {
-            *err = BR_ERR(BR_ENOMEM);
+            *err = BR_ERR(ENOMEM);
         }
         return BR_NULL;
     }
@@ -840,10 +840,10 @@ void br_file_set_offset(br_file_t *f, br_s64 off)
 br_s64 br_file_read(br_file_t *f, void *buf, br_size_t n)
 {
     if (f == BR_NULL || buf == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (f->fops->read == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return f->fops->read(f, buf, n);
 }
@@ -851,10 +851,10 @@ br_s64 br_file_read(br_file_t *f, void *buf, br_size_t n)
 br_s64 br_file_write(br_file_t *f, const void *buf, br_size_t n)
 {
     if (f == BR_NULL || buf == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (f->fops->write == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return f->fops->write(f, buf, n);
 }
@@ -862,10 +862,10 @@ br_s64 br_file_write(br_file_t *f, const void *buf, br_size_t n)
 br_s64 br_file_lseek(br_file_t *f, br_s64 off, int whence)
 {
     if (f == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (f->fops->lseek == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return f->fops->lseek(f, off, whence);
 }
@@ -873,10 +873,10 @@ br_s64 br_file_lseek(br_file_t *f, br_s64 off, int whence)
 int br_file_ioctl(br_file_t *f, br_u32 cmd, void *arg)
 {
     if (f == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (f->fops->ioctl == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return f->fops->ioctl(f, cmd, arg);
 }
@@ -884,10 +884,10 @@ int br_file_ioctl(br_file_t *f, br_u32 cmd, void *arg)
 int br_file_fsync(br_file_t *f)
 {
     if (f == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (f->fops->fsync == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return f->fops->fsync(f);
 }
@@ -895,10 +895,10 @@ int br_file_fsync(br_file_t *f)
 int br_file_poll(br_file_t *f, br_u32 *events)
 {
     if (f == BR_NULL || events == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (f->fops->poll == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     *events = 0u;
     return f->fops->poll(f, events);
@@ -944,7 +944,7 @@ br_dir_t *br_opendir(const char *path)
 int br_readdir(br_dir_t *d, br_dirent_t *out)
 {
     if (d == BR_NULL || d->f == BR_NULL || out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     const br_s64 rc = br_file_read(d->f, out, (br_size_t)sizeof(*out));
     if (rc < 0) {
@@ -954,7 +954,7 @@ int br_readdir(br_dir_t *d, br_dirent_t *out)
         return 0;                       /* 目录已穷尽 */
     }
     if (rc != (br_s64)sizeof(*out)) {
-        return BR_ERR(BR_EIO);          /* 目录项是定长记录: 半条就是 FS 违约 */
+        return BR_ERR(EIO);          /* 目录项是定长记录: 半条就是 FS 违约 */
     }
     return 1;
 }
@@ -979,10 +979,10 @@ int br_closedir(br_dir_t *d)
 int br_fstat(br_file_t *f, br_stat_t *st)
 {
     if (f == BR_NULL || f->ino == BR_NULL || st == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (f->ino->iops == BR_NULL || f->ino->iops->getattr == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return f->ino->iops->getattr(f->ino, st);
 }
@@ -991,7 +991,7 @@ int br_fstat(br_file_t *f, br_stat_t *st)
 static int stat_common(const char *path, br_stat_t *st, br_bool nofollow_last)
 {
     if (st == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     const vfs_mount_t *m = BR_NULL;
     br_inode_t        *ino = BR_NULL;
@@ -1002,7 +1002,7 @@ static int stat_common(const char *path, br_stat_t *st, br_bool nofollow_last)
     }
     if (ino->iops == BR_NULL || ino->iops->getattr == BR_NULL) {
         ino_put(m, ino, is_root);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     rc = ino->iops->getattr(ino, st);
     ino_put(m, ino, is_root);
@@ -1035,11 +1035,11 @@ static int parent_op(const char *path, int (*fn)(br_inode_t *, const char *))
     }
     if (parent->type != BR_INODE_DIR) {
         ino_put(m, parent, parent_is_root);
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     if (parent->iops == BR_NULL || fn == BR_NULL) {
         ino_put(m, parent, parent_is_root);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     rc = fn(parent, leaf);
     ino_put(m, parent, parent_is_root);
@@ -1049,15 +1049,15 @@ static int parent_op(const char *path, int (*fn)(br_inode_t *, const char *))
 /* 三个薄适配(只为把 iops 里的函数指针取出来 —— 避免在 parent_op 里做成员判空散落多处) */
 static int call_mkdir(br_inode_t *d, const char *name)
 {
-    return (d->iops->mkdir != BR_NULL) ? d->iops->mkdir(d, name) : BR_ERR(BR_ENOTSUP);
+    return (d->iops->mkdir != BR_NULL) ? d->iops->mkdir(d, name) : BR_ERR(ENOTSUP);
 }
 static int call_rmdir(br_inode_t *d, const char *name)
 {
-    return (d->iops->rmdir != BR_NULL) ? d->iops->rmdir(d, name) : BR_ERR(BR_ENOTSUP);
+    return (d->iops->rmdir != BR_NULL) ? d->iops->rmdir(d, name) : BR_ERR(ENOTSUP);
 }
 static int call_unlink(br_inode_t *d, const char *name)
 {
-    return (d->iops->unlink != BR_NULL) ? d->iops->unlink(d, name) : BR_ERR(BR_ENOTSUP);
+    return (d->iops->unlink != BR_NULL) ? d->iops->unlink(d, name) : BR_ERR(ENOTSUP);
 }
 
 int br_mkdir(const char *path)
@@ -1105,17 +1105,17 @@ int br_rename(const char *old_path, const char *new_path)
     if (m_old != m_new) {
         ino_put(m_old, d_old, root_old);
         ino_put(m_new, d_new, root_new);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if (d_old->type != BR_INODE_DIR || d_new->type != BR_INODE_DIR) {
         ino_put(m_old, d_old, root_old);
         ino_put(m_new, d_new, root_new);
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     if (d_old->iops == BR_NULL || d_old->iops->rename == BR_NULL) {
         ino_put(m_old, d_old, root_old);
         ino_put(m_new, d_new, root_new);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     rc = d_old->iops->rename(d_old, leaf_old, d_new, leaf_new);
@@ -1136,7 +1136,7 @@ int br_truncate(const char *path, br_u64 size)
     }
     if (ino->iops == BR_NULL || ino->iops->setattr == BR_NULL) {
         ino_put(m, ino, is_root);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     const br_stat_t st = { .valid = BR_STAT_SIZE, .type = ino->type, .size = size };
     rc = ino->iops->setattr(ino, &st);
@@ -1153,11 +1153,11 @@ int br_truncate(const char *path, br_u64 size)
 int br_symlink(const char *target, const char *path)
 {
     if (target == BR_NULL || target[0] == '\0') {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 目标**不校验存在性**(悬空链接是合法状态); 但长度有静态上界。 */
     if (vfs_str_len(target) > (br_size_t)BR_SYMLINK_MAX) {
-        return BR_ERR(BR_ENAMETOOLONG);
+        return BR_ERR(ENAMETOOLONG);
     }
 
     char               buf[BR_VFS_PATH_MAX];
@@ -1172,11 +1172,11 @@ int br_symlink(const char *target, const char *path)
     }
     if (parent->type != BR_INODE_DIR) {
         ino_put(m, parent, pir);
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     if (parent->iops == BR_NULL || parent->iops->symlink == BR_NULL) {
         ino_put(m, parent, pir);
-        return BR_ERR(BR_ENOTSUP);           /* 该 FS 不支持符号链接(devfs 等) */
+        return BR_ERR(ENOTSUP);           /* 该 FS 不支持符号链接(devfs 等) */
     }
     rc = parent->iops->symlink(parent, leaf, target);
     ino_put(m, parent, pir);
@@ -1195,11 +1195,11 @@ int br_readlink(const char *path, char *buf, br_size_t cap)
     }
     if (ino->type != BR_INODE_SYMLINK) {
         ino_put(m, ino, ir);
-        return BR_ERR(BR_EINVAL);            /* POSIX: 非符号链接 ⇒ EINVAL */
+        return BR_ERR(EINVAL);            /* POSIX: 非符号链接 ⇒ EINVAL */
     }
     if (ino->iops == BR_NULL || ino->iops->readlink == BR_NULL) {
         ino_put(m, ino, ir);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     rc = ino->iops->readlink(ino, buf, cap);
     ino_put(m, ino, ir);
@@ -1219,7 +1219,7 @@ int br_link(const char *old_path, const char *new_path)
     }
     if (target->type == BR_INODE_DIR) {
         ino_put(m_old, target, tir);
-        return BR_ERR(BR_EPERM);             /* 目录不可硬链接(POSIX: EPERM) */
+        return BR_ERR(EPERM);             /* 目录不可硬链接(POSIX: EPERM) */
     }
 
     char               buf[BR_VFS_PATH_MAX];
@@ -1235,21 +1235,21 @@ int br_link(const char *old_path, const char *new_path)
     }
 
     /* 跨挂载的硬链接不存在(v1 无"跨 FS inode"概念)⇒ -EXDEV。
-     * ★ 这是 `BR_EXDEV`(18)的**首个启用点** —— 它一直在错误码表里, 到这里才有语义。 */
+     * ★ 这是 `EXDEV`(18)的**首个启用点** —— 它一直在错误码表里, 到这里才有语义。 */
     if (m_old != m_new) {
         ino_put(m_old, target, tir);
         ino_put(m_new, parent, pir);
-        return BR_ERR(BR_EXDEV);
+        return BR_ERR(EXDEV);
     }
     if (parent->type != BR_INODE_DIR) {
         ino_put(m_old, target, tir);
         ino_put(m_new, parent, pir);
-        return BR_ERR(BR_ENOTDIR);
+        return BR_ERR(ENOTDIR);
     }
     if (parent->iops == BR_NULL || parent->iops->link == BR_NULL) {
         ino_put(m_old, target, tir);
         ino_put(m_new, parent, pir);
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
     rc = parent->iops->link(parent, leaf, target);

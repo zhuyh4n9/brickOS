@@ -76,7 +76,7 @@ platform = ["qemu-aarch64"]
 
 [[case]]
 id       = "TC-BDEV-006"
-pre      = "组合含至少一个 bdev(如 third_party/uboot-mmc 登记的 emmc0); 无 bdev 时只走'不适用'分支"
+pre      = "组合含至少一个 bdev(如 adapter/uboot-mmc 登记的 emmc0); 无 bdev 时只走'不适用'分支"
 steps    = [
     "取第一个 BR_CLASS_BDEV 条目的名字",
     "br_bdev_get(name, &priv) 非 NULL 且 == 条目的 class_priv; geometry(priv, &g) == 0",

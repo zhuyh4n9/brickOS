@@ -302,7 +302,7 @@ static br_bool advance_timeouts(void)
     for (br_u32 i = 0u; i < FAKE_MAX; i++) {
         if (tcb_live(&g_tcb[i]) == BR_TRUE && g_tcb[i].state == BR_TASK_BLOCKED
             && g_tcb[i].wake_at != BR_TIMEOUT_INF && g_tcb[i].wake_at <= now) {
-            g_tcb[i].wait_status = BR_ERR(BR_ETIMEDOUT);
+            g_tcb[i].wait_status = BR_ERR(ETIMEDOUT);
             g_tcb[i].state       = BR_TASK_READY;
             g_tcb[i].wake_at     = BR_TIMEOUT_INF;
             rq_push(&g_tcb[i]);
@@ -361,13 +361,13 @@ int br_sched_block_current(br_time_t abs_deadline)
     br_thread_t *t = g_current;
 
     if (t == NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if (t->wait_status == 0) {
         return 0;                    /* ICB: 挂链之后、切走之前已被唤醒 ⇒ 不切走 */
     }
 
-    t->wait_status = BR_ERR(BR_ETIMEDOUT);
+    t->wait_status = BR_ERR(ETIMEDOUT);
     t->state       = BR_TASK_BLOCKED;
     t->wake_at     = abs_deadline;
     (void)swapcontext(&g_uc[tcb_index(t)], &g_sched_uc);
@@ -438,12 +438,12 @@ int br_task_create(br_thread_t **out, const br_task_attr_t *attr,
                    void (*entry)(void *), void *arg)
 {
     if (out == NULL || attr == NULL || entry == NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_u32 slot = tcb_alloc_slot();
     if (slot == FAKE_MAX) {
-        return BR_ERR(BR_ENOMEM);
+        return BR_ERR(ENOMEM);
     }
 
     memset(&g_tcb[slot], 0, sizeof(g_tcb[slot]));
@@ -456,7 +456,7 @@ int br_task_create(br_thread_t **out, const br_task_attr_t *attr,
     g_tcb[slot].entry       = entry;
     g_tcb[slot].arg         = arg;
     g_tcb[slot].wake_at     = BR_TIMEOUT_INF;
-    g_tcb[slot].wait_status = BR_ERR(BR_ETIMEDOUT);
+    g_tcb[slot].wait_status = BR_ERR(ETIMEDOUT);
     g_join_waiter[slot]     = NULL;
 
     (void)getcontext(&g_uc[slot]);
@@ -492,14 +492,14 @@ BR_NORETURN void br_task_exit(int code)
 int br_task_join(br_thread_t *t, int *exit_code)
 {
     if (t == NULL || tcb_live(t) == BR_FALSE || t == g_current) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     g_join_waiter[tcb_index(t)] = g_current;
     while (t->state != BR_TASK_ZOMBIE) {
         /* ICB 协议: 让出 CPU 前必须把 wait_status 立成悲观默认(否则上一次唤醒留下的
          * 0 会被 block_current 当成"已经又被唤醒", 于是根本不切走 —— 忙等死循环)。 */
-        g_current->wait_status = BR_ERR(BR_ETIMEDOUT);
+        g_current->wait_status = BR_ERR(ETIMEDOUT);
         (void)br_sched_block_current(BR_TIMEOUT_INF);
     }
     if (exit_code != NULL) {
@@ -524,25 +524,25 @@ void br_task_yield(void)
 int br_task_sleep(br_time_t rel_us)
 {
     if (rel_us == BR_TIMEOUT_INF) {
-        return BR_ERR(BR_EINVAL);    /* 裁定 G13 */
+        return BR_ERR(EINVAL);    /* 裁定 G13 */
     }
     if (rel_us == 0u) {
         return BR_OK;
     }
     const int rc = br_sched_block_current(br_deadline_from_now(rel_us));
-    return (rc == 0 || rc == BR_ERR(BR_ETIMEDOUT)) ? BR_OK : rc;
+    return (rc == 0 || rc == BR_ERR(ETIMEDOUT)) ? BR_OK : rc;
 }
 
 int br_task_sleep_until(br_time_t abs_us)
 {
     if (abs_us == BR_TIMEOUT_INF) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (abs_us <= br_clock_now()) {
         return BR_OK;
     }
     const int rc = br_sched_block_current(abs_us);
-    return (rc == 0 || rc == BR_ERR(BR_ETIMEDOUT)) ? BR_OK : rc;
+    return (rc == 0 || rc == BR_ERR(ETIMEDOUT)) ? BR_OK : rc;
 }
 
 const char *br_task_name(const br_thread_t *t)
@@ -605,12 +605,12 @@ static void host_magic_corrupt(void)
     memset(&c, 0xAB, sizeof(c));
     memset(&sp, 0xAB, sizeof(sp));
 
-    CHECK(br_mutex_lock(&m) == BR_ERR(BR_EINVAL), "SYNC-MAGIC", "垃圾 mutex ⇒ -EINVAL");
-    CHECK(br_mutex_unlock(&m) == BR_ERR(BR_EINVAL), "SYNC-MAGIC", "垃圾 mutex unlock ⇒ -EINVAL");
-    CHECK(br_sem_take(&s, BR_TIMEOUT_ZERO) == BR_ERR(BR_EINVAL), "SYNC-MAGIC", "垃圾 sem ⇒ -EINVAL");
-    CHECK(br_sem_give(&s) == BR_ERR(BR_EINVAL), "SYNC-MAGIC", "垃圾 sem give ⇒ -EINVAL");
-    CHECK(br_cond_signal(&c) == BR_ERR(BR_EINVAL), "SYNC-MAGIC", "垃圾 cond ⇒ -EINVAL");
-    CHECK(br_spinlock_trylock(&sp, &(br_irq_state_t){0u}) == BR_ERR(BR_EINVAL),
+    CHECK(br_mutex_lock(&m) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 mutex ⇒ -EINVAL");
+    CHECK(br_mutex_unlock(&m) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 mutex unlock ⇒ -EINVAL");
+    CHECK(br_sem_take(&s, BR_TIMEOUT_ZERO) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 sem ⇒ -EINVAL");
+    CHECK(br_sem_give(&s) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 sem give ⇒ -EINVAL");
+    CHECK(br_cond_signal(&c) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 cond ⇒ -EINVAL");
+    CHECK(br_spinlock_trylock(&sp, &(br_irq_state_t){0u}) == BR_ERR(EINVAL),
           "SYNC-MAGIC", "垃圾 spinlock trylock ⇒ -EINVAL");
     CHECK(br_mutex_is_locked(&m) == BR_FALSE, "SYNC-MAGIC", "垃圾 mutex 查询返回 FALSE");
     CHECK(br_mutex_owner(&m) == NULL, "SYNC-MAGIC", "垃圾 mutex owner 返回 NULL");
@@ -634,7 +634,7 @@ static void host_sleep_resolution(void)
     CHECK(rc1 == BR_OK && d1 >= 1000u, "TC-TIME-SLEEP", "sleep(1000us) 不早醒");
     CHECK(d1 <= 1100u, "TC-TIME-SLEEP", "虚拟时钟下晚到很小(分辨率 ~1 us)");
     CHECK(rc2 == BR_OK && d2 == 0u, "TC-TIME-SLEEP", "sleep(0) 立即返回, 不推进时钟");
-    CHECK(br_task_sleep(BR_TIMEOUT_INF) == BR_ERR(BR_EINVAL), "TC-TIME-SLEEP", "sleep(INF) -EINVAL(G13)");
+    CHECK(br_task_sleep(BR_TIMEOUT_INF) == BR_ERR(EINVAL), "TC-TIME-SLEEP", "sleep(INF) -EINVAL(G13)");
 }
 
 /* ---- 随机化压测(风格照 tests/host/mem_test.c 的 LCG) ---- */
@@ -801,7 +801,7 @@ int main(void)
     g_tcb[0].state       = BR_TASK_READY;
     g_tcb[0].name        = "host-main";
     g_tcb[0].wake_at     = BR_TIMEOUT_INF;
-    g_tcb[0].wait_status = BR_ERR(BR_ETIMEDOUT);
+    g_tcb[0].wait_status = BR_ERR(ETIMEDOUT);
     (void)getcontext(&g_uc[0]);
     g_uc[0].uc_stack.ss_sp   = g_tstack[0];
     g_uc[0].uc_stack.ss_size = FAKE_STACK_BYTES;

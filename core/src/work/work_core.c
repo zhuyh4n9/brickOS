@@ -55,7 +55,7 @@ int br_work_submit(br_work_fn_t fn, void *arg)
      * (IR-10 要求调用方对后者做回滚)。分开计数, 免得把 bug 读成"预算不够"。 */
     if (fn == BR_NULL) {
         s_dropped_invalid++;
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();   /* W2: 与 drain 的取件互斥 */
@@ -63,7 +63,7 @@ int br_work_submit(br_work_fn_t fn, void *arg)
     if (s_count >= (br_u32)BR_WORKQ_DEPTH) {
         br_irq_unlock(st);
         s_dropped_full++;
-        return BR_ERR(BR_EAGAIN);              /* W1: 绝不静默丢弃 */
+        return BR_ERR(EAGAIN);              /* W1: 绝不静默丢弃 */
     }
 
     s_q[s_tail].fn  = fn;

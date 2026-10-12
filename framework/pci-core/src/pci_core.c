@@ -163,7 +163,7 @@ static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
         const br_uintptr_t base = pci_align_up(*next, (br_uintptr_t)size);
 
         if ((base + (br_uintptr_t)size) > (s_host.mmio_base + (br_uintptr_t)s_host.mmio_size)) {
-            return BR_ERR(BR_ENOSPC);
+            return BR_ERR(ENOSPC);
         }
 
         pci_cfg_write32_raw(bus, dev, fn, off, (br_u32)base & ~0xFu);
@@ -262,7 +262,7 @@ int br_pci_init(void)
     }
     if (s_host.ecam_base == 0u || s_host.ecam_size < 0x100000u ||
         s_host.mmio_size == 0u || s_host.intx_virq_a == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     s_n = 0u;
@@ -304,10 +304,10 @@ const br_pci_dev_t *br_pci_find(br_u16 vendor, br_u16 device)
 int br_pci_cfg_read32(br_u8 bus, br_u8 dev, br_u8 fn, br_u8 off, br_u32 *out)
 {
     if (s_inited == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if (out == BR_NULL || (off & 0x3u) != 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     *out = pci_cfg_read32_raw(bus, dev, fn, off);
     return 0;
@@ -316,10 +316,10 @@ int br_pci_cfg_read32(br_u8 bus, br_u8 dev, br_u8 fn, br_u8 off, br_u32 *out)
 int br_pci_cfg_write32(br_u8 bus, br_u8 dev, br_u8 fn, br_u8 off, br_u32 value)
 {
     if (s_inited == BR_FALSE) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
     if ((off & 0x3u) != 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     pci_cfg_write32_raw(bus, dev, fn, off, value);
     return 0;

@@ -95,7 +95,7 @@ static void item_context(void *arg)
 
     /* bh 里阻塞 ⇒ -EPERM(参数没错, 上下文错了)。 */
     br_thread_t *me = br_task_self();
-    me->wait_status = BR_ERR(BR_ETIMEDOUT);      /* 按 ICB 契约先开窗 */
+    me->wait_status = BR_ERR(ETIMEDOUT);      /* 按 ICB 契约先开窗 */
     s_block_rc = br_sched_block_current(BR_TIMEOUT_INF);
 
     /* bh 里让出 ⇒ 拒绝执行 + 留痕(不静默地当成"让出成功")。 */
@@ -152,7 +152,7 @@ static void case_bound_and_order(void)
     first_full = (br_u32)br_work_submit(item_note, (void *)(br_uintptr_t)999u);
     br_work_stats_get(&st);
 
-    host_check((rc == 0) && (first_full == (br_u32)BR_ERR(BR_EAGAIN)) &&
+    host_check((rc == 0) && (first_full == (br_u32)BR_ERR(EAGAIN)) &&
                (st.pending == (br_u32)BR_WORKQ_DEPTH) &&
                (st.max_pending == (br_u32)BR_WORKQ_DEPTH),
                "HOST-WQ-BOUND",
@@ -184,7 +184,7 @@ static void case_bound_and_order(void)
     /* 参数错与容量满是两种失败(分开计数, 免得把 bug 读成"预算不够") */
     const int bad = br_work_submit(BR_NULL, BR_NULL);
     br_work_stats_get(&st);
-    host_check((bad == BR_ERR(BR_EINVAL)) && (st.dropped_invalid == 1u),
+    host_check((bad == BR_ERR(EINVAL)) && (st.dropped_invalid == 1u),
                "HOST-WQ-EINVAL", "fn == NULL ⇒ -EINVAL(单独计数, 不与队满混淆)");
 }
 
@@ -214,7 +214,7 @@ static void case_bh_context(void)
                "HOST-WQ-BHCTX", "工作项体内 br_work_in_bh() 为真(bh 上下文标志)");
     host_check(s_nested_rc == 0, "HOST-WQ-NORECURSE",
                "工作项里再调 br_work_drain ⇒ 直接返回 0(非重入, 栈不随队列长度增长)");
-    host_check(s_block_rc == BR_ERR(BR_EPERM), "HOST-WQ-NOBLOCK",
+    host_check(s_block_rc == BR_ERR(EPERM), "HOST-WQ-NOBLOCK",
                "bh 内 br_sched_block_current ⇒ -EPERM(没有可回退的调度上下文)");
     host_check((s_self_before == s_self_after) && (s_bh_flag_after_yield == 1) &&
                (s_trace_violation >= 1u),
@@ -279,7 +279,7 @@ static void host_supervisor(void *arg)
                          .prio = 0u, .flags = 0u };
     br_thread_t *t = BR_NULL;
     const int r = br_task_create(&t, &a, other_thread, BR_NULL);
-    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(BR_EINVAL);
+    const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(EINVAL);
 
     host_check((r == 0) && (j == 0) && (s_other_hits > 0),
                "HOST-WQ-SCHED",

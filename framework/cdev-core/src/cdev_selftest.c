@@ -86,9 +86,9 @@ int cdev_core_selftest(void)
         const int r_upper = br_cdev_register("Cdev0", &good, BR_NULL);   /* 大写开头 */
         const int r_slash = br_cdev_register("c/dev", &good, BR_NULL);   /* 含斜杠 */
         const int r_empty = br_cdev_register("", &good, BR_NULL);        /* 空名 */
-        const br_bool ok = (r_upper == BR_ERR(BR_EINVAL)) &&
-                           (r_slash == BR_ERR(BR_EINVAL)) &&
-                           (r_empty == BR_ERR(BR_EINVAL)) &&
+        const br_bool ok = (r_upper == BR_ERR(EINVAL)) &&
+                           (r_slash == BR_ERR(EINVAL)) &&
+                           (r_empty == BR_ERR(EINVAL)) &&
                            (br_dev_count() == before);
         pc(ok, "TC-CDEV-001", "名字非法 ⇒ -EINVAL 且注册表条数不变");
     }
@@ -103,9 +103,9 @@ int cdev_core_selftest(void)
         const int r1 = br_cdev_register("cdevx", &only_open,  BR_NULL);
         const int r2 = br_cdev_register("cdevx", &only_close, BR_NULL);
         const int r3 = br_cdev_register("cdevx", BR_NULL,     BR_NULL);
-        const br_bool ok = (r1 == BR_ERR(BR_EINVAL)) &&
-                           (r2 == BR_ERR(BR_EINVAL)) &&
-                           (r3 == BR_ERR(BR_EINVAL));
+        const br_bool ok = (r1 == BR_ERR(EINVAL)) &&
+                           (r2 == BR_ERR(EINVAL)) &&
+                           (r3 == BR_ERR(EINVAL));
         pc(ok, "TC-CDEV-002", "ops 缺 open/close 或 ops 为空 ⇒ -EINVAL");
     }
 
@@ -160,7 +160,7 @@ int cdev_core_selftest(void)
         if (first != BR_NULL) {
             void *priv = BR_NULL;
             const br_cdev_ops_t *ops = br_cdev_get(first, &priv);
-            ok = (ops != BR_NULL) && (br_cdev_register(first, ops, priv) == BR_ERR(BR_EEXIST));
+            ok = (ops != BR_NULL) && (br_cdev_register(first, ops, priv) == BR_ERR(EEXIST));
         } else {
             br_log_info("[CDEVCONF] note: 没有 cdev 设备 ⇒ TC-CDEV-005 只走了'不适用'分支");
         }
@@ -197,11 +197,11 @@ int cdev_core_selftest(void)
         const int r_geom_missing = br_flash_geom_get("nor0", &got);
         const int r_geom_null    = br_flash_geom_get("nor0", BR_NULL);
 
-        const br_bool ok = (r_null == BR_ERR(BR_EINVAL)) &&
-                           (r_zerogeom == BR_ERR(BR_EINVAL)) &&
-                           (r_noacts == BR_ERR(BR_EINVAL)) &&
-                           (r_geom_missing == BR_ERR(BR_ENODEV)) &&
-                           (r_geom_null == BR_ERR(BR_EINVAL)) &&
+        const br_bool ok = (r_null == BR_ERR(EINVAL)) &&
+                           (r_zerogeom == BR_ERR(EINVAL)) &&
+                           (r_noacts == BR_ERR(EINVAL)) &&
+                           (r_geom_missing == BR_ERR(ENODEV)) &&
+                           (r_geom_null == BR_ERR(EINVAL)) &&
                            (br_flash_get("nor0", BR_NULL) == BR_NULL);
         pc(ok, "TC-CDEV-007", "flash: 几何自洽/必填动作在注册期校验; 未注册取回 ⇒ BR_NULL/-ENODEV");
     }

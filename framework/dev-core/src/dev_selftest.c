@@ -81,8 +81,8 @@ int dev_core_selftest(void)
         const int r3 = br_dev_add("testdev", BR_NULL); /* entry 为空 */
         const int r4 = br_dev_add(BR_NULL, BR_NULL);   /* 两个都空 */
 
-        const br_bool ok = (r1 == BR_ERR(BR_EINVAL)) && (r2 == BR_ERR(BR_EINVAL)) &&
-                           (r3 == BR_ERR(BR_EINVAL)) && (r4 == BR_ERR(BR_EINVAL)) &&
+        const br_bool ok = (r1 == BR_ERR(EINVAL)) && (r2 == BR_ERR(EINVAL)) &&
+                           (r3 == BR_ERR(EINVAL)) && (r4 == BR_ERR(EINVAL)) &&
                            (br_dev_count() == before) &&
                            (br_dev_lookup("testdev") == BR_NULL);
         pc(ok, "TC-DEV-002", "非法登记被拒(-EINVAL)且注册表条数不变");
@@ -127,7 +127,7 @@ int dev_core_selftest(void)
             const char *first = br_dev_name_at(0u);
             const br_dev_class_entry_t *e = br_dev_entry_at(0u);
             ok = (first != BR_NULL) && (e != BR_NULL) &&
-                 (br_dev_add(first, e) == BR_ERR(BR_EEXIST));
+                 (br_dev_add(first, e) == BR_ERR(EEXIST));
         } else {
             /* 表空: 没有"已有名字"可用 ⇒ 本用例**不适用**。如实报 PASS 但在描述里写明
              * 前提, 免得读日志的人以为它测过重名。 */

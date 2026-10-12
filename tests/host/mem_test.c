@@ -103,7 +103,7 @@ static int stub_map_region(const br_mm_region_t *r)
 {
     s_ops_stats.map_calls++;
     if ((s_ops_stats.fail_base != 0u) && (r->base == s_ops_stats.fail_base)) {
-        return BR_ERR(BR_EIO);
+        return BR_ERR(EIO);
     }
     return BR_OK;
 }
@@ -379,7 +379,7 @@ static void test_mem_004_contig(void)
     /* 非 2 的幂 align ⇒ -EINVAL */
     void *x = NULL;
     const int rbad = br_mem_alloc_contig(4096u, 3000u, &x);
-    CHECK(rbad == BR_ERR(BR_EINVAL), "TC-MEM-004", "align 非 2 的幂 ⇒ -EINVAL");
+    CHECK(rbad == BR_ERR(EINVAL), "TC-MEM-004", "align 非 2 的幂 ⇒ -EINVAL");
 
     br_mem_free_contig(a, 4096u);
     const int r3 = br_mem_alloc_contig(4096u, 4096u, &c);
@@ -479,7 +479,7 @@ static void test_mem_006_dma(void)
     bad.dma_addr = (br_uintptr_t)c.vaddr + 4096u;
     const int rbad = br_dma_free(&bad);
     printf("[HOSTTEST]   不一致 dma_free rc=%d\n", rbad);
-    CHECK(rbad == BR_ERR(BR_EINVAL), "TC-MEM-006", "dma_addr 不一致被拒");
+    CHECK(rbad == BR_ERR(EINVAL), "TC-MEM-006", "dma_addr 不一致被拒");
     CHECK(br_dma_free(&c) == 0, "TC-MEM-006", "拒收后真身仍可归还");
 }
 
@@ -850,12 +850,12 @@ static void test_mm_001_region(void)
     printf("[HOSTTEST]   null=%d dup=%d overlap=%d unaligned=%d zero=%d gran=%d\n",
            r_null, r_dup, r_ovl, r_unal, r_zero, r_gran);
 
-    CHECK(r_null == BR_ERR(BR_EINVAL), "TC-MM-001", "NULL ⇒ -EINVAL");
-    CHECK(r_dup == BR_ERR(BR_EEXIST), "TC-MM-001", "完全相同 ⇒ -EEXIST");
-    CHECK(r_ovl == BR_ERR(BR_EEXIST), "TC-MM-001", "部分重叠 ⇒ -EEXIST");
-    CHECK(r_unal == BR_ERR(BR_EINVAL), "TC-MM-001", "base 非 4 KiB 对齐 ⇒ -EINVAL");
-    CHECK(r_zero == BR_ERR(BR_EINVAL), "TC-MM-001", "size==0 ⇒ -EINVAL");
-    CHECK(r_gran == BR_ERR(BR_EINVAL), "TC-MM-001", "size 非 4 KiB 粒度 ⇒ -EINVAL");
+    CHECK(r_null == BR_ERR(EINVAL), "TC-MM-001", "NULL ⇒ -EINVAL");
+    CHECK(r_dup == BR_ERR(EEXIST), "TC-MM-001", "完全相同 ⇒ -EEXIST");
+    CHECK(r_ovl == BR_ERR(EEXIST), "TC-MM-001", "部分重叠 ⇒ -EEXIST");
+    CHECK(r_unal == BR_ERR(EINVAL), "TC-MM-001", "base 非 4 KiB 对齐 ⇒ -EINVAL");
+    CHECK(r_zero == BR_ERR(EINVAL), "TC-MM-001", "size==0 ⇒ -EINVAL");
+    CHECK(r_gran == BR_ERR(EINVAL), "TC-MM-001", "size 非 4 KiB 粒度 ⇒ -EINVAL");
 
     const br_u32 nkind = br_mm_region_count_kind(BR_MM_KIND_HEAP);
     const br_mm_region_t *hit = br_mm_region_find(g_heap_base + 16u);
@@ -906,7 +906,7 @@ static void test_mm_003_map(void)
     const int r1 = br_mm_map(&r);
     const int r2 = br_mm_unmap(g_resv_base, SZ_RESV);
     printf("[HOSTTEST]   map=%d unmap=%d\n", r1, r2);
-    CHECK((r1 == BR_ERR(BR_ENOTSUP)) && (r2 == BR_ERR(BR_ENOTSUP)),
+    CHECK((r1 == BR_ERR(ENOTSUP)) && (r2 == BR_ERR(ENOTSUP)),
           "TC-MM-003", "v1 br_mm_map/unmap 一律 -ENOTSUP");
 }
 
@@ -922,21 +922,21 @@ static void test_mm_extra(void)
     br_u32 attrs = 0u;
     const int pre1 = br_mm_set_attrs(g_heap_base, 4096u, BR_MM_RO);
     const int pre2 = br_mm_query(g_heap_base, 4096u, &attrs);
-    CHECK((pre1 == BR_ERR(BR_ENOTSUP)) && (pre2 == BR_ERR(BR_ENOTSUP)),
+    CHECK((pre1 == BR_ERR(ENOTSUP)) && (pre2 == BR_ERR(ENOTSUP)),
           "TC-MM-EXTRA", "未激活 set_attrs/query ⇒ -ENOTSUP");
 
     /* 注册状态机 */
     const int reg1 = br_mm_register(&s_ops);
     const int reg2 = br_mm_register(&s_ops);
     CHECK(reg1 == 0, "TC-MM-EXTRA", "首次 register 成功");
-    CHECK(reg2 == BR_ERR(BR_EBUSY), "TC-MM-EXTRA", "二次 register ⇒ -EBUSY");
+    CHECK(reg2 == BR_ERR(EBUSY), "TC-MM-EXTRA", "二次 register ⇒ -EBUSY");
 
     const int act1 = br_mm_activate();
     const int act2 = br_mm_activate();
     printf("[HOSTTEST]   activate=%d again=%d active=%d count_at_activate=%u\n",
            act1, act2, (int)br_mm_active(), (unsigned)s_ops_stats.activate_count);
     CHECK(act1 == 0, "TC-MM-EXTRA", "activate 成功");
-    CHECK(act2 == BR_ERR(BR_EBUSY), "TC-MM-EXTRA", "二次 activate ⇒ -EBUSY");
+    CHECK(act2 == BR_ERR(EBUSY), "TC-MM-EXTRA", "二次 activate ⇒ -EBUSY");
     CHECK(br_mm_active() == BR_TRUE, "TC-MM-EXTRA", "br_mm_active() 置位");
     CHECK(s_ops_stats.activate_count == br_mm_region_count(), "TC-MM-EXTRA",
           "activate 收到当前 region 表快照");
@@ -944,7 +944,7 @@ static void test_mm_extra(void)
     /* 未声明地址 ⇒ -EINVAL(即使已激活) */
     const int r_un = br_mm_cache_flush((void *)(br_uintptr_t)0x1000u, 4096u);
     printf("[HOSTTEST]   未声明地址 flush=%d\n", r_un);
-    CHECK(r_un == BR_ERR(BR_EINVAL), "TC-MM-EXTRA", "未声明地址 ⇒ -EINVAL");
+    CHECK(r_un == BR_ERR(EINVAL), "TC-MM-EXTRA", "未声明地址 ⇒ -EINVAL");
 
     /* 已激活 + CACHED ⇒ 派发 ops; 非 CACHED ⇒ 不派发 */
     const br_u32 f0 = s_ops_stats.flush_calls;
@@ -974,7 +974,7 @@ static void test_mm_extra(void)
     s_ops_stats.fail_base = 0u;
     printf("[HOSTTEST]   map_region 失败 rc=%d count %u -> %u\n",
            rc_fail, (unsigned)count_before, (unsigned)count_after);
-    CHECK((rc_fail == BR_ERR(BR_EIO)) && (count_after == count_before),
+    CHECK((rc_fail == BR_ERR(EIO)) && (count_after == count_before),
           "TC-MM-EXTRA", "map_region 失败即回滚 region 表项");
 
     /* 表满 ⇒ -ENOSPC(用一个不与已有 region 重叠的新区) */
@@ -996,7 +996,7 @@ static void test_mm_extra(void)
            rc_full, (unsigned)s_ops_stats.map_calls);
     CHECK(br_mm_region_count() == (br_u32)BR_MM_MAX_REGIONS, "TC-MM-EXTRA",
           "region 表填满");
-    CHECK(rc_full == BR_ERR(BR_ENOSPC), "TC-MM-EXTRA", "表满 ⇒ -ENOSPC");
+    CHECK(rc_full == BR_ERR(ENOSPC), "TC-MM-EXTRA", "表满 ⇒ -ENOSPC");
 }
 
 /* =====================================================================

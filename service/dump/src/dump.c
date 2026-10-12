@@ -195,7 +195,7 @@ int br_dump_memory(br_uintptr_t addr, br_size_t len, br_u32 flags)
 
     /* 缺省(STRICT): 未声明的地址一律拒绝 */
     if ((region == BR_NULL) && ((flags & BR_DUMP_F_FORCE) == 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     kind = (region != BR_NULL) ? dump_kind_name(region->attrs) : "none";

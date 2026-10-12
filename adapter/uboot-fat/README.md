@@ -99,7 +99,7 @@ struct uboot_fat_ino {          /* 每次 lookup/create 造一个, free_inode �
 | `fs_ops.unmount` | `BR_NULL`(v1 的签名先行槽位) |
 
 **名字上界**: 本仓库的 `br_dirent_t.name[]` 只有 `BR_NAME_MAX`(32)字节, 而 FAT 的长名可到
-255 字节 ⇒ 超过 31 字节的名字在 `readdir` 里返回 `BR_ERR(BR_ENOSPC)`(与 fs/tmpfs 同口径),
+255 字节 ⇒ 超过 31 字节的名字在 `readdir` 里返回 `BR_ERR(ENOSPC)`(与 fs/tmpfs 同口径),
 `create`/`mkdir` 里也拒绝。**代价**: 宿主预置的 `long name file.txt`(17 字节)可以正常列出,
 但 > 31 字节的文件名在本 VFS 面上不可见 —— 见"欠债"。
 

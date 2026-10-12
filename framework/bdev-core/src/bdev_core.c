@@ -122,15 +122,15 @@ static bdev_slot_t *bdev_find(const char *name)
 int br_bdev_register(const char *name, const br_bdev_ops_t *ops, void *priv)
 {
     if (ops == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     /* 必填槽位(设计 `7-02` §1 的四个动作; ioctl/suspend/resume 可空 ⇒ -ENOTSUP) */
     if (ops->read == BR_NULL || ops->write == BR_NULL ||
         ops->flush == BR_NULL || ops->geometry == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (br_dev_name_valid(name) == BR_FALSE) {
-        return BR_ERR(BR_EINVAL);   /* 含 name == BR_NULL / 空 / 大写 / 含斜杠 */
+        return BR_ERR(EINVAL);   /* 含 name == BR_NULL / 空 / 大写 / 含斜杠 */
     }
 
     /* 几何是注册的前置条件(见文件头): 驱动自己的错误原样上传, 自洽性由本件判。 */
@@ -140,11 +140,11 @@ int br_bdev_register(const char *name, const br_bdev_ops_t *ops, void *priv)
         return grc;
     }
     if (bdev_geom_ok(&geom) == BR_FALSE) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     if (s_bdev_n >= (br_u32)BR_BDEV_MAX) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
 
     bdev_slot_t *slot = &s_bdevs[s_bdev_n];

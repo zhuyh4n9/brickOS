@@ -72,14 +72,14 @@ br_u32 br_mm_region_count_kind(br_u32 kind)
 int br_mm_region_add(const br_mm_region_t *r)
 {
     if ((r == BR_NULL) || (r->size == 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (((r->base & (br_uintptr_t)(BR_PAGE_SIZE - 1u)) != 0u) ||
         ((r->size & (br_size_t)(BR_PAGE_SIZE - 1u)) != 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((r->base + r->size) < r->base) {
-        return BR_ERR(BR_EINVAL);   /* 地址回绕 */
+        return BR_ERR(EINVAL);   /* 地址回绕 */
     }
 
     /* 重叠判定: 半开区间相交。**完全相同也算重叠**(TC-MM-001 要求"重叠/重复"都红),
@@ -90,12 +90,12 @@ int br_mm_region_add(const br_mm_region_t *r)
         const br_uintptr_t lo = s_regions[i].base;
         const br_uintptr_t hi = s_regions[i].base + s_regions[i].size;
         if ((nlo < hi) && (lo < nhi)) {
-            return BR_ERR(BR_EEXIST);
+            return BR_ERR(EEXIST);
         }
     }
 
     if (s_count >= (br_u32)BR_MM_MAX_REGIONS) {
-        return BR_ERR(BR_ENOSPC);
+        return BR_ERR(ENOSPC);
     }
 
     s_regions[s_count] = *r;
@@ -105,7 +105,7 @@ int br_mm_region_add(const br_mm_region_t *r)
     if (s_active == BR_TRUE) {
         if ((s_ops == BR_NULL) || (s_ops->map_region == BR_NULL)) {
             s_count--;
-            return BR_ERR(BR_ENOTSUP);
+            return BR_ERR(ENOTSUP);
         }
         const int rc = s_ops->map_region(r);
         if (rc != BR_OK) {
@@ -120,14 +120,14 @@ int br_mm_region_add(const br_mm_region_t *r)
 int br_mm_map(const br_mm_region_t *r)
 {
     (void)r;
-    return BR_ERR(BR_ENOTSUP);   /* v1 签名先行(TC-MM-003) */
+    return BR_ERR(ENOTSUP);   /* v1 签名先行(TC-MM-003) */
 }
 
 int br_mm_unmap(br_uintptr_t addr, br_size_t size)
 {
     (void)addr;
     (void)size;
-    return BR_ERR(BR_ENOTSUP);   /* v1 签名先行(TC-MM-003) */
+    return BR_ERR(ENOTSUP);   /* v1 签名先行(TC-MM-003) */
 }
 
 /*
@@ -145,7 +145,7 @@ static int mm_cache_dispatch(void *addr, br_size_t size, br_bool flush)
     }
     const br_mm_region_t *r = br_mm_region_find((br_uintptr_t)addr);
     if (r == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((r->attrs & BR_MM_CACHED) == 0u) {
         return BR_OK;
@@ -154,16 +154,16 @@ static int mm_cache_dispatch(void *addr, br_size_t size, br_bool flush)
         return BR_OK;
     }
     if (s_ops == BR_NULL) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     if (flush == BR_TRUE) {
         if (s_ops->cache_flush == BR_NULL) {
-            return BR_ERR(BR_ENOTSUP);
+            return BR_ERR(ENOTSUP);
         }
         s_ops->cache_flush(addr, size);
     } else {
         if (s_ops->cache_invalidate == BR_NULL) {
-            return BR_ERR(BR_ENOTSUP);
+            return BR_ERR(ENOTSUP);
         }
         s_ops->cache_invalidate(addr, size);
     }
@@ -185,10 +185,10 @@ int br_mm_cache_invalidate(void *addr, br_size_t size)
 int br_mm_register(const br_mm_ops_t *ops)
 {
     if (ops == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (s_ops != BR_NULL) {
-        return BR_ERR(BR_EBUSY);   /* 一个镜像恰一个 platform 页表构造者 */
+        return BR_ERR(EBUSY);   /* 一个镜像恰一个 platform 页表构造者 */
     }
     s_ops = ops;
     return BR_OK;
@@ -197,10 +197,10 @@ int br_mm_register(const br_mm_ops_t *ops)
 int br_mm_activate(void)
 {
     if ((s_ops == BR_NULL) || (s_ops->activate == BR_NULL)) {
-        return BR_ERR(BR_ENOTSUP);   /* 未注册 */
+        return BR_ERR(ENOTSUP);   /* 未注册 */
     }
     if (s_active == BR_TRUE) {
-        return BR_ERR(BR_EBUSY);
+        return BR_ERR(EBUSY);
     }
 
     const int rc = s_ops->activate(s_regions, s_count);
@@ -219,7 +219,7 @@ br_bool br_mm_active(void)
 int br_mm_set_attrs(br_uintptr_t addr, br_size_t size, br_u32 attrs)
 {
     if ((s_active == BR_FALSE) || (s_ops == BR_NULL) || (s_ops->set_attrs == BR_NULL)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return s_ops->set_attrs(addr, size, attrs);
 }
@@ -227,10 +227,10 @@ int br_mm_set_attrs(br_uintptr_t addr, br_size_t size, br_u32 attrs)
 int br_mm_query(br_uintptr_t addr, br_size_t size, br_u32 *out_attrs)
 {
     if (out_attrs == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((s_active == BR_FALSE) || (s_ops == BR_NULL) || (s_ops->query == BR_NULL)) {
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
     return s_ops->query(addr, size, out_attrs);
 }

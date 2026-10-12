@@ -334,7 +334,7 @@ static void conf_mm_ro(void)
 
     /* 真保护: 写探针必须命中修复(permission fault, EC=0x25/DFSC=0x0F 一类) */
     const int wr = conf_probe_write32(page, 0xDEADBEEFu);
-    conf_report(wr == BR_ERR(BR_EFAULT), "MM-RO",
+    conf_report(wr == BR_ERR(EFAULT), "MM-RO",
                 "只读页上的写取 permission fault ⇒ extable 修复为 -EFAULT(真保护, 非影子)");
 
     /* 收尾: 属性是可撤销的, 改回 RW 后必须能正常写 —— 否则"保护"与"砖"没区别 */
@@ -404,7 +404,7 @@ static void conf_mm_devblk(void)
 
     br_log_info("[MEMCONF] info devblk sub=%d whole=%d query=%d attrs=0x%x restore=%d back=0x%x",
                 r_sub, r_w, r_q, attrs, r_r, back);
-    conf_report(r_sub == BR_ERR(BR_ENOTSUP), "MM-DEVBLK",
+    conf_report(r_sub == BR_ERR(ENOTSUP), "MM-DEVBLK",
                 "Device 2 MiB 块上的子块 set_attrs(4 KiB)⇒ -ENOTSUP(硬件表达不了就不假装支持)");
     conf_report(r_w == 0 && r_q == 0 && (attrs & BR_MM_RO) != 0u && (attrs & BR_MM_DEVICE) != 0u
                 && r_r == 0 && r_b == 0 && (back & BR_MM_RO) == 0u,
@@ -419,16 +419,16 @@ static void conf_mm_unmap(void)
     /* 先确认它真的未映射(翻译失败), 再确认"访问它"取的是可恢复 fault */
     const int rt = br_plat_mmu_translate((br_uintptr_t)BR_PLAT_CONF_UNMAPPED, &pa);
     br_log_info("[MEMCONF] info unmap probe va=0x%lx translate=%d", (br_u64)BR_PLAT_CONF_UNMAPPED, rt);
-    conf_report(rt == BR_ERR(BR_EFAULT), "MM-UNMAP",
+    conf_report(rt == BR_ERR(EFAULT), "MM-UNMAP",
                 "窗口外地址(0x42000000)在页表里 invalid ⇒ 翻译失败(-EFAULT)");
 
     const int r1 = conf_probe_read32((br_uintptr_t)BR_PLAT_CONF_UNMAPPED, &v);
-    conf_report(r1 == BR_ERR(BR_EFAULT), "MM-UNMAP",
+    conf_report(r1 == BR_ERR(EFAULT), "MM-UNMAP",
                 "读未映射地址 ⇒ translation fault 被 extable 修复为 -EFAULT, 系统存活");
 
     /* 第二次: 若 in_fault 没复位, 这一次会被当成 double fault(裸 panic) */
     const int r2 = conf_probe_read32((br_uintptr_t)BR_PLAT_CONF_UNMAPPED, &v);
-    conf_report(r2 == BR_ERR(BR_EFAULT), "MM-UNMAP",
+    conf_report(r2 == BR_ERR(EFAULT), "MM-UNMAP",
                 "再次读仍为 -EFAULT(in_fault 已复位 ⇒ 故障是可恢复的)");
 }
 
@@ -657,11 +657,11 @@ static void conf_tc_mm_001(void)
 {
     const br_mm_region_t *img = conf_region_of_kind(BR_MM_KIND_IMAGE);
 
-    int r_dup = BR_ERR(BR_EINVAL);
+    int r_dup = BR_ERR(EINVAL);
     if (img != BR_NULL) {
         r_dup = br_mm_region_add(img);      /* 同 base/size 复用: 表里已有 ⇒ -EEXIST */
     }
-    conf_report(img != BR_NULL && r_dup == BR_ERR(BR_EEXIST), "TC-MM-001",
+    conf_report(img != BR_NULL && r_dup == BR_ERR(EEXIST), "TC-MM-001",
                 "复用已存在的 region(同 base/size)⇒ -EEXIST");
 
     br_mm_region_t r;
@@ -671,7 +671,7 @@ static void conf_tc_mm_001(void)
 
     const int rc = br_mm_region_add(&r);
     br_log_info("[MEMCONF] info region_add(base=0x%lx unaligned) rc=%d", (br_u64)r.base, rc);
-    conf_report(rc == BR_ERR(BR_EINVAL), "TC-MM-001", "base 非 4 KiB 对齐 ⇒ -EINVAL");
+    conf_report(rc == BR_ERR(EINVAL), "TC-MM-001", "base 非 4 KiB 对齐 ⇒ -EINVAL");
 }
 
 static void conf_tc_mm_002(void)
@@ -691,16 +691,16 @@ static void conf_tc_mm_003(void)
 {
     const br_mm_region_t *res = conf_region_of_kind(BR_MM_KIND_RESERVED);
 
-    int r_map = BR_ERR(BR_EINVAL);
+    int r_map = BR_ERR(EINVAL);
     if (res != BR_NULL) {
         r_map = br_mm_map(res);
     }
-    conf_report(r_map == BR_ERR(BR_ENOTSUP), "TC-MM-003",
+    conf_report(r_map == BR_ERR(ENOTSUP), "TC-MM-003",
                 "br_mm_map() 在 v1 ⇒ -ENOTSUP(签名先行, 实现归 v2 重定位)");
 
     const br_uintptr_t addr = (res != BR_NULL) ? res->base : (br_uintptr_t)BR_PLAT_CONF_UNMAPPED;
     const int r_unmap = br_mm_unmap(addr, BR_PAGE_SIZE);
-    conf_report(r_unmap == BR_ERR(BR_ENOTSUP), "TC-MM-003",
+    conf_report(r_unmap == BR_ERR(ENOTSUP), "TC-MM-003",
                 "br_mm_unmap() 在 v1 ⇒ -ENOTSUP(主文档风险 R4 的签名先行验证)");
 }
 

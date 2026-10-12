@@ -133,7 +133,7 @@ int br_ft_fd_at(br_u32 index)
 int br_ft_alloc(br_file_t *file, br_u32 flags)
 {
     if (file == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -150,7 +150,7 @@ int br_ft_alloc(br_file_t *file, br_u32 flags)
     }
 
     br_irq_unlock(st);
-    return (fd >= 0) ? fd : BR_ERR(BR_EMFILE);
+    return (fd >= 0) ? fd : BR_ERR(EMFILE);
 }
 
 br_file_t *br_ft_get(int fd)
@@ -168,10 +168,10 @@ br_file_t *br_ft_get(int fd)
 int br_ft_get_flags(int fd, br_u32 *out)
 {
     if (out == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (ft_in_range(fd) == BR_FALSE) {
-        return BR_ERR(BR_EBADF);
+        return BR_ERR(EBADF);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -182,13 +182,13 @@ int br_ft_get_flags(int fd, br_u32 *out)
     }
 
     br_irq_unlock(st);
-    return (ok == BR_TRUE) ? 0 : BR_ERR(BR_EBADF);
+    return (ok == BR_TRUE) ? 0 : BR_ERR(EBADF);
 }
 
 int br_ft_set_flags(int fd, br_u32 flags)
 {
     if (ft_in_range(fd) == BR_FALSE) {
-        return BR_ERR(BR_EBADF);
+        return BR_ERR(EBADF);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -199,7 +199,7 @@ int br_ft_set_flags(int fd, br_u32 flags)
     }
 
     br_irq_unlock(st);
-    return (ok == BR_TRUE) ? 0 : BR_ERR(BR_EBADF);
+    return (ok == BR_TRUE) ? 0 : BR_ERR(EBADF);
 }
 
 int br_ft_release(int fd, br_file_t **last_file)
@@ -208,14 +208,14 @@ int br_ft_release(int fd, br_file_t **last_file)
         *last_file = BR_NULL;
     }
     if (ft_in_range(fd) == BR_FALSE) {
-        return BR_ERR(BR_EBADF);
+        return BR_ERR(EBADF);
     }
 
     const br_irq_state_t st = br_irq_lock();
     int rc = 0;
 
     if (ft_in_use((br_u32)fd) == BR_FALSE) {
-        rc = BR_ERR(BR_EBADF);
+        rc = BR_ERR(EBADF);
     } else {
         br_file_t  *f      = s_slots[(br_u32)fd].file;
         const br_bool shared = ft_shared_with_others(f, fd);
@@ -234,7 +234,7 @@ int br_ft_release(int fd, br_file_t **last_file)
 int br_ft_release_all(br_file_t **out, br_u32 cap)
 {
     if ((out == BR_NULL) && (cap != 0u)) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();
@@ -263,7 +263,7 @@ int br_ft_release_all(br_file_t **out, br_u32 cap)
     }
 
     if (distinct > cap) {
-        rc = BR_ERR(BR_ENOSPC);             /* 装不下 ⇒ 表**不变**(半途清空更糟) */
+        rc = BR_ERR(ENOSPC);             /* 装不下 ⇒ 表**不变**(半途清空更糟) */
     } else {
         br_u32 n = 0u;
         for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
@@ -288,19 +288,19 @@ int br_ft_release_all(br_file_t **out, br_u32 cap)
 int br_ft_dup(int oldfd)
 {
     if (ft_in_range(oldfd) == BR_FALSE) {
-        return BR_ERR(BR_EBADF);
+        return BR_ERR(EBADF);
     }
 
     const br_irq_state_t st = br_irq_lock();
     int rc;
 
     if (ft_in_use((br_u32)oldfd) == BR_FALSE) {
-        rc = BR_ERR(BR_EBADF);
+        rc = BR_ERR(EBADF);
     } else {
         br_file_t  *f  = s_slots[(br_u32)oldfd].file;
         const br_u32 fl = s_slots[(br_u32)oldfd].flags;
 
-        rc = BR_ERR(BR_EMFILE);             /* 表满时 oldfd **不动**(POSIX: 失败不留副作用) */
+        rc = BR_ERR(EMFILE);             /* 表满时 oldfd **不动**(POSIX: 失败不留副作用) */
         for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
             if (ft_in_use(i) == BR_FALSE) {
                 s_slots[i].file  = f;
@@ -322,19 +322,19 @@ int br_ft_dup2(int oldfd, int newfd, br_file_t **displaced)
         *displaced = BR_NULL;
     }
     if ((ft_in_range(oldfd) == BR_FALSE) || (ft_in_range(newfd) == BR_FALSE)) {
-        return BR_ERR(BR_EBADF);
+        return BR_ERR(EBADF);
     }
 
     if (oldfd == newfd) {
         /* POSIX: dup2(fd, fd) 在 fd 有效时返回 fd 本身(**不关闭**)。 */
-        return (br_ft_get(oldfd) != BR_NULL) ? newfd : BR_ERR(BR_EBADF);
+        return (br_ft_get(oldfd) != BR_NULL) ? newfd : BR_ERR(EBADF);
     }
 
     const br_irq_state_t st = br_irq_lock();
     int rc;
 
     if (ft_in_use((br_u32)oldfd) == BR_FALSE) {
-        rc = BR_ERR(BR_EBADF);
+        rc = BR_ERR(EBADF);
     } else {
         /* ① 目标已占用 ⇒ 先等价 close(newfd)。 */
         if (ft_in_use((br_u32)newfd) == BR_TRUE) {

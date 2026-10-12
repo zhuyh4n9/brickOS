@@ -61,7 +61,7 @@ static struct rr_priv *priv_of(br_thread_t *t)
 static int rr_thread_ready(br_thread_t *t)
 {
     if (t == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     const br_irq_state_t st = br_irq_lock();

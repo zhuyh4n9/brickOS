@@ -21,7 +21,7 @@
  *   strlen/strcmp/strncmp/strcpy/strchr/…    →  本文件的 `uboot_fat_*`(见下)
  *   printf/debug/log_err                     →  br_log_error/debug(带 "uboot-fat: " 前缀)
  *   assert()                                 →  不用: 有意偏离, 越界/不变量失败一律返回
- *                                                -EIO/BR_ERR(BR_EIO)(见 NOTICE 的改写要点)
+ *                                                -EIO/BR_ERR(EIO)(见 NOTICE 的改写要点)
  *   blk_get_devnum_by_uclass_id / DM / env    →  全部裁掉(设备由 br_bdev_get 给)
  *
  * ## 为什么字符串要自己写
@@ -367,7 +367,7 @@ static inline u64 uboot_fat_div_u64_rem(u64 dividend, u32 divisor, u32 *remainde
  * 那些名字由 **core** 提供(`<br/core/br_errno.h>`, ADR-0023), 与 `br_error.h` 的数值
  * 一一对应(值逐字取自 Linux 内核, 宿主 `ft-test` 逐码对拍)。
  *
- * ★ 为什么这里以前有一串 `#define EIO BR_EIO`: 那份名字表原先挂在 `runtime/posix` 上,
+ * ★ 为什么这里以前有一串 `#define EIO EIO`: 那份名字表原先挂在 `runtime/posix` 上,
  *   而本插件不该依赖 POSIX 运行时(它是介质 FS, 不是 POSIX 面)⇒ 只好自己抄一份。
  *   那既是**第二处真值**, 也是对上游代码的**多余改动**。现在名字表归 core:
  *   上游的拼写原样成立, 本件只多一行 include。

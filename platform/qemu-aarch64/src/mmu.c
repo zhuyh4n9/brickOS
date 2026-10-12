@@ -334,7 +334,7 @@ static int mmu_region_apply(const br_mm_region_t *r)
         const br_u64 attrs = mmu_desc_attrs(r->attrs);
 
         if (base < BR_PLAT_RAM_BASE || (base + size) > BR_PLAT_RAM_WINDOW_END) {
-            return BR_ERR(BR_EINVAL);       /* 跨窗口边界: 4 KiB 页区表达不了 */
+            return BR_ERR(EINVAL);       /* 跨窗口边界: 4 KiB 页区表达不了 */
         }
 
         for (br_size_t off = 0u; off < size; off += MMU_GRANULE) {
@@ -342,10 +342,10 @@ static int mmu_region_apply(const br_mm_region_t *r)
             br_u64 *d = mmu_desc_ptr(base + off, &level);
 
             if (d == BR_NULL) {
-                return BR_ERR(BR_EINVAL);   /* 页表没覆盖到 ⇒ 布局与声明不一致 */
+                return BR_ERR(EINVAL);   /* 页表没覆盖到 ⇒ 布局与声明不一致 */
             }
             if (level != 3u) {
-                return BR_ERR(BR_ENOTSUP);  /* 块粒度上做子块改属性: 表达不了 */
+                return BR_ERR(ENOTSUP);  /* 块粒度上做子块改属性: 表达不了 */
             }
             *d = (*d & ~DESC_ATTR_MASK) | attrs;
         }
@@ -365,17 +365,17 @@ static int mmu_region_apply(const br_mm_region_t *r)
                 br_u64 *d = mmu_desc_ptr(base + off, &level);
 
                 if (d == BR_NULL || level != 2u) {
-                    return BR_ERR(BR_EINVAL);
+                    return BR_ERR(EINVAL);
                 }
                 *d = (*d & ~DESC_ATTR_MASK) | want;
             }
             mmu_tlb_flush_all();
             return 0;
         }
-        return BR_ERR(BR_ENOTSUP);
+        return BR_ERR(ENOTSUP);
     }
 
-    return BR_ERR(BR_EINVAL);
+    return BR_ERR(EINVAL);
 }
 
 /* =====================================================================
@@ -385,10 +385,10 @@ static int mmu_region_apply(const br_mm_region_t *r)
 static int mmu_activate(const br_mm_region_t *regions, br_u32 count)
 {
     if (s_activated) {
-        return BR_ERR(BR_EBUSY);
+        return BR_ERR(EBUSY);
     }
     if (regions == BR_NULL && count != 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* ① 背景映射: 低 1 GiB 的 Device 块 + RAM 窗口的 Normal 页。
@@ -452,10 +452,10 @@ static int mmu_activate(const br_mm_region_t *regions, br_u32 count)
 static int mmu_map_region(const br_mm_region_t *r)
 {
     if (r == BR_NULL || r->size == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (!s_activated) {
-        return BR_ERR(BR_ENODEV);       /* 页表还没建; activate 会按快照一次构造 */
+        return BR_ERR(ENODEV);       /* 页表还没建; activate 会按快照一次构造 */
     }
     return mmu_region_apply(r);
 }
@@ -463,7 +463,7 @@ static int mmu_map_region(const br_mm_region_t *r)
 static int mmu_set_attrs(br_uintptr_t addr, br_size_t size, br_u32 attrs)
 {
     if ((addr & ((br_uintptr_t)MMU_GRANULE - 1ull)) != 0ull || size == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
 
     /* 长度向下取整到页(跨末页的部分不做半页保护: 4 KiB 粒度上没有"半页"这回事) */
@@ -476,14 +476,14 @@ static int mmu_set_attrs(br_uintptr_t addr, br_size_t size, br_u32 attrs)
         br_u64 *d = mmu_desc_ptr(cur, &level);
 
         if (d == BR_NULL) {
-            return BR_ERR(BR_EINVAL);       /* 未映射的区间不许改属性 */
+            return BR_ERR(EINVAL);       /* 未映射的区间不许改属性 */
         }
 
         if (level == 2u) {
             /* 2 MiB 块: 只接受"整块对齐 + 覆盖整块"的请求(Device 区边界见文件头) */
             if ((cur & ((br_uintptr_t)MMU_L2_BLOCK_SIZE - 1ull)) != 0ull
                 || remaining < (br_size_t)MMU_L2_BLOCK_SIZE) {
-                return BR_ERR(BR_ENOTSUP);
+                return BR_ERR(ENOTSUP);
             }
             *d = (*d & ~DESC_ATTR_MASK) | new_attrs;
             cur += MMU_L2_BLOCK_SIZE;
@@ -502,10 +502,10 @@ static int mmu_set_attrs(br_uintptr_t addr, br_size_t size, br_u32 attrs)
 static int mmu_query(br_uintptr_t addr, br_size_t size, br_u32 *out_attrs)
 {
     if (out_attrs == BR_NULL || size == 0u) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if ((addr + size) < addr) {
-        return BR_ERR(BR_EINVAL);       /* 区间回绕 */
+        return BR_ERR(EINVAL);       /* 区间回绕 */
     }
 
     /*
@@ -524,14 +524,14 @@ static int mmu_query(br_uintptr_t addr, br_size_t size, br_u32 *out_attrs)
         const br_u64 *d = mmu_desc_ptr(cur, &level);
 
         if (d == BR_NULL || (*d & DESC_AF) == 0ull) {
-            return BR_ERR(BR_EFAULT);
+            return BR_ERR(EFAULT);
         }
 
         const br_u32 a = mmu_attrs_from_desc(*d);
         if (index == 0u) {
             first = a;
         } else if (a != first) {
-            return BR_ERR(BR_EINVAL);
+            return BR_ERR(EINVAL);
         }
         index++;
 
@@ -623,17 +623,17 @@ int br_plat_mmu_probe(br_uintptr_t addr, br_u32 *out_attrs)
 int br_plat_mmu_translate(br_uintptr_t va, br_uintptr_t *pa)
 {
     if (pa == BR_NULL) {
-        return BR_ERR(BR_EINVAL);
+        return BR_ERR(EINVAL);
     }
     if (!s_activated) {
-        return BR_ERR(BR_ENODEV);
+        return BR_ERR(ENODEV);
     }
 
     br_u32 level = 0u;
     const br_u64 *d = mmu_desc_ptr(va, &level);
 
     if (d == BR_NULL || (*d & DESC_AF) == 0ull) {
-        return BR_ERR(BR_EFAULT);
+        return BR_ERR(EFAULT);
     }
     *pa = mmu_desc_pa(va, *d, level);
     return 0;
