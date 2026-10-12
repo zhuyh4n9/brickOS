@@ -56,6 +56,40 @@
 
 #include "erofs_internal.h"
 
+/*
+ * ★ 盘上布局的**编译期自检** —— 在适配层做, 而不是去实例化上游那个函数。
+ *
+ * 上游 `erofs_fs.h` 末尾有个 `static inline erofs_check_ondisk_layout_definitions()`,
+ * 里面是一串 `BUILD_BUG_ON(sizeof(struct …) != N)`。但**上游自己从不调用它**
+ * (全树 grep 只有定义处) ⇒ `static inline` 无调用者时 GCC 不实例化 ⇒ 那些
+ * `__compiletime_error` 永远不会被诊断, **上游这份自检实际是死的**(ADR-0024 §7)。
+ *
+ * 本插件早先把这张表改写成文件域的 `_Static_assert`(一定求值)⇒ 反而**更强**。
+ * 本刀要求 `src/erofs_fs.h` 与上游**逐字相同**, 所以不能再用那个改写; 但也不能把
+ * 布局保证丢掉 ⇒ 把它挪到这里(**本项目代码**, 三方件那边一个字没动)。
+ *
+ * 为什么不"取上游函数的地址强制实例化": 试过, 能激活断言, 但上游那句
+ *   `const __le64 fmh __maybe_unused = *(__le64 *)&(struct …){…};`
+ * 在本项目的 `-Wall -Wextra -Werror` 下会报 `-Wuninitialized` —— 为了编过一句话
+ * 就得在本文件里压制告警, 那比在这里重述尺寸更坏。尺寸就是**判据**, 重述它是正当的。
+ *
+ * 判据(负例见 ADR-0024 §7): 把任一 `== N` 改错 ⇒ 编译立刻失败。
+ */
+_Static_assert(sizeof(struct erofs_super_block) == 128u, "on-disk: super_block 必须 128 B");
+_Static_assert(sizeof(struct erofs_inode_compact) == 32u, "on-disk: compact inode 必须 32 B");
+_Static_assert(sizeof(struct erofs_inode_extended) == 64u, "on-disk: extended inode 必须 64 B");
+_Static_assert(sizeof(struct erofs_xattr_ibody_header) == 12u, "on-disk: xattr ibody 头必须 12 B");
+_Static_assert(sizeof(struct erofs_xattr_entry) == 4u, "on-disk: xattr entry 必须 4 B");
+_Static_assert(sizeof(struct erofs_inode_chunk_info) == 4u, "on-disk: chunk_info 必须 4 B");
+_Static_assert(sizeof(struct erofs_inode_chunk_index) == 8u, "on-disk: chunk_index 必须 8 B");
+_Static_assert(sizeof(struct z_erofs_map_header) == 8u, "on-disk: map_header 必须 8 B");
+_Static_assert(sizeof(struct z_erofs_lcluster_index) == 8u, "on-disk: lcluster_index 必须 8 B");
+_Static_assert(sizeof(struct erofs_dirent) == 12u, "on-disk: dirent 必须 12 B");
+_Static_assert(sizeof(struct erofs_deviceslot) == 128u, "on-disk: deviceslot 必须 128 B");
+/* keep in sync between 2 index structures for better extendibility(上游原话) */
+_Static_assert(sizeof(struct erofs_inode_chunk_index) ==
+               sizeof(struct z_erofs_lcluster_index), "on-disk: 两种 index 结构必须同尺寸");
+
 /* 生命周期钩子原型(名 = symbol_prefix + 相; 生成物 plugin_desc.c 引用)。
  * 本插件**不导出任何 API** ⇒ 除这三个 + 自检钩子外, 本文件其余函数全是 static。 */
 int uboot_erofs_early_init(void);

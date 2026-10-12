@@ -149,11 +149,71 @@ SD/UHS/HS200/HS400/tuning/RPMB/分区、`blk_desc` 一起搬回来, 与本项目
 | mmc 的两处行为偏离: `MMC_RSP_BUSY` 未等 `DATA_END`(上游 `sdhci.c:262` 会等)、136 位响应缺 `<<8` 与字节拼接(上游 `sdhci.c:46-53`) | CID/CSD 目前被丢弃 ⇒ 后者是潜伏; 前者影响 CMD6/CMD12 完成判定。**改了无法验证**(见下), 单独立项 |
 | 审计发现的 min 级问题: `uboot_fat_fls`/`ilog2`/`get_unaligned_le32` 死代码; `check_path_prefix` 疑似 `fs.fatbuf` 泄漏; `LOGC_FS` 未定义 | 与本刀主题(隔离)无关, 无运行期判据 |
 
-**★ 本刀的验证边界(必须如实说明)**: 本机的 QEMU 是 8.2.2, **没有 `-device emmc`**
-(`qemu-system-aarch64: -device emmc,drive=emmc0: 'emmc' is not a valid device model name`),
-所以 `emmc/fat/erofs` 三个设备侧门禁在**本刀之前就已经是红的**。
-本刀能验证到的是: **交叉编译 + 链接全绿**、`brickie check` 全绿、**宿主用例 7 件全绿**、
-**脚本门禁全绿**; 设备侧的运行期行为**未验证**。
+**★ 验证边界(本刀结束时的真实状态)**: 设备侧门禁**首次真的跑起来了**, 因为宿主 QEMU
+升级到了 10.2.1(QEMU 的 eMMC 卡模型 9.1 就在, 但 `emmc_class_init()` 里
+`dc->user_creatable = false` 直到 **10.2.0** 才删掉 ⇒ 旧版一律报
+`'emmc' is not a valid device model name`)。就位后:
+
+- `brickie build` 全绿; `brickie check` 0 错 0 警;
+- `brickie test` ⇒ **门禁全绿(全部)**: 宿主 7 + QEMU 11(含 `emmc`/`fat`/`erofs` ——
+  正是本刀改动的三件, 压缩路径的 LZ4 用例也过)+ 脚本 7(含新判据);
+- `make tools-prebuilt-check` 三件全 ok。
+
+**★ 已核实"无回归"的手法**(值得复用): 自检 pass 里有**既有的**间歇性 race
+(`TC-POSIX-016` / `APP-PT-006` / FAT 写闭环 —— 即 `WORKAROUNDS.md` 的 `br-wa-boot-002`)。
+判据不能是"跑一次全绿", 而要用 `git stash` 隔离出**改动前**的树, 对同一门禁重复跑取频率:
+实测**改动前**同样 1/25 复现同样两条 ⇒ 与本刀无关。
+
+## 7. 上游派生件的"逐字节"收敛: `erofs_fs.h` 已做到
+
+`src/erofs_fs.h` 自称"盘上格式的唯一真值, 结构体/字段顺序/数值与枚举一律**逐字保留**",
+但审计实测它与上游差 **529** 行(裁剪 + 全文件重排 + 把 `sizeof()` 换成魔数)。本刀把它
+收敛到:
+
+> **相对上游的全部差异 = 5 行 `#include` 换成 1 行 `#include "erofs_compat.h"` + 一段
+> 说明注释。其余 466 行与上游逐字节相同(含缩进)。**
+> 判据: `diff -u <upstream>/fs/erofs/erofs_fs.h src/erofs_fs.h` 里 `-` 行只有那 5 条 include。
+
+具体恢复的东西(此前被"只删读者"式地裁掉, 但它们是**盘上格式**的一部分):
+xattr 家族的全部结构体与枚举(`erofs_xattr_ibody_header`/`erofs_xattr_entry`/
+`erofs_xattr_long_prefix`/`EROFS_XATTR_INDEX_*`/`EROFS_XATTR_LONG_PREFIX*`)、
+`erofs_xattr_entry_size()`、`EROFS_SB_EXTSLOT_SIZE`、zstd/lzma 的尺寸常量。
+
+**顺带修掉一处真隐患**: 裁剪版把 `erofs_xattr_ibody_size()` 写成 `12u + …`、
+`EROFS_XATTR_ALIGN` 写成 `round_up(size, 4u)` —— 把 `sizeof(struct …)` 换成了魔数。
+该函数**有读者**(`erofs_namei.c:74,110` 用它算 `xattr_isize`, 而 `xattr_isize` 参与
+inline 数据的定位)⇒ 魔数一旦与结构体脱钩就是镜像读错。恢复成 `sizeof()` 后由
+上游的 `BUILD_BUG_ON(... != 12)` 与我们的 `_Static_assert` 双重钉住。
+
+### 7.1 两个必须照搬上游的机制(否则"逐字保留"编不过)
+
+1. **`BUILD_BUG_ON` 不能是 `_Static_assert`**。上游 `erofs_fs.h` 最后一条自检是
+   `BUILD_BUG_ON(__builtin_constant_p(fmh) ? fmh != cpu_to_le64(1ULL<<63) : 0)`,
+   而 `fmh` 是函数内 `const` 局部量 —— **不是整型常量表达式** ⇒ `_Static_assert` 直接报
+   "expression in static assertion is not constant"。上游用的是
+   `include/linux/build_bug.h` + `compiler.h::__compiletime_assert` 的
+   "函数体内 `if` + `__compiletime_error` 外部函数"形态, 它**允许**条件非常量。
+   ⇒ 适配层照搬该机制(`erofs_compat.h`), 语义一致(条件是"违规时"才触发)。
+2. **`__packed` / `__maybe_unused` / `BIT`** 由 u-boot 的 `<compiler.h>`/`<linux/bitops.h>`
+   提供; 上游那句是 `} __packed u1;`(**位置属性**, 夹在 `}` 与成员名之间)。
+   适配层必须补齐, 否则上游原文被解析成"成员名叫 `__packed`"。
+
+### 7.2 一个反直觉的发现: **上游那份布局自检是死的**
+
+`erofs_check_ondisk_layout_definitions()` 是 `static inline`, 而**上游从不调用它**
+(pinned commit 全树 grep 只有定义处) ⇒ GCC 不实例化 ⇒ 函数体里那些
+`__compiletime_error` 永远不会被诊断。也就是说: 上游这份盘上布局自检**实际不生效**;
+而本插件早先改写成文件域 `_Static_assert` 的版本**反而更强**。
+
+本刀的处置: **定义**归上游逐字(留在 `src/`), **判据**归我们(放 `adapter/erofs_vfs.c`
+的文件域 `_Static_assert` 表), 并在那里写明"上游那份是死的、所以判据必须由我们持有"。
+两条路都试过:
+- 取上游函数的地址强制实例化 ⇒ 断言确实能激活(负例报出 `BUILD_BUG_ON: … != 127`),
+  但上游那句 `const __le64 fmh … = *(__le64 *)&(struct …){…};` 在本项目的
+  `-Wall -Wextra -Werror` 下触发 `-Wuninitialized` ⇒ 为编过一句原文得压制告警, **放弃**;
+- 最终取"判据在我们这侧重述尺寸"——尺寸就是判据, 重述它是正当的。
+**负例(即判据)**: 把任一 `== N` 改错 ⇒ 编译立刻失败并打出可读消息(已实测)。
+
 
 ## 6. 判据
 

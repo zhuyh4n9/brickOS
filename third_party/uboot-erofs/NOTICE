@@ -28,7 +28,9 @@ third_party/uboot-erofs — 第三方来源与许可说明
   fs/erofs/internal.h     (397 行, GPL-2.0+)
       → src/erofs_internal.h    内部契约(改写: 裁字段、换类型、去 list_head)
   fs/erofs/erofs_fs.h     (466 行, **GPL-2.0-only OR Apache-2.0**)
-      → src/erofs_fs.h          on-disk 格式(改名/裁剪后保留; SPDX 与版权行原样保留)
+      → src/erofs_fs.h          on-disk 格式 —— ★ **与上游逐字节相同(含缩进)**, 唯一差异是
+                                文件头的 5 行 u-boot `#include` 换成 1 行
+                                `#include "erofs_compat.h"`(见 ADR-0024 §7)
   fs/erofs/fs.c           (273 行, GPL-2.0+)
       → adapter/erofs_vfs.c     ①块层 shim(u-boot 的 blk_desc/fs_devread → br_bdev_ops)
                                 ②VFS 对接(四层 ops)+ 生命周期钩子
@@ -49,8 +51,13 @@ third_party/uboot-erofs — 第三方来源与许可说明
                                     非 LZ4 算法在运行期分派处返回 -ENOTSUP。
   fs/erofs 的多设备(extra devices) : 本件一个卷(`emmc3`)⇒ 挂载期发现 `extra_devices != 0`
                                     就 -ENOTSUP(而不是装作没看见)。
-  fs/erofs/erofs_fs.h 的 xattr 结构/枚举: 没有读者, 裁掉; on-disk 布局自检改用
-                                    `_Static_assert` 保留(等价证据, 不生成代码)。
+  fs/erofs/erofs_fs.h 的 xattr 结构/枚举: **已恢复**(ADR-0024 §7)。早先按"没有读者"
+                                    裁过它们, 但它们是**盘上格式**的一部分, 且裁掉后
+                                    `erofs_xattr_ibody_size()` 从 `sizeof(…)` 退化成魔数
+                                    `12u` —— 而该函数有读者(`namei.c` 用它算 `xattr_isize`,
+                                    参与 inline 数据定位)⇒ 魔数一旦与结构体脱钩就是镜像读错。
+                                    on-disk 布局自检由**适配层**的文件域 `_Static_assert` 持有
+                                    (上游那份 `static inline` 自检**无人调用 ⇒ 实际是死的**)。
   其余 u-boot 依赖                : `linux/compat.h`、`linux/{stat,bug,err,printk,log2}.h`、
                                     `<asm/unaligned.h>`、`<inttypes.h>`、u-boot 的
                                     `blk-uclass`/`fs_internal.h`/DM —— 全部换成

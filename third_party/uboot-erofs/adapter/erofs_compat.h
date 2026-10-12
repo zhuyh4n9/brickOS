@@ -223,8 +223,49 @@ static inline unsigned int uboot_erofs_ilog2(unsigned int v)
 }
 #define ilog2(v) uboot_erofs_ilog2(v)
 
-/* `BUILD_BUG_ON` → `_Static_assert`(上游 erofs_fs.h 的布局自检用它) */
-#define BUILD_BUG_ON(cond) _Static_assert(!(cond), "BUILD_BUG_ON: " #cond)
+/*
+ * `BUILD_BUG_ON` —— **按 u-boot 的机制**兑现, 而不是用 `_Static_assert`。
+ *
+ * ★ 为什么不能用 `_Static_assert`(ADR-0024 §7): 上游 `erofs_fs.h` 的最后一条自检是
+ *     BUILD_BUG_ON(__builtin_constant_p(fmh) ? fmh != cpu_to_le64(1ULL<<63) : 0);
+ *   `fmh` 是函数内的 `const` 局部量 —— **不是整型常量表达式** ⇒ `_Static_assert` 直接
+ *   报 "expression in static assertion is not constant"。而 u-boot 的定义是
+ *   "函数体内 `if` + `__compiletime_error` 外部函数"(见 include/linux/build_bug.h 与
+ *   include/linux/compiler.h 的 `__compiletime_assert`), 它**允许**条件不是常量:
+ *   常量可判定 ⇒ 编译器就地报错并给出 msg; 判不出来 ⇒ 留一次调用。
+ *   ⇒ 只有照搬这个机制, 上游 `erofs_fs.h` 才能**逐字**编过(这正是适配层的职责)。
+ *
+ * 语义与上游一致: 条件是"**违规**时"才触发(上游把 `!(cond)` 传进 compiletime_assert)。
+ * 未开优化(`__OPTIMIZE__` 不定义)时上游把它编译成空语句, 这里照办。
+ */
+#define __br_compiletime_error(msg) __attribute__((__error__(msg)))
+#define __br_cc_assert_id(prefix, suffix) prefix ## suffix
+#define __br_cc_assert(cond, msg, prefix, suffix)                          \
+    do {                                                                   \
+        extern void __br_cc_assert_id(prefix, suffix)(void)                \
+            __br_compiletime_error(msg);                                   \
+        if (!(cond))                                                       \
+            __br_cc_assert_id(prefix, suffix)();                           \
+    } while (0)
+
+#ifdef __OPTIMIZE__
+#define BUILD_BUG_ON(condition)                                            \
+    __br_cc_assert(!(condition), "BUILD_BUG_ON: " #condition,              \
+                   __br_build_bug_on_, __COUNTER__)
+#else
+#define BUILD_BUG_ON(condition) do { } while (0)
+#endif
+
+/*
+ * u-boot 的 `<compiler.h>` / `<linux/bitops.h>` 提供的三个属性/宏。
+ * ★ 为什么必须在这里兑现(ADR-0024 §7): `src/erofs_fs.h` 要**与上游逐字相同**,
+ *   而上游那里写着 `} __packed u1;`(**位置属性**: 夹在 `}` 与成员名之间)、
+ *   `const __le64 fmh __maybe_unused = …` 与 `BIT(n)`。少了任何一个, 上游原文就编不过,
+ *   于是"逐字保留"只能退化成"改写上游" —— 那正是本刀要消灭的东西。
+ */
+#define __packed        __attribute__((__packed__))
+#define __maybe_unused  __attribute__((__unused__))
+#define BIT(nr)         (1UL << (nr))
 
 /*
  * ★ 有意偏离: 上游的 `DBG_BUGON()` = `BUG_ON()` = **停机**。本插件在挂载期与读路径上
