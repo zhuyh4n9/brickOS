@@ -37,6 +37,7 @@ int iface_posix_start(void);
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/types.h>

@@ -44,6 +44,7 @@ int vfs_core_start(void);
 /* ==================================================================== 静态上界 */
 
 #define BR_VFS_MAX_MOUNTS    8u    /* 挂载表上界(设计 SD-4: v1 静态挂载) */
+#define BR_VFS_DRIVER_NAME_MAX 16u  /* 驱动名上界(如 "erofs"/"fat"); 短于路径名 */
 #define BR_VFS_PATH_MAX      128u  /* 规范化路径缓冲(含结尾 '\0'); ADR-0013 起 64 → 128
                                     * —— 符号链接的"前缀 + 目标 + 剩余分量"拼接要放得下 */
 #define BR_VFS_SYMLINK_DEPTH 8u    /* 符号链接展开深度上界(超 ⇒ -ELOOP) */
@@ -64,6 +65,21 @@ typedef struct vfs_mount {
 } vfs_mount_t;
 
 static vfs_mount_t s_mounts[BR_VFS_MAX_MOUNTS];
+
+/* ---- FS 驱动注册表(ADR-0029): fstype 名 → {ops, fs_priv} -------------------
+ * FS 插件在 start 相登记自己; APP 用 POSIX `mount(..., fstype, ...)` 按名挂载。
+ * 名字是**契约**(APP 的 [[mount]].fstype 按它查)⇒ 由 plugin.toml 声明、自检点名核对。 */
+#define BR_VFS_MAX_DRIVERS   8u
+
+typedef struct vfs_driver {
+    br_bool             used;
+    char                name[BR_VFS_DRIVER_NAME_MAX];
+    const br_fs_ops_t  *ops;
+    void               *priv;
+} vfs_driver_t;
+
+static vfs_driver_t s_drivers[BR_VFS_MAX_DRIVERS];
+static br_u32       s_driver_n;
 
 /* ★ 布局守卫(ADR-0013 补): `br_vfs_internal_mounts()` 是把 `s_mounts` **强转**成
  *   `vfs_mount_internal_t*` 给自检看的(见 src/vfs_internal.h 的说明)。两处声明一旦
@@ -633,6 +649,117 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
 
     br_log_info("vfs: mount %s (root type=%u)", m->path, root->type);
     return BR_OK;
+}
+
+/* ==================================================================== FS 驱动注册表 */
+
+int br_fs_driver_register(const char *name, const br_fs_ops_t *ops, void *fs_priv)
+{
+    if (name == BR_NULL || ops == BR_NULL || ops->mount == BR_NULL || name[0] == '\0') {
+        return BR_ERR(EINVAL);
+    }
+    const br_size_t n = vfs_str_len(name);
+    if (n >= (br_size_t)BR_VFS_DRIVER_NAME_MAX) {
+        return BR_ERR(ENAMETOOLONG);
+    }
+    for (br_u32 i = 0u; i < s_driver_n; i++) {
+        if (s_drivers[i].used == BR_TRUE && vfs_str_eq(s_drivers[i].name, name) == BR_TRUE) {
+            return BR_ERR(EEXIST);      /* 不覆盖: 见 br_vfs.h 的说明 */
+        }
+    }
+    if (s_driver_n >= (br_u32)BR_VFS_MAX_DRIVERS) {
+        return BR_ERR(ENOSPC);
+    }
+    vfs_driver_t *d = &s_drivers[s_driver_n];
+    d->used = BR_TRUE;
+    vfs_str_copy(d->name, name, (br_size_t)sizeof(d->name));
+    d->ops  = ops;
+    d->priv = fs_priv;
+    s_driver_n++;
+    br_log_info("vfs: driver %s", d->name);
+    return BR_OK;
+}
+
+br_u32 br_fs_driver_count(void)
+{
+    return s_driver_n;
+}
+
+const char *br_fs_driver_name_at(br_u32 index)
+{
+    if (index >= s_driver_n || s_drivers[index].used == BR_FALSE) {
+        return BR_NULL;
+    }
+    return s_drivers[index].name;
+}
+
+/* `br_mount_register` 的**带介质**形态: 多一个 `dev` 进 cfg(介质类 FS 用它取 bdev)。 */
+static int mount_with_dev(const char *path, const br_fs_ops_t *ops, void *fs_priv,
+                          const char *dev)
+{
+    /* 与 br_mount_register 同体, 只多 cfg.dev —— 抽成公用实现以免两份挂载逻辑漂移。 */
+    if (ops == BR_NULL || ops->mount == BR_NULL) {
+        return BR_ERR(EINVAL);
+    }
+    char norm[BR_VFS_PATH_MAX];
+    int  rc = path_norm(path, norm, (br_size_t)sizeof(norm));
+    if (rc != BR_OK) {
+        return rc;
+    }
+    if (s_mount_n >= (br_u32)BR_VFS_MAX_MOUNTS) {
+        return BR_ERR(ENOSPC);
+    }
+    for (br_u32 i = 0u; i < s_mount_n; i++) {
+        if (s_mounts[i].used == BR_TRUE && vfs_str_eq(s_mounts[i].path, norm) == BR_TRUE) {
+            return BR_ERR(EEXIST);
+        }
+    }
+    if (vfs_str_eq(norm, "/") == BR_FALSE) {
+        const vfs_mount_t *parent = mount_match(norm);
+        if (parent == BR_NULL) {
+            return BR_ERR(ENODEV);
+        }
+        rc = mkdir_p(norm);
+        if (rc != BR_OK) {
+            return rc;
+        }
+    }
+    const br_fs_cfg_t cfg = { .path = norm, .dev = dev, .opts = BR_NULL };
+    br_inode_t *root = BR_NULL;
+    rc = ops->mount(fs_priv, &cfg, &root);
+    if (rc != BR_OK) {
+        return rc;
+    }
+    if (root == BR_NULL) {
+        return BR_ERR(EINVAL);
+    }
+    vfs_mount_t *m = &s_mounts[s_mount_n];
+    m->used = BR_TRUE;
+    vfs_str_copy(m->path, norm, (br_size_t)sizeof(m->path));
+    m->len  = (br_u32)vfs_str_len(m->path);
+    m->ops  = ops;
+    m->priv = fs_priv;
+    m->root = root;
+    s_mount_n++;
+    br_log_info("vfs: mount %s (dev=%s root type=%u)", m->path,
+                (dev != BR_NULL) ? dev : "-", root->type);
+    return BR_OK;
+}
+
+int br_vfs_mount(const char *source, const char *target, const char *fstype,
+                 unsigned long flags, const void *data)
+{
+    (void)flags;
+    (void)data;                     /* v1 保留: POSIX 的后两个参数 */
+    if (target == BR_NULL || fstype == BR_NULL) {
+        return BR_ERR(EINVAL);
+    }
+    for (br_u32 i = 0u; i < s_driver_n; i++) {
+        if (s_drivers[i].used == BR_TRUE && vfs_str_eq(s_drivers[i].name, fstype) == BR_TRUE) {
+            return mount_with_dev(target, s_drivers[i].ops, s_drivers[i].priv, source);
+        }
+    }
+    return BR_ERR(ENODEV);          /* 没有这个 fstype 的驱动(FS 插件没选进来/没注册) */
 }
 
 br_u32 br_mount_count(void)

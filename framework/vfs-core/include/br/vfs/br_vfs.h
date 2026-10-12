@@ -252,6 +252,34 @@ struct br_fs_ops {
  */
 int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv);
 
+/* ==================================================================== FS 驱动注册表
+ *
+ * ★ 为什么需要它(ADR-0029): **挂载由 APP 决定**。FS 插件不再自己挂载, 而是在自己的
+ *   start 相把"我是什么文件系统"登记成**驱动**; APP 用 POSIX `mount(source, target,
+ *   fstype, …)` 按**名字**(`"fat"`/`"erofs"`/`"tmpfs"`/`"devfs"`)把驱动挂到某个挂载点。
+ *   于是 `plugin.toml` 的 `[[mount]]` 不再表示"本插件挂在哪", 而 APP 的
+ *   `[[mount]]` 表示"要挂什么" —— 挂载计划归**消费者**。
+ *
+ * `name` 的拼写是驱动契约(APP 的 `[[mount]].fstype` 按它查), 必须与 plugin.toml 里
+ * 声明的一致; 重复注册同名 ⇒ `-EEXIST`(不覆盖: 覆盖会让先注册者的 priv 失去持有者)。
+ */
+int br_fs_driver_register(const char *name, const br_fs_ops_t *ops, void *fs_priv);
+
+/* 驱动注册表观测(诊断/dump)。 */
+br_u32      br_fs_driver_count(void);
+const char *br_fs_driver_name_at(br_u32 index);      /* 越界 ⇒ BR_NULL */
+
+/*
+ * 按**驱动名**挂载: 查表拿到 ops/priv ⇒ 等价于 `br_mount_register(target, ops, priv)`,
+ * 但把介质名(`source`)一并交给 FS(`cfg.dev`)。
+ *   `source`: 介质类 FS 的设备名(`"emmc0"`); 无介质(tmpfs/devfs) 传 BR_NULL。
+ *   `flags` / `data`: v1 保留(POSIX `mount()` 的后两个参数; 本代恒 0 / BR_NULL)。
+ * 错误: 驱动不存在 ⇒ `-ENODEV`; 其余同 `br_mount_register`。
+ * ★ 这是 POSIX `mount()` 在 vfs 侧的**唯一**落点 —— `runtime/posix` 只做转发与参数整形。
+ */
+int br_vfs_mount(const char *source, const char *target, const char *fstype,
+                 unsigned long flags, const void *data);
+
 /* 挂载表观测(诊断/dump; append-only 增量, 与按名查找同型)。 */
 br_u32 br_mount_count(void);
 const char *br_mount_path_at(br_u32 index);          /* 越界 ⇒ BR_NULL */

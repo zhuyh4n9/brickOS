@@ -48,6 +48,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/mount.h>
 #include <sys/select.h>
 #include <sys/stat.h>
 #include <sys/uio.h>
@@ -3289,6 +3290,39 @@ int posix_init(void)
      * v1 **不**自动打开 fd 0/1/2: 那是"进程模型"的一部分, 而本代没有进程模型
      * (stdio.h 的说明)。标准流符号保持 NULL, 直到有人显式 fdopen 它们。 */
     return 0;
+}
+
+/* ==================================================================== 层: 挂载
+ *
+ * ★ 为什么在**这里**(而不是在 FS 插件的 start 相): ADR-0029 —— 挂载计划归**消费者**
+ *   (APP)。FS 插件只登记驱动(`br_fs_driver_register`), APP 用 POSIX `mount()` 决定
+ *   "把哪个 FS 挂到哪"。
+ * ★ 本层是**纯转发 + 参数整形**: 挂载语义(路径规范化/父挂载/自动 mkdir/表满)全在
+ *   `framework/vfs-core`, 这里不重复实现一份(那会是第二处真值)。
+ */
+int mount(const char *source, const char *target, const char *filesystemtype,
+          unsigned long mountflags, const void *data)
+{
+    /* v1 保留位: 显式拒绝比"收下不用"诚实 —— 否则 APP 会以为 flags/data 生效了。 */
+    if (mountflags != 0ul || data != NULL) {
+        errno = EINVAL;
+        return -1;
+    }
+    const int rc = br_vfs_mount(source, target, filesystemtype, mountflags, data);
+    if (rc != BR_OK) {
+        errno = -rc;                 /* vfs 返回负 errno ⇒ 零转换映到 errno(11-01 §2) */
+        return -1;
+    }
+    return 0;
+}
+
+int umount(const char *target)
+{
+    (void)target;
+    /* 运行期卸载 = 设计 O-S3(不早于 v3): 它要先把该挂载点下的打开句柄与瞬态 inode 收回,
+     * 而挂载表持有的根 inode 与静态组合期布局都假设"挂上就不再卸"。显式 -ENOTSUP。 */
+    errno = ENOTSUP;
+    return -1;
 }
 
 int posix_start(void)
