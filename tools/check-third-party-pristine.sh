@@ -13,8 +13,15 @@
 #   ② `third_party/uboot-imx/**` 的**每个文件**的 sha256 与锁一致  ← 核心: "不改三方代码"
 #   ③ 锁里**每条**在磁盘上都存在(没有静默丢失; 少了文件也是红);
 #   ④ `third_party/` 下没有 `plugin.toml` —— 三方件不是 brickOS 插件, 我们的插件在 adapter/;
-#   ⑤ `third_party/` 之外**没有**任何代码 include 三方件的头 —— vendor 树只是参照物,
-#      不参与编译(参与编译的是 adapter/ 里的移植件)。这条同时钉住"三方件不污染构建"。
+#   ⑤ `third_party/` 之外**没有**任何代码 include 三方件的头 —— 具体判据是"不出现
+#      `#include <third_party/...>` / `#include "third_party/..."`"(绝对路径形态)。
+#      ★ ADR-0026 起 vendor 的 `.c` **确实参与编译**(各 `plugin.toml` 的 `sources` 直接
+#        指向它们), 所以"参照物、不参与编译"这句旧口径不再成立; 本条现在守的是
+#        "**头**不许被绝对路径直取" —— 需要 vendor 的头时, 由 `adapter/*/compat/` 放一个
+#        **相对路径转发壳**(见 `adapter/uboot-erofs/compat/u-boot/lz4.h` 与
+#        `adapter/uboot-fat/compat/{fat,fs,rtc_def}.h`), 于是"谁引用了三方件"在 adapter/ 里
+#        一眼可数, 而不是散在构建的 `-I` 里。
+#      ⇒ 与之配套的另一半是 `tools/check-adapter-copies.py`(adapter 里不许有 vendor 源码副本)。
 #
 # 用法: bash tools/check-third-party-pristine.sh
 # 退出码: 0 = 全过, 1 = 有违规, 2 = 用法/环境错
@@ -101,17 +108,17 @@ else
     pass "third_party/ 下没有 plugin.toml(插件都在 adapter/)"
 fi
 
-# ---- ⑤ 三方件的头不参与编译 ---------------------------------------------------
+# ---- ⑤ 三方件的头不许被绝对路径直取 -------------------------------------------
 hits="$(grep -rn --include='*.c' --include='*.h' -E '^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]third_party/' \
             --exclude-dir=build --exclude-dir=.git --exclude-dir=tools . 2>/dev/null || true)"
 if [ -n "$hits" ]; then
-    fail "third_party/ 之外有人 include 三方件的头(vendor 树只作参照, 不参与编译)"
+    fail "third_party/ 之外有人以绝对路径 include 三方件的头(要取 vendor 的头, 请放 adapter/*/compat/ 的相对路径转发壳)"
     printf '%s\n' "$hits" | sed 's/^/      /' >&2
 else
-    pass "无人 include 三方件的头(vendor 树只作参照, 不参与编译)"
+    pass "无人以绝对路径 include 三方件的头(vendor 的头只经 adapter/*/compat/ 的转发壳)"
 fi
 
 if [ "$status" -eq 0 ]; then
-    echo "PASS: third_party 只读 vendor 树(逐字节=上游 / 无多余文件 / 无插件 / 不参与编译)"
+    echo "PASS: third_party 只读 vendor 树(逐字节=上游 / 无多余文件 / 无插件 / 头只经 adapter 转发壳)"
 fi
 exit "$status"

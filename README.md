@@ -434,6 +434,16 @@ make tools-test         # 工具自身用例: 渲染器自检 + 端到端回归(
 `aarch64-linux-gnu-gcc`(或带版本号的 `gcc-16`/`gcc-15`/`gcc-14`/`gcc-13`; **候选序与探测在
 `brickie-core`**, 不在 Makefile)、`binutils-aarch64-linux-gnu`、`qemu-system-aarch64`。
 
+> ⚠ **QEMU 必须 ≥ 10.2**(不是"随便一个 qemu-system-aarch64")。`platform/qemu-aarch64` 挂了四块
+> `-device emmc`, 而 eMMC 卡模型虽然 **9.1** 就进了 QEMU, 当时却是 `dc->user_creatable = false`
+> (注释 "Soldered on board"), 直到 **10.2.0** 才成为可插拔设备 —— 更早的版本跑 `make run` 只会得到
+> `'emmc' is not a valid device model name`。仓库的参考环境是 Ubuntu 26.04 的 **10.2.1**。
+> 宿主自带的不够新时, **不用换发行版也不用 root**: `bash tools/fetch-qemu.sh` 会把 10.2.1
+> (Ubuntu 26.04 "resolute" 归档的 11 个包, URL + SHA256 钉在脚本里)**就地解包**到
+> `prebuilts/toolchain/qemu/`, 并在 `prebuilts/toolchain/bin/` 放一个包装器 —— `brickie` 的工具
+> 解析**先看那个目录**(`resolve_tool`), 所以 `make run` / `make emmc-test` 不必改任何配置。
+> `brickie` 自己也会**预检**: 步骤里出现 `-device emmc` 而版本 < 10.2 时当场给出上面这段修法。
+
 **目标表**(`make <目标>`; 镜像侧的每个名字都是**薄委派**, 真身在右侧):
 
 | 目标 | 做什么 | 真身(委派到) |
@@ -665,8 +675,8 @@ ADR-0015(改名 `runtime/posix` + 新增 `runtime` 命名空间)不改用例, �
 | **`framework/{vfs-core,dev-core,cdev-core}`** | `7-01`(§1 SD-1/§2 SD-15/§3 SD-7)、`8-01`(§1 框架件归属与形态 A/B/C、§2 注册表与 open_file 钩子、§3 子分类与 D22 预留)、`1-01` §4.5(D19) | 三件的依赖方向**逐条照 §7.3/`8-01` §1.3**: `cdev-core→dev-core`(init)、`cdev-core→vfs-core`(type)、`dev-core→vfs-core`(**type** —— 写成 runtime 会推翻形态 B); `vfs-core` 的 deps **为空**(D21 撤销设备路由后的纯 VFS)。增量: `br_inode_t` 加 `fpriv`、补路径级便捷面与 `br_open_err`、补 5 个存储域错误码(见 ADR-0009 §3) |
 | **`fs/{tmpfs,devfs}`** | `7-03`(§2 tmpfs rootfs / §3 devfs 设备节点 / §6 挂载计划) | tmpfs 挂 "/" 并预建 `/dev /data /tmp`; devfs 把 dev-core 注册表**实时投影**为节点(打开经类 open_file 钩子)⇒ `/dev/uart0` 可 `br_open`。两件的挂载点是**代码常量**(`[[mount]]` 声明面工具侧尚未消费)⇒ `br-wa-fs-001` |
 | **`framework/{bdev-core,pci-core}`** | `7-02` §1(bdev 类形状)、`8-01` §1.3/§3(块设备子分类)、`1-03` §1(bdev-core 在清单里) | **ADR-0021**: bdev 与 cdev 并列的存储域第二条设备链(扇区 read/write/flush + 几何 + DMA/PIO 声明位); PCI(e) 是本刀**新增的域**(设计无条目)⇒ 通用机制在 `pci-core`、板级事实(ECAM/MMIO/INTx 起点)留 `platform`。`br_bdev_get` 是"FS 绑定块设备"的入口 |
-| **`third_party/uboot-mmc`** | `7-02` §1/§4/§5(bdev 形状、DMA/PIO 要能指出、ISR→bh→唤醒) | **ADR-0021**: u-boot `drivers/mmc/**` + `include/{mmc,sdhci}.h` 的移植(GPL-2.0+); 偏离 = 中断驱动(上游轮询)+ ADMA2/PIO 运行期可选 + **多卡静态实例表**(ADR-0022); flush 只做"等卡不忙"⇒ `br-wa-emmc-001` |
-| **`third_party/{uboot-fat,uboot-erofs}`** | `7-01` §1~§3(四层 ops/瞬态 inode)、`7-03` §1~§2(介质 FS) | **ADR-0022**: u-boot `fs/fat/**`(读写)与 `fs/erofs/**`(只读 + LZ4)的移植(GPL-2.0+); inode = **瞬态路径包装**(设计给介质 FS 的形状), 复用上游的路径风格 API ⇒ 上游函数逐一对得上; 两件**只能**是 `api_type = third_party`(源码许可 + "挂载晚于块设备 start 相"那条 init 边的工具链禁则)。EROFS 的写面填槽位返回 `-EROFS`(不是留空得 `-ENOTSUP`) |
+| **`adapter/uboot-mmc`** | `7-02` §1/§4/§5(bdev 形状、DMA/PIO 要能指出、ISR→bh→唤醒) | **ADR-0021 + ADR-0029**: u-boot `drivers/mmc/**` + `include/{mmc,sdhci}.h` 的**上游原样编译**(原件在 `third_party/uboot-imx/`, 适配在 `adapter/uboot-mmc/{compat,glue}`); 偏离 = 中断驱动(上游轮询 ⇒ 环境层的 `get_timer()`/`udelay()` 变成可被设备中断唤醒的睡眠等待)+ ADMA2/PIO 运行期可选 + **多卡静态实例表**(ADR-0022); flush 只做"等卡不忙"⇒ `br-wa-emmc-001` |
+| **`adapter/{uboot-fat,uboot-erofs}`** | `7-01` §1~§3(四层 ops/瞬态 inode)、`7-03` §1~§2(介质 FS) | **ADR-0022 + ADR-0026/0029**: u-boot `fs/fat/**`(读写)与 `fs/erofs/**`(只读 + LZ4)的**上游原样编译**(同一个三角; erofs 见 ADR-0026, fat 见 ADR-0029); inode = **瞬态路径包装**(设计给介质 FS 的形状), 复用上游的路径风格 API ⇒ 上游函数逐一对得上; 两件**只能**是 `api_type = third_party`(源码许可 + "挂载晚于块设备 start 相"那条 init 边的工具链禁则)。EROFS 的写面填槽位返回 `-EROFS`(不是留空得 `-ENOTSUP`) |
 | **`io/uart-pl011`** | `1-03 §1`(M0 轮询 console → **M2 注册 cdev**)、`8-01` §6(驱动编写者契约)、§5(ioctl 编码) | v1 交付**注册 cdev + 轮询式会话**(`/dev/uart0` 可开/读/写/ioctl/poll + 严格独占); **不开 UART 中断**(bh 已在 ADR-0011 就位, 欠的是驱动侧还没用它做 RX 唤醒)⇒ `br-wa-io-001`。与 platform 的 `console_pl011.c` 是同一硬件的两种**设计内**形态(后者是 panic 通道, 不能注册设备) |
 | **`service/{trace,backtrace,hexdump,memleak,dump}`** | `1-03 §1`(v1.0 插件清单: `service/trace`)+ `5-01`(§1 trace / §2 bridge / §3 ramdump 捕获集 / §4 memleak) | `service/trace` 与清单同名; 另四件是本次补的调试服务(6-01 尚无 `TC-DBG-*` 组, 属回灌项); 调用点**不再经 APP** —— 调试域用例归 core 的 selftest pass(ADR-0010), `allow_edges` 现为空(ADR-0016 删掉最后一条, 见 `br-wa-boot-001`) |
 | **`tests/host/mem_test.c` + `make mem-test`** | `1-03` 的"host 平台插件: CI 秒级 + ASan 白捡" | 完整 host 平台插件未落地; 本原型先做到"内存实现编成宿主可执行跑算法压测"(无需交叉工具链/QEMU) |

@@ -1,14 +1,18 @@
-# adapter/uboot-fat — u-boot FAT 移植(ability / fs / third_party)
+# adapter/uboot-fat — u-boot FAT(上游**原样编译**; ability / fs / third_party)
 
-> ⚠ **本插件是 GPL-2.0-or-later**, 来源与逐文件对照见 [NOTICE](NOTICE), 全文见
-> [LICENSE.GPL-2.0](LICENSE.GPL-2.0)。它与 [uboot-mmc](../uboot-mmc/README.md)、
-> [uboot-erofs](../uboot-erofs/README.md) 一起构成本仓库的 GPL 代码区(ADR-0021 D-3 /
-> ADR-0022)。
+> ⚠ **本插件是 GPL-2.0-or-later**: 参与编译的上游文件与我们的适配层都在这个目录里,
+> 来源与逐条偏离见 [NOTICE](NOTICE), 全文见 [LICENSE.GPL-2.0](LICENSE.GPL-2.0)。
+> 它与 [uboot-mmc](../uboot-mmc/README.md)、[uboot-erofs](../uboot-erofs/README.md) 一起
+> 构成本仓库的 GPL 代码区(ADR-0021 D-3 / ADR-0022 / ADR-0026)。
 
-## 1. 它是什么
+## 1. 它是什么(以及这一刀改了什么)
 
-把 u-boot 的 **FAT12/16/32 读写实现**移植进 brickOS, 出口是 **VFS 契约**
-(`framework/vfs-core/include/br/vfs/br_vfs.h`), 挂三个卷:
+把 u-boot 的 **FAT12/16/32 读写实现**接进 brickOS, 出口是 **VFS 契约**
+(`framework/vfs-core/include/br/vfs/br_vfs.h`), 挂三个卷。
+
+★★★★ **ADR-0026 之前本插件是"上游改写副本 + 适配层"**(`src/fat_core.c` 与上游
+`fs/fat/fat.c` 行级相似度 0.58、`src/fat_write.c` 0.60)。现在**上游原件直接参与编译**,
+插件里没有一份副本:
 
 ```
                       ┌──────────────── framework/vfs-core(br_vfs.h)────────────────┐
@@ -16,47 +20,75 @@
                       └───────────────────────────┬────────────────────────────────┘
                                                   │ br_fs_ops / br_inode_ops / br_file_ops
                       ┌───────────────────────────▼────────────────────────────────┐
-                      │ adapter/fat_vfs.c  瞬态路径包装 inode;目录 read br_dirent_t │
+                      │ glue/fat_vfs.c   瞬态路径包装 inode; 目录 read br_dirent_t  │
                       └───────────────────────────┬────────────────────────────────┘
-                                                  │ 路径风格的上游 API(fat_read_file / …)
-              ┌───────────────────────────────────┴─────────────────────────────────┐
-              │ src/fat_core.c(读)                 src/fat_write.c(写 + truncate)  │
-              │  BPB/簇链/目录迭代/只读文件面        长名/目录槽/簇分配/set_contents      │
-              └───────────────────────────────────┬─────────────────────────────────┘
-                                                  │ disk_read/disk_write(shim)
+                                                  │ 上游的**路径风格 API**(fat_read_file / …)
+   third_party/uboot-imx/fs/fat/fat_write.c  ──────┤  ★ **原件, 逐字节上游**(它第 23 行
+   (单编译单元: 它 include "fat.c")                │     #include "fat.c" ⇒ 读+写一个 TU)
+                      ┌───────────────────────────▼────────────────────────────────┐
+                      │ glue/fat_blk.c   blk_dread/blk_dwrite(切块 + 越界拒绝)+ 卷表 │
+                      │                  + BPB 观测(挂载判据)+ 环境的那几个实现       │
+                      └───────────────────────────┬────────────────────────────────┘
                       ┌───────────────────────────▼────────────────────────────────┐
                       │ framework/bdev-core  br_bdev_ops_t(read/write/flush/geometry)│
                       └───────────────────────────┬────────────────────────────────┘
                                                   │ emmc0 / emmc1 / emmc2
                       ┌───────────────────────────▼────────────────────────────────┐
-                      │ adapter/uboot-mmc(它在自己的 start 相注册三块块设备)     │
+                      │ adapter/uboot-mmc(它在自己的 start 相注册三块块设备)      │
                       └────────────────────────────────────────────────────────────┘
 ```
 
-分层只隔两个接口: **VFS 契约**(往上)与 **br_bdev_ops_t**(往下)。上游戏移植代码认得出是
-移植(函数名与函数体结构保留), 有意偏离处一律写 `/* 偏离: … */` 并在 NOTICE 登记。
+上游 .c 拿到的是**环境**: `compat/` 里每个 u-boot 头名一个薄壳(全部接到 `compat/fat_env.h`),
+盘上结构则**转发**到 vendor 原件(`<fat.h>`/`<fs.h>`/`<rtc_def.h>`)。判据(全机械):
+
+```bash
+bash tools/check-third-party-pristine.sh     # vendor 逐字节 = 上游(28 个文件的 sha256 锁)
+python3 tools/check-adapter-copies.py        # adapter/ 里没有三方件源码副本
+cc -fsyntax-only <vendor>/fs/fat/fat_write.c -Iadapter/uboot-fat/compat …   # 上游原样编过
+```
 
 ### 三个卷
 
-| bdev | 容量 | FAT 类型 | 挂载点 | 对应 (设计) |
+| bdev | 容量 | FAT 类型 | 挂载点 | 卷 id |
 |---|---|---|---|---|
 | `emmc0` | 2 MiB | FAT12 | `/fat12` | `UB_FAT_VOL12` |
 | `emmc1` | 16 MiB | FAT16 | `/fat16` | `UB_FAT_VOL16` |
-| `emmc2` | 64 MiB | FAT32 | `/fat32` | `UB_FAT_VOL32` |
+| `emmc2` | 32 MiB | FAT32 | `/fat32` | `UB_FAT_VOL32` |
 
-设备名/挂载点在 `src/fat_internal.h` 里是**编译期常量**, 且与 [plugin.toml](plugin.toml) 的
-`[[mount]]` 逐字一致(两处真值由 `uboot_fat_mount_to_vol()` 在运行时对账: 挂载点对不上就拒挂)。
+设备名/挂载点在这张表里是**自检的期望值**(`UB_FAT_DEV*`/`UB_FAT_MNT*`, 见
+[glue/fat_glue.h](glue/fat_glue.h)); **运行期的对应关系由 APP 的挂载计划给出**
+(ADR-0030): APP 调 `mount("emmc0", "/fat12", "fat", 0, NULL)`, 本件用
+`uboot_fat_vol_claim(dev, mnt)` 认领一个卷槽。于是"哪个挂载点用哪块设备"只有**一处真值**
+(APP 的 `[[mount]]` 计划), 从前那处 `br-wa-fs-001` 的"两处真值"欠债在 fat 这一侧消掉了;
+自检仍按这张期望表逐卷对账(名不副实 ⇒ TC-FAT-001 红)。
+
+### ★ 多卷: 上游只有"当前卷", 切换是 glue 的责任
+
+上游 `fs/fat/fat.c` 里是 `static struct blk_desc *cur_dev; static struct disk_partition
+cur_part_info;` —— **只认一个当前卷**。本件挂三个卷, 所以 **glue 在每个入口都先
+`uboot_fat_vol_bind(vol)`**(它做三件事: 把卷切成"当前"(`s_cur_vol`)、按几何刷新 shim 的
+`struct blk_desc`/`disk_partition`(整设备一个分区: 起始扇区 0)、调**上游自己的**
+`fat_set_blk_dev()` 做引导扇区校验)。已经绑定过的卷再 bind 只切指针, 不重读 BPB。
+`fat_vfs.c` 的每一处上游 API 调用之前都有这一次 bind(共 12 处), 这既是"多卷正确"的充分
+条件, 也是**回归面**(忘一处 ⇒ 拿上一个卷的 FAT 参数读这一个卷)。
 
 ## 2. 生命周期
 
 | 相 | 做什么 | 为什么 |
 |---|---|---|
-| `early_init` | 空手返回 | 堆还没建池(`br_mem_init` 在 core.init); early 相只允许"声明" |
-| `init` | 只填挂载点表(s_slots); 空手返回 | 同上: 真正要分配的动作都在 start |
-| `start` | 逐卷 `br_bdev_get` → 读 BPB → 校验卷几何 → `br_mount_register` | 块设备由 `adapter/uboot-mmc` 在**它的** start 相注册; `[[dep]] kind = "init"` 保证相位顺序 |
+| `early_init` | 空手返回 | 堆还没建池(`br_mem_init` 在 core.init) |
+| `init` | 只填挂载表(`s_slots`) | 真正要分配的动作都在 start |
+| `start` | `br_fs_driver_register("fat", …)`(★ ADR-0030 起: **只登记驱动, 不挂载**); 真正的挂载由 APP 的挂载计划 `mount("emmcN", "/fatNN", "fat", …)` 触发 → ops.mount 里 `uboot_fat_vol_claim(dev, mnt)` 认领卷 → `uboot_fat_vol_bind` → BPB 观测 + 几何校验 → 造根 inode | 块设备由 `adapter/uboot-mmc` 在**它的** start 相注册; `[[dep]] kind = "init"` 保证相位顺序 |
 
 **挂载失败 ⇒ 立刻返回负 errno(首败即停机是刻意的)**: FAT 卷是产品的数据面, 缺一个卷还
 继续跑只会让调用方在后面某个不相干的地方拿到 -ENOENT。
+
+> ★ **ADR-0030 的影响(如实登记)**: 挂载权从本插件移到 **APP 的挂载计划** —— 插件只登记
+> `fat` 驱动并把 `(源设备, 挂载点)` 认领成卷。于是 `fat-test` 门禁里的
+> `vfs: mount /fat12|16|32` / `uboot-fat: /fatNN 就绪` 两条判据**依赖 APP 侧挂载计划落地**;
+> 在它落地之前, 本插件的自检会报 `mount_count got=0 want=3`(判据本身**没有**放宽)。
+> 这一节之前的版本(以及 18:45~18:53 的三次全绿证据)是"插件在自己的 start 相逐卷
+> `br_mount_register`"的形态。
 
 ## 3. inode = 瞬态路径包装(设计 SD-3, 与 fs/tmpfs 相反的一侧)
 
@@ -70,101 +102,93 @@ struct uboot_fat_ino {          /* 每次 lookup/create 造一个, free_inode �
 };
 ```
 
-* "节点"没有任何持久身份 —— 每次走查都重建。于是胶水层直接把路径交给上游的路径风格 API
-  (`fat_exists`/`fat_size`/`fat_read_file`/`file_fat_write_at`/`fat_unlink`/`fat_mkdir`/
-  `fat_rename`), 不需要在介质上做 inode 编号 → 目录项的索引。
-* **所有权**: `lookup`/`create` 交出的节点由调用方经 `free_inode` 释放(= `br_free`);
-  唯一的例外是**挂载根** —— mount 用 `br_malloc` 造好、挂在 `uboot_fat_fs_t` 上长期持有,
-  vfs 永不把它交给 `free_inode`(契约如此)。
-* `size` 只是快照: `getattr`/`lseek(SEEK_END)`/`read` 每次都**问介质**(目录项的 size 是
-  唯一真值), 免得"同一个文件被两个句柄打开"时读到脏长度。
+* "节点"没有持久身份 —— 每次走查都重建, 胶水层直接把路径交给上游的路径风格 API。
+* **所有权**: `lookup`/`create` 交出的节点由调用方经 `free_inode`(= `br_free`)释放; 唯一的
+  例外是**挂载根** —— mount 用 `br_malloc` 造好、挂在 `uboot_fat_fs_t` 上长期持有。
+* `size` 只是快照: `getattr`/`lseek(SEEK_END)`/`read` 每次都**问介质**。
+* 目录句柄的**会话状态**(合成 `.`/`..` 的游标)由 glue 自己持有
+  (`uboot_fat_dirstream_t`): 上游 `fat_opendir()` 交回的 `struct fs_dir_stream *` 是不透明的
+  (它的具体类型 `fat_dir` 是上游那个编译单元的私事)。
 
 ## 4. 与 VFS 契约的对接口径
 
 | 契约项 | 本插件的答复 |
 |---|---|
 | `iops->lookup` | 新建瞬态节点; 未命中 `BR_NULL`; "." / ".." 就地解析(根的父亲 = 根) |
-| `iops->create` | 先 `file_fat_write_at(…, size = 0)` 把目录项建出来(之后每次写走"已存在"分支); `O_EXCL` 且已存在 ⇒ -EEXIST |
+| `iops->create` | 先 `file_fat_write_at(…, size = 0)` 把目录项建出来; `O_EXCL` 且已存在 ⇒ -EEXIST |
 | `iops->unlink` | 目录 ⇒ -EISDIR(FAT 的 `fat_unlink` 只删空目录, 但那是 **rmdir** 的语义) |
 | `iops->rmdir` | 非目录 ⇒ -ENOTDIR; 非空目录由上游返回 -EINVAL(见"欠债") |
-| `iops->rename` | 跨卷 ⇒ -EXDEV; "目录搬进自己的子树"由上游的 `check_path_prefix` 拒(-EINVAL) |
+| `iops->rename` | 跨卷 ⇒ -EXDEV; "目录搬进自己的子树"由上游 `fat_rename` 拒 |
 | `iops->getattr` | 只置 `BR_STAT_SIZE`; `nlink` **不置位**(FAT 没有硬链接) |
 | `iops->setattr` | 只认 `BR_STAT_SIZE` ⇒ `uboot_fat_truncate()`; 其他位 ⇒ -ENOTSUP |
 | `iops->symlink/readlink/link` | 三个槽位显式 `BR_NULL` ⇒ -ENOTSUP(FAT 没有链接) |
 | 文件 `read/write/lseek` | 带偏移语义(读: 越过 EOF ⇒ 0; 写: `pos > 现长` ⇒ -EINVAL, 上游"不许空洞") |
-| 文件 `fsync` | **已实现**: 回写该卷的 dirty FAT 窗口 + `bdev.flush()`(与 `fs_ops.sync` **共用** `uboot_fat_flush_volume()`, 不是两份真值) |
+| 文件 `fsync` | **已实现**: `bdev.flush()`(与 `fs_ops.sync` **共用** `uboot_fat_flush_volume()`) |
 | 文件 `ioctl/poll/poll_attach` | `BR_NULL`(契约: 缺失槽位 ⇒ -ENOTSUP) |
-| 目录 `read` | 每次填**恰好一条** `br_dirent_t` 并返回 `sizeof(br_dirent_t)`; 穷尽返回 0; 头两条是 `.` / `..` |
-| `fs_ops.sync` | 先 `flush_dirty_fat_buffer()`, 再 `bdev.flush()`(契约: flush **必须**落介质) |
+| 目录 `read` | 每次填**恰好一条** `br_dirent_t` 并返回 `sizeof(br_dirent_t)`; 穷尽返回 0; 头两条是 `.`/`..` |
+| `fs_ops.sync` | `bdev.flush()`(契约: flush **必须**落介质)。**为什么不需要回写 FAT 缓存**: 见 §5 |
 | `fs_ops.unmount` | `BR_NULL`(v1 的签名先行槽位) |
 
 **名字上界**: 本仓库的 `br_dirent_t.name[]` 只有 `BR_NAME_MAX`(32)字节, 而 FAT 的长名可到
 255 字节 ⇒ 超过 31 字节的名字在 `readdir` 里返回 `BR_ERR(ENOSPC)`(与 fs/tmpfs 同口径),
 `create`/`mkdir` 里也拒绝。**代价**: 宿主预置的 `long name file.txt`(17 字节)可以正常列出,
-但 > 31 字节的文件名在本 VFS 面上不可见 —— 见"欠债"。
+但 > 31 字节的文件名在本 VFS 面上不可见 —— 见"欠债"。这条口径**没有因为迁移而改变**。
 
-## 5. 截断(本件新增, 上游没有)
+## 5. 截断: 只用上游公开 API(上游没有 truncate)
 
-上游 u-boot 只有"从 pos 写 size 字节", 没有 `fat_truncate`。本件的 `uboot_fat_truncate(path, size)`
-**必须**用上游的同一套内部原语拼(`set_fatent_value`/`clear_fatent`/`flush_dirty_fat_buffer`/
-`flush_dir`/`set_contents`), 否则"写"与"截断"就有了两套簇管理实现, 迟早互相踩:
+上一版有 160 行 `uboot_fat_truncate()` 改写(它得动上游的 static 原语与可变全局
+`total_sector`)。现在**删掉**, 用上游自己的写语义拼三种情形:
 
-* **缩小**: 走链到第 `size` 字节所在簇 → `clear_fatent()` 释放它之后的整条链 →
-  把新的末尾簇标成 EOC → 目录项 `size = size` → 回写 FAT 与目录项;
-  `size == 0` ⇒ 整条链释放 + 首簇清零。
-* **扩大**: 分块(每次 ≤ 一个簇)调 `set_contents(dent, pos = 老长, buffer = 全零, len = 差值)`
-  把新区域**显式写成 0**(不读回 0 就是信息泄漏 —— 新簇里可能是上一个文件的残留),
-  再补写目录项 `size`(上游的 `set_contents` 不改目录项里的长度)。
-* `size == 现长` ⇒ 空操作(照 POSIX); 目录 ⇒ -EISDIR。
+| 情形 | 实现 | 为什么成立(对着上游源码核过) |
+|---|---|---|
+| **变短** | `file_fat_write_at(path, newsize, NULL, 0, &act)` | 上游先把目录项 `size` 改成 `pos+size`; `set_contents()` 在 `filesize <= cur_pos` 时走 "truncate the rest": `clear_fatent()` 还掉尾部簇链 + 给末簇打 EOC。`get_set_cluster(size == 0)` 立刻返回 ⇒ **NULL buffer 不会被解引用** |
+| **变 0** | 同上(`newsize == 0`) | 上游 `filesize == 0` 的专门分支: 清整条链 + 首簇置 0 + size = 0 |
+| **变长** | 从现长起**追加显式零字节**(512 B/次分块) | 上游**没有"扩洞"语义**: 它的 `set_contents` 在 `pos` 落在链尾之外时会走 `assert(!pos)`/`assert(pos == cur_pos)` 那两个死断言, 然后报 "something wrong" 返回 -1(实测)。TC-FAT-008 要求的正是"新区域读回 0"(不是上一个文件的残留), 所以"追加零"与判据同义 —— **判据没有放宽**, 只是把"扩展"写成上游真能接受的形式 |
 
-判据在 `TC-FAT-008`: 1000 B → 300 B 缩短后**读回必须恰好 300 字节**(多一个字节就说明链没释放);
-再 300 B → 600 B 扩大后 `[300, 600)` 必须全是 0。
+判据在 `TC-FAT-008`: 1000 B → 300 B 缩短后**读回必须恰好 300 字节**(多一个字节就说明链没
+释放); 再 300 B → 600 B 扩大后 `[300, 600)` 必须全是 0。
 
-## 5.1 跨操作一致性(实测抓到的三类坑, 全部已修)
+### ★ 为什么 `sync` 现在只剩 `bdev.flush()`
 
-这一节记录的是**只有跑起来才会暴露**的问题, 也是本插件对上游做的最重要的三处加固:
+上游每个写入口(`file_fat_write_at`/`fat_unlink`/`fat_mkdir`/`fat_rename`)在返回前就把 dirty
+的 FAT 窗口(`flush_dirty_fat_buffer`)与目录项(`flush_dir`)落盘了, 而它的 `fsdata` 是**每次
+调用自带、返回前 free** 的局部量 —— 这是上游的模型。上一版的"`fsdata` 归卷"(把 FAT 缓存挂在
+卷上长期持有)是**我们的偏离**, 已随 ADR-0026 撤销: 撤销之后, 两次 API 调用之间不存在未落盘
+的插件内状态, `sync` 的语义就退化成"让设备把已写扇区真正落介质"(设计 `7-02` §1 的 SD-8 口径)。
 
-1. **上游 `set_contents()` 不覆盖"顺序追加"**: 它的"覆盖/追加"二分假设
-   `pos < 链覆盖量`; 而消费者的**分段写**(写 8 B → 写 4 B → 写 9 B)在写满一个整簇后
-   会走到 `pos == 链覆盖量`(长度恰好落在簇边界上)⇒ 上游报越界。
-   本件改成"`ub_fat_at()` 定位 → 三分支: `cov > pos` 覆盖 / `cov == pos` 追加 /
-   `cov < pos` 有洞(拒)", 并且每轮**维护不变量**"`cur` 是要写的簇、`start_off` 是它的起始
-   偏移"。另外上游写完最后一簇后不标 EOC(文件尾仍指向已释放的簇) —— 一起修掉。
-2. **上游 `get_cluster()` 的"尾部不足一扇区"路径会把整扇区读进调用方缓冲**:
-   隐含前提是"调用方缓冲 ≥ 512 B"。消费者用 64 B 栈缓冲读 12 B 文件时就越界
-   (实测 = 栈金丝雀被打爆)。本件改成"读进本函数的扇区缓冲再拷贝 `size` 字节"。
-3. **卷级脏状态不许被静默丢掉**(本插件自己的结构):
-   `fsdata` 挂在卷上长期有效, 于是把"重新识别"做成
-   *①先 `flush_dirty_fat_buffer()` 再换缓存 ②已经有缓存就不再重读 BPB*;
-   并且 `fat_dir_entries()`/`check_path_prefix()` 造的**只读局部副本**显式清掉
-   `fat_dirty`(否则 `get_fatent()` 会把那份"刚读进来、没人改过"的 6 扇区窗口写回盘,
-   覆盖真正的 FAT)。这三条合起来保证"APP 跑完一轮建/写/改名/删之后, 本插件的用例"
-   与"同一序列里每一步"看到的是同一份盘上事实。
-
-## 6. 一致性用例(`TC-FAT-*`, [adapter/fat_selftest.c](adapter/fat_selftest.c))
+## 6. 一致性用例(`TC-FAT-*`, [glue/fat_selftest.c](glue/fat_selftest.c))
 
 | id | 判据 |
 |---|---|
 | TC-FAT-001 | 三个挂载点在挂载表里; 每卷 BPB 判出的 FAT 类型(12/16/32)与**簇数区间**自洽, 设备名对得上 |
-| TC-FAT-002 | 每卷读**宿主预置**的 `hello.txt` 并逐字节比对(`fat12 hello\n` / `fat16 hello\n` / `fat32 hello\n`) |
+| TC-FAT-002 | 每卷读**宿主预置**的 `hello.txt` 并逐字节比对 |
 | TC-FAT-003 | 每卷 `readdir` 根: 头两条是 `.`/`..`; `hello.txt`(type/长度)与 `dir/`(目录)可见; `dir/a.bin` 的 size 与宿主一致 |
-| TC-FAT-004 | `/fat16` 新建 → 三段各 512 B 写 → 关 → 重开读回 1536 B 逐字节一致 |
-| TC-FAT-005 | `SEEK_END` 落在文件尾; EOF 读返回 0; `SEEK_SET(3)` 后读到第 4 字节; 负偏移 ⇒ 负 errno |
+| TC-FAT-004 | `/fat16` 新建 → 三段各 512 B 写(恰好每段一簇)→ 关 → 重开读回 1536 B 逐字节一致 |
+| TC-FAT-005 | `SEEK_END` 落在文件尾; EOF 读返回 0; `SEEK_SET(3)` 后读到第 4 字节(1 字节缓冲!); 负偏移 ⇒ 负 errno |
 | TC-FAT-006 | `/fat32` `mkdir` + 在其中建 100 B 文件 + `stat` 的 type/size 与内容都对 |
 | TC-FAT-007 | 改名后旧名 `stat` ⇒ -ENOENT, 新名内容逐字节一致 |
-| TC-FAT-008 | `truncate` 缩短(读回恰好 300 B)与扩大(新区域全 0); `unlink` 后 ⇒ -ENOENT; 卷级 `sync == 0` **且文件级 `br_file_fsync` == 0**(两条入口同源) |
+| TC-FAT-008 | `truncate` 缩短(读回恰好 300 B)与扩大(新区域全 0); `unlink` 后 ⇒ -ENOENT; 卷级 `sync == 0` **且文件级 `br_file_fsync` == 0** |
 
-**诊断**: 每个 tag 只有一行 PASS/FAIL 时"红在哪一步"看不出来(实测踩过)。所以每个子判据在
-**失败分支**上补一行 `[FATCONF]   <tag> <step> got=<> want=<>`(`fat_diag`/`fat_diag_str`)——
-绿的路径日志不变长, 计数也不受影响。
+**诊断**: 每个 tag 只有一行 PASS/FAIL 时"红在哪一步"看不出来。所以每个子判据在**失败分支**
+上补一行 `[FATCONF]   <tag> <step> got=<> want=<>`(`fat_diag`/`fat_diag_str`)—— 绿的路径
+日志不变长, 计数也不受影响。
+
+★ **TC-FAT-001 的类型/簇数从哪来**: 上游的 `get_fs_info()`/`determine_legacy_fat_bits()` 是
+**static**(单编译单元的私有实现), 没有对外观测点 ⇒ glue 在挂载期用 **vendored
+`struct boot_sector` 布局**只读地解析一遍 BPB(`glue/fat_blk.c` 的 `uboot_fat_vol_probe`,
+判定算法与上游同形并注明出处)。它**只喂判据与日志, 不参与 I/O 决策** —— I/O 全在上游手里,
+而上游每次 API 调用都会自己重解析 BPB。若哪天观测与上游口径分叉, 表现是**挂载判据红**,
+不会变成"读写错了"。类型判定本身另有**间接**判据: TC-FAT-002..008 的读/写闭环在 12/16/32
+三种表宽上都跑过, 表宽判错则读回必然不符。
 
 自检**不删不改**宿主预置文件(tag 2/3 依赖它们); 自己的临时文件用 `tcN_` 前缀并在用例开头
 先 `unlink`(门禁镜像跨次运行是持久的)。
 
 ## 7. 前置工件(宿主必须在 QEMU 之前造好)
 
-三块块设备上的 FAT 卷**不是**本插件格式化的(本插件只读写既有卷), 由构建后门禁造:
-`emmc0.img`(2 MiB, FAT12)、`emmc1.img`(16 MiB, FAT16)、`emmc2.img`(64 MiB, FAT32), 内容:
+三块块设备上的 FAT 卷**不是**本插件格式化的(本插件只读写既有卷), 由构建后门禁 `fs-images`
+用外部权威工具造(`mkfs.fat` + `mcopy`): `emmc0.img`(2 MiB FAT12)、`emmc1.img`(16 MiB FAT16)、
+`emmc2.img`(32 MiB FAT32), 内容:
 
 ```
 /fat12: hello.txt = "fat12 hello\n";          dir/a.bin = 16 个 'A'
@@ -173,64 +197,58 @@ struct uboot_fat_ino {          /* 每次 lookup/create 造一个, free_inode �
         long name file.txt = "lfn\n"
 ```
 
-这些形状作为**常量**写在 [src/fat_internal.h](src/fat_internal.h) 的 `UB_FAT_C*_*` 里
-(自检与 APP 共用一份真值)。宿主造出来的形状与它们不一致 ⇒ TC-FAT-002/003 红 —— 这是判据,
-不是耦合。**未完成事项**: 本刀只交付插件目录, 造镜像脚本与 `tests/gates.toml` 的
-`fat-test` 门禁条目由调用方接管(与 uboot-mmc/uboot-erofs 的分工一致)。
+这些形状作为**常量**写在 [glue/fat_glue.h](glue/fat_glue.h) 的 `UB_FAT_C*_*` 里(自检与 APP
+共用一份真值)。宿主造出来的形状与它们不一致 ⇒ TC-FAT-002/003 红 —— 这是判据, 不是耦合。
 
-## 8. 依赖与构建
+## 8. 依赖、构建与目录分工
 
 | 边 | kind | 理由 |
 |---|---|---|
 | `framework/vfs-core` | init | 实现并注册 `br_fs_ops`/`br_inode_ops`/`br_file_ops` |
 | `framework/bdev-core` | init | `br_bdev_get` 取三块块设备 |
-| `adapter/uboot-mmc` | init | 三块块设备(emmc0/1/2)由它在自己的 start 相注册 |
+| `adapter/uboot-mmc` | init | 三块块设备由它在自己的 start 相注册 |
 
-`src/*.c` 两件(上游派生): `fat_core.c` / `fat_write.c`; `adapter/*.c` 两件(本项目):
-`fat_vfs.c` / `fat_selftest.c`; 私有头两件: `adapter/fat_compat.h`(u-boot/Linux 式类型与
-工具宏 + 字符串小工具)、`src/fat_internal.h`(**唯一**的跨文件声明处)。**不导出 API**
-(没有 `[[export]]`; `[build].includes = ["src", "adapter"]` 只给**同一插件内**两个目录
-互相找头用, 不抛对外头)—— 它的消费面就是 VFS 契约本身。
+```
+adapter/uboot-fat/
+├── plugin.toml      sources = ../../third_party/uboot-imx/fs/fat/fat_write.c + glue/*.c
+├── compat/          u-boot 运行环境(我们写的):
+│     fat_env.h        环境实现头(类型/宏/字符串/日志/堆/块设备 shim/环境桩)
+│     <头名>.h         薄壳: blk.h config.h exports.h log.h part.h malloc.h memalign.h
+│                      rtc.h command.h div64.h rand.h dm/uclass.h linux/{ctype,log2,math64,
+│                      kernel,compiler}.h asm/{byteorder,unaligned,cache}.h
+│     fat.h fs.h rtc_def.h   **转发壳** → vendor 原件(盘上格式只有一处真值)
+├── glue/            本项目对接: fat_blk.c(块层/卷表/BPB/环境实现)
+│                     fat_vfs.c(VFS 四层 ops + 钩子)、fat_selftest.c(TC-FAT-*)
+└── (src/ 这一层**已删除** —— ADR-0026 D-2)
+```
 
-## 8.1 `src/` 与 `adapter/` 的拆分(单向依赖)
-
-GPL 边界靠**依赖方向**而非目录名维持:
-
-- `src/`(**上游派生**, GPL-2.0+): `fat_core.c` / `fat_write.c` / `fat_internal.h`
-  —— 逐字对应 u-boot `fs/fat/**`, 不含任何 `#include <br/...>`;
-- `adapter/`(**本项目**): `fat_compat.h`(u-boot/Linux 式运行环境的**唯一**入口)、
-  `fat_vfs.c`(四层 VFS ops 对接)、`fat_selftest.c`(TC-FAT-*)。
-
-依赖**单向** `src/` → `adapter/`: `src/` 只经 `fat_compat.h` 取运行环境; `adapter/` 反过来
-include `src/fat_internal.h` 是允许的(适配层当然要认识被适配的代码)。
-[plugin.toml](plugin.toml) 据此收 `sources = ["src/*.c", "adapter/*.c"]` /
-`includes = ["src", "adapter"]`, 门禁 `tools/check-third-party-isolation.sh`
-(见 `tests/gates.toml`)机械地守住这条边界。完整理由与逐文件归属见
-[`adapter/README.md`](adapter/README.md)。
+`includes = ["compat", "glue"]`; **不导出 API**(没有 `[[export]]`), 消费面就是 VFS 契约本身。
+★ **不要**把 `third_party/uboot-imx/include` 加进 `includes`: brickie 的 `-I` 按字典序排, 那条
+会盖住 `compat/` 里的同名壳(`<fs.h>`/`<part.h>` 会被解析到 u-boot 的真头, 而那份还要
+`<asm/byteorder.h>`/`<rtc_def.h>` 之类)。转发壳用**相对路径**, 没有这个歧义。
 
 ## 9. 欠债(如实登记)
 > **WORKAROUND(br-wa-emmc-002)**: 本件的**写面端到端用例只在 FAT16 卷上做全**(FAT12/FAT32 只跑了读路径), 且 FAT32 的 FSInfo 空闲簇计数不维护 —— 逐条欠债与退出条件见 `WORKAROUNDS.md`。
 
-
 1. **名字长度**: 长名 > 31 字节在 VFS 面上不可见(`readdir` ⇒ -ENOSPC)。退出条件 =
    `br_dirent_t.name[]` 加宽(或引入 LFN 影子索引), 属 VFS 契约变更。
 2. **非空目录的 rmdir 返回 -EINVAL**(上游 `fat_unlink` 的口径)而不是 -ENOTEMPTY:
-   上游把它当成"参数错"。本刀**没有**改成 -ENOTEMPTY(那要动上游的返回码, 会与
-   "保留上游函数体结构"的纪律冲突); 登记在此, 由调用方决定要不要包一层翻译。
-3. **栈用量**: 写路径的 `get_set_cluster()` 在**栈上**放一个簇大小的缓冲(≤ 32 KiB),
-   `set_sectors()` 的尾段用 512 B。上游用的是"永不释放的静态缓冲", 本件换成栈是为了让
-   静态占用可算。⇒ **本插件的 ops 必须在栈足够大的线程上跑**(v1 的 APP 线程栈量级是 4 KiB,
-   所以这是一条真实约束: 若将来把 FAT 写路径挂到小栈线程上, 必须改成堆缓冲)。
-4. **`used_kib = 80`**: 运行期峰值约 33 KiB(迭代器的簇缓冲)+ 32 KiB(写路径的簇中转)
-   + 3 KiB(FAT 缓存)+ 若干目录流/节点。它不是 manifest 预算生成的(与 tmpfs 的配额
-   同源欠债: `br-wa-mem-001`)。
-5. **单卷单线程假设**: `s_cur_vol`("当前卷")是**插件静态**, 与上游的 `cur_dev` 同型。
-   本件在每次 API 调用前重新 `uboot_fat_vol_bind()`(它只写指针 + 读引导扇区), 但
-   "同时操作两个卷"在 v1 的单 APP 线程模型下不会发生; 多线程消费者(v2)必须加锁或改成
-   "每卷一份上下文"。
-6. **`fsync` 的粒度是"卷"**: FAT 没有 per-file 脏账(数据与目录项在每次写时已落盘, 留在
-   内存里的只有 6 扇区 FAT 窗口)⇒ 文件级 `fsync` 与卷级 `sync` 是同一件事。这在语义上
-   足够(fsync 的承诺是"我写的数据在介质上"), 但**不是** per-file 隔离: 一次 `fsync` 会把
-   该卷上所有挂起的 FAT 更新一起落盘。登记为如实口径。
-7. **目录项顺序无契约**: `readdir` 的顺序 = FAT 目录槽的物理顺序, 不保证与创建顺序一致
-   (FAT 用"第一个够长的空闲槽段", 于是删除过的目录项会被复用)。
+   改成 -ENOTEMPTY 要动上游的返回码 ⇒ 与"不改上游"的纪律冲突; 由调用方决定要不要包一层。
+3. **`assert()` 在本次编译里是空语句**: 与上游一致 —— 两个 fat .c 都没有 `#define DEBUG`,
+   上游 `include/log.h` 的 `assert` 展开在 `_DEBUG == 0` 时本来就不做运行期断言
+   (上游那几处 `assert(pos == cur_pos)`/`assert(!pos)` 是**上游自己的**死代码)。
+   本件**没有**把它们改成"打印 + 返回错误" —— 那正是"改上游"。风险如实登记: 上游写路径在
+   畸形盘上可能带着不满足的断言继续跑(它的错误返回路径仍然在)。
+4. **写路径的簇缓冲**: 上游 `get_set_cluster()` 用**永不释放的静态缓冲**
+   (`static u8 *tmpbuf_cluster`, 首次 `memalign(ARCH_DMA_MINALIGN, MAX_CLUSTSIZE)`)⇒
+   最多 32 KiB 首次分配后常驻。`fsdata` 的 FAT 缓存(3 KiB)是**每次 API 调用**分配/释放
+   (上游口径), 于是 3 KiB 的 malloc/free 会随文件操作次数发生。
+5. **`used_kib = 80`**: 峰值约 32 KiB(写路径簇缓冲)+ 3 KiB(FAT 缓存)+ 512 B(引导扇区,
+   栈上)+ 目录流/节点。它不是 manifest 预算生成的(与 tmpfs 的配额同源欠债 `br-wa-mem-001`)。
+6. **单卷单线程假设**: `s_cur_vol`("当前卷")是**插件静态**, 与上游的 `cur_dev` 同型; 每个
+   入口重新 bind。多线程消费者(v2)必须加锁或改成"每卷一份上下文" —— 与
+   `WORKAROUNDS.md` 的 `br-wa-boot-002`(自检 pass 的抢占窗口)同族。
+7. **`fsync` 的粒度是"卷"**: 数据与目录项在每次写时已落盘, 所以文件级 `fsync` 与卷级 `sync`
+   都是 `bdev.flush()`。一次 `fsync` 会把该卷上所有已写扇区一起落——语义足够, 但不是 per-file
+   隔离。
+8. **目录项顺序无契约**: `readdir` 的顺序 = FAT 目录槽的物理顺序, 不保证与创建顺序一致。

@@ -1,7 +1,10 @@
-third_party/uboot-fat — 第三方来源与许可说明
-=============================================
+adapter/uboot-fat — 第三方来源与许可说明
+=========================================
 
-本目录下的源码是 **u-boot(NXP 下游分支)FAT 文件系统的移植/改写**。
+本插件把 **u-boot(NXP 下游分支)FAT 文件系统**接进 brickOS。上游源码**原样参与编译**:
+它留在 `third_party/uboot-imx/`(只读 vendor 树, 逐字节 = 上游, 由
+`adapter/third-party-upstream.lock` 的 sha256 锁守), 本目录**没有它的副本**; 本目录里是我们
+写的东西 —— `compat/`(环境)与 `glue/`(对接)。见 `ADAPTER-NOTES.md` 与 ADR-0026。
 
 来源
 ----
@@ -9,111 +12,96 @@ third_party/uboot-fat — 第三方来源与许可说明
   分支    : lf_v2026.04
   commit  : bb41975aeb4cbd153b49c9fd62da1d64cd65968d
 
-逐文件对照(源 → 本目录)
-------------------------
-★ 本目录分两侧(见 `adapter/README.md`): `src/` = 上游派生件; `adapter/` = 本项目写的
-  适配层(无上游对应物)。下表逐条标明归属, 免得把两侧混为一谈。
-
-  fs/fat/fat.c         (1448 行, GPL-2.0+, Copyright 2002 Marcus Sundberg /
-                        rjones@nexus-tech.net / kharris@nexus-tech.net)
-      → src/fat_core.c  读路径整段: 卷识别(引导扇区/BPB/FAT 类型判定)、FAT 表读取、
-                        目录迭代器(fat_itr)、路径→目录项解析、只读文件面、目录流;
-                        **外加**本项目的块层 shim(disk_read/disk_write)与卷生命周期
-                        (uboot_fat_vol_bind/unbind/info)
+参与编译的上游文件(在 third_party 里, 本目录不存副本)
+----------------------------------------------------
   fs/fat/fat_write.c   (2179 行, GPL-2.0+, Copyright Donggeun Kim / Samsung)
-      → src/fat_write.c 写路径整段: 8.3/长名生成、空闲目录槽、FAT 表写入与簇分配、
-                        set_contents、unlink/mkdir/rename; **外加** uboot_fat_truncate()
-                        (上游没有这个函数 —— 本件用上游的同一套原语拼出来的)
-  include/fat.h        (GPL-2.0+)
-      → adapter/fat_compat.h 盘上结构(boot_sector/volume_info/dir_entry/dir_slot/nameext/
-                         fsdata)+ 属性位 + FAT 判据宏,FATBUF* 上界;**数值逐字对齐**
-  include/fs.h         (GPL-2.0+)
-  fs/fat/fat_write.c   (fat_dir 类型)
-      → src/fat_internal.h 目录流(fat_dir)与迭代器(fat_itr)的内部形态;
-                            `struct fs_dirent` 与本项目的 `br_dirent_t` 的对接说明
-  (无上游对应)
-      → adapter/fat_vfs.c    VFS 契约对接(br_fs_ops/br_inode_ops/br_file_ops)+ 生命周期钩子
-      → adapter/fat_selftest.c  TC-FAT-001..008
+      ★ **唯一**被本插件编译的上游 .c。它第 23 行 `#include "fat.c"` ⇒ 同一个编译单元里
+        同时含读路径(上游 `fs/fat/fat.c`, GPL-2.0+, Copyright 2002 Marcus Sundberg /
+        rjones@nexus-tech.net / kharris@nexus-tech.net)。**不要**再单独编 `fat.c`(重复符号)。
+  include/fat.h        (GPL-2.0+)  盘上结构/属性位/FAT 判据宏 —— 经 `compat/fat.h` 转发
+  include/fs.h         (GPL-2.0)   `struct fs_dirent`/`fs_dir_stream`/`FS_DT_*` —— 经 `compat/fs.h` 转发
+  include/rtc_def.h    (GPL-2.0+)  `struct rtc_time`(被 `fs.h` 引用)—— 经 `compat/rtc_def.h` 转发
+      ★ 这个文件是本插件**新引入的 vendor 原件**: 逐字节取自 `build/uboot-ref/uboot.tar.gz`
+        (`include/rtc_def.h`), 并已在 `adapter/third-party-upstream.lock` 里补了 sha256。
+        本件 v1 没有 RTC(`CONFIG_DM_RTC=0`), 它只被用来成立 `struct fs_dirent` 的**布局**。
 
-未移植清单(明确**不**做的)
---------------------------
-  1. u-boot 的 DM/uclass/blk 粘合层: `drivers/block/**`、`disk/part.c`
-     (MBR/GPT 分区表)、`blk_dread/blk_dwrite`、`struct blk_desc`。本件用 bdev-core 的
-     `br_bdev_ops_t` 取代, 并**把"整设备一个分区"写进 shim**(分区映射器属 bdev-core 的 SD-9,
-     v1.x)。
-  2. `fs/fat/fat.c` 的 `file_fat_detectfs()`(它打印 u-boot 的设备信息)、
-     `fat_uuid()`(要 sprintf)、`fat2rtc()`/`struct rtc_time`(v1 无 RTC)。
-  3. `fs/fs.c`(u-boot 的 fs 层派发: fs_set_blk_dev/fs_read/fs_write/fs_exists/…):
-     本项目的等价物是 framework/vfs-core, 所以这一层**不移植**, 由 fat_vfs.c 直接对接。
-  4. `CONFIG_FS_FAT_MAX_CLUSTSIZE` 之外的配置项、`CONFIG_EFI_LOADER` 分支(时间戳)、
-     `CONFIG_DM_RTC` 分支、`CONFIG_FAT_WRITE` 只读编译分支。
-  5. 上游的 `assert()`(本件改成显式判错 + -EIO)。
-
-改写要点(相对上游的**有意偏离**)
+本目录里我们的东西(无上游对应物)
 --------------------------------
-  0. **errno 名字是 core 给的, 本件不带映射表**(ADR-0023): 上游代码里的裸名字
-     (`-EIO`/`-ENOENT`/`-ENOSPC`/…) 来自 `<br/core/br_errno.h>` —— 那份名字表与
-     `br/core/br_error.h` 的数值一一对应(值逐字取自 Linux 内核, 宿主 `ft-test` 逐码对拍),
-     且**无条件可用**(不依赖 `runtime/posix` 是否在组合里)。此前 compat 层自带 12 行
-     `#define EIO BR_EIO`, 那既是第二处真值, 也是对上游代码的多余改动; 现已删除。
-  1. **块层换掉**: `struct blk_desc`/`disk_partition`/`blk_dread`/`blk_dwrite`
-     → 一个"当前卷"(uboot_fat_vol_t)+ `br_bdev_ops_t.read/write`。分区的起始扇区恒 0
-     ("整设备一个分区"), 于是上游的 `cur_part_info.start + block` 恒等于 `block`。
-     单次 I/O **按 geometry.max_rw 切块**(实测 64 扇区 = 32 KiB), 上游没有这条约束。
-  2. **DMA 相关的一切删掉**: `malloc_cache_aligned()`/`ALLOC_CACHE_ALIGN_BUFFER`/
-     `ARCH_DMA_MINALIGN` 与"缓冲未对齐就逐扇区中转"的分支。本件的数据通路是裸 memcpy
-     (块设备驱动自己有 DMA), 而 core 堆的对齐 ≥ 16 B 覆盖本插件的全部对齐需求。
-  3. **fsdata 归卷**(结构级偏离): 上游每个上层 API 自带 `fsdata fsdata;`(用完 free) ⇒
-     "读一次文件"就 malloc/free 一次 3 KiB 的 FAT 缓存, 且写路径跨调用**不保留**未回写的
-     FAT 修改。本件把 fsdata 挂在**卷**上长期持有(重识别前先归还缓存) ⇒ 3 KiB 只分配一次,
-     且"新建 → 写 → 关 → 再读"在同一卷上天然一致。代价: 每次(重)识别多读一遍引导扇区。
-  4. **`strdup` → 栈上有界缓冲**(UB_FAT_PATH_MAX = 256): 无 libc, 而路径本来就有静态上界。
-     收益是少了三处 malloc 失败路径。
-  5. **`rand()` 去掉**: 上游用随机数挑"~N"短名后缀的起点。候选空间本来就是确定性的
-     (它自己从 i=1 逐个试), 去掉 rand 不改变"找一个不冲突的短名"这个契约。
-  6. **上游缺陷修复**(逐条都在宿主/真镜像上抓到过, 详见 README §5.1):
-     · `set_fatent_value()`/`get_fatent()` 里 `flush_dirty_fat_buffer()` 的返回值被丢弃
-       (上游写成 `< 0` 却不管返回值)—— 本件显式失败;
-     · `get_fatent()` 可能拿着 `getsize == 0` 去 `disk_read()`(返回 0 = "成功"),
-       于是把过期缓存当新块用 —— 本件显式拒绝;
-     · **`set_contents()` 整段重写**(不是逐行移植): 上游的"覆盖/追加"二分不覆盖
-       `pos == 链覆盖量` 的**顺序追加**(消费者分段写在写满整簇后会走到这里)⇒ 报越界;
-       写完最后一簇后不标 EOC ⇒ 文件尾指向已释放的簇; `maxsize == 0` 会走"清空整条簇链"
-       分支 ⇒ 零长度写毁文件; 四处 `assert()` 在无 libc 构建里是空语句。
-       本件用**同一套原语**(get_fatent/set_fatent_value/clear_fatent/find_empty_cluster/
-       determine_fatent/set_cluster/get_set_cluster/check_overflow)重写成
-       "定位 → 逐簇写(整簇 / 读改写)→ 末尾标 EOC 并释放尾巴";
-     · `get_cluster()` 的"尾部不足一扇区"路径把**整扇区**读进调用方缓冲 —— 隐含
-       "调用方缓冲 ≥ 512 B"的前提。本件改成经本函数的扇区缓冲拷贝 `size` 字节;
-     · `fat_dir_entries()`/`check_path_prefix()` 复制 fsdata 时把 `fat_dirty` 一起抄走:
-       副本是只读缓存, 带着脏标志会让 `get_fatent()` 把陈旧窗口写回盘。本件显式清零。
-  6b. **卷级缓存生命周期**(本插件自己的结构, 非上游): `fsdata` 归卷长期持有 ⇒
-      ①重新识别前必须先回写 dirty 的 FAT 窗口(不许静默丢弃);
-      ②已有缓存就不再重读 BPB(少一次 I/O, 且杜绝"操作之间重建缓存"这类跨操作不一致)。
-  7. **簇号上界**: 上游的 `determine_fatent()`/`find_empty_cluster()` 用 `while (1)` 扫描
-     空闲簇, 卷满时**永不返回**(它会一直越过 FAT 表末端继续"分配")。本件按卷几何算出
-     簇号上界, 越界 ⇒ 返回 0(调用方按 -ENOSPC 处理)。
-  8. **`assert()` 全删**: 换成"打印 + 返回 -EIO"。盘上数据畸形时打死内核不是正确的答复。
-  9. **函数名**: 上游的裸字符串调用点改成 `uboot_fat_*`(strlen/strcmp/strncmp/strcpy/
-     strchr/strrchr/tolower/strcasecmp/strncasecmp)与 `memcpy/memset/memmove/memcmp`
-     (后者由 core 提供)。**不做 `#define strlen …` 这种宏替换** —— 宏会污染整个编译单元,
-     显式前缀让"哪些是自研实现"一眼可查(代价是移植代码的调用点与上游拼写不同)。
- 10. **拆 TU**: 上游用 `#include "fat.c"` 把读路径塞进 fat_write.c 的编译单元; 本件按本项目
-     纪律拆成 fat_core.c / fat_write.c, 跨文件的函数提成非 static 并在 fat_internal.h 声明。
-     同一原因: `fat_itr_root()` 的签名从 `(itr, fsdata)` 收成 `(itr)`(fsdata 归卷)。
- 11. **`printf` → `br_log_error`**, 且数据路径上"打印并继续"改成"打印 + 返回错误码"。
- 12. `__maybe_unused`/`CONFIG_IS_ENABLED` 之类 u-boot 宏全部拆掉。
- 13. **`fops->fsync` 是新增能力**(上游没有"句柄级落盘"这个概念): 上游的 fs 层把
-     "落盘"留给块设备。本件把 `fs_ops.sync` 与 `br_file_ops.fsync` 实现为**同一段代码**
-     (`uboot_fat_flush_volume()`: 回写 dirty FAT 窗口 + `bdev.flush()`)。留 `BR_NULL` 会让
-     `fsync(fd)` 在可写介质 FS 上返回 -ENOTSUP —— 那是能力缺口, 不是 v2 增量。
+  compat/fat_env.h        u-boot 运行环境: 类型/宏/字符串小工具/日志/堆/块设备 shim/环境桩
+  compat/<头名>.h         20 个薄壳(blk.h config.h exports.h log.h part.h malloc.h memalign.h
+                          rtc.h command.h div64.h rand.h dm/uclass.h linux/{ctype,compiler,log2,
+                          math64,kernel}.h asm/{byteorder,unaligned,cache}.h)
+  compat/{fat.h,fs.h,rtc_def.h}   **转发壳** → third_party 里的上游原件(盘上格式只有一处真值)
+  glue/fat_blk.c          块层 shim(blk_dread/blk_dwrite)+ 卷表 + BPB 观测 + 环境实现
+                          (strdup/sprintf/rand)+ 截断(只用上游公开 API)
+  glue/fat_vfs.c          VFS 契约对接(br_fs_ops/br_inode_ops/br_file_ops)+ 生命周期钩子
+  glue/fat_selftest.c     TC-FAT-001..008
+  glue/fat_glue.h         插件内部契约(常量/结构/原型; 不导出)
+  (上一版的 `src/fat_core.c` / `src/fat_write.c` / `src/fat_internal.h` 这一层**已删除**
+   —— 它们是改写副本, 正是 ADR-0026 要消灭的东西)
+
+与上游的偏离(逐条)
+------------------
+★ 一句话: **上游 .c 一个字节都没改**(判据 = `tools/check-third-party-pristine.sh` 的哈希锁)。
+   下面这些"偏离"全部发生在**我们的适配层**, 是"给上游环境"的形态差别, 不是"改上游":
+
+  1. **块层**: u-boot 的 `struct blk_desc`/`disk_partition`/`blk_dread`/`blk_dwrite` 由
+     `compat/fat_env.h` 的**极小 shim** + `glue/fat_blk.c` 兑现: "整设备一个分区"
+     (起始扇区 0, 扇区数 = `geometry.n_sectors`)⇒ 上游 `cur_part_info.start + block` 恒等于
+     `block`; 单次 I/O 按 `geometry.max_rw` 切块(上游没有这条约束, 本件加在 shim 里);
+     越界 lba 直接拒绝(上游没有这道守卫)。
+  2. **多卷**: 上游只认"当前卷"(`fat.c` 的 `static cur_dev/cur_part_info`), 本件挂 3 卷 ⇒
+     glue 在**每个入口**先 `uboot_fat_vol_bind()`(切当前卷 + 刷新 shim 的分区描述符 + 调
+     上游自己的 `fat_set_blk_dev` 做引导扇区校验)。这是"多卷"这件事在本插件里唯一的实现点。
+  3. **无 libc 的那几个函数**: `malloc/free/realloc/calloc` → core(`br_*`); `memcpy/memset/
+     memcmp/memmove` → core 提供(项目纪律); `strlen/strcmp/…` → `compat/fat_env.h` 的自研
+     `uboot_fat_*`(经宏接上上游的裸名字); `strdup/sprintf` → `glue/fat_blk.c`
+     (有界/无 libc); `rand()` → 确定性 LCG(u-boot 的 `rand()` 在 vendor 树里没有原件)。
+  4. **`assert()` 是空语句** —— 与上游这一次编译**本来**的行为一致: 两个 fat .c 都没有
+     `#define DEBUG`, 上游 `include/log.h` 的 `assert` 在 `_DEBUG == 0` 时不做运行期检查。
+     本件保持"表达式仍被类型检查、运行期不求值"。★ 上一版把这些断言改成"打印 + 返回 -EIO",
+     那是**改上游**; 现在撤销, 并如实登记其风险(见 README §9)。
+  5. **`printf`/`log_err` → `br_log_write(BR_LOG_ERROR, ...)`**(内容逐字保留, 前缀
+     `uboot-fat: `); `debug` 缺省不输出(上游 `debug_cond(_DEBUG, …)` 的同一行为),
+     需要诊断时把 `UBOOT_FAT_VERBOSE_DBG` 置 1。**控制流仍由上游自己的 `return` 决定**,
+     我们没有把"打印并继续"改成"打印 + 返回错误"。
+  6. **编译期配置**: `CONFIG_FAT_WRITE=1`(⇒ 只有上游 `fat_write.c` 里那一份
+     `flush_dirty_fat_buffer`; `fat.c` 里的只读桩**不编**)、`CONFIG_EFI_LOADER=0`、
+     `CONFIG_DM_RTC=0`、`CONFIG_FS_EXFAT=0`、`CONFIG_FS_FAT_MAX_CLUSTSIZE=32768`。
+     于是上游那些 `CONFIG_IS_ENABLED(...)` 分支**按其原文成立**, 不用我们删代码。
+  7. **`truncate`**: 上游没有这个入口。本件在 glue 里**只用上游公开 API** 拼: 变短/变 0 走
+     `file_fat_write_at(path, newsize, NULL, 0, …)`(上游自己的 "truncate the rest" 与
+     `filesize == 0` 分支); 变长(**上游没有"扩洞"语义**)走"从现长起追加显式零字节"。
+     ★ 上一版那 160 行的 `uboot_fat_truncate()` 改写**已删除**。
+  8. **`fsdata` 不再"归卷"**: 上游每个 API 自带一份 `fsdata`(用完 free), 本件**照它的口径**
+     调用 ⇒ 上一版"卷长期持有 FAT 缓存"的偏离(以及"每个入口记得刷新 `total_sector`"这条
+     不变量)撤销。卷级 `sync`/文件级 `fsync` 因此只剩 `bdev.flush()`(数据与目录项在上游的
+     每个写入口内部就已落盘)。
+  9. **DM/RTC/分区表那一族是环境桩**: `part_get_info`/`disk_partition_clr_uuid`/
+     `blk_enabled`/`blk_get_uclass_name`/`dev_print`/`uclass_first_device`/`dm_rtc_get`/
+     `rtc_calc_weekday` 只被上游**没人引用的**函数(`fat_register_device`/`file_fat_detectfs`/
+     `fat2rtc`)调用, 在 `-ffunction-sections` + `--gc-sections` 下不进镜像。
+ 10. **BPB 观测**: 上游的 `get_fs_info()`/`determine_legacy_fat_bits()` 是 static(没有对外
+     观测点)⇒ `glue/fat_blk.c` 用 vendored `struct boot_sector` **只读地**再解析一遍, 供
+     挂载判据(TC-FAT-001 + 几何校验)使用; 判定算法与上游同形并注明出处。它不参与 I/O 决策。
+ 11. **`-Wno-*` 的口径**: 本插件按**上游自己的告警集合**编译(见 plugin.toml 的
+     `[build].cflags`)。上游的形参故意遮蔽类型名/外层变量、对 `void *` 做算术、单编译单元
+     风格的前置声明缺失 —— 这些都**不能**靠改上游来消除(那正是本刀要消灭的"就地改三方件")。
+
+未移植/不参与编译的上游物(明确不做)
+----------------------------------
+  1. u-boot 的 DM/uclass/blk 粘合层(`drivers/block/**`、`disk/part.c`、MBR/GPT 分区表):
+     等价物是 `framework/bdev-core`; 本件把"整设备一个分区"写进 shim(分区映射器属 bdev-core
+     的 SD-9, v1.x)。
+  2. `fs/fs.c`(u-boot 的 fs 层派发): 等价物是 `framework/vfs-core`, 由 `glue/fat_vfs.c` 直接对接。
+  3. 上游 `lib/string.c` 的 `strdup/strchr/strrchr/strcasecmp/sprintf` 与 u-boot 的 `rand()`
+     实现: 本件自带(理由见上), 不把它们 vendor 进来。
 
 许可
 ----
   上游文件均标 `SPDX-License-Identifier: GPL-2.0+`(即 GPL-2.0 或更新版本)。
-  本移植件同样以 **GPL-2.0-or-later** 分发, 全文见同目录 `LICENSE.GPL-2.0`。
-  ★ `src/` 下每个文件都带与对应上游文件一致的 SPDX 标识(ADR-0024 D-4; 判据 =
-  `tools/check-third-party-isolation.sh`)。上游每个文件都有, 派生件丢了它就是署名回归。
-  ⚠ 本目录与 `third_party/uboot-mmc`、`third_party/uboot-erofs` 一样, 是 brickOS 原型树内
-  的 GPL 代码区; `framework/**`、`core/**`、`platform/**` 保持 WTFPL。残余风险(静态链接后
-  整镜像构成 GPL 组合作品)登记在 `../../WORKAROUNDS.md` 的 `br-wa-tp-001`。
+  本插件同样以 **GPL-2.0-or-later** 分发, 全文见同目录 `LICENSE.GPL-2.0`。
+  ★ 上游文件的 SPDX 行**保持原样**(我们不改 vendor 树, 也就不会丢署名)。
+  ⚠ 本目录与 `adapter/uboot-mmc`、`adapter/uboot-erofs` 一样, 是 brickOS 原型树内的 GPL
+  代码区; `framework/**`、`core/**`、`platform/**` 保持 WTFPL。残余风险(静态链接后整镜像
+  构成 GPL 组合作品)登记在 `../../WORKAROUNDS.md` 的 `br-wa-tp-001`。

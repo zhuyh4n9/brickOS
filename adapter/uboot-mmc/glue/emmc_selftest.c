@@ -5,8 +5,17 @@
  * `docs/decisions/0021-bdev-pci-emmc.md` D-4/D-5(中断 + ADMA2/PIO + flush 口径)、
  * `docs/decisions/0022-erofs-fat.md`(四块卡的分工与"擦写区"约定)。
  *
+ * WORKAROUND(br-wa-test-001): `TC-EMMC-*` 是**自编号** —— 设计 `6-01` 的用例表里
+ * 没有 eMMC 这一族(那一版把块设备并进了 BDEV/IO 两族)。本套件的编号与判据由
+ * ADR-0021/0022 定, 登记在 `WORKAROUNDS.md`。
+ *
  * 只经**公开面**驱动: `br_bdev_get`(bdev-core 类 API)+ `br_dev_*`(dev-core 注册表)+
  * 器件 ioctl 编码。不看任何内部状态 —— 否则"经 bdev 真的能写进去再读出来"这件事就没有判据。
+ *
+ * ★ ADR-0026 之后本文件的**语义与判据一字未改**: 上游原件(`drivers/mmc/` 下的全部文件)参与编译、
+ *   glue 只做对接, 所以"经 bdev 往返"这条判据现在同时钉住了"上游协议栈真的在跑"。
+ *   内部实现上唯一的变化: 8 扇区/32 扇区缓冲仍是静态数组(与旧形态同源), 外加**中断计数
+ *   对照**(见下面 `irq_mark`/`irq_report`)—— 那是 ADR-0021 D-4"ISR→bh→唤醒"的可观测判据。
  *
  * ## 为什么每次都"先写后读"
  *   门禁的后备镜像里, `emmc0/1/2` 上**装着活的 FAT 卷**(由宿主用 mkfs.fat + mcopy 造好),
@@ -71,6 +80,52 @@ static void em_name(char *out, br_u32 idx)
     out[5] = '\0';
 }
 
+/* ==================================================================== 中断计数对照
+ *
+ * 任务书(§5 报告格式)与 ADR-0021 D-4 都要求"中断驱动"**可观测**: 不能只是注释里写着
+ * "我们用中断", 而实际靠 `udelay`/`get_timer` 的纯超时轮询兜过去。判据:
+ *   传输期间该卡 INTx 的 ISR 次数必须**随命令数增长**(每一条 CMD 至少一次 RESPONSE/数据
+ *   事件), 且与命令数**同量级**(不成比例就意味着在靠拍子超时)。
+ * 所以每个用例前后各取一次快照, 把增量打进日志(门禁不要求这些行, 但它们必须可判读)。
+ */
+typedef struct irq_mark {
+    br_u32 isr;
+    br_u32 bh;
+    br_u32 drop;
+    br_u32 wake_irq;
+    br_u32 wake_sem;
+    br_u32 wake_to;
+} irq_mark_t;
+
+static irq_mark_t irq_mark(br_u32 idx)
+{
+    irq_mark_t m = { 0u, 0u, 0u, 0u, 0u, 0u };
+    uboot_mmc_irq_counts(idx, &m.isr, &m.bh, &m.drop, &m.wake_irq, &m.wake_sem, &m.wake_to);
+    return m;
+}
+
+/*
+ * 一次传输的**中断对照行**。这一行是 ADR-0021 D-4("ISR→bh→唤醒等待线程")的实测证据,
+ * 也是"到底靠中断还是靠超时兜过去"的判据:
+ *   ISR +N     —— 传输期间设备真的投递了 N 次电平中断(不是注释里写着"我们用中断");
+ *   wake +A/+T —— 等待原语被中断唤醒 A 次、靠 1 ms 兜底超时返回 T 次。
+ *                 ★ 判据是 **A ≫ T**: 若 T 与 A 同量级, 那就是"靠超时轮询兜过去",
+ *                   必须在本行与交付报告里如实说明(见 emmc_internal.h 的字段说明)。
+ */
+static void irq_report(const char *tag, br_u32 idx, const char *dev,
+                       irq_mark_t before, irq_mark_t after)
+{
+    br_log_info("uboot-mmc: IRQ[%s] %s ISR +%u (total %u), bh +%u, drop +%u, "
+                "wake irq/token/timeout +%u/+%u/+%u",
+                tag, dev,
+                (unsigned)(after.isr - before.isr), (unsigned)after.isr,
+                (unsigned)(after.bh - before.bh), (unsigned)(after.drop - before.drop),
+                (unsigned)(after.wake_irq - before.wake_irq),
+                (unsigned)(after.wake_sem - before.wake_sem),
+                (unsigned)(after.wake_to - before.wake_to));
+    (void)idx;
+}
+
 int uboot_mmc_selftest(void)
 {
     s_em_pass = 0u;
@@ -129,22 +184,32 @@ int uboot_mmc_selftest(void)
     /* ---- 004: 越界访问被拒(不发给卡) ---- */
     {
         int rc = 0;
+        const irq_mark_t before = irq_mark(assets_idx);
         if (ops[assets_idx] != BR_NULL) {
             rc = ops[assets_idx]->read(priv[assets_idx], geo[assets_idx].n_sectors, s_b, 1u);
         }
+        const irq_mark_t after = irq_mark(assets_idx);
         em_conf(rc < 0, "TC-EMMC-004", "read(lba == n_sectors) ⇒ 负 errno(越界不落卡)");
+        if (after.isr != before.isr) {
+            /* 越界必须在**本层**就被拒: 一条命令都不该发给卡 ⇒ ISR 不该涨。 */
+            br_log_info("uboot-mmc: IRQ[TC-EMMC-004] 越界却产生了 %u 次中断(应当为 0)",
+                        (unsigned)(after.isr - before.isr));
+        }
     }
 
     /* ---- 005: 默认(DMA)通路: 擦写区 8 扇区写后读回一致 ---- */
     {
         em_fill(s_a, 8u * 128u, 0xE3E30000u);
+        const irq_mark_t before = irq_mark(assets_idx);
         br_bool ok = BR_FALSE;
         if (ops[assets_idx] != BR_NULL) {
             const int w = ops[assets_idx]->write(priv[assets_idx], BR_EMMC_SCRATCH_LBA, s_a, 8u);
             const int r = ops[assets_idx]->read(priv[assets_idx], BR_EMMC_SCRATCH_LBA, s_b, 8u);
             ok = (w == 8) && (r == 8) && em_same(s_a, s_b, 8u * 128u);
         }
+        const irq_mark_t after = irq_mark(assets_idx);
         em_conf(ok, "TC-EMMC-005", "默认 ADMA2 通路: 擦写区 8 扇区 write→read 逐字一致");
+        irq_report("005/ADMA2-8sec", assets_idx, BR_EMMC_ASSETS_DEV, before, after);
     }
 
     /* ---- 006: 在**一块**卡上切 PIO: 该卡几何随之报 PIO, 别的卡仍报 DMA ---- */
@@ -168,6 +233,7 @@ int uboot_mmc_selftest(void)
     /* ---- 007: PIO 通路 8 扇区写后读回一致 ---- */
     {
         em_fill(s_a, 8u * 128u, 0x06060000u);
+        const irq_mark_t before = irq_mark(assets_idx);
         br_bool ok = BR_FALSE;
         if (ops[assets_idx] != BR_NULL) {
             const br_u64 lba = BR_EMMC_SCRATCH_LBA + 64u;
@@ -175,7 +241,9 @@ int uboot_mmc_selftest(void)
             const int r = ops[assets_idx]->read(priv[assets_idx], lba, s_b, 8u);
             ok = (w == 8) && (r == 8) && em_same(s_a, s_b, 8u * 128u);
         }
+        const irq_mark_t after = irq_mark(assets_idx);
         em_conf(ok, "TC-EMMC-007", "PIO 通路: 8 扇区 write→read 逐字一致");
+        irq_report("007/PIO-8sec", assets_idx, BR_EMMC_ASSETS_DEV, before, after);
     }
 
     /* ---- 008: 切回 ADMA2 做 32 扇区多块 DMA + flush + GET_INFO 回答自洽 ---- */
@@ -185,6 +253,7 @@ int uboot_mmc_selftest(void)
         const br_u32 path = BR_MMC_PATH_DMA;
         br_emmc_info_t info;
         em_fill(s_a, 32u * 128u, 0xD0D00000u);
+        const irq_mark_t before = irq_mark(assets_idx);
         br_bool ok = BR_FALSE;
         if (ops[assets_idx] != BR_NULL) {
             const br_u64 lba = BR_EMMC_SCRATCH_LBA + 128u;
@@ -199,8 +268,23 @@ int uboot_mmc_selftest(void)
                  (info.sector_size == 512u) && (info.path == BR_MMC_PATH_DMA) &&
                  (info.bus_width == 4u || info.bus_width == 8u || info.bus_width == 1u);
         }
+        const irq_mark_t after = irq_mark(assets_idx);
         em_conf(ok, "TC-EMMC-008",
                 "SET_PATH(DMA) 后 32 扇区 ADMA2 多块一致; flush == 0; GET_INFO 自洽");
+        irq_report("008/ADMA2-32sec", assets_idx, BR_EMMC_ASSETS_DEV, before, after);
+    }
+
+    /* ---- 每块卡一条可判读的中断计数行(证明 INTx 真的投递并被 ISR/bh 处理) ---- */
+    for (br_u32 i = 0u; i < BR_EMMC_MAX_DEVS; i++) {
+        char nm[BR_EMMC_NAME_MAX];
+        em_name(nm, i);
+        br_u32 isr = 0u, bh = 0u, drop = 0u, wq = 0u, ws = 0u, wt = 0u;
+        uboot_mmc_irq_counts(i, &isr, &bh, &drop, &wq, &ws, &wt);
+        br_log_info("uboot-mmc: /dev/%s IRQ count=%u (bh=%u, dropped=%u, wake irq/token/timeout/spin=%u/%u/%u/%u), idle-signal=%s",
+                    nm, (unsigned)isr, (unsigned)bh, (unsigned)drop,
+                    (unsigned)wq, (unsigned)ws, (unsigned)wt,
+                    (unsigned)uboot_mmc_wake_spin(i),
+                    (uboot_mmc_irq_idle(i) == BR_TRUE) ? "flat" : "ASSERTED");
     }
 
     br_log_info("[EMMCCONF] SUMMARY pass=%u fail=%u total=%u",

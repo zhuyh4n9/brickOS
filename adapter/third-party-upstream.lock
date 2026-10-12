@@ -132,3 +132,27 @@ sha256 = "01670ab77447f119826efca6728f56026eafb075be621d79c4a8b9685a260862"
 [[file]]
 path   = "include/rtc_def.h"
 sha256 = "f69b5c0f6210d22d1a7c87a98f5540534c560c2dd8c6cc5a13818e8e105a60ee"
+
+[[file]]
+path   = "drivers/mmc/mmc_legacy.c"
+sha256 = "c36fc94684f28d7321db301d2bfbb3167383fea3c9cb84e742cc5619dd34c326"
+
+[[file]]
+path   = "include/dm/uclass-id.h"
+sha256 = "1a28c6145f952b0e738fc89067d51580147a417abdc6c2b7112615bf1f23591b"
+
+[[file]]
+path   = "include/linux/kconfig.h"
+sha256 = "63be846a3c9c8f4256eff5f0c4e1db870c6b32909d00c80267c08c2ce9b90149"
+
+[[file]]
+path   = "include/linux/list.h"
+sha256 = "a4a05d3104d6c8473e0c1e91caf2c01570365a058c1b7a3c64b8a3d6729237fe"
+
+[[file]]
+path   = "include/linux/poison.h"
+sha256 = "1c2110a1cccc38a086b60da92b416b6881703f2163c0d610d01551a0afa95da5"
+
+[[file]]
+path   = "include/memalign.h"
+sha256 = "28500a461ad4504b4a9394c878f72bdd7e5052ce04872cf90bf5ef352a0f4917"
