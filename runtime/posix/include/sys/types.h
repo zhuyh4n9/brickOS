@@ -36,10 +36,10 @@ typedef unsigned int  mode_t;
 typedef int           pid_t;
 typedef unsigned int  uid_t;
 typedef unsigned int  gid_t;
-typedef unsigned int  dev_t;
+typedef unsigned long dev_t;      /* POSIX/LP64 = 8 B(原为 unsigned int = 4 B, 与宿主不一致) */
 typedef unsigned long ino_t;
 typedef unsigned long nlink_t;
-typedef unsigned int  blksize_t;
+typedef long          blksize_t;  /* POSIX/LP64 = 8 B(原为 unsigned int = 4 B, 与宿主不一致) */
 typedef long          blkcnt_t;
 typedef long          time_t;          /* 秒(见 time.h 的"没有墙钟"说明) */
 typedef long          suseconds_t;

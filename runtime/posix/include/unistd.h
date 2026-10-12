@@ -41,6 +41,12 @@ int   chdir (const char *path);
 char *getcwd(char *buf, size_t size);
 
 /* ---- 权限(本代 = 存在性检查 + 一律放行; 见 ADR-0014)---- */
+/* POSIX 必需的标准描述符编号。本仓的 fd 0/1/2 由 runtime/posix 的初始化
+ * 绑定到 console(见该插件的 start 钩子)。 */
+#define STDIN_FILENO   0
+#define STDOUT_FILENO  1
+#define STDERR_FILENO  2
+
 #define F_OK  0
 #define X_OK  1
 #define W_OK  2

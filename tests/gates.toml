@@ -317,6 +317,18 @@ argv = ["bash", "tools/check-workarounds.sh"]
 #   不参与编译 —— 参与编译的是 adapter/ 里的移植件)。
 #   ★ 为什么必须有这条: 上一轮反复犯的正是"顺手改一行三方件让它编过"(加注释/SPDX、
 #     改 include、删裁剪)。纪律写在文档里拦不住, 写成 hash 锁才拦得住。
+# check-posix-conformance: iface/posix 与 **POSIX 一致**的门禁(ADR-0028)。
+# ★ 它守的是"APP 看见的 POSIX 面必须与真 POSIX 一致" —— 不一致的后果不是编不过, 而是
+#   **静默错值**(类型宽度不同 ⇒ 布局不同)、**flag 位含义不同**(常量不同)、
+#   或**移植代码编不过**(少一个必需的名字)。四条判据全部以宿主 glibc 为对照:
+#   ① 类型宽度 ② 常量值 ③ 函数签名(赋值兼容) ④ struct stat/dirent 的必需成员与类型宽度。
+#   ★ **不**比字段偏移: POSIX 不规定 struct stat 的成员顺序, 拿 glibc 的偏移当判据
+#     会把"glibc 的 ABI"误当成"POSIX 的要求"。少数有意偏离走白名单 + 写明理由。
+[[script]]
+name = "check-posix-conformance"
+argv = ["bash", "tools/check-posix-conformance.sh"]
+require = ["PASS: iface/posix 与 POSIX 一致"]
+
 [[script]]
 name = "check-third-party-pristine"
 argv = ["bash", "tools/check-third-party-pristine.sh"]

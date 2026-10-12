@@ -25,7 +25,8 @@
 #define O_NONBLOCK   0004000
 #define O_DSYNC      0010000
 #define O_DIRECT     0040000
-#define O_LARGEFILE  0100000
+#define O_LARGEFILE  0        /* ★ 64 位宿主上就是 0(off_t 本就是 64 位);
+                              *   原写 0100000 是 32 位 Linux 的值, 与宿主不一致 */
 #define O_DIRECTORY  0200000
 #define O_NOFOLLOW   0400000
 #define O_NOATIME    01000000
