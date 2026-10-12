@@ -1451,7 +1451,7 @@ int uboot_fat_start(void)
 {
     /* ★ ADR-0030: 只**登记驱动**, 不挂载 —— 挂哪块卡、挂到哪个挂载点, 由 APP 的
      *   挂载计划决定(每次 `mount("emmcN", "/fatNN", "fat", 0, NULL)` 认领一个卷)。
-     *   从前这里按插件自己的三行表逐卷挂载 ⇒ "挂载计划"有两个真值(见 br-wa-fs-001)。 */
+     *   从前这里按插件自己的三行表逐卷挂载 ⇒ "挂载计划"有两个真值(该欠债已由 ADR-0030 还清)。 */
     const int rc = br_fs_driver_register("fat", &s_fs_ops, BR_NULL);
 
     if (rc != 0) {

@@ -67,10 +67,13 @@ int tmpfs_start(void);
 #define TMPFS_MIN_CAP    64u
 
 /*
- * ★ 挂载点是**代码常量**。设计 `7-03` §6 的挂载计划(plugin.toml 的 `[[mount]]`)目前只是
- * 人读的声明面、工具侧还不消费它 ⇒ "声明面 + 本常量"两处真值。已登记
- * `WORKAROUND(br-wa-fs-001)`; 退出条件 = 组合器按挂载计划产出行, 本常量随之消失。
- * (与 fs/devfs 的 BR_DEVFS_MOUNT_PATH 同型; 但 tmpfs **不**按它拒挂 —— 见 tmpfs_mount。)
+ * 挂载点常量 —— **仅供自检当夹具名**(如 TC-VFS 里"挂载表里有一个 '/'"的断言)。
+ *
+ * ★ ADR-0030 起"挂在哪"**不再由本件决定**: tmpfs 只 `br_fs_driver_register("tmpfs", …)`
+ *   登记驱动, 挂载点由 **APP 的 `[[mount]]`** 给出(见各 APP 的 plugin.toml)。
+ *   从前这里是"代码常量 + manifest 声明"两处真值(欠债 br-wa-fs-001); 生成链路落地后
+ *   该欠债已还清 —— 本常量随之退化为**自检夹具名**, 不再参与挂载。
+ *   `tmpfs_mount()` 也**不**按它拒挂: APP 把 tmpfs 挂到哪都行(见该函数)。
  */
 #define TMPFS_MOUNT_PATH "/"
 

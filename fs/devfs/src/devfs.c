@@ -35,9 +35,9 @@ int devfs_early_init(void);
 int devfs_init(void);
 int devfs_start(void);
 
-/* 挂载点。★ 这个字符串与 `plugin.toml` 里的挂载计划是**两处真值** —— 原型还没有
- * "manifest → 挂载计划代码"的生成链路(与 `br-wa-mem-001` 的预算→region 同源),
- * 已登记 `WORKAROUND(br-wa-fs-001)`; 退出条件 = 生成器产出行, 本常量随之消失。 */
+/* 挂载点常量 —— **仅供自检当夹具名**。
+ * ★ ADR-0030 起"挂在哪"由 **APP 的 `[[mount]]`** 决定(devfs 只登记驱动 `"devfs"`);
+ *   从前它是"代码常量 + manifest 声明"两处真值(欠债 br-wa-fs-001), 生成链路落地后已还清。 */
 #define BR_DEVFS_MOUNT_PATH   "/dev"
 
 /* ==================================================================== 小工具(无 libc) */

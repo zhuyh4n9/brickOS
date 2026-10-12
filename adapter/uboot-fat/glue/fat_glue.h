@@ -79,12 +79,12 @@ int file_fat_write_at(const char *filename, loff_t pos, void *buffer, loff_t siz
 #define UB_FAT_DEV32     "emmc2"
 
 /*
- * 挂载点(绝对路径, 与 plugin.toml 的 [[mount]] 逐字一致)。
+ * 挂载点与设备名常量 —— **仅供自检当夹具名**(与 `app/hello/plugin.toml` 的 `[[mount]]` 一致)。
  *
- * WORKAROUND(br-wa-fs-001): 这两个常量与 `plugin.toml` 的 `[[mount]]`/设备名是**两处真值**
- * —— 工具侧既不消费 `[[mount]]`, 也不校验它与这里的常量一致(组合器还没有"挂载计划"这条
- * 生成链路)。改一处不报错, 只会静默挂错地方。ADR-0022 把这条欠债的面从 2 件扩到 4 件
- * (新增两件介质 FS), 性质未变; 退出条件见 `WORKAROUNDS.md`。
+ * ★ ADR-0030 起"哪块卡挂到哪个挂载点"由 **APP 的 `[[mount]]`** 给出: 本件只登记驱动
+ *   `"fat"`, 挂载时按 `(cfg->dev, cfg->path)` **认领卷槽**(`uboot_fat_vol_claim`)。
+ *   从前这里的三行 挂载点↔设备 表与 manifest 是**两处真值**(欠债 br-wa-fs-001);
+ *   生成链路落地 + 表取消之后, 该欠债已还清 —— 这些常量随之退化为自检夹具名。
  */
 #define UB_FAT_MNT12     "/fat12"
 #define UB_FAT_MNT16     "/fat16"

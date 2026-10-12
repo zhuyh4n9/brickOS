@@ -11,8 +11,9 @@
 #   (存储域总套件 `vfs_core_selftest()` 跑在 "/" 上; 由 core 的自检 pass 驱动, ADR-0010)。
 #   这与 app/hello 的形态同类:
 #   组合期契约(生命周期钩子)不进 [[export]], 而本件没有别的对外面。
-# ★ 挂载点是**代码常量**(src/tmpfs.c), 与下面的挂载计划注释是两处真值 ——
-#   生成链路未落地, 已登记 `WORKAROUND(br-wa-fs-001)`。
+# ★ ADR-0030: **挂载由 APP 决定**。本件只 `br_fs_driver_register("tmpfs", …)` 登记驱动,
+#   挂在哪里由 **APP 的 `[[mount]]`** 给出(app/*/plugin.toml)。
+#   从前"代码常量 + manifest 声明"是两处真值(欠债 br-wa-fs-001) —— 已随生成链路落地而还清。
 schema = 1
 
 [plugin]
@@ -30,13 +31,15 @@ sched_class = "SAFE_PREEMPT"
 [[res]]
 kind     = "ram"
 used_kib = 4
-notes    = "静态部分只有根节点与记账; 文件数据与目录节点在运行期从 core 堆取(配额见 WORKAROUND br-wa-fs-001)"
+notes    = "静态部分只有根节点与记账; 文件数据与目录节点在运行期从 core 堆取(配额见 src/tmpfs.c 的 TMPFS_* 上界)"
 
-# ---- 挂载计划(设计 `7-03` §6。★ 工具侧还**不**消费本表: 它现在是人读的声明面,
-#      代码里的挂载点常量是执行面 —— 两处真值即 br-wa-fs-001 的欠债) ----
+# ---- 挂载计划已**移出本件**(ADR-0030) ----
+#   本件不再声明 `[[mount]]`: 挂载计划归**消费者**(APP)。本件只提供能力 ——
+#   在 init 相登记驱动名 `"tmpfs"`; APP 用 POSIX `mount(NULL, "/", "tmpfs", 0, NULL)` 挂它。
+#   判据 = tools/check-mount-ownership.sh(非 APP 声明 [[mount]] ⇒ 红)。
 
 # ---- 结构依赖 ----
-# init: 挂载要经 vfs-core 的 `br_mount_register`(设计 §1.4 的依赖表: fs/tmpfs → vfs-core)。
+# init: 登记驱动要经 vfs-core 的 `br_fs_driver_register`(设计 §1.4 的依赖表: fs/tmpfs → vfs-core)。
 # 这也是"挂载表先能收挂载"的顺序保证(vfs-core 的 CORE init 在自己的 phase 里, 而
 # 拓扑序保证依赖方先完成)。
 [[dep]]

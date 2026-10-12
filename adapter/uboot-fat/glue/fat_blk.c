@@ -360,7 +360,7 @@ void uboot_fat_vol_unbind(void)
  *   槽用完 ⇒ -ENOSPC(本件的并发挂载卷数上界 = UB_FAT_VOL_MAX)。
  *
  * ★ 这条改动消灭了一处**两处真值**: 从前"挂载点 ↔ 设备"既写在插件的表里、又写在
- *   manifest 的 [[mount]] 里, 改一处不报错、只会静默挂错设备(见 br-wa-fs-001)。
+ *   manifest 的 [[mount]] 里, 改一处不报错、只会静默挂错设备(该欠债已由 ADR-0030 还清)。
  */
 int uboot_fat_vol_claim(const char *dev, const char *mnt, br_u32 *id)
 {
