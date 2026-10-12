@@ -1,0 +1,27 @@
+schema = 1
+
+[plugin]
+name        = "fs/tmpfs"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "fs"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "RAM 文件系统: rootfs(\"/\"), 完整文件语义 + 预建 /dev /data /tmp; 数据出自 core 堆"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 4
+notes    = "静态部分只有根节点与记账; 文件数据与目录节点在运行期从 core 堆取(配额见 src/tmpfs.c 的 TMPFS_* 上界)"
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[build]
+
+sources  = ["src/*.c"]

@@ -1,21 +1,22 @@
 #!/usr/bin/env bash
 #
-# brickOS prototype — 编译器支持例程的**自递归**门禁(core/src/string.c)
+# brickOS prototype — the **self-recursion** gate for compiler support routines (core/src/string.c)
 #
-# 为什么值得一条门禁:
-#   `core/src/string.c` 里那对定长 8 的 `__builtin_memcpy` 曾被 GCC 降成对 **memcpy
-#   自己**的 libcall ⇒ 无限递归 ⇒ 栈无界增长压穿 64 KiB 启动栈、异常帧落进 .bss 的
-#   页表 ⇒ 表现为"开机即翻译 fault, 且原始 fault 现场丢失"。
-#   这类错误"编得过、宿主也跑得对"(宿主链的是 libc), **只有反汇编看得见** ——
-#   所以钉成机械判据: 四个例程内部**不得有对自身的 bl**。
-#   (判据只禁自递归, 不禁 memmove→memcpy 这类正当调用。)
+# Why this gate is worth having: in `core/src/string.c`, the pair of fixed-8 `__builtin_memcpy`
+#   calls was once lowered by GCC into a libcall to **memcpy itself** ⇒ infinite recursion ⇒ the
+#   stack grew without bound, punched through the 64 KiB boot stack, and exception frames landed
+#   in the .bss page tables ⇒ the symptom was "translation fault at boot, with the original fault
+#   context lost". Such bugs "compile fine and even run fine on the host" (the host links libc);
+#   **only the disassembly shows them** -- hence a mechanical criterion: none of the four routines
+#   may contain a `bl` to itself. (The criterion bans self-recursion only, not legitimate calls
+#   like memmove→memcpy.)
 #
-# 用法: bash tools/check-string.sh [<obj>] [<objdump>]
-#   缺省 <obj>     = build/obj/core/src/string.o
-#                    (口径 = product.toml 的 [build].obj_dir + 源相对路径 + `.o`,
-#                     与 brickie 的 `<obj_dir>/<src>.o` 约定同构; 文件不在 ⇒ 报红)
-#   缺省 <objdump> = aarch64-linux-gnu-objdump → 带版本号的变体 → objdump
-# 退出码: 0 = 一致, 1 = 有自递归, 2 = 用法/环境错
+# Usage: bash tools/check-string.sh [<obj>] [<objdump>]
+#   default <obj>     = build/obj/core/src/string.o
+#                     (convention = product.toml [build].obj_dir + source-relative path + `.o`,
+#                      same shape as brickie's `<obj_dir>/<src>.o`; a missing file ⇒ red)
+#   default <objdump> = aarch64-linux-gnu-objdump → versioned variants → objdump
+# Exit code: 0 = consistent, 1 = self-recursion present, 2 = usage/environment error
 
 set -uo pipefail
 
@@ -24,7 +25,7 @@ cd "$(dirname "$0")/.." || exit 2
 OBJ="${1:-build/obj/core/src/string.o}"
 
 if [ ! -f "$OBJ" ]; then
-    echo "FAIL: 找不到 $OBJ(先 `brickie build`; 对象落点见 product.toml 的 [build].obj_dir)" >&2
+    echo "FAIL: cannot find $OBJ (run `brickie build` first; see product.toml [build].obj_dir for the object location)" >&2
     exit 2
 fi
 
@@ -36,7 +37,7 @@ if [ -z "$OBJDUMP" ]; then
     done
 fi
 if [ -z "$OBJDUMP" ]; then
-    echo "FAIL: 找不到 objdump(aarch64 binutils)" >&2
+    echo "FAIL: cannot find objdump (aarch64 binutils)" >&2
     exit 2
 fi
 
@@ -46,16 +47,16 @@ for f in memcpy memmove memset memcmp; do
         | awk -v f="<$f>:" 'index($0,f){inb=1;next} /^[0-9a-f]+ </{inb=0} inb' \
         | grep -c "bl.*<$f>")
     if [ "$n" != "0" ]; then
-        echo "FAIL: $f 内部有 $n 条对自身的 bl(自递归 libcall)"
+        echo "FAIL: $f contains $n bl instructions to itself (self-recursive libcall)"
         bad=1
     fi
 done
 
 if [ "$bad" -ne 0 ]; then
-    echo "--- memcpy 反汇编 ---"
+    echo "--- memcpy disassembly ---"
     "$OBJDUMP" -d --no-show-raw-insn "$OBJ" | sed -n '/<memcpy>:/,/^$/p'
     exit 1
 fi
 
-echo "ok   编译器支持例程无自递归(memcpy/memmove/memset/memcmp 内部 0 条自调用 bl)"
+echo "ok   compiler support routines have no self-recursion (memcpy/memmove/memset/memcmp: 0 self-calls)"
 exit 0

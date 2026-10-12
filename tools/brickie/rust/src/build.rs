@@ -1,37 +1,37 @@
-//! `brickie build` — **声明面驱动的构建编排**(core 侧: 出计划 + 判定)。
+//! `brickie build` — **declaration-driven build orchestration** (core side: plan + verdict).
 //!
-//! ## 为什么在 core
+//! ## Why this lives in core
 //!
-//! 设计 `2-02` §1 把"插件发现 / manifest 解析 / 闭包求解 / 拓扑与环检测 / 生成物 /
-//! **构建编排**"全部划给 brickie; `Design/docs/decisions/0003`(构建归属转移)把它
-//! 排成 S1–S3 三个台阶。本模块是那张表的落地:
+//! Design `2-02` §1 assigns "plugin discovery / manifest parsing / closure solving /
+//! topology and cycle detection / generated artifacts / **build orchestration**" to brickie;
+//! `Design/docs/decisions/0003` (build ownership transfer) lays it out as stages S1–S3. This module implements that table:
 //!
-//! * **哪些源码进镜像** ← `product.toml [select]` 的闭包(求解器)+ 每个插件的
-//!   `[build].sources`(声明面)—— 不再是顶层 `Makefile` 里的 `wildcard` 字面路径;
-//! * **怎么编** ← `[build.target]`(platform 插件: arch/triple/链接脚本/QEMU 型号)+
-//!   `product.toml [build]`(标志/产物落点);
-//! * **跑什么门禁** ← `tests/gates.toml`(人写: 宿主用例 / QEMU 日志判据 / 脚本门禁)。
+//! * **Which sources enter the image** ← the `product.toml [select]` closure (solver) + each plugin's
+//!   `[build].sources` (declaration surface) — no longer `wildcard` literal paths in the top-level `Makefile`;
+//! * **How to compile** ← `[build.target]` (platform plugin: arch/triple/linker script/QEMU model) +
+//!   `product.toml [build]` (flags/artifact locations);
+//! * **Which gates run** ← `tests/gates.toml` (hand-written: host cases / QEMU log criteria / script gates).
 //!
-//! L5(Python)只做"执行 + 落盘 + 呈现": 它拿到的 `data.steps[i].argv` 是**具体命令**,
-//! 不含任何判定。日志判据(`judge`)由 core 按 `tests/gates.toml` 的正则判 —— 于是
-//! "红绿"只有一处真值, `--json` 与文本是同一 `data` 的两种序列化。
+//! L5 (Python) only executes + writes + presents: the `data.steps[i].argv` it receives are **concrete commands**
+//! with no verdicts. Log criteria (`judge`) are decided in core from `tests/gates.toml` regexes — so
+//! "red/green" has a single source of truth, and `--json` and text are two serializations of one `data`.
 //!
-//! ## 三件事的归属(裁定 S-B1…S-B6, 逐条见 `rust/README.md` §10)
+//! ## Ownership of three concerns (rulings S-B1…S-B6, itemized in `rust/README.md` §10)
 //!
-//! | 事 | 归属 | 理由 |
+//! | Concern | Owner | Rationale |
 //! |---|---|---|
-//! | 工具**候选序**(`gcc` → `gcc-16` → …)与**解析结果** | core | 生成物(make/ninja 后端文件)必须把解析结果烧进去; L5 只执行 argv |
-//! | 增量判定(`stamp` = argv + 输入(size,mtime)) | core | 纯函数, 可用 `context.files` 注入 ⇒ 自检可复现 |
-//! | 进程编排(并发 / 超时 / 收日志) | L5 | §8 的"调子进程"; core 不碰时钟与并发 |
+//! | Tool **candidate order** (`gcc` → `gcc-16` → …) and **resolution result** | core | generated files (make/ninja backends) must bake in the resolution; L5 only executes argv |
+//! | Incremental decision (`stamp` = argv + inputs (size,mtime)) | core | pure function, injectable via `context.files` ⇒ reproducible self-test |
+//! | Process orchestration (concurrency / timeouts / log capture) | L5 | §8 "spawn subprocesses"; core touches neither clocks nor concurrency |
 //!
-//! ## 与设计的分歧(登记 `docs/contract.md` §9)
+//! ## Divergences from the design (logged in `docs/contract.md` §9)
 //!
-//! * `brickie-v0.1.md` §0 的边界纪律写"v0.1 任何命令不得要求 cc/cargo/nm 在场"。
-//!   本命令族**故意违反**这一条 —— 它就是"要求交叉编译器在场"的命令。纪律的准确
-//!   表述应为"**组合期**命令不要求编译器在场"(见 ADR-0004 §偏离登记)。
-//! * `plugin.toml [build]` 在 `brickie-v0.1.md` §7.1 注为"v0.1 只记录; v0.3 起被消费"
-//!   —— 本刀**提前消费**它(ADR-0004 的 S1–S3), 并新增两个字段(`defines`,
-//!   `[build.target]` 整表), 已在 contract §7.1 补齐。
+//! * `brickie-v0.1.md` §0 boundary discipline says "no v0.1 command may require cc/cargo/nm present".
+//!   This family **deliberately violates** it — it is the "cross-compiler must be present" command.
+//!   The precise rule should be "**composition-time** commands do not require a compiler" (see ADR-0004 §deviation log).
+//! * `brick.toml [build]` is noted in `brickie-v0.1.md` §7.1 as "recorded in v0.1 only; consumed from v0.3"
+//!   — this change **consumes it early** (ADR-0004 S1–S3) and adds two fields (`defines`,
+//!   the whole `[build.target]` table), now reflected in contract §7.1.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -45,41 +45,46 @@ use crate::model::{self, Plugin, ProductBuild, TreeLoad};
 use crate::proto::{Request, Response};
 use crate::solver;
 
-// ------------------------------------------------------------------ 诊断码
+// ------------------------------------------------------------------ Diagnostic codes
 //
-// `BRV-D8` 的编码表没有 BUILD 族 ⇒ 本刀新开一族, 逐条登记在 `docs/contract.md` §9
-// 的 R-13/标 与 `rust/README.md` §10(设计侧回灌项: `BRV-D8` 需要 BUILD 族)。
+// `BRV-D8`'s code table has no BUILD family ⇒ this change opens one, each entry logged in
+// `docs/contract.md` §9 R-13/mark and `rust/README.md` §10 (design feedback: `BRV-D8` needs a BUILD family).
 
-/// `product.toml` 缺 `[build]`(或整个 product 缺席)。
+/// `product.toml` lacks `[build]` (or the whole product is absent).
 pub const CODE_NO_BUILD: &str = "BRV-BLD-0001";
-/// `[build].sources` 展开后为空(声明了却不匹配任何文件)。
+/// `[build].sources` expands to nothing (declared but matching no file).
 pub const CODE_EMPTY_SOURCES: &str = "BRV-BLD-0002";
-/// 没有 platform 插件声明 `[build.target]`(无从得知 arch/链接脚本)。
+/// No platform plugin declares `[build.target]` (no way to know arch/linker script).
 pub const CODE_NO_TARGET: &str = "BRV-BLD-0003";
-/// 多个 platform 插件声明 `[build.target]`(谁是真值不明)。
+/// Multiple platform plugins declare `[build.target]` (which one is authoritative is unclear).
 pub const CODE_TARGET_AMBIGUOUS: &str = "BRV-BLD-0004";
-/// 工具解析失败(交叉编译器 / objcopy / qemu 不在场)。**环境错**(退出码 2)。
+/// Tool resolution failed (cross compiler / objcopy / qemu absent). **Environment error** (exit code 2).
 pub const CODE_TOOL_MISSING: &str = "BRV-BLD-0005";
-/// 闭包内的插件没有 `[build]`(它会被组合, 却没说怎么编)。
+/// A plugin in the closure has no `[build]` (it gets composed but says nothing about compiling).
 pub const CODE_UNIT_NO_BUILD: &str = "BRV-BLD-0006";
-/// `[build].sources` 里的**字面**路径不存在(通配不匹配不算错, 见 0002)。
+/// A **literal** path in `[build].sources` does not exist (a non-matching glob is not an error, see 0002).
 pub const CODE_MISSING_SOURCE: &str = "BRV-BLD-0007";
-/// `tests/gates.toml` 里没有这个名字的门禁(或整文件缺席)。
+/// No gate with this name in `tests/gates.toml` (or the whole file is absent).
 pub const CODE_GATE_UNKNOWN: &str = "BRV-BLD-0008";
-/// 门禁判红(日志缺 require / 命中 forbid / 缺 PASS 用例 tag)。
+/// Gate judged red (log missing a require / hitting a forbid / missing a PASS case tag).
 pub const CODE_GATE_FAILED: &str = "BRV-BLD-0009";
-/// `[build]` 的形状问题(产物落点 / 标志表非法)。
+/// Shape problem in `[build]` (illegal artifact location / flag table).
 pub const CODE_BUILD_SHAPE: &str = "BRV-BLD-0010";
-/// 执行的步骤失败(编译/链接/脚本非零退出) —— L5 检出, **码由 core 给**(见 `Step::to_json`)。
+/// An executed step failed (compile/link/script non-zero exit) — detected by L5, **code supplied by core** (see `Step::to_json`).
 pub const CODE_STEP_FAILED: &str = "BRV-BLD-0011";
-/// `tests/gates.toml` 里的正则超出 core 支持的**子集**(写了就报, 不静默不匹配)。
+/// A regex in `tests/gates.toml` exceeds the **subset** core supports (always reported, never silently unmatched).
 pub const CODE_GATE_SHAPE: &str = "BRV-BLD-0012";
-/// 生成物属于**不在闭包内**的插件 ⇒ 已跳过(info: 不是缺陷, 但必须看得见)。
+/// Generated artifact belongs to a plugin **outside the closure** ⇒ skipped (info: not a defect, but must be visible).
 pub const CODE_GEN_NOT_SELECTED: &str = "BRV-BLD-0013";
+/// A generated artifact under `build/gen/` with **no identifiable owner** (stale leftover after a plugin rename/delete) ⇒ skipped.
+///
+/// Difference from 0013: 0013 means "owner known, just not selected"; this code means "no plugin with that name remains in the tree".
+/// Both must be skipped, but the fix differs (former: change `[select]`; latter: clean `build/gen/`) — hence separate codes.
+pub const CODE_GEN_ORPHAN: &str = "BRV-BLD-0014";
 
-// ------------------------------------------------------------------ 入口
+// ------------------------------------------------------------------ Entry
 
-/// build 命令族的 dispatch(由 `main.rs` 转发)。
+/// Dispatch for the build command family (forwarded from `main.rs`).
 pub fn run(req: &Request) -> Response {
     match req.command.as_str() {
         "build" => cmd_build(req),
@@ -92,35 +97,35 @@ pub fn run(req: &Request) -> Response {
         other => {
             let mut d = Diags::new();
             d.usage(
-                format!("build 族里没有命令 `{other}`"),
-                "见 docs/contract.md §5.4 的 build 命令族",
+                format!("no command `{other}` in the build family"),
+                "see the build command family in docs/contract.md §5.4",
             );
             Response::ok(d, json!({}))
         }
     }
 }
 
-// ================================================================== 规划器
+// ================================================================== Planner
 
-/// 一个编译单元(核心本体 / 插件 / 生成物)。
+/// One compilation unit (core body / plugin / generated artifacts).
 #[derive(Clone, Debug, Default)]
 struct Unit {
-    /// 展示名: 插件名(`service/trace`)或 `core` / `build/gen(生成物)`。
+    /// Display name: plugin name (`service/trace`) or `core` / `build/gen (generated)`.
     name: String,
-    /// 相对 root 的单元目录(`""` = 仓库根, 核心与生成物用)。
+    /// Unit directory relative to root (`""` = repo root, used by core and generated artifacts).
     dir: String,
-    /// 相对 root 的源文件(通配已展开, 字典序)。
+    /// Source files relative to root (globs expanded, lexicographic order).
     sources: Vec<String>,
-    /// 相对 root 的 include 目录。
+    /// Include directories relative to root.
     includes: Vec<String>,
     defines: Vec<String>,
-    /// 单元自己的编译标志(`[build].cflags`), 接在**产品级** cflags **之后** ——
-    /// 于是它可以关掉产品级开着的告警(如 vendor 代码的 `-Wno-shadow`)。
+    /// The unit's own compile flags (`[build].cflags`), appended **after** the **product-level**
+    /// cflags — so it can disable a product-level warning (e.g. `-Wno-shadow` for vendor code).
     cflags: Vec<String>,
     plugin: Option<String>,
 }
 
-/// 目标事实(来自 platform 插件的 `[build.target]`)。
+/// Target facts (from the platform plugin's `[build.target]`).
 #[derive(Clone, Debug, Default)]
 struct Target {
     arch: String,
@@ -135,30 +140,30 @@ struct Target {
     owner: String,
 }
 
-/// 一条待执行命令。
+/// One command to execute.
 #[derive(Clone, Debug, Default)]
 struct Step {
     label: String,
     /// `compile` / `link` / `objcopy` / `run` / `script` / `hosttest` / `hostrun` / `backend`
     kind: String,
     argv: Vec<String>,
-    /// 同一 `group` 的步骤可并发(L5 的编排口径)。
+    /// Steps in the same `group` may run concurrently (L5's orchestration contract).
     group: u32,
-    /// 相对 root 的日志落点(`None` = 直接继承 stdio)。
+    /// Log destination relative to root (`None` = inherit stdio directly).
     log: Option<String>,
     timeout_s: Option<u64>,
-    /// 该步骤**预期**以超时结束(QEMU 门禁: 镜像本来就跑到被掐)。
+    /// The step is **expected** to end in a timeout (QEMU gate: the image runs until killed).
     expect_timeout: bool,
-    /// 需要 core 判定的门禁名(见 `cmd_judge`)。
+    /// Gate name requiring a core verdict (see `cmd_judge`).
     judge: Option<String>,
-    /// 交给 stdout 的行数上限(展开 `--head`)。
+    /// Cap on lines forwarded to stdout (`--head` expansion).
     stdout_lines: Option<u64>,
-    /// 该步骤写出的文件(增量状态与清理用)。
+    /// Files this step writes (for incremental state and cleanup).
     outputs: Vec<String>,
-    /// 该步骤**消费**的、由本计划里其它步骤产出的文件。
+    /// Files this step **consumes** that other steps in this plan produce.
     ///
-    /// 用途只有一个: 上游步骤失败时, L5 要能**跳过**下游而不是拿上一次的旧产物
-    /// 去跑(旧对象也能链接成功 ⇒ 日志会打印 "ok ld" 而实际产物是陈旧的 —— 误导)。
+    /// Only one purpose: when an upstream step fails, L5 must **skip** downstream instead of
+    /// rerunning with stale outputs (stale objects still link ⇒ logs print "ok ld" while the artifact is stale — misleading).
     consumes: Vec<String>,
 }
 
@@ -176,14 +181,14 @@ impl Step {
             "stdout_lines": self.stdout_lines,
             "outputs": self.outputs,
             "consumes": self.consumes,
-            // 失败码随步骤一起给 L5: "码"只有一处真值(contract §3), L5 不自己编。
+            // Failure codes ship with the step to L5: "codes" have one source of truth (contract §3); L5 invents none.
             "fail_code": CODE_STEP_FAILED,
             "tool_code": CODE_TOOL_MISSING,
         })
     }
 }
 
-/// 解析好的构建配置 + 静态计划。
+/// Resolved build configuration + static plan.
 struct Ctx {
     root: PathBuf,
     profile: String,
@@ -201,33 +206,33 @@ struct Ctx {
     cflags: Vec<String>,
     asflags: Vec<String>,
     ldflags: Vec<String>,
-    /// 产品级**语义配置** → 编译期 define(当前唯一一项: `[kernel].hz` ⇒
-    /// `BR_CFG_TICK_HZ=<hz>`)。与 `[build].cflags` 分开: 前者是配置, 后者是通用标志
-    /// (ADR-0017)。下发到**全部**编译单元, 使"每秒多少次时钟中断"只有一处真值。
+    /// Product-level **semantic config** → compile-time define (currently only `[kernel].hz` ⇒
+    /// `BR_CFG_TICK_HZ=<hz>`). Separate from `[build].cflags`: former is config, latter generic flags
+    /// (ADR-0017). Pushed to **all** compilation units so "timer interrupts per second" has one source of truth.
     config_defines: Vec<String>,
-    /// 单元名 → 该单元的 include 目录(相对仓库根, 已排序去重)。
+    /// Unit name → its include dirs (relative to repo root, sorted and deduped).
     ///
-    /// **不再全局并集**: 每个编译单元只拿到 core + 自己 + **声明依赖闭包**的头目录
-    /// (ADR-0018)。未声明的依赖会在编译期以"头文件找不到"暴露, 而不是被全局 `-I` 掩盖。
+    /// **No more global union**: each unit gets only core + itself + its **declared dep closure** headers
+    /// (ADR-0018). Undeclared deps surface at compile time as "header not found" instead of being masked by a global `-I`.
     unit_includes: BTreeMap<String, Vec<String>>,
-    /// 工具名 → 候选(按序)。
+    /// Tool name → candidates (in order).
     tools: BTreeMap<String, Vec<String>>,
-    /// 工具名 → 解析结果(绝对路径或裸名)。
+    /// Tool name → resolution result (absolute path or bare name).
     resolved: BTreeMap<String, String>,
-    /// tool 名 → 它是什么(呈现用)。
+    /// Tool name → what it is (for presentation).
     tool_what: BTreeMap<String, String>,
-    /// `context.files[path] = (size, mtime_ns)`; `Some` 时**不碰磁盘**(自检用)。
+    /// `context.files[path] = (size, mtime_ns)`; when `Some`, **no disk access** (for self-test).
     stat_override: Option<BTreeMap<String, (u64, i64)>>,
     force: bool,
 }
 
-// ------------------------------------------------------------------ 小工具
+// ------------------------------------------------------------------ Helpers
 
 fn hex_of(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// `sha256:<64 hex>`。
+/// `sha256:<64 hex>`.
 fn sha256_tag(parts: &[String]) -> String {
     let mut h = Sha256::new();
     for p in parts {
@@ -237,11 +242,11 @@ fn sha256_tag(parts: &[String]) -> String {
     format!("sha256:{}", hex_of(&h.finalize()))
 }
 
-/// 简单的通配匹配: `*`(不跨 `/`)与 `?`。
+/// Simple glob match: `*` (does not cross `/`) and `?`.
 fn glob_match(pat: &str, name: &str) -> bool {
     let p: Vec<char> = pat.chars().collect();
     let n: Vec<char> = name.chars().collect();
-    // 迭代式双指针(带回溯点), 避免递归爆栈。
+    // Iterative two-pointer with a backtracking point, avoiding recursion stack blowup.
     let (mut pi, mut ni) = (0usize, 0usize);
     let (mut star, mut mark) = (usize::MAX, 0usize);
     while ni < n.len() {
@@ -266,17 +271,17 @@ fn glob_match(pat: &str, name: &str) -> bool {
     pi == p.len()
 }
 
-/// 有没有通配符(决定"不匹配"是错(字面)还是空(通配))。
+/// Whether a wildcard is present (decides if "no match" is an error (literal) or empty (glob)).
 fn has_wildcard(pat: &str) -> bool {
     pat.contains('*') || pat.contains('?')
 }
 
-/// 展开一个相对 `base_dir` 的通配, 返回**相对 root** 的文件路径(字典序)。
+/// Expand a glob relative to `base_dir`, returning **root-relative** file paths (lexicographic).
 ///
-/// 支持 `*`/`?`(**不跨 `/`**)与 `**`(跨任意层目录; `**` 可以匹配**零层**)。
-/// 为什么需要 `**`: 生成物路径的层级 = 插件名的命名空间深度(`build/gen/service/dump/...`
-/// 是两层, `build/gen/foo/...` 是一层)。写 `build/gen/*/*/plugin_desc.c` 就会把
-/// "工具能否发现生成物"绑死在"插件名恰好两段"上 —— 那是巧合, 不是契约。
+/// Supports `*`/`?` (**not crossing `/`**) and `**` (crossing any number of dirs; `**` may match **zero** levels).
+/// Why `**`: generated-artifact depth = plugin-name namespace depth (`build/gen/service/dump/...`
+/// is two levels, `build/gen/foo/...` one). Writing `build/gen/*/*/plugin_desc.c` would tie
+/// "can the tool find generated artifacts" to "plugin names happen to have two segments" — coincidence, not contract.
 fn expand_glob(root: &Path, base_dir: &str, pattern: &str) -> Vec<String> {
     let base = if base_dir.is_empty() {
         root.to_path_buf()
@@ -299,14 +304,14 @@ fn expand_glob(root: &Path, base_dir: &str, pattern: &str) -> Vec<String> {
     out
 }
 
-/// 递归通配匹配的一层: `comps` 是**剩余**的模式分量。
+/// One level of recursive glob matching: `comps` are the **remaining** pattern components.
 fn glob_walk(dir: &Path, comps: &[&str], out: &mut Vec<PathBuf>) {
     let Some(comp) = comps.first().copied() else {
         return;
     };
     let rest = &comps[1..];
     if comp == "**" {
-        // `**` 匹配零层 ⇒ 在原地继续用 rest; 也匹配一层以上 ⇒ 下钻且**保留 `**`**。
+        // `**` matches zero levels ⇒ continue in place with rest; also matches one or more ⇒ descend keeping `**`.
         glob_walk(dir, rest, out);
         let mut subs: Vec<PathBuf> = match fs::read_dir(dir) {
             Ok(entries) => entries
@@ -351,12 +356,12 @@ fn glob_walk(dir: &Path, comps: &[&str], out: &mut Vec<PathBuf>) {
     }
 }
 
-/// 把插件名变成相对仓库根的插件目录(布局约定 `4-02`: 顶层目录 = namespace)。
+/// Map a plugin name to its repo-root-relative dir (layout convention `4-02`: top-level dir = namespace).
 fn plugin_dir_of(name: &str) -> String {
     name.to_string()
 }
 
-/// 一个插件的 include 目录(相对仓库根): `[build].includes` 相对**插件根**展开。
+/// A plugin's include dirs (relative to repo root): `[build].includes` expand relative to the **plugin root**.
 fn plugin_incs(p: &model::Plugin) -> Vec<String> {
     let dir = plugin_dir_of(&p.name);
     p.build
@@ -365,7 +370,7 @@ fn plugin_incs(p: &model::Plugin) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// 解析 `.d` 文件(make 语法: `target: dep dep …`, 支持 `\` 续行)。
+/// Parse a `.d` file (make syntax: `target: dep dep …`, supporting `\` line continuations).
 fn parse_depfile(path: &Path, root: &Path) -> Vec<String> {
     let text = match fs::read_to_string(path) {
         Ok(t) => t,
@@ -381,7 +386,7 @@ fn parse_depfile(path: &Path, root: &Path) -> Vec<String> {
             if tok.is_empty() {
                 continue;
             }
-            // `.d` 里的路径是**相对于编译时 cwd**(= 仓库根)的, 直接可用。
+            // Paths inside `.d` are **relative to the compile-time cwd** (= repo root), usable as-is.
             let rel = tok.replace('\\', "/");
             if rel.starts_with('/') {
                 if let Ok(p) = Path::new(&rel).strip_prefix(root) {
@@ -397,9 +402,9 @@ fn parse_depfile(path: &Path, root: &Path) -> Vec<String> {
     out
 }
 
-// ================================================================== 配置装载
+// ================================================================== Config loading
 
-/// `[build]` 的缺省产物落点(与顶层 Makefile 的历史口径一致)。
+/// Default artifact location for `[build]` (matches the historical top-level Makefile layout).
 fn default_obj_dir() -> String {
     "build/obj".to_string()
 }
@@ -414,8 +419,8 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             "",
             "product.toml",
             "",
-            "没有 `product.toml`: 构建需要产品级声明(选哪些插件 + 怎么编)",
-            "先 `brickie init <product>` 或补上 product.toml; contract §7.2",
+            "no `product.toml`: building needs a product-level declaration (which plugins + how to compile)",
+            "run `brickie init <product>` or add product.toml; contract §7.2",
         );
         return Err(d);
     };
@@ -425,17 +430,17 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             &prod.name,
             "product.toml",
             "build",
-            "`product.toml` 缺 `[build]`(标志表与产物落点)",
-            "补 `[build]`: cflags/asflags/ldflags + 产物落点; 见 contract §7.2",
+            "`product.toml` lacks `[build]` (flag table and artifact locations)",
+            "add `[build]`: cflags/asflags/ldflags + artifact locations; see contract §7.2",
         );
         return Err(d);
     };
 
-    // ---- [kernel]: 时钟节拍频率(参考 Linux 的 CONFIG_HZ; ADR-0017) ----
-    // 缺省 200 Hz(5 ms 一拍)。这里把**产品配置**变成**编译期 define** 下发到全部单元:
-    // platform 的 timer 装弹周期与 core 的 jiffies 口径都读同一个 `BR_CFG_TICK_HZ`,
-    // 于是"每秒多少次时钟中断"只有一处真值。schema 已用 `minimum: 1` 拦明显非法的值,
-    // 这里再兜一次(组合期校验与构建可以分别调用)。
+    // ---- [kernel]: tick frequency (cf. Linux CONFIG_HZ; ADR-0017) ----
+    // Default 200 Hz (5 ms per tick). Product config becomes a **compile-time define** for all units:
+    // the platform timer reload period and core jiffies both read the same `BR_CFG_TICK_HZ`, so
+    // "timer interrupts per second" has one source of truth. The schema already rejects clearly
+    // illegal values via `minimum: 1`; this re-checks (composition-time validation and build may be called separately).
     const DEFAULT_TICK_HZ: i64 = 200;
     let tick_hz = prod.kernel_hz.unwrap_or(DEFAULT_TICK_HZ);
     if tick_hz < 1 {
@@ -444,21 +449,21 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             &prod.name,
             "product.toml",
             "kernel.hz",
-            format!("`[kernel].hz` 必须 ≥ 1(收到 {tick_hz})"),
-            "ADR-0017: HZ = 每秒时钟中断次数, 0/负数无意义; 缺省(不写) = 200",
+            format!("`[kernel].hz` must be ≥ 1 (got {tick_hz})"),
+            "ADR-0017: HZ = timer interrupts per second; 0/negative is meaningless; default (omitted) = 200",
         );
     }
     let config_defines = vec![format!("BR_CFG_TICK_HZ={tick_hz}")];
 
-    // ---- profile: `--profile` 覆盖 `[product].stage`(§7.5) ----
+    // ---- profile: `--profile` overrides `[product].stage` (§7.5) ----
     let profile = req
         .arg_str("profile")
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| prod.stage.clone());
     if !matches!(profile.as_str(), "dev" | "release") {
         d.usage(
-            format!("`--profile` 只能是 dev | release(收到 {profile})"),
-            "BRV-D9 退出码 2",
+            format!("`--profile` must be dev | release (got {profile})"),
+            "BRV-D9 exit code 2",
         );
         return Err(d);
     }
@@ -469,8 +474,8 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         .unwrap_or_else(|| "direct".to_string());
     if !matches!(backend.as_str(), "direct" | "make" | "ninja") {
         d.usage(
-            format!("`--backend` 只能是 direct | make | ninja(收到 {backend})"),
-            "BRV-D9 退出码 2",
+            format!("`--backend` must be direct | make | ninja (got {backend})"),
+            "BRV-D9 exit code 2",
         );
         return Err(d);
     }
@@ -482,7 +487,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         format!("-{tag}")
     };
 
-    // ---- 目标事实: 恰一个 platform 声明 `[build.target]` ----
+    // ---- Target facts: exactly one platform declares `[build.target]` ----
     let owners: Vec<&Plugin> = tree
         .plugins
         .iter()
@@ -507,8 +512,8 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                 "",
                 "product.toml",
                 "",
-                "没有插件声明 `[build.target]`: 无从得知 arch / 交叉前缀 / 链接脚本",
-                "platform 插件补 `[build.target]`(每镜像恰一个 platform, §8.3 ④)",
+                "no plugin declares `[build.target]`: arch / cross prefix / linker script unknown",
+                "platform plugin should add `[build.target]` (exactly one platform per image, §8.3 ④)",
             );
             return Err(d);
         }
@@ -545,7 +550,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                 "product.toml",
                 "",
                 format!(
-                    "有 {} 个插件声明了 `[build.target]`: {}",
+                    "{} plugins declare `[build.target]`: {}",
                     owners.len(),
                     owners
                         .iter()
@@ -553,13 +558,13 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-                "每镜像恰一个 platform(§8.3 ④); 其余插件的编译事实进 `[build]`",
+                "exactly one platform per image (§8.3 ④); other plugins' build facts go in `[build]`",
             );
             return Err(d);
         }
     }
 
-    // ---- 闭包: 选中的单元 = 核心本体 + 闭包内插件 + 生成物 ----
+    // ---- Closure: selected units = core body + plugins in closure + generated artifacts ----
     let sol = solver::solve(tree, &profile, false);
     let closure = sol.closure.clone();
     let mut diags = sol.into_diags();
@@ -569,18 +574,18 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     }
     let mut units: Vec<Unit> = Vec::new();
 
-    // 自检总开关(ADR-0010 §2.3)的**唯一**读取点(`Product::selftest_on` 是唯一裁决函数):
-    // 它同时决定 core 自检源要不要编、以及生成物里发不发 selftest 钩子(后者在 gen_plan 里)。
+    // The **single** read point for the self-test master switch (ADR-0010 §2.3) (`Product::selftest_on` is the only decider):
+    // it decides both whether core self-test sources compile and whether generated artifacts emit the selftest hook (latter in gen_plan).
     let selftest_on = tree
         .product
         .as_ref()
         .map(|p| p.selftest_on())
         .unwrap_or(false);
 
-    // (a) 核心本体(**不是插件**, `[compat].core` 引用它)
-    // core 的自检套件(`core/selftest/**`)只在产品开关放行时编进来(ADR-0010 §2.3):
-    // 关掉自检 ⇒ 这些文件**不参与编译** ⇒ `br_core_selftest()` 缺席 ⇒ plugin_mgr 的
-    // 弱引用读到 NULL 就跳过整个 core 侧自检。这就是"关掉 = 代码不进镜像"的落地方式。
+    // (a) Core body (**not a plugin**, referenced by `[compat].core`)
+    // The core self-test suite (`core/selftest/**`) compiles only when the product switch allows (ADR-0010 §2.3):
+    // switch off ⇒ these files **do not compile** ⇒ `br_core_selftest()` is absent ⇒ plugin_mgr's
+    // weak reference reads NULL and skips all core-side self-test. That is "off = code absent from image".
     let mut core_sources =
         expand_many(&root, "", &pb.core_sources, "core", "product.toml", "build.core_sources", &mut diags);
     if selftest_on {
@@ -604,7 +609,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         plugin: None,
     });
 
-    // (b) 闭包内的插件(按拓扑序: init 在前, 让链接顺序也可复现)
+    // (b) Plugins in the closure (topological order: init first, making link order reproducible too)
     let mut ordered: Vec<String> = closure.topo_order.clone();
     for name in &closure.selected {
         if !ordered.contains(name) {
@@ -620,14 +625,14 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             diags.shape(
                 CODE_UNIT_NO_BUILD,
                 &p.name,
-                format!("{dir}/plugin.toml"),
+                format!("{dir}/brick.toml"),
                 "build.sources",
-                format!("闭包内的插件 `{}` 没有 `[build].sources`: 它会被组合, 却没说怎么编", p.name),
-                "补 `[build] sources/includes`; contract §7.1",
+                format!("plugin `{}` in the closure has no `[build].sources`: it gets composed but says nothing about compiling", p.name),
+                "add `[build] sources/includes`; contract §7.1",
             );
             continue;
         }
-        let sources = expand_many(&root, &dir, &b.sources, &p.name, &format!("{dir}/plugin.toml"), "build.sources", &mut diags);
+        let sources = expand_many(&root, &dir, &b.sources, &p.name, &format!("{dir}/brick.toml"), "build.sources", &mut diags);
         units.push(Unit {
             name: p.name.clone(),
             dir: dir.clone(),
@@ -643,24 +648,40 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         });
     }
 
-    // (c) 生成物(`build/gen/**`): 由 `brickie gen` 产出, 声明面在 `product.toml`
+    // (c) Generated artifacts (`build/gen/**`): produced by `brickie gen`, declared in `product.toml`
     if !pb.gen_sources.is_empty() {
         let sources = expand_many(&root, "", &pb.gen_sources, "build/gen", "product.toml", "build.gen_sources", &mut diags);
-        // **按闭包过滤**: 生成物属于某个插件(路径 = `build/gen/<插件名>/…`), 而镜像只
-        // 由闭包内的插件组成。不过滤的话, "插件树里有、但没被产品选中"的插件, 它的
-        // 描述符会被编进镜像, 而它的 .c 不会 ⇒ **链接期未定义符号**(F1 实测踩到)。
-        // 这是"声明面有第二处真值"的典型: 生成物的 glob 与 `[select]` 必须由工具对齐。
-        let (sources, skipped) = filter_gen_sources(&sources, tree, &closure.selected);
+        // **Filter by closure**: an artifact belongs to a plugin (path = `build/gen/<plugin>/…`), and the image
+        // contains only plugins in the closure. Without filtering, a plugin present in the tree but not selected
+        // would have its descriptor compiled into the image while its .c is not ⇒ **undefined symbols at link time** (hit in F1).
+        // Typical "second source of truth in the declaration surface": the artifact glob and `[select]` must be aligned by the tool.
+        // The same spot must also block **stale artifacts** (`build/gen/<old name>/` still on disk after rename/delete):
+        // that is not "not selected" but "no plugin with this name remains" ⇒ see filter_gen_sources.
+        let (sources, skipped, orphans) = filter_gen_sources(&sources, tree, &closure.selected);
         for path in &skipped {
             diags.push(
                 crate::diag::Diag::new(
                     Severity::Info,
-                    format!("生成物 `{path}` 属于不在闭包内的插件, 已跳过(不进镜像)"),
+                    format!("generated artifact `{path}` belongs to a plugin outside the closure, skipped (not in image)"),
                 )
                 .code(CODE_GEN_NOT_SELECTED)
                 .file("product.toml")
                 .span("build.gen_sources")
-                .hint("把该插件加进 [select].plugins, 或从生成物 glob 里排除它"),
+                .hint("add the plugin to [select].plugins, or exclude it from the artifact glob"),
+            );
+        }
+        for path in &orphans {
+            diags.push(
+                crate::diag::Diag::new(
+                    Severity::Info,
+                    format!(
+                        "generated artifact `{path}` belongs to no plugin in the tree (stale leftover), skipped (not in image)"
+                    ),
+                )
+                .code(CODE_GEN_ORPHAN)
+                .file("product.toml")
+                .span("build.gen_sources")
+                .hint("run `brickie gen` (auto-clears stale descriptors) or `brickie clean --all`"),
             );
         }
         if !sources.is_empty() {
@@ -668,7 +689,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                 name: "build/gen".to_string(),
                 dir: String::new(),
                 sources,
-                // 生成物 include 自己的插件目录(模板里 `#include "qemu-aarch64/qemu-aarch64.h"`)
+                // Generated artifacts include their own plugin dirs (templates use `#include "qemu-aarch64/qemu-aarch64.h"`)
                 includes: tree
                     .plugins
                     .iter()
@@ -682,14 +703,14 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         }
     }
 
-    // ---- 每单元的 include 面 = core + 自己 + **声明依赖闭包**(ADR-0018) ----
-    // 关键点: 不再把全树的 include 目录并成一个全局 `-I` 列表发给所有单元 —— 那会让
-    // "用了别家头却没声明 `[[dep]]`"静默编过(本刀之前的实况, 见 ADR-0018 §1)。
-    // 闭包按**声明边**算 ⇒ 未声明依赖 = 头文件找不到 = 编译期硬错误。
-    //   - 插件单元: core_includes + 自己的 includes + 传递依赖各插件的 includes;
-    //   - core(非插件): core_includes + **platform** 的头(core.init 阶段③依赖 platform
-    //     的数据与 ISA 头, `br_plat.h`/`br_mmu.h` 是设计内的 core→platform 方向);
-    //   - build/gen: core_includes + 全部被选插件的 include(生成物要包含各插件的锚头)。
+    // ---- Per-unit include surface = core + self + **declared dep closure** (ADR-0018) ----
+    // Key point: no longer union the whole tree's include dirs into one global `-I` list for all units — that let
+    // "using another's header without declaring `[[dep]]`" compile silently (the state before this change, see ADR-0018 §1).
+    // The closure follows **declared edges** ⇒ undeclared dep = header not found = hard compile error.
+    //   - plugin unit: core_includes + its own includes + includes of transitive dep plugins;
+    //   - core (not a plugin): core_includes + **platform** headers (core.init stage ③ depends on platform
+    //     data and ISA headers; `br_plat.h`/`br_mmu.h` are the in-design core→platform direction);
+    //   - build/gen: core_includes + includes of all selected plugins (artifacts include each plugin's anchor header).
     let platform_incs: Vec<String> = tree
         .plugins
         .iter()
@@ -716,12 +737,12 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         unit_includes.insert(u.name.clone(), incs);
     }
 
-    // ---- 声明与使用交叉校验: 未声明的跨插件 `#include` = **构建错误**(ADR-0018) ----
-    // `-I` 收窄是结构手段, 但目标工具链自带 glibc 头, `unistd.h` 这类常见名会被系统头
-    // 兜住(收窄后不报"找不到头", 而是静默改用 glibc 声明)⇒ 还必须显式把"源码 include
-    // 了别家的头"与声明面对齐。`check` 的 deps 域用同一个函数, 于是 build 与 check 同口径。
+    // ---- Declaration/use cross-check: undeclared cross-plugin `#include` = **build error** (ADR-0018) ----
+    // Narrowing `-I` is a structural measure, but the target toolchain ships glibc headers, so common names
+    // like `unistd.h` get caught by system headers (instead of "header not found", glibc declarations are used silently) ⇒
+    // "source includes another's header" must be explicitly aligned with the declaration surface. `check`'s deps domain uses the same function, so build and check agree.
     for u in model::cross_plugin_includes(&root, &tree, &closure.selected) {
-        // A-2(ADR-0020): APP 直连 core 头 = 构建错误; 其它插件不受限(见 check.rs 同处)。
+        // A-2 (ADR-0020): APP directly including a core header = build error; other plugins unrestricted (see the same spot in check.rs).
         if u.provider == "core" {
             let is_app = tree
                 .plugins
@@ -736,10 +757,10 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                 &u.file,
                 "include",
                 format!(
-                    "`{}`(APP)直接 include 了 core 头 `{}`: APP 不许依赖 iface 层以下的接口",
+                    "`{}` (APP) directly includes core header `{}`: APPs must not depend on interfaces below the iface layer",
                     u.consumer, u.header
                 ),
-                "ADR-0020 / A-2: 经 Interface 皮肤取用(如 `<iface/min/min.h>`); 需要更多 core 面时在皮肤里追加条目",
+                "ADR-0020 / A-2: use the Interface skin (e.g. `<iface/min/min.h>`); add entries to the skin when more of core is needed",
             );
             continue;
         }
@@ -752,14 +773,14 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             &u.file,
             "include",
             format!(
-                "`{}` include 了 `{}` 的头 `{}`, 但 `plugin.toml` 没有声明依赖(直接或传递)",
+                "`{}` includes `{}`'s header `{}`, but `brick.toml` declares no dependency (direct or transitive)",
                 u.consumer, u.provider, u.header
             ),
-            "ADR-0018: 编译期包含面 = 声明依赖闭包; 补 `[[dep]]` 或删掉这个 include",
+            "ADR-0018: compile-time include surface = declared dep closure; add `[[dep]]` or drop this include",
         );
     }
 
-    // ---- 标志 ----
+    // ---- Flags ----
     let cflags = if profile == "release" {
         let mut v = pb.cflags.clone();
         v.extend(pb.release_cflags_extra.clone());
@@ -787,8 +808,8 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             &prod.name,
             "product.toml",
             "build.cflags",
-            "`[build].cflags` 为空: 编译选项必须由产品声明(工具不自带缺省策略)",
-            "把 `-std=c11`/`-O2`/`-ffreestanding` 等显式写进 `[build].cflags`",
+            "`[build].cflags` is empty: compile options must be declared by the product (no built-in defaults)",
+            "write `-std=c11`/`-O2`/`-ffreestanding` etc. explicitly into `[build].cflags`",
         );
     }
 
@@ -802,14 +823,14 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         format!("build/gen/build-state{tag_suffix}.json")
     };
     let gen_dir = "build/gen".to_string();
-    // 带 tag 的构建把对象也挪走, 免得两种后端互相踩(后端对比门禁要用)。
+    // Tagged builds relocate objects too, so the two backends do not collide (needed by the backend-compare gate).
     let obj_dir = if tag.is_empty() {
         obj_dir
     } else {
         format!("{obj_dir}{tag_suffix}")
     };
 
-    // ---- 工具候选(顺序 = 策略) ----
+    // ---- Tool candidates (order = policy) ----
     let cross = &target.cross;
     let mut tools: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut cc_cands: Vec<String> = vec![format!("{cross}gcc")];
@@ -835,15 +856,15 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     tools.insert("ninja".to_string(), vec!["ninja".to_string()]);
 
     let mut tool_what: BTreeMap<String, String> = BTreeMap::new();
-    tool_what.insert("cc".into(), "交叉 C 编译器(br-wa-toolchain-001 过渡)".into());
-    tool_what.insert("objcopy".into(), "目标文件转二进制".into());
-    tool_what.insert("objdump".into(), "反汇编(门禁用)".into());
-    tool_what.insert("size".into(), "段体积".into());
-    tool_what.insert("qemu".into(), "目标机模拟器".into());
-    tool_what.insert("make".into(), "BR-D4 后端 A".into());
-    tool_what.insert("ninja".into(), "BR-D4 后端 B".into());
+    tool_what.insert("cc".into(), "cross C compiler (br-wa-toolchain-001 interim)".into());
+    tool_what.insert("objcopy".into(), "object file to binary".into());
+    tool_what.insert("objdump".into(), "disassembly (for gates)".into());
+    tool_what.insert("size".into(), "section sizes".into());
+    tool_what.insert("qemu".into(), "target machine emulator".into());
+    tool_what.insert("make".into(), "BR-D4 backend A".into());
+    tool_what.insert("ninja".into(), "BR-D4 backend B".into());
 
-    // ---- 工具解析(core 做: 生成物要把结果烧进去; 裁定 S-B1) ----
+    // ---- Tool resolution (core does it: generated files must bake in the result; ruling S-B1) ----
     let path_env = req
         .context("path")
         .and_then(Value::as_str)
@@ -857,7 +878,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         }
     }
 
-    // ---- `context.files`: 自检用的确定性 stat(给了就不碰磁盘) ----
+    // ---- `context.files`: deterministic stat for self-test (when given, no disk access) ----
     let stat_override = req.context("files").and_then(Value::as_object).map(|m| {
         let mut out: BTreeMap<String, (u64, i64)> = BTreeMap::new();
         for (k, v) in m {
@@ -873,8 +894,8 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         return Err(diags);
     }
 
-    // 注意: **不能**在这里把 diags 丢掉 —— 装载期也会产出 info/warning
-    // (例如"生成物属于不在闭包内的插件, 已跳过"), 它们是调用方必须呈现的东西。
+    // Note: diags must **not** be dropped here — loading also produces info/warning
+    // (e.g. "generated artifact belongs to a plugin outside the closure, skipped"), which callers must present.
     Ok((Ctx {
         root,
         profile,
@@ -902,7 +923,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     }, diags))
 }
 
-/// 展开一组通配; 字面路径不存在 ⇒ `BRV-BLD-0007`(通配匹配为空 ⇒ 静默, 由 0002 兜底)。
+/// Expand a group of globs; a literal path that does not exist ⇒ `BRV-BLD-0007` (an empty glob match ⇒ silent, covered by 0002).
 fn expand_many(
     root: &Path,
     base_dir: &str,
@@ -924,8 +945,8 @@ fn expand_many(
                 unit,
                 file,
                 span,
-                format!("`{pat}` 不存在(字面路径, 不是通配)"),
-                "检查路径拼写与工作目录; 通配不匹配**不算**错(见 BRV-BLD-0002)",
+                format!("`{pat}` does not exist (literal path, not a glob)"),
+                "check the path spelling and working directory; a non-matching glob is **not** an error (see BRV-BLD-0002)",
             );
             continue;
         }
@@ -936,9 +957,9 @@ fn expand_many(
     out
 }
 
-/// 工具解析: `<root>/prebuilts/toolchain/bin/` → PATH。
+/// Tool resolution: `<root>/prebuilts/toolchain/bin/` → PATH.
 ///
-/// 顺序是**策略**(裁定 S-B1): 仓库自带的 prebuilt 优先(可复现), 再退宿主 PATH。
+/// The order is **policy** (ruling S-B1): the repo's own prebuilt first (reproducible), then host PATH.
 fn resolve_tool(root: &Path, candidates: &[String], path_env: &str) -> Option<String> {
     let dirs: Vec<PathBuf> = path_env
         .split(':')
@@ -953,7 +974,7 @@ fn resolve_tool(root: &Path, candidates: &[String], path_env: &str) -> Option<St
             }
             continue;
         }
-        // (1) 仓库自带的 prebuilt 工具链
+        // (1) The repo's own prebuilt toolchain
         let local = root.join("prebuilts/toolchain/bin").join(cand);
         if local.is_file() {
             return Some(format!("prebuilts/toolchain/bin/{cand}"));
@@ -1000,8 +1021,8 @@ impl Ctx {
             .unwrap_or_else(|| format!("@{name}"))
     }
 
-    /// 一个编译单元的 include 目录(别名: `-I` 参数)。**按单元**取, 不再全局并集
-    /// —— 包含面 = 声明依赖闭包(ADR-0018), 见 `load_ctx` 的 `unit_includes`。
+    /// A unit's include dirs (alias: `-I` arguments). Resolved **per unit**, no global union
+    /// — the include surface is the declared dep closure (ADR-0018), see `unit_includes` in `load_ctx`.
     fn unit_includes_argv(&self, unit: &str) -> Vec<String> {
         self.unit_includes
             .get(unit)
@@ -1010,9 +1031,9 @@ impl Ctx {
     }
 }
 
-// ================================================================== 计划
+// ================================================================== Plan
 
-/// 生成全量步骤(未做增量过滤)。
+/// Generate all steps (no incremental filtering).
 fn all_steps(ctx: &Ctx) -> Vec<Step> {
     let mut steps: Vec<Step> = Vec::new();
     let cc = ctx.tool("cc");
@@ -1020,8 +1041,8 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
     let arch_flags = ctx.target.arch_flags.clone();
     let arch_in_cflags = !arch_flags.is_empty();
     let arch_in_asflags = !arch_flags.is_empty();
-    // 产品级配置 define(`[kernel].hz` ⇒ `BR_CFG_TICK_HZ` 等): 对**每个 C 编译单元**都下发,
-    // 放在单元自己的 defines **之后** —— 语义配置由产品裁决(ADR-0017)。
+    // Product-level config defines (`[kernel].hz` ⇒ `BR_CFG_TICK_HZ` etc.): pushed to **every C unit**,
+    // placed **after** the unit's own defines — semantic config is decided by the product (ADR-0017).
     let config_defines: Vec<String> = ctx
         .config_defines
         .iter()
@@ -1040,7 +1061,7 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
         let obj = ctx.obj_of(src);
         let dep = ctx.dep_of(src);
         let is_asm = src.ends_with(".S") || src.ends_with(".s");
-        // 本单元的包含面(声明依赖闭包); 不是全局并集(ADR-0018)。
+        // This unit's include surface (declared dep closure); not a global union (ADR-0018).
         let includes = ctx.unit_includes_argv(unit);
         let mut argv: Vec<String> = vec![cc.clone()];
         if is_asm {
@@ -1053,8 +1074,8 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
             if arch_in_cflags {
                 argv.extend(arch_flags.clone());
             }
-            // ★ 单元级 cflags 接在产品级**之后**: 顺序有意义 —— 后面的 `-Wno-*`
-            //   才能关掉前面 `-Wall -Wextra -Werror` 里的某几条(vendor 代码用)。
+            // ★ Unit-level cflags go **after** product-level ones: order matters — later `-Wno-*`
+            //   can disable some of the earlier `-Wall -Wextra -Werror` (used by vendor code).
             {
                 let unit_cflags: Vec<String> = ctx
                     .units
@@ -1146,12 +1167,12 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
     steps
 }
 
-/// 一条步骤的输入集合(源 + `.d` 里列的依赖)。
+/// A step's input set (source + dependencies listed in `.d`).
 fn step_inputs(ctx: &Ctx, step: &Step) -> Vec<String> {
     let mut inputs: Vec<String> = Vec::new();
     match step.kind.as_str() {
         "compile" => {
-            // argv 末尾形态: … -c <src> -o <obj>
+            // argv tail shape: … -c <src> -o <obj>
             let mut it = step.argv.iter().rev();
             let _obj = it.next();
             let _o = it.next();
@@ -1159,7 +1180,7 @@ fn step_inputs(ctx: &Ctx, step: &Step) -> Vec<String> {
                 inputs.push(src.clone());
                 let dep = format!("{}.d", _obj.cloned().unwrap_or_default());
                 if ctx.stat_override.is_some() {
-                    // 自检模式下 `.d` 由 context 提供(`context.files` 里带 `deps:<obj>` 键)
+                    // In self-test mode `.d` comes from context (`context.files` carries a `deps:<obj>` key)
                 } else {
                     let deps = parse_depfile(&ctx.root.join(&dep), &ctx.root);
                     inputs.extend(deps);
@@ -1187,37 +1208,55 @@ fn step_inputs(ctx: &Ctx, step: &Step) -> Vec<String> {
     inputs
 }
 
-/// 把 `build/gen/**` 展开出来的路径按闭包过滤。
+/// Filter paths expanded from `build/gen/**` by **ownership**.
 ///
-/// 归属判定: 路径形如 `build/gen/<插件名>/<文件>`(`<插件名>` 可能带命名空间,
-/// 如 `service/dump`), 于是"哪个插件拥有它"= 树里**名字是它的路径前缀**的那个插件。
-/// 认不出归属的路径(不以 `build/gen/<已知插件>/` 开头)保持原样 —— 那是人写的
-/// 生成物或别的工具的产物, 工具不该替它做决定。
+/// Ownership test: a path looks like `build/gen/<plugin>/<file>` (`<plugin>` may carry a namespace,
+/// e.g. `service/dump`), so "which plugin owns it" = the plugin whose **name is a prefix of the path**.
+/// Three outcomes:
+///
+/// * owner plugin is in the closure ⇒ **keep** (it enters the image);
+/// * owner plugin is in the tree but not in the closure ⇒ **skip** (its .c is not compiled; compiling its descriptor = undefined symbol at link);
+/// * **owner unrecognizable** and the path is under `build/gen/` ⇒ **skip**. That is not "not selected" but **stale leftover**:
+///   after a plugin rename/delete the old dir stays on disk forever (`brickie gen` only writes plugins in the current tree, never deletes),
+///   and the `[build].gen_sources` glob picks the old descriptor up again.
+///   Observed for real (2026-10, after ADR-0029 renamed `third_party/uboot-mmc` to `adapter/uboot-mmc`):
+///   the old and new descriptors' `start` point at the **same** `uboot_mmc_start` (same symbol name), so
+///   plugin_manager registers it twice — on the second start the 4 cards are already claimed, `BR_EMMC_MAX_DEVS`
+///   is hit and it returns `-ENOSPC`, then "first failure stops the boot" (G6) **panics during kernel startup**:
+///   `FAIL third_party/uboot-mmc phase=start rc=-28`.
+///   Skipping it is enough to block such ghost plugins; `brickie gen` has a separate "prune stale descriptors" pass (see L5's
+///   `writer.prune_orphan_descriptors`) that sweeps it off disk.
+///
+/// Paths **outside** `build/gen/` with no recognizable owner are left as-is — those are hand-written artifacts or another tool's
+/// output, and the tool should not decide for them.
 fn filter_gen_sources(
     sources: &[String],
     tree: &TreeLoad,
     selected: &BTreeSet<String>,
-) -> (Vec<String>, Vec<String>) {
+) -> (Vec<String>, Vec<String>, Vec<String>) {
     let mut kept: Vec<String> = Vec::new();
     let mut skipped: Vec<String> = Vec::new();
+    let mut orphans: Vec<String> = Vec::new();
     for path in sources {
         let owner = tree.plugins.iter().find(|p| {
             path.starts_with(&format!("build/gen/{}/", p.name))
         });
         match owner {
             Some(p) if !selected.contains(&p.name) => skipped.push(path.clone()),
-            _ => kept.push(path.clone()),
+            Some(_) => kept.push(path.clone()),
+            None if path.starts_with("build/gen/") => orphans.push(path.clone()),
+            None => kept.push(path.clone()),
         }
     }
-    (kept, skipped)
+    (kept, skipped, orphans)
 }
 
-/// argv 指纹: **命令本身**变了(改标志 / 换编译器 / 改落点) ⇒ 必须重跑。
+/// argv fingerprint: the **command itself** changed (flags / compiler / output path) ⇒ must rerun.
 fn argv_hash_of(step: &Step) -> String {
     sha256_tag(&[step.kind.clone(), step.argv.join("\u{1}")])
 }
 
-/// 上一次的状态(机器文件, core 产出 / L5 落盘; 缺省 = 全量重建)。
+/// Previous state (machine file, produced by core / written by L5; absent = full rebuild).
 #[derive(Clone, Debug, Default)]
 struct StateEntry {
     argv_hash: String,
@@ -1230,7 +1269,7 @@ fn load_state(ctx: &Ctx) -> BTreeMap<String, StateEntry> {
         return out;
     };
     let Ok(v) = text.parse::<toml::Value>() else {
-        // 状态文件损坏 = 当作"没有状态"(全量重建), 不是错 —— 它是派生物。
+        // Corrupt state file = treat as "no state" (full rebuild), not an error — it is a derived artifact.
         return out;
     };
     if let Some(jobs) = v.get("jobs").and_then(|j| j.as_array()) {
@@ -1263,7 +1302,7 @@ fn load_state(ctx: &Ctx) -> BTreeMap<String, StateEntry> {
     out
 }
 
-/// 构建计划: 要跑的步骤 + 状态文件内容 + 统计。
+/// Build plan: steps to run + state file content + counters.
 struct BuildPlan {
     todo: Vec<Step>,
     stale: Vec<String>,
@@ -1273,15 +1312,15 @@ struct BuildPlan {
     plan_hash: String,
 }
 
-/// 增量口径(**两条判据, 与 make / ninja 同族**):
+/// Incremental policy (**two criteria, same family as make / ninja**):
 ///
-/// 1. **命令指纹**: `argv` 变了(改标志 / 换编译器 / 改落点) ⇒ 重跑;
-/// 2. **时间戳**: 目标不存在, 或任一输入(源 + `.d` 里列的头 + 链接用的对象与脚本)
-///    比目标**新**, 或输入**不见了** ⇒ 重跑。
+/// 1. **Command fingerprint**: `argv` changed (flags / compiler / output path) ⇒ rerun;
+/// 2. **Timestamps**: the target does not exist, or any input (source + headers listed in `.d` + objects and scripts used for linking)
+///    is **newer** than the target, or an input **is gone** ⇒ rerun.
 ///
-/// 为什么不用"输入集合 + 内容戳": `.d` 是**构建的产物**(第一次编译后才存在), 于是
-/// "按输入集合算戳"会让头一次构建之后的两次运行必然不一致 —— 头依赖永远多编一轮
-/// (踩过)。时间戳口径没有这个自指: `.d` 缺失 ⇒ 重编一次, 之后每轮都读它比时间。
+/// Why not "input set + content hash": `.d` is a **build product** (it exists only after the first compile), so
+/// "hash the input set" makes two runs after the first build necessarily disagree — header deps get rebuilt one extra round
+/// (hit in practice). The timestamp policy has no such self-reference: a missing `.d` ⇒ recompile once, then every round just compares times.
 fn make_plan(ctx: &Ctx) -> BuildPlan {
     let steps = all_steps(ctx);
     let old = load_state(ctx);
@@ -1291,8 +1330,8 @@ fn make_plan(ctx: &Ctx) -> BuildPlan {
     let mut up_to_date = 0usize;
     let mut plan_parts: Vec<String> = Vec::new();
 
-    // 上游要重建 ⇒ 下游也必须重建。**必须显式传递**: 计划是在构建**之前**算的,
-    // 那时对象文件还是旧的 —— 光看时间戳会得出"链接不用跑"的错误结论。
+    // Upstream rebuilds ⇒ downstream must rebuild too. **Must be propagated explicitly**: the plan is computed **before** the build,
+    // when object files are still old — timestamps alone would wrongly conclude "no need to link".
     let mut dirty: BTreeSet<String> = BTreeSet::new();
     for step in &steps {
         let target = step.outputs.first().cloned().unwrap_or_default();
@@ -1312,7 +1351,7 @@ fn make_plan(ctx: &Ctx) -> BuildPlan {
             }
         }
         if !needs && step.kind == "compile" {
-            // 缺 `.d` ⇒ 头依赖不可知 ⇒ 重编一次(宁多编一次, 不错链一次)。
+            // Missing `.d` ⇒ header deps unknown ⇒ recompile once (better one extra compile than one bad link).
             if ctx.stat(&format!("{target}.d")).is_none() {
                 needs = true;
             }
@@ -1321,7 +1360,7 @@ fn make_plan(ctx: &Ctx) -> BuildPlan {
             let target_mtime = target_stat.map(|(_, m)| m).unwrap_or(i64::MIN);
             for inp in &inputs {
                 match ctx.stat(inp) {
-                    // 输入比目标新, 或输入不见了 ⇒ 重跑(后者会以编译错误暴露)
+                    // Input newer than target, or input gone ⇒ rerun (the latter surfaces as a compile error)
                     Some((_, m)) if m <= target_mtime => {}
                     _ => {
                         needs = true;
@@ -1359,7 +1398,7 @@ fn make_plan(ctx: &Ctx) -> BuildPlan {
         .collect();
 
     let state_content = format!(
-        "# brickie:generated — 增量状态(派生品, 可删)\n\
+        "# brickie:generated — incremental state (derived, safe to delete)\n\
          schema = 1\n\
          profile = \"{}\"\n\
          plan = \"{}\"\n\
@@ -1400,15 +1439,15 @@ fn make_plan(ctx: &Ctx) -> BuildPlan {
     }
 }
 
-// ================================================================== 后端文件
+// ================================================================== Backend files
 
-/// 渲染 make 后端(BR-D4 的 A): 生成物, 不手改。
+/// Render the make backend (BR-D4 A): generated, do not edit by hand.
 fn render_make(ctx: &Ctx, steps: &[Step]) -> String {
     let mut s = String::new();
-    s.push_str("# brickie:generated — 生成物, 请勿手改。\n");
-    s.push_str("# 重新生成: brickie build --backend make\n");
-    s.push_str("# 来源: product.toml [build] + 各插件 [build] + platform [build.target](唯一真值)\n");
-    s.push_str("# 本文件是 BR-D4 的**后端 A**(make 干活); `brickie build` 的 direct 后端不读它。\n\n");
+    s.push_str("# brickie:generated — generated file, do not edit by hand.\n");
+    s.push_str("# regenerate: brickie build --backend make\n");
+    s.push_str("# source: product.toml [build] + each plugin [build] + platform [build.target] (single source of truth)\n");
+    s.push_str("# This file is BR-D4's **backend A** (make does the work); the `brickie build` direct backend does not read it.\n\n");
     s.push_str(".DEFAULT_GOAL := all\n.PHONY: all clean\n\n");
     s.push_str(&format!("OBJ_DIR := {}\nELF := {}\nBIN := {}\nMAP := {}\n\n", ctx.obj_dir, ctx.elf, ctx.bin, ctx.map));
     let compiles: Vec<&Step> = steps.iter().filter(|s| s.kind == "compile").collect();
@@ -1442,19 +1481,19 @@ fn render_make(ctx: &Ctx, steps: &[Step]) -> String {
     s
 }
 
-/// 渲染 ninja 后端(BR-D4 的 B)。
+/// Render the ninja backend (BR-D4 B).
 ///
-/// 两条 rule: `cc`(C)与 `asm`(汇编)。**必须分开** —— C 与 `.S` 的 argv 不同
-/// (`-std=c11`/`-O2`/警告旗标 vs `-g3`), 用一条模板渲染两类源就是把汇编当成 C 编。
-/// 模板从**该类的第一条步骤**的 argv 派生, 于是生成物与 `direct` 后端的命令逐字一致。
+/// Two rules: `cc` (C) and `asm` (assembly). They **must be separate** — C and `.S` have different argv
+/// (`-std=c11`/`-O2`/warning flags vs `-g3`); one template for both would compile assembly as C.
+/// The template is derived from the **first step of that kind**, so generated commands match the `direct` backend verbatim.
 fn render_ninja(ctx: &Ctx, steps: &[Step]) -> String {
     let mut s = String::new();
-    s.push_str("# brickie:generated — 生成物, 请勿手改。\n");
-    s.push_str("# 重新生成: brickie build --backend ninja\n");
-    s.push_str("# 本文件是 BR-D4 的**后端 B**(ninja 干活); 与 A 后端出**逐字节一致**的镜像。\n\n");
+    s.push_str("# brickie:generated — generated file, do not edit by hand.\n");
+    s.push_str("# regenerate: brickie build --backend ninja\n");
+    s.push_str("# This file is BR-D4's **backend B** (ninja does the work); it produces a **byte-identical** image to backend A.\n\n");
     s.push_str(&format!("cc = {}\n\n", ctx.tool("cc")));
-    // ninja 的 `.ninja_log` / `.ninja_deps` 默认落在**调用目录**。钉到 build/ 下,
-    // 否则一次 `brickie build --backend ninja` 就会往仓库根丢两个状态文件(踩过)。
+    // ninja's `.ninja_log` / `.ninja_deps` default to the **invocation directory**. Pin them under build/,
+    // otherwise one `brickie build --backend ninja` drops two state files into the repo root (hit in practice).
     s.push_str(&format!("builddir = {}/ninja\n\n", ctx.gen_dir));
 
     let compiles: Vec<&Step> = steps.iter().filter(|s| s.kind == "compile").collect();
@@ -1468,7 +1507,7 @@ fn render_ninja(ctx: &Ctx, steps: &[Step]) -> String {
     };
     let is_asm = |st: &Step| src_of(st).ends_with(".S") || src_of(st).ends_with(".s");
 
-    // 每类一条 rule(模板 = 该类第一条步骤的 argv, 把具体 in/out 换成 $in/$out)
+    // One rule per kind (template = that kind's first step argv, with concrete in/out replaced by $in/$out)
     for (tag, want_asm) in [("cc", false), ("asm", true)] {
         let Some(tmpl_step) = compiles.iter().find(|st| is_asm(st) == want_asm) else {
             continue;
@@ -1524,7 +1563,7 @@ fn render_ninja(ctx: &Ctx, steps: &[Step]) -> String {
     s
 }
 
-/// 极简 shell 引号(生成物里的命令要能被 make 原样执行)。
+/// Minimal shell quoting (commands in generated files must run verbatim under make).
 fn shell_join(argv: &[String]) -> String {
     argv.iter()
         .map(|a| {
@@ -1540,7 +1579,7 @@ fn shell_join(argv: &[String]) -> String {
         .join(" ")
 }
 
-// ================================================================== 呈现数据
+// ================================================================== Presentation data
 
 fn summary_json(ctx: &Ctx, plan: &BuildPlan, steps: &[Step], extra: Value) -> Value {
     let mut units: Vec<Value> = ctx
@@ -1612,7 +1651,7 @@ fn summary_json(ctx: &Ctx, plan: &BuildPlan, steps: &[Step], extra: Value) -> Va
     data
 }
 
-// ================================================================== 命令: build
+// ================================================================== Command: build
 
 fn cmd_build(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
@@ -1631,7 +1670,7 @@ fn cmd_build(req: &Request) -> Response {
     let dry_run = req.arg_bool("dry_run").unwrap_or(false);
     let emit_backends = req.arg_bool("emit_backends").unwrap_or(false);
 
-    // ---- 后端文件(生成物) ----
+    // ---- Backend files (generated) ----
     let mut files: Vec<Value> = Vec::new();
     let want_make = emit_backends || ctx.backend == "make";
     let want_ninja = emit_backends || ctx.backend == "ninja";
@@ -1652,7 +1691,7 @@ fn cmd_build(req: &Request) -> Response {
         }));
     }
 
-    // ---- 要执行的步骤 ----
+    // ---- Steps to execute ----
     let exec_steps: Vec<Step> = match ctx.backend.as_str() {
         "make" => {
             let jobs = req.arg_u64("jobs").unwrap_or(0);
@@ -1701,7 +1740,7 @@ fn cmd_build(req: &Request) -> Response {
         _ => plan.todo.clone(),
     };
 
-    // ---- 工具解析失败 ⇒ 环境错(退出码 2) ----
+    // ---- Tool resolution failed ⇒ environment error (exit code 2) ----
     if !dry_run && ctx.backend == "direct" && !plan.todo.is_empty() {
         for name in ["cc", "objcopy"] {
             if !ctx.resolved.contains_key(name) {
@@ -1711,10 +1750,10 @@ fn cmd_build(req: &Request) -> Response {
                     "product.toml",
                     "build.target",
                     format!(
-                        "找不到工具 `{name}`(候选: {})",
+                        "cannot find tool `{name}` (candidates: {})",
                         ctx.tools.get(name).cloned().unwrap_or_default().join(", ")
                     ),
-                    "装交叉工具链或取 prebuilt: make prebuilt; 也可用 `[build.target].cross` 指到别处",
+                    "install a cross toolchain or fetch prebuilt: make prebuilt; or point `[build.target].cross` elsewhere",
                 );
                 return Response::ok(diags, json!({}));
             }
@@ -1727,7 +1766,7 @@ fn cmd_build(req: &Request) -> Response {
         "content": plan.state_content.clone(),
         "mode": "0644",
     });
-    // 状态文件只在 direct 后端有意义(make/ninja 自己记时间戳)。
+    // The state file only matters for the direct backend (make/ninja track timestamps themselves).
     if ctx.backend == "direct" && !dry_run {
         files.push(state_file);
     }
@@ -1739,8 +1778,8 @@ fn cmd_build(req: &Request) -> Response {
             "",
             "product.toml",
             "build.release",
-            "release 与 dev 的编译标志相同(只有组合期检查严格度不同)",
-            "镜像内断言轴(debug=panic / release=trace, 1-01 §13)尚未落地, 是 v0.2 的登记项",
+            "release and dev use identical compile flags (only composition-time check strictness differs)",
+            "the in-image assertion axis (debug=panic / release=trace, 1-01 §13) is not implemented yet; logged for v0.2",
         );
     }
 
@@ -1758,7 +1797,7 @@ fn cmd_build(req: &Request) -> Response {
     Response::ok_with_files(diags, files, data)
 }
 
-// ================================================================== 命令: clean / run / size / disasm
+// ================================================================== Commands: clean / run / size / disasm
 
 fn cmd_clean(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
@@ -1774,7 +1813,7 @@ fn cmd_clean(req: &Request) -> Response {
         paths.push(ctx.map.clone());
         paths.push(ctx.state_path.clone());
     } else {
-        // 声明面还没成形(如缺 [build])也要能清: 退回到历史约定路径。
+        // Cleaning must work before the declaration surface exists (e.g. no [build]): fall back to historical paths.
         d = Diags::new();
         paths.push(default_obj_dir());
         for f in ["build/brick.elf", "build/brick.bin", "build/brick.map"] {
@@ -1796,7 +1835,7 @@ fn cmd_clean(req: &Request) -> Response {
     let data = json!({
         "all": all,
         "paths": paths,
-        "note": "L5 逐个删除(每个路径都必须落在 root 之内; 不含 build/host 的工具产物)",
+        "note": "L5 deletes each path in turn (every path must lie inside root; excludes build/host tool artifacts)",
     });
     Response::ok(d, data)
 }
@@ -1819,8 +1858,8 @@ fn cmd_run(req: &Request) -> Response {
             "",
             "product.toml",
             "build.target.qemu",
-            format!("找不到 QEMU(`{}`)", ctx.target.qemu_binary),
-            "装 qemu-system-arm; 或用 `[build.target.qemu].binary` 指到别处",
+            format!("cannot find QEMU (`{}`)", ctx.target.qemu_binary),
+            "install qemu-system-arm; or point `[build.target.qemu].binary` elsewhere",
         );
         return Response::ok(diags, json!({}));
     }
@@ -1895,8 +1934,8 @@ fn binutils_cmd(req: &Request, which: &str) -> Response {
             "",
             "product.toml",
             "build.target",
-            format!("找不到工具 `{which}`(候选: {})", ctx.tools.get(which).cloned().unwrap_or_default().join(", ")),
-            "装 aarch64 binutils 或取 prebuilt: make prebuilt",
+            format!("cannot find tool `{which}` (candidates: {})", ctx.tools.get(which).cloned().unwrap_or_default().join(", ")),
+            "install aarch64 binutils or fetch prebuilt: make prebuilt",
         );
         return Response::ok(diags, json!({}));
     }
@@ -2034,19 +2073,19 @@ fn load_gates(root: &Path, d: &mut Diags) -> GatesFile {
     let text = match fs::read_to_string(&abs) {
         Ok(t) => t,
         Err(e) => {
-            d.env(format!("读不到 `{rel}`: {e}"), "检查路径与权限");
+            d.env(format!("cannot read `{rel}`: {e}"), "check the path and permissions");
             return g;
         }
     };
     let value: toml::Value = match text.parse() {
         Ok(v) => v,
         Err(e) => {
-            d.env(format!("`{rel}` 不是合法 TOML: {e}"), "contract §7.4");
+            d.env(format!("`{rel}` is not valid TOML: {e}"), "contract §7.4");
             return g;
         }
     };
     let Some(top) = value.as_table() else {
-        d.env(format!("`{rel}` 顶层必须是表"), "contract §7.4");
+        d.env(format!("`{rel}` top level must be a table"), "contract §7.4");
         return g;
     };
     if let Some(run) = top.get("run").and_then(|v| v.as_table()) {
@@ -2107,7 +2146,7 @@ fn load_gates(root: &Path, d: &mut Diags) -> GatesFile {
         g.build_post = str_list(b, "post");
     }
 
-    // 正则子集校验: 宁可**报形状错**, 也不让一条"永不匹配"的 require 变成假绿。
+    // Regex subset validation: prefer a **shape error** over a never-matching require turning falsely green.
     let mut check_patterns: Vec<(String, String, String)> = Vec::new();
     for gate in &g.gates {
         for (i, pat) in gate.require.iter().enumerate() {
@@ -2132,18 +2171,18 @@ fn load_gates(root: &Path, d: &mut Diags) -> GatesFile {
                 name,
                 rel.clone(),
                 span,
-                format!("正则 `{pat}` 用了 core 正则子集不支持的 `{ch}`"),
-                "支持 `.` `*` `+` `?` `[...]` 与 `\\x` 转义; 分组/交替/锚点不支持 —— 拆成多条",
+                format!("regex `{pat}` uses `{ch}`, unsupported by core's regex subset"),
+                "supports `.` `*` `+` `?` `[...]` and `\\x` escapes; groups/alternation/anchors unsupported — split into several patterns",
             );
         }
     }
     g
 }
 
-/// 返回模式里**第一个不支持的元字符**(`None` = 在子集内)。
+/// Return the **first unsupported metacharacter** in the pattern (`None` = inside the subset).
 ///
-/// 为什么不引一个正则库: 判据只需要"日志里有没有这么个形状", 而这一族模式很短;
-/// 引库会多一条工具依赖(§9.3 最小依赖集)。代价是**必须如实拒绝**子集外的写法。
+/// Why not pull in a regex crate: the criteria only need "does the log contain this shape", and these patterns are short;
+/// a crate would add a tool dependency (§9.3 minimal dependency set). The cost is that out-of-subset syntax **must be rejected truthfully**.
 fn regex_unsupported(pat: &str) -> Option<char> {
     let mut escaped = false;
     for ch in pat.chars() {
@@ -2160,7 +2199,7 @@ fn regex_unsupported(pat: &str) -> Option<char> {
     None
 }
 
-// ================================================================== 命令: test
+// ================================================================== Command: test
 
 fn cmd_test(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
@@ -2176,7 +2215,7 @@ fn cmd_test(req: &Request) -> Response {
         diags.merge(d);
     }
 
-    // `--list`: 只列(CI 的自检与 `--help` 之外的发现路径)。
+    // `--list`: list only (a discovery path besides CI self-test and `--help`).
     if req.arg_bool("list").unwrap_or(false) {
         let data = json!({
             "gates": g.gates.iter().map(|x| x.name.clone()).collect::<Vec<_>>(),
@@ -2195,8 +2234,8 @@ fn cmd_test(req: &Request) -> Response {
             "",
             "tests/gates.toml",
             "",
-            "没有 `tests/gates.toml`: 门禁没有声明面, 无从编排",
-            "写下 `[[gate]]` / `[[hosttest]]` / `[[script]]`; contract §7.4",
+            "no `tests/gates.toml`: gates have no declaration surface, cannot be orchestrated",
+            "write `[[gate]]` / `[[hosttest]]` / `[[script]]`; contract §7.4",
         );
         return Response::ok(diags, json!({}));
     }
@@ -2213,13 +2252,13 @@ fn cmd_test(req: &Request) -> Response {
             want.clone(),
             &g.file.clone(),
             "",
-            format!("没有名为 `{want}` 的门禁(已知: {})", known.join(", ")),
-            "`brickie test --list` 可列出全部",
+            format!("no gate named `{want}` (known: {})", known.join(", ")),
+            "`brickie test --list` lists them all",
         );
         return Response::ok(diags, json!({}));
     }
 
-    // 选中集合: 单个 = 它 + 它的 depends(拓扑展开); 不给 = 全跑。
+    // Selected set: a single name = it + its depends (topologically expanded); none given = run all.
     let selected: BTreeSet<String> = if want.is_empty() {
         g.hosttests
             .iter()
@@ -2248,7 +2287,7 @@ fn cmd_test(req: &Request) -> Response {
     let mut steps: Vec<Step> = Vec::new();
     let mut group: u32 = 0;
 
-    // ---- 宿主用例: 编译 + 跑 ----
+    // ---- Host cases: compile + run ----
     for h in &g.hosttests {
         if !selected.contains(&h.name) {
             continue;
@@ -2291,7 +2330,7 @@ fn cmd_test(req: &Request) -> Response {
         group += 1;
     }
 
-    // ---- QEMU 门禁 ----
+    // ---- QEMU gates ----
     for gate in &g.gates {
         if !selected.contains(&gate.name) {
             continue;
@@ -2324,7 +2363,7 @@ fn cmd_test(req: &Request) -> Response {
         group += 1;
     }
 
-    // ---- 脚本门禁 ----
+    // ---- Script gates ----
     for s in &g.scripts {
         if !selected.contains(&s.name) {
             continue;
@@ -2378,7 +2417,7 @@ fn cmd_test(req: &Request) -> Response {
     Response::ok(diags, data)
 }
 
-// ================================================================== 命令: judge
+// ================================================================== Command: judge
 
 fn cmd_judge(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
@@ -2400,8 +2439,8 @@ fn cmd_judge(req: &Request) -> Response {
             name.clone(),
             &g.file.clone(),
             "",
-            format!("没有名为 `{name}` 的门禁可判"),
-            "`brickie test --list` 可列出全部",
+            format!("no gate named `{name}` to judge"),
+            "`brickie test --list` lists them all",
         );
         return Response::ok(diags, json!({}));
     }
@@ -2425,8 +2464,8 @@ fn cmd_judge(req: &Request) -> Response {
                 name.clone(),
                 g.file.clone(),
                 format!("gate[{i}].require"),
-                format!("门禁 `{name}`: 日志里没有匹配 `{pat}` 的行"),
-                "判据在 tests/gates.toml; 日志见步骤声明的 log 路径",
+                format!("gate `{name}`: no log line matches `{pat}`"),
+                "criteria live in tests/gates.toml; the log is at the path declared by the step",
             );
         }
     }
@@ -2446,8 +2485,8 @@ fn cmd_judge(req: &Request) -> Response {
                 name.clone(),
                 g.file.clone(),
                 format!("gate[{i}].forbid"),
-                format!("门禁 `{name}`: 日志命中了禁止模式 `{pat}`: {sample}"),
-                "这是「不该出现的东西出现了」 —— 先看那一行日志",
+                format!("gate `{name}`: log hit forbidden pattern `{pat}`: {sample}"),
+                "this is \"something that must not appear appeared\" — look at that log line first",
             );
         }
     }
@@ -2463,20 +2502,20 @@ fn cmd_judge(req: &Request) -> Response {
                 name.clone(),
                 g.file.clone(),
                 format!("gate[{i}].require_tags"),
-                format!("门禁 `{name}`: 缺用例 `{tag}` 的 PASS(用例被裁掉也算红)"),
-                "用例少了和用例失败一样是红 —— 与 irq-test 同一纪律",
+                format!("gate `{name}`: missing PASS for case `{tag}` (a dropped case also goes red)"),
+                "a missing case is as red as a failing one — same discipline as irq-test",
             );
         }
     }
 
     let pass_lines = lines.iter().filter(|l| l.contains("PASS ")).count();
     if failed == 0 {
-        // 全绿是 **info 且无码**: 它不是缺陷, 借用失败码会让 `--json` 的读者误判。
+        // All green is **info with no code**: it is not a defect, and borrowing a failure code would mislead `--json` readers.
         diags.push(
             crate::diag::Diag::new(
                 Severity::Info,
                 format!(
-                    "门禁 `{name}` 全绿: require {} 条 / forbid {} 条 / 用例 tag {} 条 / 日志 {} 行(PASS 行 {pass_lines})",
+                    "gate `{name}` all green: {} require / {} forbid / {} case tags / {} log lines ({pass_lines} PASS lines)",
                     require.len(),
                     forbid.len(),
                     tags.len(),
@@ -2507,11 +2546,11 @@ fn cmd_judge(req: &Request) -> Response {
     resp
 }
 
-/// 极简正则: 支持 `.` `*` `+` `?` `[...]` `\(`/`\)` `|` 的**子集**判定(不编译, 线性扫描)。
+/// Minimal regex: **subset** matching for `.` `*` `+` `?` `[...]` `\(`/`\)` `|` (no compilation, linear scan).
 ///
-/// 为什么不自带正则库: 判据只需要"日志里有没有这么个形状", 而这个子集覆盖
-/// `tests/gates.toml` 里实际用到的全部模式(`pass=[0-9]* fail=0 `、`\[PANIC\]`、
-/// `irq_ticks=[1-9]`)。**不用正则引擎**也避免了一条"工具依赖"的负债。
+/// Why not bundle a regex crate: the criteria only need "does the log contain this shape", and this subset covers
+/// every pattern actually used in `tests/gates.toml` (`pass=[0-9]* fail=0 `, `\[PANIC\]`,
+/// `irq_ticks=[1-9]`). **No regex engine** also avoids one "tool dependency" liability.
 fn regex_lite_match(pat: &str, text: &str) -> bool {
     match regex_lite_at(pat, text) {
         Some(_) => true,
@@ -2519,7 +2558,7 @@ fn regex_lite_match(pat: &str, text: &str) -> bool {
     }
 }
 
-/// 在 `text` 的任意位置尝试匹配 `pat`(回溯实现, 模式都很短)。
+/// Try to match `pat` anywhere in `text` (backtracking implementation; patterns are short).
 fn regex_lite_at(pat: &str, text: &str) -> Option<usize> {
     let p: Vec<char> = pat.chars().collect();
     let t: Vec<char> = text.chars().collect();
@@ -2531,7 +2570,7 @@ fn regex_lite_at(pat: &str, text: &str) -> Option<usize> {
     None
 }
 
-/// 从 `(pi, ti)` 尝试匹配到模式结尾, 返回**结束位置**(用于 `+`/`*` 的回溯)。
+/// Try to match from `(pi, ti)` to the end of the pattern, returning the **end position** (for `+`/`*` backtracking).
 fn regex_lite_here(p: &[char], t: &[char], pi: usize, ti: usize) -> Option<usize> {
     if pi >= p.len() {
         return Some(ti);
@@ -2539,7 +2578,7 @@ fn regex_lite_here(p: &[char], t: &[char], pi: usize, ti: usize) -> Option<usize
     let (atom_len, atom) = match p[pi] {
         '\\' if pi + 1 < p.len() => (2usize, Some(p[pi + 1])),
         '[' => {
-            // 字符类: 取到 `]`, 支持 `^` 取反与 `a-z`
+            // Character class: scan to `]`, supporting `^` negation and `a-z`
             let mut j = pi + 1;
             while j < p.len() && p[j] != ']' {
                 j += 1;
@@ -2607,7 +2646,7 @@ fn regex_lite_here(p: &[char], t: &[char], pi: usize, ti: usize) -> Option<usize
         }
     };
 
-    // 贪心吃 atom, 失败则逐步回退(模式很短, 不需要更聪明的引擎)
+    // Greedily consume the atom, then back off step by step (patterns are short; no smarter engine needed)
     let mut count = 0usize;
     while ti + count < t.len() && matches_atom(t[ti + count]) {
         count += 1;
@@ -2632,9 +2671,9 @@ fn regex_lite_here(p: &[char], t: &[char], pi: usize, ti: usize) -> Option<usize
     }
 }
 
-// ================================================================== 自检钩子
+// ================================================================== Self-test hooks
 
-/// `brickie-core --selftest` 用的纯函数入口(不碰磁盘: 由 `context.files` 注入 stat)。
+/// Pure-function entry for `brickie-core --selftest` (no disk access: stat injected via `context.files`).
 pub fn selftest_plan(root: &Path, req: &Request) -> (Diags, Value) {
     let tree = model::load_tree(root);
     let mut diags = tree.diags.clone();
@@ -2660,22 +2699,22 @@ pub fn selftest_plan(root: &Path, req: &Request) -> (Diags, Value) {
     }
 }
 
-/// 让 `selftest` 也能单测正则子集。
+/// Let `selftest` unit-test the regex subset too.
 pub fn selftest_regex(pat: &str, text: &str) -> bool {
     regex_lite_match(pat, text)
 }
 
-/// `selftest`: 正则子集之外的元字符(应被拒绝)。
+/// `selftest`: metacharacters outside the regex subset (should be rejected).
 pub fn selftest_regex_unsupported(pat: &str) -> Option<char> {
     regex_unsupported(pat)
 }
 
-/// `selftest`: 通配匹配(`*` 不跨 `/`)。
+/// `selftest`: glob matching (`*` does not cross `/`).
 pub fn selftest_glob(pat: &str, name: &str) -> bool {
     glob_match(pat, name)
 }
 
-/// `selftest`: 直接渲染一个后端文件(不落盘), 用来钉住生成物的关键行。
+/// `selftest`: render one backend file directly (without writing it), to pin key lines of generated output.
 pub fn selftest_render_backend(root: &Path, req: &Request, which: &str) -> String {
     let tree = model::load_tree(root);
     match load_ctx(req, &tree) {

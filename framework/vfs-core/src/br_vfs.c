@@ -1,32 +1,33 @@
 /*
- * brickOS prototype v0.2.0 — VFS 核心(framework/vfs-core)
+ * brickOS prototype v0.2.0 — VFS core (framework/vfs-core)
  *
- * 设计依据: `docs/7-storage/7-01-vfs.md`(§1 统一可打开模型 SD-1/D21、§2 挂载与 ops
- * 四层分层 SD-15/D23、§3 poll 分期 SD-7)、`docs/8-device/8-01-device.md` §2(open_file 钩子
- * 的 {fops, fpriv})、`docs/3-os-core/3-04-memory.md`(句柄出自 core 堆)。
- * 契约: `include/br/vfs/br_vfs.h`; 逐条裁定与偏离: `docs/decisions/0009-vfs-storage-stack.md`。
+ * Design basis: `docs/7-storage/7-01-vfs.md` (§1 unified openable model SD-1/D21, §2 mount and ops
+ * four-layer split SD-15/D23, §3 poll staging SD-7), `docs/8-device/8-01-device.md` §2 (open_file hook's
+ * {fops, fpriv}), `docs/3-os-core/3-04-memory.md` (handles come from the core heap).
+ * Contract: `include/br/vfs/br_vfs.h`; per-item rulings and deviations: `docs/decisions/0009-vfs-storage-stack.md`.
  *
- * ## 本文件实现的**全部**东西
- *   ① 挂载表 + **最长前缀匹配**(§1 的单路由: `br_open` 只走这张表);
- *   ② 路径规范化 + **逐级 lookup 走查链**(§2 "路径走查在 vfs-core")+ 瞬态 inode 的
- *      释放时机管理(v1 无 cache, 走查即弃 —— SD-3);
- *   ③ 文件句柄(`br_file_t`)的分配/释放 + 层 3 派发(层 1/2/4 的 ops 表由 FS 填);
- *   ④ 目录迭代(泛型: 走文件面的 `read` 取定长目录项);
- *   ⑤ 路径级便捷面(stat/mkdir/rmdir/unlink/rename/truncate —— runtime/posix 的 1:1 映射口);
- *   ⑥ **不含**一致性用例: 存储域总套件(TC-VFS-*)已搬到 `src/vfs_selftest.c`,
- *      由 core 的自检 pass 驱动(ADR-0010; 测试入口不进 [[export]])。
+ * ## Everything this file implements
+ *   (1) mount table + longest-prefix match (§1's single route: `br_open` only walks this table);
+ *   (2) path normalization + component-by-component lookup walk chain (§2 "path walking lives in vfs-core")
+ *       + lifetime management of transient inodes (v1 has no cache; walk and discard — SD-3);
+ *   (3) file handle (`br_file_t`) alloc/free + layer-3 dispatch (layers 1/2/4 ops tables are filled by the FS);
+ *   (4) directory iteration (generic: reads fixed-size dirents through the file-side `read`);
+ *   (5) path-level convenience surface (stat/mkdir/rmdir/unlink/rename/truncate — runtime/posix's 1:1 map);
+ *   (6) **no** conformance cases: the storage-domain suite (TC-VFS-*) moved to `src/vfs_selftest.c`,
+ *       driven by the core self-test pass (ADR-0010; test entry points are not in [[export]]).
  *
- * ## 本文件**不**做什么(D21 的"纯 VFS")
- *   零设备知识: 没有任何 `br_cdev`/`br_dev`/设备名分支 —— 设备经 fs/devfs 以文件节点
- *   出现, vfs 看到的只是"某个 FS 的某个 inode 带了 fops/fpriv"。这是 D21 撤销
- *   "vfs-core 依赖 dev-core" 之后的形态。
+ * ## What this file does **not** do (D21's "pure VFS")
+ *   Zero device knowledge: no `br_cdev`/`br_dev`/device-name branches — devices appear via fs/devfs
+ *   as file nodes, so vfs only sees "some FS's inode carrying fops/fpriv". This is the shape after
+ *   D21 revoked "vfs-core depends on dev-core".
  *
- * ## inode 所有权规则(唯一容易错的地方, 所以写在文件头)
- *   - **挂载表持有的根 inode 不属瞬态**: vfs 永不把它交给 `free_inode`;
- *   - `lookup`/`create` 返回的 inode **属瞬态**: 谁拿到谁负责 —— 走查中间层用完即弃,
- *     末级 inode 交给 `br_file_t` 并由 `br_file_close` 释放;
- *   - `br_stat`/`br_mkdir`/… 这类"用完就走"的路径**立即**释放末级 inode。
- *   全文件用一个 `ino_put()` 收敛这条规则, 所有释放点都经它 —— 不存在第二处判断。
+ * ## inode ownership rules (the one easy place to get wrong, so they are at the top of the file)
+ *   - **the root inode held by the mount table is not transient**: vfs never hands it to `free_inode`;
+ *   - inodes returned by `lookup`/`create` **are transient**: whoever gets one owns it — intermediate
+ *     walk levels are discarded after use, the final inode goes to `br_file_t` and is freed by `br_file_close`;
+ *   - "use and go" paths like `br_stat`/`br_mkdir`/… release the final inode **immediately**.
+ *   The whole file converges this rule into one `ino_put()`; every release site goes through it —
+ *   there is no second decision point.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -34,41 +35,41 @@
 #include <br/core/br_types.h>
 #include <br/vfs/br_vfs.h>
 
-#include "vfs_internal.h"      /* 自检用的内部视图(见该头; 生产路径不用它) */
+#include "vfs_internal.h"      /* internal view for self-test (see that header; production paths do not use it) */
 
-/* 生命周期钩子原型(名 = symbol_prefix + 相; 生成物 `plugin_desc.c` 引用; 不进 [[export]]) */
+/* lifecycle hook prototypes (name = symbol_prefix + phase; referenced by generated `plugin_desc.c`; not in [[export]]) */
 int vfs_core_early_init(void);
 int vfs_core_init(void);
 int vfs_core_start(void);
 
-/* ==================================================================== 静态上界 */
+/* ==================================================================== static limits */
 
-#define BR_VFS_MAX_MOUNTS    8u    /* 挂载表上界(设计 SD-4: v1 静态挂载) */
-#define BR_VFS_DRIVER_NAME_MAX 16u  /* 驱动名上界(如 "erofs"/"fat"); 短于路径名 */
-#define BR_VFS_PATH_MAX      128u  /* 规范化路径缓冲(含结尾 '\0'); ADR-0013 起 64 → 128
-                                    * —— 符号链接的"前缀 + 目标 + 剩余分量"拼接要放得下 */
-#define BR_VFS_SYMLINK_DEPTH 8u    /* 符号链接展开深度上界(超 ⇒ -ELOOP) */
+#define BR_VFS_MAX_MOUNTS    8u    /* mount table limit (design SD-4: v1 static mounts) */
+#define BR_VFS_DRIVER_NAME_MAX 16u  /* driver name limit (e.g. "erofs"/"fat"); shorter than path names */
+#define BR_VFS_PATH_MAX      128u  /* normalized path buffer (incl. trailing '\0'); 64 -> 128 since ADR-0013
+                                    * — must fit the symlink "prefix + target + remaining components" concat */
+#define BR_VFS_SYMLINK_DEPTH 8u    /* symlink expansion depth limit (exceeded ⇒ -ELOOP) */
 
-/* 允许的 flags 全集之外的位置位 ⇒ -EINVAL(静默忽略会让"我请求了 O_EXCL 却没人管"藏起来) */
+/* Any bit outside the allowed flags ⇒ -EINVAL (silently ignoring it would hide "I asked for O_EXCL and nobody cared") */
 #define BR_VFS_KNOWN_FLAGS   (BR_O_ACCMODE | BR_O_CREAT | BR_O_EXCL | \
                               BR_O_TRUNC | BR_O_APPEND | BR_O_NONBLOCK | BR_O_NOFOLLOW)
 
-/* ==================================================================== 挂载表 */
+/* ==================================================================== mount table */
 
 typedef struct vfs_mount {
     br_bool            used;
-    char               path[BR_VFS_PATH_MAX];   /* 规范化: 无尾 '/'(根除外)/无 "//" */
-    br_u32             len;                     /* strlen(path); 根 = 1 */
+    char               path[BR_VFS_PATH_MAX];   /* normalized: no trailing '/' (except root), no "//" */
+    br_u32             len;                     /* strlen(path); root = 1 */
     const br_fs_ops_t *ops;
     void              *priv;
-    br_inode_t        *root;                    /* 挂载表持有, **永不**交给 free_inode */
+    br_inode_t        *root;                    /* held by the mount table, **never** given to free_inode */
 } vfs_mount_t;
 
 static vfs_mount_t s_mounts[BR_VFS_MAX_MOUNTS];
 
-/* ---- FS 驱动注册表(ADR-0029): fstype 名 → {ops, fs_priv} -------------------
- * FS 插件在 start 相登记自己; APP 用 POSIX `mount(..., fstype, ...)` 按名挂载。
- * 名字是**契约**(APP 的 [[mount]].fstype 按它查)⇒ 由 plugin.toml 声明、自检点名核对。 */
+/* ---- FS driver registry (ADR-0029): fstype name -> {ops, fs_priv} -------------------
+ * FS plugins register themselves in the start phase; APPs mount by name via POSIX `mount(..., fstype, ...)`.
+ * The name is a **contract** (the APP's [[mount]].fstype looks it up) ⇒ declared in brick.toml, checked by name in self-test. */
 #define BR_VFS_MAX_DRIVERS   8u
 
 typedef struct vfs_driver {
@@ -81,25 +82,25 @@ typedef struct vfs_driver {
 static vfs_driver_t s_drivers[BR_VFS_MAX_DRIVERS];
 static br_u32       s_driver_n;
 
-/* ★ 布局守卫(ADR-0013 补): `br_vfs_internal_mounts()` 是把 `s_mounts` **强转**成
- *   `vfs_mount_internal_t*` 给自检看的(见 src/vfs_internal.h 的说明)。两处声明一旦
- *   不一致, 自检读到的就是错位的字节 —— 那是一次真实踩坑(只改生产侧的路径上界,
- *   TC-VFS-002 立刻红, 现象却是"所有挂载都指向 /"), 所以把"必须逐字段一致"从注释
- *   升级成编译期断言。 */
+/* ★ layout guard (ADR-0013 addendum): `br_vfs_internal_mounts()` **casts** `s_mounts` to
+ *   `vfs_mount_internal_t*` for the self-test (see src/vfs_internal.h). If the two declarations
+ *   disagree, the self-test reads misaligned bytes — a real past pitfall (changing only the
+ *   production path limit made TC-VFS-002 red at once, and the symptom was "all mounts point to /"),
+ *   so "must match field by field" was upgraded from a comment to a compile-time assertion. */
 _Static_assert(sizeof(vfs_mount_t) == sizeof(vfs_mount_internal_t),
-               "vfs_mount_t 与 vfs_mount_internal_t 布局必须一致(内部视图靠强转)");
+               "vfs_mount_t and vfs_mount_internal_t layouts must match (internal view relies on the cast)");
 _Static_assert(BR_VFS_PATH_MAX == BR_VFS_PATH_MAX_INTERNAL,
-               "BR_VFS_PATH_MAX 与 BR_VFS_PATH_MAX_INTERNAL 必须一致");
-static br_u32      s_mount_n;   /* 成功挂载条数(等于表内 used 的条数) */
+               "BR_VFS_PATH_MAX and BR_VFS_PATH_MAX_INTERNAL must match");
+static br_u32      s_mount_n;   /* successful mount count (equals used entries in the table) */
 
-/* ==================================================================== 句柄模型
- * `br_file_t` 对插件**不透明**(br_vfs.h 只前向声明)⇒ 布局只活在本文件里;
- * 插件一律经 `br_file_*` 访问器读写(D14 的"句柄不透明" + CA-5 的面预算)。 */
+/* ==================================================================== handle model
+ * `br_file_t` is **opaque** to plugins (br_vfs.h only forward-declares it) ⇒ the layout lives only here;
+ * plugins always go through `br_file_*` accessors (D14's "handles are opaque" + CA-5's surface budget). */
 struct br_file {
-    const vfs_mount_t   *m;              /* 所属挂载(close 时要经它的 free_inode) */
+    const vfs_mount_t   *m;              /* owning mount (its free_inode is used at close) */
     const br_file_ops_t *fops;
     br_inode_t          *ino;
-    br_bool              ino_transient;  /* 末级 inode 是否该在 close 时释放 */
+    br_bool              ino_transient;  /* whether the final inode must be freed at close */
     void                *fpriv;
     br_s64               offset;
     br_u32               flags;
@@ -109,7 +110,7 @@ struct br_dir {
     br_file_t *f;
 };
 
-/* ==================================================================== 小工具 */
+/* ==================================================================== small helpers */
 
 static br_bool vfs_str_eq(const char *a, const char *b)
 {
@@ -160,10 +161,10 @@ br_bool br_vfs_internal_mem_eq(const void *a, const void *b, br_size_t n)
 }
 
 /*
- * 路径规范化(设计 §2 "native API 只认绝对路径"): 必须绝对; 折叠重复 '/'; 去掉尾部 '/'
- * (根除外)。**不解析 "." / ".."** —— 那是 FS 的 lookup 语义(每个 FS 对"根的上层"
- * 回答不同, 例如 devfs 的 ".." 仍是它自己), vfs 不替它决定。
- * 返回 0 / `-EINVAL`(相对或空) / `-ENOSPC`(超缓冲)。
+ * Path normalization (design §2 "native API accepts absolute paths only"): must be absolute; collapse
+ * repeated '/'; strip trailing '/' (except root). **Does not resolve "." / ".."** — that is FS lookup
+ * semantics (each FS answers "parent of root" differently, e.g. devfs's ".." is itself), vfs does not decide it.
+ * Returns 0 / `-EINVAL` (relative or empty) / `-ENOSPC` (buffer exceeded).
  */
 static int path_norm(const char *in, char *out, br_size_t cap)
 {
@@ -190,17 +191,17 @@ static int path_norm(const char *in, char *out, br_size_t cap)
     }
 
     while (n > 1u && out[n - 1u] == '/') {
-        n--;                            /* 尾部 '/' 去掉; "/" 保留 */
+        n--;                            /* strip trailing '/'; keep "/" */
     }
     out[n] = '\0';
     return BR_OK;
 }
 
-/* 挂载点前缀比较(**分量边界**, 不是裸字符串前缀 —— 否则 "/devx" 会错配 "/dev") */
+/* mount-point prefix compare (**component boundary**, not a bare string prefix — otherwise "/devx" would mismatch "/dev") */
 static br_bool mount_prefix_eq(const vfs_mount_t *m, const char *norm)
 {
     if (m->len == 1u) {
-        return BR_TRUE;                 /* 根挂载匹配一切 */
+        return BR_TRUE;                 /* root mount matches everything */
     }
     for (br_u32 i = 0u; i < m->len; i++) {
         if (norm[i] == '\0' || norm[i] != m->path[i]) {
@@ -210,7 +211,7 @@ static br_bool mount_prefix_eq(const vfs_mount_t *m, const char *norm)
     return (norm[m->len] == '\0' || norm[m->len] == '/') ? BR_TRUE : BR_FALSE;
 }
 
-/* **最长前缀匹配**(设计 §1: "/data/xxx" → littlefs, 不是 rootfs) */
+/* **longest-prefix match** (design §1: "/data/xxx" -> littlefs, not rootfs) */
 static const vfs_mount_t *mount_match(const char *norm)
 {
     const vfs_mount_t *best = BR_NULL;
@@ -227,7 +228,7 @@ static const vfs_mount_t *mount_match(const char *norm)
     return best;
 }
 
-/* 挂载点之后的相对路径(**无前导 '/'**; 目标就是挂载点时返回 "") */
+/* path relative to the mount point (**no leading '/'**; returns "" when the target is the mount point) */
 static const char *mount_rest(const vfs_mount_t *m, const char *norm)
 {
     if (m->len == 1u) {
@@ -239,33 +240,34 @@ static const char *mount_rest(const vfs_mount_t *m, const char *norm)
     return norm + m->len + 1u;
 }
 
-/* 瞬态 inode 释放的**唯一**入口(见文件头的所有权规则) */
+/* the **only** entry for releasing transient inodes (see the ownership rules at the file top) */
 static void ino_put(const vfs_mount_t *m, br_inode_t *ino, br_bool is_root)
 {
     if (ino == BR_NULL || is_root == BR_TRUE) {
-        return;                          /* 挂载表的根 inode 不属瞬态 */
+        return;                          /* the mount table's root inode is not transient */
     }
     if (m->ops->free_inode != BR_NULL) {
         m->ops->free_inode(ino);
     }
 }
 
-/* ==================================================================== 走查链(SD-3, ADR-0013 加符号链接)
+/* ==================================================================== walk chain (SD-3, ADR-0013 adds symlinks)
  *
- * **谁解析符号链接**: vfs-core(不是 FS)。目标串可能是绝对路径(要重启挂载表匹配)或相对
- * 路径(要相对"链接所在目录"), 两件事都只有掌握挂载表与完整路径的 vfs 做得到; FS 只提供
- * `readlink`(给目标串)与 `symlink`/`link`(建链接)。
+ * **Who resolves symlinks**: vfs-core (not the FS). The target string may be an absolute path (must
+ * restart mount-table matching) or a relative path (relative to "the directory containing the link");
+ * only vfs, which owns the mount table and the full path, can do both. The FS only provides
+ * `readlink` (supplies the target string) and `symlink`/`link` (creates links).
  *
- * **展开用"重启"而不是递归**: 本函数会被 APP 线程以 4 KiB 栈调用, 递归 8 层会把栈压穿。
- * 重启的代价是"从挂载根重走一遍", 在 v1 的单 APP 文件规模下可忽略(SD-3 已把"无 cache"
- * 的性能上限登记为 R-S3)。
+ * **Expansion restarts instead of recursing**: this function is called by APP threads with a 4 KiB
+ * stack; 8 levels of recursion would blow it. Restarting costs "walk again from the mount root",
+ * negligible at v1's single-APP file scale (SD-3 already logged the "no cache" performance ceiling as R-S3).
  *
- * **`..` 不跨挂载**: 走查始终在**一个挂载内**下推(`mount_match` 定挂载, `lookup` 解 `..`),
- * 于是相对目标里的 `..` 到挂载根就停住 —— 这是 v1 有意的边界(不是 Linux 的语义),
- * 登记在 ADR-0013 §2.4。
+ * **`..` does not cross mounts**: the walk always descends **within one mount** (`mount_match` picks
+ * the mount, `lookup` resolves `..`), so `..` inside a relative target stops at the mount root — a
+ * deliberate v1 boundary (not Linux semantics), logged in ADR-0013 §2.4.
  */
 
-/* 往拼接缓冲里推一个字符(统一的长度执法点 ⇒ 超长一律 -ENAMETOOLONG)。 */
+/* push one char into the concat buffer (single length enforcement point ⇒ overlong is always -ENAMETOOLONG). */
 static int np_push(char *np, br_size_t *n, char c)
 {
     if (*n + 1u >= (br_size_t)BR_VFS_PATH_MAX) {
@@ -276,13 +278,13 @@ static int np_push(char *np, br_size_t *n, char c)
 }
 
 /*
- * 从挂载表出发解析一条**规范化**的绝对路径, 返回末级 inode。
- * `*is_root_out` = 末级是否就是"挂载表的根"(调用方据此决定能不能 free)。
- * `nofollow_last` = 末级是符号链接时**不**展开(stat/readlink/link/unlink 类用)。
- * 错误: `-ENOENT`(未命中)/ `-ENOTDIR`(中间级不是目录)/ `-ENOSPC`(分量超上界)/
- *       `-ENAMETOOLONG`(展开后超路径缓冲)/ `-ELOOP`(展开深度超上界)/ readlink 的错误。
+ * Resolve a **normalized** absolute path starting from the mount table, returning the final inode.
+ * `*is_root_out` = whether the final level is "the mount table's root" (the caller decides if it can free).
+ * `nofollow_last` = do **not** expand when the final level is a symlink (used by stat/readlink/link/unlink).
+ * Errors: `-ENOENT` (miss) / `-ENOTDIR` (intermediate level not a directory) / `-ENOSPC` (component over limit) /
+ *       `-ENAMETOOLONG` (expansion exceeds the path buffer) / `-ELOOP` (expansion depth over limit) / readlink errors.
  *
- * ★ 每级都 lookup(不缓存)是 SD-3 的直接后果: v1 **有 inode ops, 无 inode cache**。
+ * ★ Looking up at every level (no caching) is a direct consequence of SD-3: v1 **has inode ops, no inode cache**.
  */
 static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                         const vfs_mount_t **m_out, br_inode_t **ino_out, br_bool *is_root_out,
@@ -292,8 +294,9 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
     vfs_str_copy(path, norm_in, (br_size_t)sizeof(path));
 
     for (br_u32 depth = 0u; depth <= (br_u32)BR_VFS_SYMLINK_DEPTH; depth++) {
-        /* 记下"这次实际在走哪条路径"(展开后会变)。`-ENOENT` 的调用方要它:
-         * `O_CREAT` 撞上悬空链接时, 该建的是**目标**, 不是链接名(ADR-0013 §2.5)。 */
+        /* Record "which path this walk is actually on" (it changes after expansion). Callers of
+         * `-ENOENT` need it: when `O_CREAT` hits a dangling link, what must be created is the **target**,
+         * not the link name (ADR-0013 §2.5). */
         if (final_out != BR_NULL && final_cap > 0u) {
             vfs_str_copy(final_out, path, final_cap);
         }
@@ -317,10 +320,11 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
             const br_bool   last = (rest[j] == '\0') ? BR_TRUE : BR_FALSE;
             const br_size_t clen = j - i;
 
-            /* ★ 用 `type` 判"是不是目录", **不**用 `iops == NULL`:
-             *   iops 是否为空是各 FS 的**形态约定**(tmpfs 让所有节点共一张表, 表里有
-             *   lookup 槽位), 而 type 是语义事实。靠形态约定判语义 ⇒ 同一个错误在不同 FS
-             *   下会得到不同的 errno(文件当目录走查会变成 -ENOENT 而不是 -ENOTDIR)。 */
+            /* ★ Use `type` to decide "is a directory", **not** `iops == NULL`:
+             *   whether iops is null is each FS's **shape convention** (tmpfs shares one table with a
+             *   lookup slot across all nodes), while type is the semantic fact. Judging semantics from
+             *   a shape convention ⇒ the same mistake yields different errno per FS (walking a file as
+             *   a directory would become -ENOENT instead of -ENOTDIR). */
             if (cur->type != BR_INODE_DIR || cur->iops == BR_NULL || cur->iops->lookup == BR_NULL) {
                 ino_put(m, cur, cur_is_root);
                 return BR_ERR(ENOTDIR);
@@ -342,7 +346,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                 return BR_ERR(ENOENT);
             }
 
-            /* ---- 符号链接展开(末级 nofollow 时跳过) ---- */
+            /* ---- symlink expansion (skipped when the final level is nofollow) ---- */
             if ((next->type == BR_INODE_SYMLINK) &&
                 !((last == BR_TRUE) && (nofollow_last == BR_TRUE))) {
                 char tgt[BR_SYMLINK_MAX + 1u];
@@ -357,7 +361,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                     return rl;
                 }
                 if ((br_size_t)rl > (br_size_t)BR_SYMLINK_MAX) {
-                    rl = (int)BR_SYMLINK_MAX;          /* 契约: 截断不报错, 返回全长 */
+                    rl = (int)BR_SYMLINK_MAX;          /* contract: truncate silently, return the full length */
                 }
                 tgt[rl] = '\0';
 
@@ -366,8 +370,8 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                 int       pr = BR_OK;
 
                 if (tgt[0] != '/') {
-                    /* 相对目标: 前缀 = 链接**所在目录**的路径
-                     * (i == 0 时就是挂载路径本身; 否则是 '/' 之前的那一段) */
+                    /* relative target: prefix = path of the directory **containing** the link
+                     * (when i == 0 it is the mount path itself; otherwise the segment before '/') */
                     const br_size_t plen = (i == 0u) ? (br_size_t)m->len : (rest_off + i - 1u);
                     for (br_size_t k = 0u; k < plen && pr == BR_OK; k++) {
                         pr = np_push(np, &n, path[k]);
@@ -380,13 +384,13 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                     pr = np_push(np, &n, tgt[k]);
                 }
                 for (br_size_t k = j; (rest[k] != '\0') && (pr == BR_OK); k++) {
-                    pr = np_push(np, &n, rest[k]);      /* 剩余分量(自带前导 '/') */
+                    pr = np_push(np, &n, rest[k]);      /* remaining components (carry their own leading '/') */
                 }
                 if (pr == BR_OK) {
                     np[n] = '\0';
                     pr = path_norm(np, path, (br_size_t)sizeof(path));
                     if (pr != BR_OK) {
-                        pr = BR_ERR(ENAMETOOLONG);   /* 拼接后超缓冲 ⇒ 语义上的名字过长 */
+                        pr = BR_ERR(ENAMETOOLONG);   /* over buffer after concat ⇒ semantically name too long */
                     }
                 }
 
@@ -395,10 +399,10 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                     return pr;
                 }
                 expanded = BR_TRUE;
-                break;                                  /* 重启走查 */
+                break;                                  /* restart the walk */
             }
 
-            ino_put(m, cur, cur_is_root);              /* 中间层用完即弃 */
+            ino_put(m, cur, cur_is_root);              /* intermediate levels discarded after use */
             cur         = next;
             cur_is_root = BR_FALSE;
 
@@ -409,7 +413,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
         }
 
         if (expanded == BR_TRUE) {
-            continue;                                   /* 换一条路径重来 */
+            continue;                                   /* retry with a different path */
         }
         *m_out       = m;
         *ino_out     = cur;
@@ -421,11 +425,11 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
 }
 
 /*
- * 解析"父目录 inode + 末级名字"(mkdir/unlink/rmdir/rename/create/symlink/link 共用)。
- *   `buf`/`cap`: 调用方给的**可写**缓冲(末级名字会被复制进去; `*leaf_out` 指向它)。
- * 中间分量**跟随**符号链接(父目录是链接 ⇒ 落在目标目录里) —— 这是 POSIX 的语义。
- * 错误: `-EINVAL`(路径非法)/ `-EBUSY`(目标是挂载点本身: 没有"末级名字")/
- *       `-ENOENT`(父目录不存在)/ `-ENOTDIR`(父路径上有非目录)/ `-ENOSPC`(名字超长)。
+ * Resolve "parent directory inode + final name" (shared by mkdir/unlink/rmdir/rename/create/symlink/link).
+ *   `buf`/`cap`: caller-provided **writable** buffer (the final name is copied into it; `*leaf_out` points to it).
+ * Intermediate components **follow** symlinks (parent is a link ⇒ lands in the target directory) — POSIX semantics.
+ * Errors: `-EINVAL` (illegal path) / `-EBUSY` (target is the mount point itself: there is no "final name") /
+ *       `-ENOENT` (parent missing) / `-ENOTDIR` (a non-directory on the parent path) / `-ENOSPC` (name too long).
  */
 static int resolve_parent(const char *path,
                           char *buf, br_size_t cap,
@@ -444,8 +448,8 @@ static int resolve_parent(const char *path,
         return BR_ERR(ENOENT);
     }
 
-    /* 目标是**挂载点本身** ⇒ 没有可操作的"末级名字"。
-     * 挂载根 vs 子目录要分清: "/dev/x" 的末级是 x(合法), "/dev" 是挂载点(非法)。 */
+    /* Target is the **mount point itself** ⇒ there is no operable "final name".
+     * Distinguish mount root from subdirectory: "/dev/x" has final name x (legal), "/dev" is a mount point (illegal). */
     const char *rest = mount_rest(m, norm);
     if (rest[0] == '\0') {
         return BR_ERR(EBUSY);
@@ -467,10 +471,10 @@ static int resolve_parent(const char *path,
     br_size_t   llen     = 0u;
 
     if (found == BR_FALSE) {
-        plen     = (br_size_t)m->len;               /* 父 = 挂载路径本身 */
+        plen     = (br_size_t)m->len;               /* parent = mount path itself */
         leaf_src = rest;
     } else {
-        plen     = rest_off + slash;                /* 父 = 最后一个 '/' 之前的那一段 */
+        plen     = rest_off + slash;                /* parent = segment before the last '/' */
         leaf_src = rest + slash + 1u;
     }
     for (br_size_t k = 0u; k < plen; k++) {
@@ -500,7 +504,7 @@ static int resolve_parent(const char *path,
     return BR_OK;
 }
 
-/* 解析到"末级 inode"(stat/lstat/truncate/open/link/readlink 用) */
+/* resolve to the "final inode" (used by stat/lstat/truncate/open/link/readlink) */
 static int resolve_leaf(const char *path, br_bool nofollow_last,
                         const vfs_mount_t **m_out, br_inode_t **ino_out, br_bool *is_root_out,
                         char *final_out, br_size_t final_cap)
@@ -513,18 +517,20 @@ static int resolve_leaf(const char *path, br_bool nofollow_last,
     return resolve_norm(norm, nofollow_last, m_out, ino_out, is_root_out, final_out, final_cap);
 }
 
-/* ==================================================================== 挂载点自动建目录
- * 设计 `7-03` §6: "**挂载点在父 FS 缺失时自动 mkdir**" —— 静态组合的便利性优先于
- * 显式 mkdir 仪式(manifest 组合期已校验)。这里**逐级**建(`/a/b` 先建 `/a`)。
+/* ==================================================================== auto-create mount point directories
+ * Design `7-03` §6: "**auto mkdir the mount point when missing in the parent FS**" — static composition
+ * convenience beats explicit mkdir ceremony (the manifest already validated it). Here directories are
+ * created **level by level** (`/a/b` creates `/a` first).
  *
- * ADR-0013 起按**规范化全路径的前缀**逐级解析(而不是"从父挂载根下推 rest"): 这样中间
- * 分量上的符号链接也被展开(前一个挂载点可能是一只链接)。挂载点自身**尚未注册**, 所以
- * `mount_match` 命中的是父挂载 —— 正是我们要它落进去的那一个。 */
+ * Since ADR-0013 resolution goes level by level over **prefixes of the normalized full path** (rather
+ * than "descending rest from the parent mount root"): this also expands symlinks on intermediate
+ * components (a previous mount point may be a link). The mount point itself is **not yet registered**,
+ * so `mount_match` hits the parent mount — exactly the one we want it to land in. */
 static int mkdir_p(const char *full_norm)
 {
     br_size_t i = 0u;
     while (full_norm[i] == '/') {
-        i++;                                            /* 跳过根 '/' */
+        i++;                                            /* skip the root '/' */
     }
 
     while (full_norm[i] != '\0') {
@@ -560,7 +566,7 @@ static int mkdir_p(const char *full_norm)
                 } else {
                     rc = parent->iops->mkdir(parent, leaf);
                     if (rc == BR_ERR(EEXIST)) {
-                        rc = BR_OK;                     /* 竞态/已存在 ⇒ 不是错误(原语义) */
+                        rc = BR_OK;                     /* race/already exists ⇒ not an error (original semantics) */
                     }
                 }
                 ino_put(pm, parent, pir);
@@ -583,7 +589,7 @@ static int mkdir_p(const char *full_norm)
     return BR_OK;
 }
 
-/* ==================================================================== 层 1: 挂载注册 */
+/* ==================================================================== layer 1: mount registration */
 
 int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
 {
@@ -599,34 +605,35 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
     if (s_mount_n >= (br_u32)BR_VFS_MAX_MOUNTS) {
         return BR_ERR(ENOSPC);
     }
-    /* 重复挂载同一路径(规范化后比较)⇒ -EEXIST。为什么不是"覆盖": 覆盖会让旧 FS 的
-     * 根 inode 与它的 fs_priv 失去唯一持有者 —— 静默泄漏比报错糟。 */
+    /* Duplicate mount of the same path (compared after normalization) ⇒ -EEXIST. Why not "overwrite":
+     * overwriting would leave the old FS's root inode and its fs_priv without a unique owner — a silent
+     * leak is worse than an error. */
     for (br_u32 i = 0u; i < s_mount_n; i++) {
         if (s_mounts[i].used == BR_TRUE && vfs_str_eq(s_mounts[i].path, norm) == BR_TRUE) {
             return BR_ERR(EEXIST);
         }
     }
 
-    /* ① 挂载点必须落在**父挂载**里, 缺失时逐级建(设计 `7-03` §6) */
+    /* (1) The mount point must land in the **parent mount**; create it level by level when missing (design `7-03` §6) */
     if (vfs_str_eq(norm, "/") == BR_FALSE) {
         const vfs_mount_t *parent = mount_match(norm);
         if (parent == BR_NULL) {
-            return BR_ERR(ENODEV);          /* 没有父 FS 承接挂载点 */
+            return BR_ERR(ENODEV);          /* no parent FS to host the mount point */
         }
         const char *rest = mount_rest(parent, norm);
         if (rest[0] == '\0') {
-            return BR_ERR(EEXIST);          /* 与已有挂载点同路径(上面已挡, 纯防御) */
+            return BR_ERR(EEXIST);          /* same path as an existing mount point (already blocked above; pure defense) */
         }
-        rc = mkdir_p(norm);                    /* ADR-0013: 按全路径前缀逐级建(展开链接) */
+        rc = mkdir_p(norm);                    /* ADR-0013: create level by level by full-path prefix (expands links) */
         if (rc != BR_OK) {
             return rc;
         }
     }
 
-    /* ② FS 侧 mount(建根 inode)。cfg.path 给 FS 一份规范化后的自身路径。 */
+    /* (2) FS-side mount (creates the root inode). cfg.path gives the FS its own normalized path. */
     const br_fs_cfg_t cfg = {
         .path = norm,
-        .dev  = BR_NULL,     /* 介质类 FS(littlefs/EROFS)用; tmpfs/devfs 不需要 */
+        .dev  = BR_NULL,     /* used by media FSes (littlefs/EROFS); tmpfs/devfs do not need it */
         .opts = BR_NULL,
     };
     br_inode_t *root = BR_NULL;
@@ -635,7 +642,7 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
         return rc;
     }
     if (root == BR_NULL) {
-        return BR_ERR(EINVAL);              /* mount 成功却不给根 inode: FS 违约 */
+        return BR_ERR(EINVAL);              /* mount succeeded but returned no root inode: FS contract violation */
     }
 
     vfs_mount_t *m = &s_mounts[s_mount_n];
@@ -651,7 +658,7 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
     return BR_OK;
 }
 
-/* ==================================================================== FS 驱动注册表 */
+/* ==================================================================== FS driver registry */
 
 int br_fs_driver_register(const char *name, const br_fs_ops_t *ops, void *fs_priv)
 {
@@ -664,7 +671,7 @@ int br_fs_driver_register(const char *name, const br_fs_ops_t *ops, void *fs_pri
     }
     for (br_u32 i = 0u; i < s_driver_n; i++) {
         if (s_drivers[i].used == BR_TRUE && vfs_str_eq(s_drivers[i].name, name) == BR_TRUE) {
-            return BR_ERR(EEXIST);      /* 不覆盖: 见 br_vfs.h 的说明 */
+            return BR_ERR(EEXIST);      /* no overwrite: see br_vfs.h */
         }
     }
     if (s_driver_n >= (br_u32)BR_VFS_MAX_DRIVERS) {
@@ -693,11 +700,11 @@ const char *br_fs_driver_name_at(br_u32 index)
     return s_drivers[index].name;
 }
 
-/* `br_mount_register` 的**带介质**形态: 多一个 `dev` 进 cfg(介质类 FS 用它取 bdev)。 */
+/* the **media-carrying** form of `br_mount_register`: one extra `dev` in cfg (media FSes use it to get a bdev). */
 static int mount_with_dev(const char *path, const br_fs_ops_t *ops, void *fs_priv,
                           const char *dev)
 {
-    /* 与 br_mount_register 同体, 只多 cfg.dev —— 抽成公用实现以免两份挂载逻辑漂移。 */
+    /* Same body as br_mount_register plus cfg.dev — factored out so the two mount paths cannot drift. */
     if (ops == BR_NULL || ops->mount == BR_NULL) {
         return BR_ERR(EINVAL);
     }
@@ -724,13 +731,13 @@ static int mount_with_dev(const char *path, const br_fs_ops_t *ops, void *fs_pri
             return rc;
         }
     }
-    /* ★ `cfg.path` 必须是**长期存活**的缓冲, 不能是这里的栈缓冲 `norm`。
-     *   为什么: 介质类 FS 会把 `cfg->path`(与 `cfg->dev`)记进自己的卷表, 挂载返回后
-     *   在**自检相**还要用(如 `uboot-fat` 的 `vol_info`/`sync`)。给栈缓冲的话, mount
-     *   一返回它就失效 —— 症状是"挂载那一刻日志完全正常, 自检却报 vol_info_failed /
-     *   sync_rc=-2"(实测踩到)。
-     *   解法: 先把规范化路径写进**挂载表的槽位**(它的生命周期 = 到关机), 再把 `cfg.path`
-     *   指过去。槽位在 mount 失败时回退(不占用)。 */
+    /* ★ `cfg.path` must be a **long-lived** buffer, not the stack buffer `norm` here.
+     *   Why: media FSes record `cfg->path` (and `cfg->dev`) in their volume table and still need it in
+     *   the **self-test phase** after mount returns (e.g. `uboot-fat`'s `vol_info`/`sync`). With a stack
+     *   buffer it becomes invalid the moment mount returns — the symptom is "logs at mount time look
+     *   perfectly fine, yet self-test reports vol_info_failed / sync_rc=-2" (hit in practice).
+     *   Fix: first write the normalized path into the **mount table slot** (lifetime = until shutdown),
+     *   then point `cfg.path` at it. The slot is rolled back if mount fails (not occupied). */
     vfs_mount_t *m = &s_mounts[s_mount_n];
     vfs_str_copy(m->path, norm, (br_size_t)sizeof(m->path));
     m->len = (br_u32)vfs_str_len(m->path);
@@ -739,7 +746,7 @@ static int mount_with_dev(const char *path, const br_fs_ops_t *ops, void *fs_pri
     br_inode_t *root = BR_NULL;
     rc = ops->mount(fs_priv, &cfg, &root);
     if (rc != BR_OK) {
-        m->path[0] = '\0';      /* 回退: 不留下"看起来已挂"的半状态 */
+        m->path[0] = '\0';      /* rollback: leave no half-state that "looks mounted" */
         m->len = 0u;
         return rc;
     }
@@ -762,7 +769,7 @@ int br_vfs_mount(const char *source, const char *target, const char *fstype,
                  unsigned long flags, const void *data)
 {
     (void)flags;
-    (void)data;                     /* v1 保留: POSIX 的后两个参数 */
+    (void)data;                     /* reserved in v1: POSIX's last two arguments */
     if (target == BR_NULL || fstype == BR_NULL) {
         return BR_ERR(EINVAL);
     }
@@ -771,7 +778,7 @@ int br_vfs_mount(const char *source, const char *target, const char *fstype,
             return mount_with_dev(target, s_drivers[i].ops, s_drivers[i].priv, source);
         }
     }
-    return BR_ERR(ENODEV);          /* 没有这个 fstype 的驱动(FS 插件没选进来/没注册) */
+    return BR_ERR(ENODEV);          /* no driver for this fstype (FS plugin not selected/registered) */
 }
 
 br_u32 br_mount_count(void)
@@ -787,7 +794,7 @@ const char *br_mount_path_at(br_u32 index)
     return s_mounts[index].path;
 }
 
-/* ==================================================================== 统一入口 */
+/* ==================================================================== unified entry */
 
 br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
 {
@@ -817,7 +824,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
                           open_final, (br_size_t)sizeof(open_final));
 
     if (rc != BR_OK) {
-        /* 未命中 + O_CREAT ⇒ 在父目录上 create(设计 §2 的"未命中且 O_CREAT") */
+        /* miss + O_CREAT ⇒ create on the parent directory (design §2's "miss and O_CREAT") */
         if (rc != BR_ERR(ENOENT) || (flags & BR_O_CREAT) == 0u) {
             if (err != BR_NULL) {
                 *err = rc;
@@ -830,9 +837,10 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
         br_bool     parent_is_root = BR_FALSE;
         char       *leaf = BR_NULL;
 
-        /* ★ 建在**展开后**的路径上, 不是原始路径上: 若末级是一条**悬空符号链接**,
-         *   POSIX 的 `open(link, O_CREAT)` 建的是**目标**(`link` 自己已经存在, 建不了)。
-         *   `open_final` 由 resolve_leaf 写下"这次实际走到哪条路径"。 */
+        /* ★ Create on the **post-expansion** path, not the original one: if the final level is a
+         *   **dangling symlink**, POSIX `open(link, O_CREAT)` creates the **target** (`link` itself
+         *   already exists, so it cannot be created). `open_final` is written by resolve_leaf as
+         *   "which path this walk actually reached". */
         rc = resolve_parent(open_final, buf, (br_size_t)sizeof(buf), &m, &parent,
                             &parent_is_root, &leaf);
         if (rc != BR_OK) {
@@ -844,14 +852,14 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
         if (parent->type != BR_INODE_DIR) {
             ino_put(m, parent, parent_is_root);
             if (err != BR_NULL) {
-                *err = BR_ERR(ENOTDIR);     /* "父"其实是文件 ⇒ 与"中间级不是目录"同码 */
+                *err = BR_ERR(ENOTDIR);     /* "parent" is actually a file ⇒ same code as "intermediate level not a directory" */
             }
             return BR_NULL;
         }
         if (parent->iops == BR_NULL || parent->iops->create == BR_NULL) {
             ino_put(m, parent, parent_is_root);
             if (err != BR_NULL) {
-                *err = BR_ERR(ENOTSUP);     /* 该 FS 不支持创建(只读 / 设备投影) */
+                *err = BR_ERR(ENOTSUP);     /* this FS does not support create (read-only / device projection) */
             }
             return BR_NULL;
         }
@@ -875,8 +883,8 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
         return BR_NULL;
     }
 
-    /* 末级仍是符号链接 ⇒ 只有一种可能: 调用方给了 O_NOFOLLOW。POSIX 的答复是 -ELOOP
-     * (**不是** -ENOTSUP) —— 链接本身没有文件面, 不该被 open 打开。 */
+    /* The final level is still a symlink ⇒ only one possibility: the caller passed O_NOFOLLOW. POSIX's
+     * answer is -ELOOP (**not** -ENOTSUP) — a link has no file face and should not be opened. */
     if (ino->type == BR_INODE_SYMLINK) {
         ino_put(m, ino, ino_is_root);
         if (err != BR_NULL) {
@@ -885,8 +893,8 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
         return BR_NULL;
     }
 
-    /* 目录只许只读打开(它的"文件面"是目录项流); 写打开 ⇒ -EISDIR。
-     * 文件/设备必须有文件面, 否则是"看得见打不开"(v2 的 raw flash/bdev 正属这类)。 */
+    /* Directories may only be opened read-only (their "file face" is the dirent stream); write open ⇒ -EISDIR.
+     * Files/devices must have a file face, otherwise it is "visible but unopenable" (v2's raw flash/bdev is this). */
     if (ino->type == BR_INODE_DIR && (flags & BR_O_ACCMODE) != BR_O_RDONLY) {
         ino_put(m, ino, ino_is_root);
         if (err != BR_NULL) {
@@ -914,7 +922,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
     f->fops          = ino->fops;
     f->ino           = ino;
     f->ino_transient = (ino_is_root == BR_TRUE) ? BR_FALSE : BR_TRUE;
-    f->fpriv         = ino->fpriv;      /* inode 携带的 {fops, fpriv}(D21/D23) */
+    f->fpriv         = ino->fpriv;      /* {fops, fpriv} carried by the inode (D21/D23) */
     f->offset        = 0;
     f->flags         = flags;
 
@@ -924,7 +932,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
             ino_put(m, ino, ino_is_root);
             br_free(f);
             if (err != BR_NULL) {
-                *err = rc;              /* 独占设备的 -EBUSY 从这里上传(策略归驱动) */
+                *err = rc;              /* an exclusive device's -EBUSY propagates from here (policy belongs to the driver) */
             }
             return BR_NULL;
         }
@@ -938,7 +946,7 @@ br_file_t *br_open(const char *path, br_u32 flags)
     return br_open_err(path, flags, BR_NULL);
 }
 
-/* ==================================================================== 访问器 */
+/* ==================================================================== accessors */
 
 br_inode_t *br_file_inode(br_file_t *f)
 {
@@ -974,7 +982,7 @@ void br_file_set_offset(br_file_t *f, br_s64 off)
     }
 }
 
-/* ==================================================================== 层 3 派发 */
+/* ==================================================================== layer 3 dispatch */
 
 br_s64 br_file_read(br_file_t *f, void *buf, br_size_t n)
 {
@@ -1046,7 +1054,7 @@ int br_file_poll(br_file_t *f, br_u32 *events)
 int br_file_close(br_file_t *f)
 {
     if (f == BR_NULL) {
-        return BR_OK;                   /* 幂等: 关一个空句柄不是错误 */
+        return BR_OK;                   /* idempotent: closing a null handle is not an error */
     }
     int rc = BR_OK;
     if (f->fops->close != BR_NULL) {
@@ -1057,7 +1065,7 @@ int br_file_close(br_file_t *f)
     return rc;
 }
 
-/* ==================================================================== 目录迭代 */
+/* ==================================================================== directory iteration */
 
 br_dir_t *br_opendir(const char *path)
 {
@@ -1090,10 +1098,10 @@ int br_readdir(br_dir_t *d, br_dirent_t *out)
         return (int)rc;
     }
     if (rc == 0) {
-        return 0;                       /* 目录已穷尽 */
+        return 0;                       /* directory exhausted */
     }
     if (rc != (br_s64)sizeof(*out)) {
-        return BR_ERR(EIO);          /* 目录项是定长记录: 半条就是 FS 违约 */
+        return BR_ERR(EIO);          /* dirents are fixed-size records: a partial one is an FS contract violation */
     }
     return 1;
 }
@@ -1108,12 +1116,12 @@ int br_closedir(br_dir_t *d)
     return rc;
 }
 
-/* ==================================================================== 路径级便捷面
+/* ==================================================================== path-level convenience surface
  *
- * 为什么要有这一层(设计 `7-01` §1 只写了 `br_open`/`br_file_*`): 目录的名字空间变更
- * (create/mkdir/unlink/rename/getattr)在 ops 表里是"父目录 inode + 名字"两段式,
- * 而**消费者拿不到 inode**(那是瞬态走查产物)。所以必须由 vfs 提供"路径 → 两段式"的
- * 翻译层 —— runtime/posix 的 POSIX 面就是它的 1:1 映射(ADR-0009 §3 裁定 3)。 */
+ * Why this layer exists (design `7-01` §1 only wrote `br_open`/`br_file_*`): directory namespace
+ * changes (create/mkdir/unlink/rename/getattr) are two-part "parent directory inode + name" in the ops
+ * table, and **consumers cannot get an inode** (that is a transient walk product). So vfs must provide
+ * the "path -> two-part" translation layer — runtime/posix's POSIX face is its 1:1 map (ADR-0009 §3 ruling 3). */
 
 int br_fstat(br_file_t *f, br_stat_t *st)
 {
@@ -1126,7 +1134,7 @@ int br_fstat(br_file_t *f, br_stat_t *st)
     return f->ino->iops->getattr(f->ino, st);
 }
 
-/* `stat` 跟随末级符号链接, `lstat` 不跟随(POSIX)。中间分量两者都跟随。 */
+/* `stat` follows the final symlink, `lstat` does not (POSIX). Both follow intermediate components. */
 static int stat_common(const char *path, br_stat_t *st, br_bool nofollow_last)
 {
     if (st == BR_NULL) {
@@ -1158,7 +1166,7 @@ int br_lstat(const char *path, br_stat_t *st)
     return stat_common(path, st, BR_TRUE);
 }
 
-/* mkdir/rmdir/unlink/rename 的公共骨架: 解析父目录 → 调对应槽位 → 释放父 inode。 */
+/* Common skeleton for mkdir/rmdir/unlink/rename: resolve the parent → call the slot → release the parent inode. */
 static int parent_op(const char *path, int (*fn)(br_inode_t *, const char *))
 {
     char        buf[BR_VFS_PATH_MAX];
@@ -1185,7 +1193,7 @@ static int parent_op(const char *path, int (*fn)(br_inode_t *, const char *))
     return rc;
 }
 
-/* 三个薄适配(只为把 iops 里的函数指针取出来 —— 避免在 parent_op 里做成员判空散落多处) */
+/* Three thin adapters (only to extract the function pointers from iops — avoids scattered null checks in parent_op) */
 static int call_mkdir(br_inode_t *d, const char *name)
 {
     return (d->iops->mkdir != BR_NULL) ? d->iops->mkdir(d, name) : BR_ERR(ENOTSUP);
@@ -1239,8 +1247,8 @@ int br_rename(const char *old_path, const char *new_path)
         return rc;
     }
 
-    /* 跨挂载 rename: v1 不支持(需要"跨 FS 搬运"语义, 而那是 copy+unlink 的组合,
-     * 属 v2/v3 的范围)。用 -ENOTSUP 而不是编造 -EXDEV(不在 SD-10 子集里)。 */
+    /* Cross-mount rename: not supported in v1 (it needs "cross-FS move" semantics, which is a copy+unlink
+     * combination, in v2/v3 scope). Use -ENOTSUP rather than inventing -EXDEV (not in the SD-10 subset). */
     if (m_old != m_new) {
         ino_put(m_old, d_old, root_old);
         ino_put(m_new, d_new, root_new);
@@ -1269,7 +1277,7 @@ int br_truncate(const char *path, br_u64 size)
     br_inode_t        *ino = BR_NULL;
     br_bool            is_root = BR_FALSE;
 
-    int rc = resolve_leaf(path, BR_FALSE, &m, &ino, &is_root, BR_NULL, 0u);   /* truncate 跟随链接 */
+    int rc = resolve_leaf(path, BR_FALSE, &m, &ino, &is_root, BR_NULL, 0u);   /* truncate follows links */
     if (rc != BR_OK) {
         return rc;
     }
@@ -1283,10 +1291,11 @@ int br_truncate(const char *path, br_u64 size)
     return rc;
 }
 
-/* ==================================================================== 链接(ADR-0013)
+/* ==================================================================== links (ADR-0013)
 
- * 三个入口的共同形状: 名字空间变更 ⇒ 都要"父目录 + 名字"(`resolve_parent`), 于是
- * **建链接时父路径上的符号链接会被展开**(把链接建到链接指向的目录里), 这是 POSIX 语义。
+ * Common shape of the three entries: namespace changes ⇒ all need "parent directory + name"
+ * (`resolve_parent`), so **symlinks on the parent path are expanded when creating a link** (the link
+ * gets created in the directory the link points to), which is POSIX semantics.
  */
 
 int br_symlink(const char *target, const char *path)
@@ -1294,7 +1303,7 @@ int br_symlink(const char *target, const char *path)
     if (target == BR_NULL || target[0] == '\0') {
         return BR_ERR(EINVAL);
     }
-    /* 目标**不校验存在性**(悬空链接是合法状态); 但长度有静态上界。 */
+    /* The target's existence is **not checked** (a dangling link is legal); but its length has a static limit. */
     if (vfs_str_len(target) > (br_size_t)BR_SYMLINK_MAX) {
         return BR_ERR(ENAMETOOLONG);
     }
@@ -1315,7 +1324,7 @@ int br_symlink(const char *target, const char *path)
     }
     if (parent->iops == BR_NULL || parent->iops->symlink == BR_NULL) {
         ino_put(m, parent, pir);
-        return BR_ERR(ENOTSUP);           /* 该 FS 不支持符号链接(devfs 等) */
+        return BR_ERR(ENOTSUP);           /* this FS does not support symlinks (devfs etc.) */
     }
     rc = parent->iops->symlink(parent, leaf, target);
     ino_put(m, parent, pir);
@@ -1328,13 +1337,13 @@ int br_readlink(const char *path, char *buf, br_size_t cap)
     br_inode_t        *ino = BR_NULL;
     br_bool            ir = BR_FALSE;
 
-    int rc = resolve_leaf(path, BR_TRUE, &m, &ino, &ir, BR_NULL, 0u);   /* readlink **不**跟随末级 */
+    int rc = resolve_leaf(path, BR_TRUE, &m, &ino, &ir, BR_NULL, 0u);   /* readlink does **not** follow the final level */
     if (rc != BR_OK) {
         return rc;
     }
     if (ino->type != BR_INODE_SYMLINK) {
         ino_put(m, ino, ir);
-        return BR_ERR(EINVAL);            /* POSIX: 非符号链接 ⇒ EINVAL */
+        return BR_ERR(EINVAL);            /* POSIX: not a symlink ⇒ EINVAL */
     }
     if (ino->iops == BR_NULL || ino->iops->readlink == BR_NULL) {
         ino_put(m, ino, ir);
@@ -1347,7 +1356,7 @@ int br_readlink(const char *path, char *buf, br_size_t cap)
 
 int br_link(const char *old_path, const char *new_path)
 {
-    /* POSIX `link(2)`: 末级**不**跟随(链接到链接本身, 而不是链接的目标)。 */
+    /* POSIX `link(2)`: the final level is **not** followed (link to the link itself, not to its target). */
     const vfs_mount_t *m_old = BR_NULL;
     br_inode_t        *target = BR_NULL;
     br_bool            tir = BR_FALSE;
@@ -1358,7 +1367,7 @@ int br_link(const char *old_path, const char *new_path)
     }
     if (target->type == BR_INODE_DIR) {
         ino_put(m_old, target, tir);
-        return BR_ERR(EPERM);             /* 目录不可硬链接(POSIX: EPERM) */
+        return BR_ERR(EPERM);             /* directories cannot be hard-linked (POSIX: EPERM) */
     }
 
     char               buf[BR_VFS_PATH_MAX];
@@ -1373,8 +1382,9 @@ int br_link(const char *old_path, const char *new_path)
         return rc;
     }
 
-    /* 跨挂载的硬链接不存在(v1 无"跨 FS inode"概念)⇒ -EXDEV。
-     * ★ 这是 `EXDEV`(18)的**首个启用点** —— 它一直在错误码表里, 到这里才有语义。 */
+    /* Cross-mount hard links do not exist (v1 has no "cross-FS inode" concept) ⇒ -EXDEV.
+     * ★ This is the **first enablement point** of `EXDEV` (18) — it was always in the error-code table
+     *   and only gains meaning here. */
     if (m_old != m_new) {
         ino_put(m_old, target, tir);
         ino_put(m_new, parent, pir);
@@ -1397,11 +1407,12 @@ int br_link(const char *old_path, const char *new_path)
     return rc;
 }
 
-/* ==================================================================== 自检用的内部视图
+/* ==================================================================== internal view for self-test
  *
- * 见 `src/vfs_internal.h` 的说明: 这几条**只**为 `vfs_selftest.c` 存在 —— 它们的被测
- * 对象就是这里的机制本身(挂载表 / 最长前缀匹配 / 路径规范化), 用公开 API 表达不出来。
- * ★ 一律**转调**生产实现, 不复制逻辑: 用例必须跑真算法, 否则验证的是副本。
+ * See `src/vfs_internal.h`: these exist **only** for `vfs_selftest.c` — what they expose under test is
+ * this file's own mechanism (mount table / longest-prefix match / path normalization), which the public
+ * API cannot express. ★ Always **forward** to the production implementation, never copy logic: cases must
+ * run the real algorithm, otherwise they verify a copy.
  */
 const vfs_mount_internal_t *br_vfs_internal_mounts(br_u32 *n)
 {
@@ -1430,26 +1441,27 @@ br_bool br_vfs_internal_str_eq(const char *a, const char *b)
     return vfs_str_eq(a, b);
 }
 
-/* ==================================================================== 生命周期 */
+/* ==================================================================== lifecycle */
 
 int vfs_core_early_init(void)
 {
-    return 0;   /* EARLY: 静态表是 BSS; 挂载要等各 FS 的 CORE init(那时堆已就绪) */
+    return 0;   /* EARLY: the static tables are BSS; mounting waits for each FS's CORE init (heap ready by then) */
 }
 
 int vfs_core_init(void)
 {
-    /* vfs-core 自己没有要初始化的状态: 它的"上场"是各 FS 调 `br_mount_register`。
-     * 刻意不造空 API(R-S4: 框架件往里的每一行都要有消费者)。 */
+    /* vfs-core has no state of its own to initialize: it "enters" when each FS calls `br_mount_register`.
+     * Deliberately no empty API (R-S4: every line added to framework code must have a consumer). */
     return 0;
 }
 
 int vfs_core_start(void)
 {
-    /* START 相只留一行挂载表摘要作启动证据。
-     * ★ 存储域的**总套件**(TC-VFS-*)不在这里跑: 它在 `src/vfs_selftest.c`, 由 core 的
-     *   自检 pass 在**全部 start 之后**统一驱动(ADR-0010)。ADR-0009 §2.5 曾把它挂在
-     *   APP 的 start 上(那时没有统一的自检时机), 那一版随 ADR-0010 作废。 */
+    /* The START phase leaves only a one-line mount summary as boot evidence.
+     * ★ The storage domain's **full suite** (TC-VFS-*) does not run here: it lives in
+     *   `src/vfs_selftest.c`, driven uniformly by core's self-test pass **after all starts**
+     *   (ADR-0010). ADR-0009 §2.5 once hung it on the APP's start (there was no unified self-test
+     *   point then); that version was voided with ADR-0010. */
     br_log_info("vfs: %u mount(s) active", s_mount_n);
     for (br_u32 i = 0u; i < s_mount_n; i++) {
         br_log_info("vfs:   [%u] %s", i, s_mounts[i].path);

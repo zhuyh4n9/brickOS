@@ -6,7 +6,7 @@
 > 状态: **已落地**(QEMU virt aarch64; `[FTCONF] 11/0`; 宿主 `ft-test` 全绿, 其中含
 > **errno 与宿主 `<errno.h>` 49 码逐一对拍**; `brickie test -j8` 全量门禁绿:
 > 宿主 7 + QEMU 7 + 脚本 4)。
-> 影响面(**新插件 1 件**): `framework/file-table/**`(plugin.toml / include/br/ft/br_ft.h /
+> 影响面(**新插件 1 件**): `framework/file-table/**`(brick.toml / include/br/ft/br_ft.h /
 > src/file_table.c / src/ft_selftest.c / README.md / tests/smoke.toml);
 > `core/include/br/core/br_error.h`(**只加不破**: errno-base 整表 + generic 补码);
 > `tests/host/ft_test.c`(新宿主用例); `product.toml`(`[select]` 追加 1 件);
@@ -151,7 +151,7 @@ POSIX 的"同一 open file description"在本件里就是**同一个 `br_file_t*
 | 实现 | `framework/file-table/src/file_table.c`(静态 32 槽; 关中断临界区; 无堆分配) |
 | 目标套件 | `framework/file-table/src/ft_selftest.c` → `[FTCONF] 11/0`, 由 core 在全部 `start()` 后驱动(ADR-0010) |
 | 宿主套件 | `tests/host/ft_test.c` → `[FTTEST]`; 含 errno 49 码对拍 + 重跑 in-image 套件 + 极值 fd 边界 |
-| 声明面 | `plugin.toml`(`[[res]] ram = 1 KiB`, 无 `[[dep]]`, `[selftest] cases = 11`) |
+| 声明面 | `brick.toml`(`[[res]] ram = 1 KiB`, 无 `[[dep]]`, `[selftest] cases = 11`) |
 | 门禁 | `tests/gates.toml`: `[[hosttest]] ft-test` + `plugin-test` 增 `require/forbid/require_tags` |
 | 用例骨架 | `framework/file-table/tests/smoke.toml`(TC-FT-001..011 的声明面) |
 | 债 | `br-wa-test-001` 扩写(第五组自编号 `TC-FT-*`; 设计侧尚无"文件表"用例组) |

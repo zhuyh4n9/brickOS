@@ -1,32 +1,37 @@
 /*
- * service/trace — trace 观测服务(实现)
+ * service/trace — trace observation service (implementation)
  *
- * 设计出处: `docs/5-debug/5-01-debug.md`
- *   §1 trace 插件: 定长 16B 事件 + 静态环形缓冲 + **热路径零字符串**
- *      ("id→名字的映射表随插件元数据导出, 离线解码");
- *   §1 "泄放途径: panic 时 console 倒出 / bridge 实时流 / host 工具解码"
- *      —— 本插件就是"倒出"这一侧的消费端;
- *   §1 API 一节把事件宏与 id 分配留给 manifest, 本实现对**动态 id** 取
- *      32 槽 hash 表(声明面已冻结, 见 include/br/debug/br_trace_svc.h)。
- * 归属裁定(ADR-0003): 16B 事件的**环与 ISR 发射点在 core**
- *   (`br/core/br_trace.h` 的 `br_trace_emit`), 本插件是它的唯一消费方:
- *   取走(drain)、id→名字解码、计数、成行呈现。理由见 plugin.toml 的抬头注释。
+ * Design source: `docs/5-debug/5-01-debug.md`
+ *   §1 trace plugin: fixed 16B events + static ring buffer + **zero strings on the hot path**
+ *      ("the id→name map is exported with plugin metadata and decoded offline");
+ *   §1 "drain routes: console dump on panic / bridge live stream / host tool decode"
+ *      — this plugin is the consuming side of "dump";
+ *   §1 the API section leaves event macros and id assignment to the manifest; this implementation
+ *      uses a 32-slot hash table for **dynamic ids** (the declaration face is frozen, see
+ *      include/br/debug/br_trace_svc.h).
+ * Ownership ruling (ADR-0003): the 16B event **ring and ISR emit point live in core**
+ *   (`br/core/br_trace.h` `br_trace_emit`); this plugin is its only consumer: drain, decode
+ *   id→name, count, render lines. Reasons in the brick.toml header comment.
  *
- * ★ 名字表的前提与风险(声明面明确写成 `const char *`, 这里如实落地):
- *   槽位里**只存调用方给的指针, 不拷贝字符串** —— 契约是"tag 的生命周期 = 映像"
- *   (调用方通常传字符串字面量或静态数组)。若调用方传栈上/堆上的临时缓冲,
- *   指针会悬空; 本原型没有插件管理器来强制这条前提, 所以由调用纪律承担。
- *   身份判据用**指针相等**: 同一字面量在同一编译单元内会被合并(-fmerge-constants),
- *   所以"同一处 tag 重复 marker"幂等; 而"内容相同但指针不同"说明调用方给了两个
- *   不同缓冲, 身份不可判定(也破坏了上面的生命周期前提) ⇒ -ENOSPC。
- *   **地址撞槽不报错**: 从 `hash % SLOTS` 起**向后线性探测**空槽(环绕, 最多扫全表)。
- *   为什么不是"撞车即错": 32 槽表上一次撞车就失败, 会让**谁先注册**决定别人能不能
- *   注册 —— 别的插件的 marker 能凭 hash 挤掉本插件 selftest 的槽位, 让用例无辜
- *   变红(测试依赖哈希槽位是设计味道)。线性探测只在撞车时退化为最多 32 步扫描,
- *   寻址仍是 hash O(1), 对 32 槽的表完全可接受。见 README 的"关键裁定"。
+ * ★ Name-table premise and risk (the declaration face says `const char *`, faithfully realized
+ *   here): a slot **stores only the caller-supplied pointer, never copies the string** — the
+ *   contract is "tag lifetime = image" (callers normally pass string literals or static arrays).
+ *   If a caller passes a stack/heap temporary buffer the pointer dangles; this prototype has no
+ *   plugin manager to enforce the premise, so call discipline carries it.
+ *   Identity test uses **pointer equality**: the same literal in one translation unit is merged
+ *   (-fmerge-constants), so repeated markers from the same tag site are idempotent; "same content
+ *   but different pointer" means the caller gave two different buffers, identity is undecidable
+ *   (and the lifetime premise above is broken) ⇒ -ENOSPC.
+ *   **An address collision is not an error**: probe **linearly forward** from `hash % SLOTS` for
+ *   an empty slot (wrapping, at most the whole table). Why not "collision is an error": failing on
+ *   the first collision in a 32-slot table would let **who registers first** decide whether others
+ *   can register — another plugin's marker could push this plugin's selftest slot out by hash and
+ *   make the case fail innocently (tests depending on hash slots are a design smell). Linear
+ *   probing degrades to at most 32 steps only on collision; addressing stays hash O(1), fully
+ *   acceptable for a 32-slot table. See README "key rulings".
  *
- * ISR 安全: 本文件全部函数 **thread-only**(drain 会推进消费游标)。ISR/fault
- *   路径只允许直接调 core 的 `br_trace_emit`。
+ * ISR safety: every function in this file is **thread-only** (drain advances the consumer
+ *   cursor). ISR/fault paths may only call core's `br_trace_emit` directly.
  */
 #include <br/debug/br_trace_svc.h>
 
@@ -35,47 +40,47 @@
 #include <br/core/br_time.h>
 #include <br/core/br_trace.h>
 
-#include "trace_internal.h"    /* 自检用的内部视图(见该头; 生产路径不用它) */
+#include "trace_internal.h"    /* internal view for self-test (see that header; not used on the production path) */
 
 /* =====================================================================
- * 常量与内部状态
+ * Constants and internal state
  * ===================================================================== */
 
-/* FNV-1a 32 位: 与 5-01 §1 的"热路径零字符串"配套 —— 事件里只带 32 位 hash,
- * 名字留在这张表里, 供在线呈现或随元数据离线解码。 */
+/* FNV-1a 32-bit: pairs with "zero strings on the hot path" in 5-01 §1 — the event carries only a
+ * 32-bit hash; names stay in this table for online rendering or offline decode with metadata. */
 #define TRC_FNV_OFFSET   2166136261u
 #define TRC_FNV_PRIME    16777619u
 
-/* 每次 drain 的批量(固定静态占用; 16B × 16 = 256B) */
+/* Per-drain batch (fixed static footprint; 16B × 16 = 256B) */
 #define TRC_DRAIN_BATCH  16u
 
-/* "已消费"计数表: 64 项线性表; 表满后的余量并入 s_other 桶(summary 尾随一行体现) */
+/* "Seen" count table: 64-entry linear table; overflow past full goes into the s_other bucket (shown as a trailing summary line) */
 #define TRC_SEEN_SLOTS   64u
 
-/* 动态名字表: 只在槽位放下指针, 不拥有字符串(前提见文件头) */
+/* Dynamic name table: stores only pointers in slots, owns no strings (premise in the file header) */
 static const char *s_names[BR_TRACE_SVC_ID_SLOTS];
 
-/* 按 id 累计的"已消费"计数(线性查找; 观测与用例判据) */
+/* Per-id accumulated "seen" counts (linear search; observation and test criteria) */
 static br_u32 s_seen_id[TRC_SEEN_SLOTS];
 static br_u32 s_seen_cnt[TRC_SEEN_SLOTS];
-static br_u32 s_seen_n;      /* 已登记的不同 id 数(= summary 的 ids) */
-static br_u32 s_other;       /* 计数表满后并入"其它"桶的条数 */
+static br_u32 s_seen_n;      /* number of distinct registered ids (= summary's ids) */
+static br_u32 s_other;       /* entries folded into the "other" bucket after the count table filled */
 
-/* 本插件累计取走的条数; 同时充当 [TRACE] 行的消费序号 */
+/* Total entries this plugin has taken; also serves as the consumption sequence number in [TRACE] lines */
 static br_u32 s_drained;
 
-/* drain 批量缓冲(线程上下文单消费者, 无需加锁) */
+/* Drain batch buffer (single consumer in thread context, no locking needed) */
 static br_trace_evt_t s_batch[TRC_DRAIN_BATCH];
 
-/* 本插件自有事件名(静态数组 ⇒ 指针恒等, init 可重复调用) */
+/* This plugin's own event names (static arrays ⇒ pointer identity, init is repeatable) */
 static const char TRC_NAME_REPORT[] = "trace.report";
 static const char TRC_NAME_RESET[]  = "trace.reset";
 
 /* =====================================================================
- * 小工具(不引 libc)
+ * Small helpers (no libc)
  * ===================================================================== */
 
-/* FNV-1a 32 位; 按字节走, 故先转 br_u8(避免 char 的有符号性影响结果) */
+/* FNV-1a 32-bit; byte-wise, so cast to br_u8 first (avoids char signedness affecting the result) */
 static br_u32 trc_fnv1a32(const char *s)
 {
     br_u32 h = TRC_FNV_OFFSET;
@@ -98,25 +103,26 @@ static br_bool trc_streq(const char *a, const char *b)
         a++;
         b++;
     }
-    return (*a == *b);   /* 同时停在 '\0' 才相等 */
+    return (*a == *b);   /* equal only if both stopped at '\0' */
 }
 
 /* =====================================================================
- * 名字注册 / 解码
+ * Name registration / decode
  * ===================================================================== */
 
 /*
- * 取槽: 从 `hash % SLOTS` 起**向后线性探测**(环绕, 最多 SLOTS 步)。
- *   - 空槽 ⇒ 占位(只存指针, 不拷贝字符串)并返回槽位下标;
- *   - 命中同指针 ⇒ 幂等, 返回既有槽位;
- *   - 命中**内容相同但指针不同** ⇒ -ENOSPC(调用方给了两个不同缓冲, 身份不可判定,
- *     也破坏了"tag 生命周期 = 映像"的前提);
- *   - 扫完全表仍无空槽 ⇒ -ENOSPC。
- * ★ 为什么不是"撞车即 -ENOSPC": 32 槽表上一次撞车就失败, 会让**谁先注册**决定
- *   别人能不能注册 —— 别的插件的 marker 能凭 hash 挤掉本插件 selftest 的槽位,
- *   让用例无辜变红(测试依赖哈希槽位是设计味道)。线性探测只在撞车时退化为最多
- *   32 步扫描, 寻址仍是 hash O(1), 对 32 槽的表完全可接受。
- * 返回槽位下标(0..SLOTS-1)或负 errno。
+ * Acquire a slot: probe **linearly forward** from `hash % SLOTS` (wrapping, at most SLOTS steps).
+ *   - empty slot ⇒ claim it (store only the pointer, no string copy) and return the slot index;
+ *   - hit the same pointer ⇒ idempotent, return the existing slot;
+ *   - hit **same content but different pointer** ⇒ -ENOSPC (the caller gave two different buffers,
+ *     identity is undecidable, and the "tag lifetime = image" premise is broken);
+ *   - no empty slot after scanning the whole table ⇒ -ENOSPC.
+ * ★ Why not "collision ⇒ -ENOSPC": failing on the first collision in a 32-slot table would let
+ *   **who registers first** decide whether others can register — another plugin's marker could
+ *   push this plugin's selftest slot out by hash and make the case fail innocently (tests
+ *   depending on hash slots are a design smell). Linear probing degrades to at most 32 steps only
+ *   on collision; addressing stays hash O(1), fully acceptable for a 32-slot table.
+ * Returns the slot index (0..SLOTS-1) or a negative errno.
  */
 static int trc_acquire_slot(const char *name)
 {
@@ -130,20 +136,20 @@ static int trc_acquire_slot(const char *name)
         const br_u32 slot = (start + step) % BR_TRACE_SVC_ID_SLOTS;
 
         if (s_names[slot] == BR_NULL) {
-            s_names[slot] = name;          /* 只存指针, 不拷贝 */
+            s_names[slot] = name;          /* store pointer only, no copy */
             return (int)slot;
         }
-        if (s_names[slot] == name) {       /* 同指针 ⇒ 幂等 */
+        if (s_names[slot] == name) {       /* same pointer ⇒ idempotent */
             return (int)slot;
         }
         if (trc_streq(s_names[slot], name)) {
-            return BR_ERR(ENOSPC);      /* 同名(内容)但指针不同 */
+            return BR_ERR(ENOSPC);      /* same name (content) but different pointer */
         }
     }
-    return BR_ERR(ENOSPC);              /* 全表满 */
+    return BR_ERR(ENOSPC);              /* table full */
 }
 
-/* 槽位下标 → 事件 id(唯一一处换算, marker/register 共用) */
+/* Slot index → event id (the single conversion point, shared by marker/register) */
 static int trc_slot_to_id(int slot)
 {
     return (slot < 0) ? slot : (int)(BR_TRACE_SVC_ID_BASE + (br_u32)slot);
@@ -159,7 +165,7 @@ int br_trace_svc_marker(const char *tag)
 
     const int id = trc_slot_to_id(slot);
 
-    /* a = tag 的 32 位 hash(离线/在线解码的键), b = 当前时钟(us) */
+    /* a = 32-bit hash of tag (key for offline/online decode), b = current clock (us) */
     br_trace_emit((br_u32)id, trc_fnv1a32(tag), (br_u64)br_clock_now());
     return id;
 }
@@ -178,11 +184,11 @@ const char *br_trace_svc_name(br_u32 id)
             return n;
         }
     }
-    return br_trace_name(id);   /* 退回 core 的固定事件名表(未知 ⇒ "?") */
+    return br_trace_name(id);   /* fall back to core's fixed event name table (unknown ⇒ "?") */
 }
 
 /* =====================================================================
- * 消费计数
+ * Consumption counts
  * ===================================================================== */
 
 static void trc_seen_add(br_u32 id)
@@ -199,7 +205,7 @@ static void trc_seen_add(br_u32 id)
         s_seen_n++;
         return;
     }
-    s_other++;   /* 表满: 只保证"总数不丢", 不再保 id 粒度 */
+    s_other++;   /* table full: only the total is preserved, not id granularity */
 }
 
 br_u32 br_trace_svc_seen(br_u32 id)
@@ -213,13 +219,14 @@ br_u32 br_trace_svc_seen(br_u32 id)
 }
 
 /* =====================================================================
- * 取走 + 呈现
+ * Drain + render
  * ===================================================================== */
 
 br_u32 br_trace_svc_report(br_u32 max_events)
 {
-    /* max_events == 0 = "不限", 但必须有硬上界, 否则消费期间 ISR 还在补货时
-     * 单次调用可能永不收敛 —— 取环容量作上界(多轮调用即可取净)。 */
+    /* max_events == 0 = "unlimited", but a hard bound is required, else a single call may never
+     * converge while ISRs keep refilling during consumption — bound by ring capacity (repeated
+     * calls drain it fully). */
     const br_u32 limit = (max_events == 0u) ? (br_u32)BR_TRACE_RING_SIZE : max_events;
     br_u32 taken = 0u;
 
@@ -231,7 +238,7 @@ br_u32 br_trace_svc_report(br_u32 max_events)
 
         const br_u32 n = br_trace_drain(s_batch, want);
         if (n == 0u) {
-            break;   /* 环已取空 */
+            break;   /* ring drained */
         }
 
         for (br_u32 i = 0u; i < n; i++) {
@@ -252,16 +259,17 @@ br_u32 br_trace_svc_summary(void)
 {
     const br_u32 total   = br_trace_total();
     const br_u32 overrun = br_trace_overrun();
-    /* live 下界 0: 环被覆盖时生产者计数与消费计数会短暂错位 */
+    /* live lower-bounded at 0: producer and consumer counts briefly disagree when the ring is overwritten */
     const br_u32 live    = (total >= s_drained) ? (total - s_drained) : 0u;
 
     br_log_info("[TRACE] total=%u drained=%u overrun=%u ids=%u live=%u",
                 total, s_drained, overrun, s_seen_n, live);
 
-    /* "其它"桶: 逐 id 计数表(64 项)满后无法保 id 粒度的余量, 在这里体现,
-     * 免得 summary 的 drained 与逐 id 计数看起来"对不上"。 */
+    /* "Other" bucket: the remainder that can no longer keep id granularity once the per-id count
+     * table (64 entries) is full, shown here so summary's drained does not look inconsistent with
+     * the per-id counts. */
     if (s_other > 0u) {
-        br_log_info("[TRACE] other=%u (逐 id 计数表 %u 项已满, 余量并入此桶)",
+        br_log_info("[TRACE] other=%u (per-id count table full at %u entries, remainder folded into this bucket)",
                     s_other, TRC_SEEN_SLOTS);
     }
 
@@ -277,18 +285,20 @@ void br_trace_svc_reset(void)
     s_seen_n  = 0u;
     s_other   = 0u;
     s_drained = 0u;
-    /* ★ 不动 core 环的读写游标, 也不清动态名字表(注册是"映像级"的, 与计数无关) */
+    /* ★ does not touch core ring cursors, nor clear the dynamic name table (registration is image-level, unrelated to counts) */
 }
 
 int br_trace_svc_init(void)
 {
     br_trace_svc_reset();
 
-    /* 本插件的两个自有事件名。起始槽位由 hash 决定(trace.report→26,
-     * trace.reset→31), 实际落点由线性探测决定。v0.1 只登记名字, 不发这两个 id 的
-     * 事件(事件留痕仍走 marker/core 的固定事件), 目的是让离线解码能认出它们。
-     * 注: 线性探测之后, 别的插件撞槽不会再挤掉 selftest 的 slot 2 —— 只有全表
-     * 32 槽都被占满才会出现 -ENOSPC(契约变更, 见 trc_acquire_slot 的注释)。 */
+    /* This plugin's two own event names. The start slot comes from the hash (trace.report→26,
+     * trace.reset→31); the actual landing spot comes from linear probing. v0.1 only registers the
+     * names and emits no events with these ids (traces still go through marker/core fixed
+     * events), so offline decoding can recognize them.
+     * Note: with linear probing, another plugin's collision no longer pushes selftest's slot 2
+     * out — -ENOSPC appears only when all 32 slots are occupied (contract change, see the
+     * trc_acquire_slot comment). */
     (void)br_trace_svc_register(TRC_NAME_REPORT);
     (void)br_trace_svc_register(TRC_NAME_RESET);
 
@@ -296,12 +306,14 @@ int br_trace_svc_init(void)
 }
 
 /* =====================================================================
- * 自检用的内部视图
+ * Internal view for self-test
  *
- * 见 `src/trace_internal.h` 的说明: 这两条**只**为 `trace_selftest.c` 存在 —— 用例要
- * 复核"撞槽前提"与"解码出的名字逐字节相等", 用公开 API 表达不出来。★ 一律**转调**
- * 生产实现, 不复制逻辑: 用例必须跑真算法, 否则验证的是副本。
- * 原型在该头文件里(-Wmissing-prototypes), 入口名不是本插件的对外 API。
+ * See `src/trace_internal.h`: these two exist **only** for `trace_selftest.c` — the cases must
+ * re-check the "collision premise" and "decoded name byte-for-byte equal", which the public API
+ * cannot express. ★ Always **forward** to the production implementation, never copy logic: the
+ * case must run the real algorithm, or it verifies a copy.
+ * Prototypes are in that header (-Wmissing-prototypes); the entry names are not this plugin's
+ * external API.
  * ===================================================================== */
 
 br_u32 br_trace_internal_slot_of(const char *name)
@@ -316,30 +328,31 @@ br_bool br_trace_internal_streq(const char *a, const char *b)
 
 
 /* =====================================================================
- * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物
- * `build/gen/service/trace/plugin_desc.c` 引用; 设计 1-01 §9 / 3-05 §2)
+ * Plugin lifecycle hooks (name = symbol_prefix(short) + phase; referenced by the generated
+ * `build/gen/service/trace/plugin_desc.c`; design 1-01 §9 / 3-05 §2)
  *
- * 自带原型满足 -Wmissing-prototypes: 钩子名由**生成器**推导(不是本插件的对外 API),
- * 所以不写进 `include/br/debug/br_trace_svc.h`、也不进 plugin.toml 的 [[export]]
- * (那会改接口 hash)。
+ * Self-declared prototypes satisfy -Wmissing-prototypes: hook names are derived by the
+ * **generator** (not this plugin's external API), so they are not written into
+ * `include/br/debug/br_trace_svc.h` nor into brick.toml [[export]] (that would change the
+ * interface hash).
  * ===================================================================== */
 int trace_early_init(void);
 int trace_init(void);
 int trace_start(void);
 
-/* EARLY 相: 无动作(不用堆/无线程/关中断; 这里没有要注册的东西)。 */
+/* EARLY phase: no action (no heap/threads/IRQ-off; nothing to register here). */
 int trace_early_init(void)
 {
     return 0;
 }
 
-/* LATE 相(Service 类别 ⇒ ② 完成点): 现有 init 的转调。 */
+/* LATE phase (Service category ⇒ completion point ②): forward to the existing init. */
 int trace_init(void)
 {
     return br_trace_svc_init();
 }
 
-/* START 相: 本服务没有需要"中断可用/可建线程"之后才做的事。 */
+/* START phase: this service has nothing to do after "IRQs available / threads creatable". */
 int trace_start(void)
 {
     return 0;

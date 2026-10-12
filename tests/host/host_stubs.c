@@ -1,12 +1,14 @@
 /*
- * tests/host/host_stubs.c — 宿主侧替身(仅 `-DBR_HOSTTEST=1` 的 mem-test 使用)
+ * tests/host/host_stubs.c - host-side stand-ins (used only by mem-test with `-DBR_HOSTTEST=1`)
  *
- * 为什么需要: 目标镜像是 `-ffreestanding -nostdlib`, core 的 `br_log_write` 最终落到
- * platform 的早期 console(轮询 PL011)。宿主用例不链 platform, 也不该为了打几行
- * 排障日志去链 core/src/log.c 里的格式化器(它依赖 br_console_*), 所以这里给最小替身:
- *   - `br_log_write` 用宿主 vprintf 实现(用例允许 libc);
- *   - `br_console_*` 全空(宿主没有 PL011)。
- * 替身只实现**契约**(br_log.h / br_console.h 的签名), 不改语义面。
+ * Why: the target image is `-ffreestanding -nostdlib`, and core's `br_log_write` ends up at the
+ * platform early console (polling PL011). Host tests do not link platform, and should not link
+ * the formatter in core/src/log.c (it depends on br_console_*) just to print a few debug lines,
+ * so this provides minimal stand-ins:
+ *   - `br_log_write` implemented with the host vprintf (tests may use libc);
+ *   - `br_console_*` all empty (no PL011 on the host).
+ * The stand-ins implement only the **contract** (the signatures in br_log.h / br_console.h) and
+ * do not change the semantic surface.
  */
 #include <br/core/br_console.h>
 #include <br/core/br_log.h>
@@ -46,7 +48,7 @@ br_log_level_t br_log_get_level(void)
     return s_host_level;
 }
 
-/* ---- 早期 console 替身(宿主无 PL011; 空实现) ---- */
+/* ---- early console stand-in (no PL011 on the host; empty implementation) ---- */
 
 void br_console_init(void)
 {

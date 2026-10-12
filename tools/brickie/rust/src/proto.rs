@@ -1,27 +1,27 @@
-//! 进程边界信封(contract §2): 一行 JSON 从 stdin 读入, 一行 JSON 从 stdout 写出。
+//! Process-boundary envelope (contract §2): one line of JSON from stdin, one line to stdout.
 //!
-//! 请求: `{protocol, command, root, args, context}`
-//! 响应: `{protocol, status, exit_code, diagnostics, files, data}`
+//! Request: `{protocol, command, root, args, context}`
+//! Response: `{protocol, status, exit_code, diagnostics, files, data}`
 //!
-//! 协议版本不匹配 ⇒ `BRV-PROTO-0001`、`exit_code = 2`、`status = "ok"`
-//! (协议处理成功, 业务退出码在响应里)。
+//! Protocol version mismatch ⇒ `BRV-PROTO-0001`, `exit_code = 2`, `status = "ok"`
+//! (protocol handled fine; the business exit code is in the response).
 
 use serde_json::{json, Map, Value};
 
 use crate::diag::{Diags, Severity, EXIT_USAGE};
 
-/// 当前协议版本常量。
+/// Current protocol version constant.
 pub const PROTOCOL: i64 = 1;
 
-/// 解析后的请求信封。
+/// Parsed request envelope.
 #[derive(Clone, Debug)]
 pub struct Request {
     pub protocol: Option<i64>,
     pub command: String,
     pub root: String,
-    /// `args` 里的键值(非对象时为不可变空表)。
+    /// Key-values in `args` (empty table if not an object).
     pub args: Map<String, Value>,
-    /// `context` 里的键值(非对象时为不可变空表)。
+    /// Key-values in `context` (empty table if not an object).
     pub context: Map<String, Value>,
 }
 
@@ -47,13 +47,13 @@ impl Request {
     }
 }
 
-/// 解析 stdin 的请求。`Err` = 连信封都不成形(环境错, 退出码 2)。
+/// Parse the stdin request. `Err` = not even a well-formed envelope (environment error, exit code 2).
 pub fn parse_request(input: &str) -> Result<Request, String> {
-    let v: Value = serde_json::from_str(input).map_err(|e| format!("请求不是合法 JSON: {e}"))?;
+    let v: Value = serde_json::from_str(input).map_err(|e| format!("request is not valid JSON: {e}"))?;
     if !v.is_object() {
-        return Err("请求必须是 JSON 对象".to_string());
+        return Err("request must be a JSON object".to_string());
     }
-    let obj = v.as_object().expect("已验证是对象");
+    let obj = v.as_object().expect("already verified to be an object");
 
     let protocol = obj.get("protocol").and_then(Value::as_i64);
     let command = obj
@@ -87,7 +87,7 @@ pub fn parse_request(input: &str) -> Result<Request, String> {
     })
 }
 
-/// 响应信封。
+/// Response envelope.
 #[derive(Clone, Debug)]
 pub struct Response {
     pub protocol: i64,
@@ -99,7 +99,7 @@ pub struct Response {
 }
 
 impl Response {
-    /// 协议处理成功(即使 `exit_code != 0`)。
+    /// Protocol handled successfully (even if `exit_code != 0`).
     pub fn ok(diags: Diags, data: Value) -> Self {
         Response {
             protocol: PROTOCOL,
@@ -111,7 +111,7 @@ impl Response {
         }
     }
 
-    /// 协议处理成功 + 附带 `files`(机器拥有的文件内容, contract §4)。
+    /// Protocol handled successfully + attached `files` (machine-owned file contents, contract §4).
     pub fn ok_with_files(diags: Diags, files: Vec<Value>, data: Value) -> Self {
         Response {
             protocol: PROTOCOL,
@@ -123,9 +123,9 @@ impl Response {
         }
     }
 
-    /// 工具自身故障(L5 抛环境错)。进程退出码非 0。
+    /// Tool's own failure (L5 raises an environment error). Process exit code is non-zero.
     ///
-    /// 兜底诊断允许 `code: null`(BRV-D8: 仅"无法分类的兜底错误"才允许)。
+    /// Fallback diagnostics may use `code: null` (BRV-D8: only for "unclassifiable fallback errors").
     pub fn internal_error(message: &str, hint: &str) -> Self {
         let mut d = Diags::new();
         d.push(crate::diag::Diag::new(Severity::Error, message).hint(hint));
@@ -139,26 +139,26 @@ impl Response {
         }
     }
 
-    /// 未实现命令的统一答复: 用法错(退出码 2) + `code: null`, 见 README。
+    /// Uniform reply for unimplemented commands: usage error (exit code 2) + `code: null`, see README.
     pub fn unimplemented(command: &str, owner: &str) -> Self {
         let mut d = Diags::new();
         d.usage(
-            format!("命令 `{command}` 尚未实现({owner})"),
-            "v0.1 的 Rust 核心本刀只交付 version/model/plan-new/plan-init/gen-plan/dep-add/dep-rm; 其余命令见 rust/README.md 的排期表",
+            format!("command `{command}` is not implemented yet ({owner})"),
+            "the v0.1 Rust core in this cut delivers only version/model/plan-new/plan-init/gen-plan/dep-add/dep-rm; other commands are in the schedule table in rust/README.md",
         );
         Response::ok(d, json!({}))
     }
 
-    /// `BRV-PROTO-0001`: 协议版本不匹配。
+    /// `BRV-PROTO-0001`: protocol version mismatch.
     pub fn proto_mismatch(got: Option<i64>) -> Self {
         let mut d = Diags::new();
         d.push(
             crate::diag::Diag::new(Severity::Error, format!(
-                "协议版本不匹配: 期望 protocol={PROTOCOL}, 收到 {}",
-                got.map(|v| v.to_string()).unwrap_or_else(|| "缺失".to_string())
+                "protocol version mismatch: expected protocol={PROTOCOL}, got {}",
+                got.map(|v| v.to_string()).unwrap_or_else(|| "missing".to_string())
             ))
             .code("BRV-PROTO-0001")
-            .hint("L5 与 L0/L1 的握手失败; 不自动迁移(契约 §2)"),
+            .hint("L5 handshake with L0/L1 failed; no automatic migration (contract §2)"),
         );
         d.set_exit_override(EXIT_USAGE);
         Response::ok(d, json!({}))
@@ -175,8 +175,8 @@ impl Response {
         })
     }
 
-    /// 写出到 stdout: 一行 JSON。
+    /// Write to stdout: one line of JSON.
     pub fn write_stdout(&self) {
-        println!("{}", serde_json::to_string(&self.to_json()).expect("JSON 必可序列化"));
+        println!("{}", serde_json::to_string(&self.to_json()).expect("JSON is always serializable"));
     }
 }

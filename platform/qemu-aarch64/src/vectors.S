@@ -1,56 +1,57 @@
 /*
- * brickOS prototype v0.1.0 — aarch64 异常向量表 + 入口保存/恢复桩
+ * brickOS prototype v0.1.0 — aarch64 exception vector table + entry save/restore stubs
  *
- * 设计依据(权威): `docs/3-os-core/3-02-int.md`
- *   §5.2  中断处理流程: asm 入口桩只保存 caller-saved → 调 br_irq_enter(frame)
- *   §10.2 向量表按 (异常类型 × 来源) 分 16 槽; **EL1t 四槽也必须是真实可用的桩**
- *         (复位后首个异常可能落在 EL1t, 空槽会变成异常循环); **fault 桩必须显式
- *         全屏蔽 DAIF**(`msr daifset, #0xf`)—— PSTATE.I 不屏蔽 SError(A)与
- *         debug(D), 而同步异常是否自动置位在硬件上"待核实", 故不依赖任一说法。
- *   §5.3/§10.2 fault 与 IRQ 两条路径**共用同一份保存/恢复汇编**(唯一差异 =
- *         fault 路径多一条 `msr daifset, #0xf`), 减少两份易错汇编。
+ * Design basis (authoritative): `docs/3-os-core/3-02-int.md`
+ *   §5.2  interrupt handling flow: the asm entry stub saves caller-saved only → calls br_irq_enter(frame)
+ *   §10.2 vector table split into 16 slots by (exception type × source); **the four EL1t slots must also be
+ *         real usable stubs** (the first exception after reset may land in EL1t, and an empty slot becomes an
+ *         exception loop); **fault stubs must explicitly mask all of DAIF** (`msr daifset, #0xf`) —— PSTATE.I
+ *         does not mask SError(A) or debug(D), and whether a synchronous exception sets it automatically is
+ *         "to be verified" on hardware, so neither claim is relied upon.
+ *   §5.3/§10.2 fault and IRQ share **the same save/restore assembly** (the only difference is the extra
+ *         `msr daifset, #0xf` on the fault path), to avoid two error-prone copies.
  *
- * 帧布局的**唯一真值**: `core/include/br/core/br_exc.h`(设计 §14.2)。
- * 本文件直接 `#include` 它 —— 该头的偏移宏是纯字面量(汇编器可用), C 专属部分
- * (typedef/静态断言)在 `#ifndef __ASSEMBLER__` 内; Makefile 的 ASFLAGS 带
- * `-Icore/include`, 且 GCC 对 `.S` 自动定义 `__ASSEMBLER__`。
+ * The **single source of truth** for the frame layout: `core/include/br/core/br_exc.h` (design §14.2).
+ * This file `#include`s it directly — the header's offset macros are pure literals (usable by the assembler),
+ * and the C-only parts (typedefs/static asserts) are inside `#ifndef __ASSEMBLER__`; the Makefile ASFLAGS carry
+ * `-Icore/include`, and GCC defines `__ASSEMBLER__` automatically for `.S`.
  *
- * ★ 槽内为什么只放"跳板"而不是完整桩(实现裁定 P-IRQ-ASM-1):
- *   每槽硬性 0x80 B(架构固定, 表必须连续), 而 31 个 GPR + 6 个系统寄存器 + eret
- *   的保存/恢复约 60+ 条指令(> 240 B), 物理上放不进一槽。⇒ 槽内放
- *   `b <本槽专属的桩体>`, 桩体由同一个 `.macro` **每槽各展开一份**(互不 fallthrough),
- *   放在向量表之后同一 `.text.vectors` 段内 —— "一槽一份实例"的纪律不破。
- *   跳板只有 4 B, 保证 16 槽严格落在 0x80 网格上。
+ * ★ Why each slot holds only a "trampoline" rather than the full stub (implementation ruling P-IRQ-ASM-1):
+ *   Each slot is hard-limited to 0x80 B (fixed by the architecture; the table must be contiguous), while saving/
+ *   restoring 31 GPRs + 6 system registers + eret is about 60+ instructions (> 240 B), physically too large for
+ *   one slot. ⇒ each slot holds `b <stub body for this slot>`, and the body is expanded **once per slot** by the
+ *   same `.macro` (no fallthrough), placed in the same `.text.vectors` section after the vector table — the
+ *   "one instance per slot" discipline holds. The trampoline is only 4 B, keeping all 16 slots on the 0x80 grid.
  *
- * ★ 为什么恢复时不写回 DAIF(实现裁定 P-IRQ-ASM-2):
- *   AArch64 只有 `daifset/daifclr` 能**写** PSTATE.DAIF, 不存在 `MSR DAIF, Xt`
- *   (`MRS Xt, DAIF` 可读)。DAIF 的恢复由 `eret` 从 SPSR_EL1 **原子**完成 ——
- *   且本路径上从不解除屏蔽, 所以没有"恢复窗口"。帧里的 daif 字段照存
- *   (br_exc.h 布局 + 设计 §6.4 的恢复策略要用), 只是不从这里写回。
+ * ★ Why DAIF is not written back on restore (implementation ruling P-IRQ-ASM-2):
+ *   AArch64 can only **write** PSTATE.DAIF with `daifset/daifclr`; `MSR DAIF, Xt` does not exist
+ *   (`MRS Xt, DAIF` can read). DAIF is restored **atomically** by `eret` from SPSR_EL1 ——
+ *   and this path never unmasks anything, so there is no "restore window". The daif field is still saved in the
+ *   frame (br_exc.h layout + design §6.4 restore policy need it), it is just not written back from here.
  *
- * ★ 为什么只存 caller-saved(x0–x30)而不存 callee-saved(§5.2 原注):
- *   v1 的 ISR 一律**返回被打断的现场**(不切上下文), 被调用的 C 函数按 AAPCS64
- *   自行保存它用到的 callee-saved 寄存器 ⇒ 帧里只需 caller-saved 与异常现场寄存器。
- *   **⚠ v2 的注意义务**: 若 v2 在 IRQ 出口切栈(设计 §11.2 的空钩子), 这个前提就变了 ——
- *   那时要么帧里也放 callee-saved, 要么明确"切栈点只发生在 C 出口之后、帧已无用"。
- *   改这段汇编前请先读 §5.2 的那段注释。
+ * ★ Why only caller-saved (x0–x30) is saved and not callee-saved (§5.2 original note):
+ *   v1 ISRs always **return to the interrupted site** (no context switch), and called C functions save the
+ *   callee-saved registers they use per AAPCS64 ⇒ the frame needs only caller-saved and exception-state registers.
+ *   **⚠ v2 duty of care**: if v2 switches stacks on IRQ exit (design §11.2's empty hook), this premise changes —
+ *   then either put callee-saved in the frame too, or state explicitly "the stack switch happens only after the C
+ *   return, when the frame is already dead". Read that §5.2 comment before changing this assembly.
  */
 #include <br/core/br_exc.h>
 
-/* WORKAROUND(br-wa-isa-001): 本文件属设计里的 **ISA 共享库**(异常向量入口汇编);
- * 原型还没有该独立层, 故与 platform 插件同目录 —— 见 WORKAROUNDS.md。 */
+/* WORKAROUND(br-wa-isa-001): in the design this file belongs to the **ISA shared library** (exception vector entry
+ * assembly); the prototype has no such layer yet, so it sits with the platform plugin — see WORKAROUNDS.md. */
     .section .text.vectors, "ax"
 
 /* =====================================================================
- * 槽级宏
+ * Slot macros
  * ===================================================================== */
 
 /*
- * 非处理槽(14 个): 真实可用的桩 —— 把槽下标放进 x0 后交给平台 bare 落点。
- * ★ 刻意不依赖任何可能已损坏的设施(设计 §8.3.1): 只 `mov` + `b`。
- * ★ EL1t 四槽也走这里: 复位后首个异常可能落在 EL1t(SPSel 还没切到 1, §10.2);
- *   异常入口会选 SP_ELx(x = 目标 EL), 但若 SP_EL1 尚未装载则 C 路径仍不可用 ——
- *   这是"复位窗口内极早异常"的固有极限, 记录在实现裁定里。
+ * Non-handling slots (14): real usable stubs — put the slot index in x0 and hand off to the platform bare landing point.
+ * ★ Deliberately no dependency on anything that may be corrupted (design §8.3.1): only `mov` + `b`.
+ * ★ The four EL1t slots go here too: the first exception after reset may land in EL1t (SPSel not yet 1, §10.2);
+ *   exception entry selects SP_ELx (x = target EL), but if SP_EL1 is not yet loaded the C path is still unusable —
+ *   this is the inherent limit of "extremely early exception in the reset window", recorded in the implementation ruling.
  */
 .macro BR_VEC_PANIC idx
     .balign 0x80
@@ -59,7 +60,7 @@
 .endm
 
 /*
- * 处理槽跳板: 转入本槽专属的桩体(见文件头 P-IRQ-ASM-1 的说明)。
+ * Handling-slot trampoline: jump to this slot's own stub body (see P-IRQ-ASM-1 at the top of the file).
  */
 .macro BR_VEC_ENTER body
     .balign 0x80
@@ -67,8 +68,8 @@
 .endm
 
 /* =====================================================================
- * 向量表: 16 槽 × 0x80 B = 2 KiB, VBAR_EL1 要求 2 KiB 对齐
- * 槽序由架构固定: 高 2 位 = 来源, 低 2 位 = 类型(Sync/IRQ/FIQ/SError)
+ * Vector table: 16 slots × 0x80 B = 2 KiB, VBAR_EL1 requires 2 KiB alignment
+ * Slot order is architecture-fixed: high 2 bits = source, low 2 bits = type (Sync/IRQ/FIQ/SError)
  * ===================================================================== */
     .balign 2048
     .global br_plat_vectors
@@ -78,8 +79,8 @@ br_plat_vectors:
     BR_VEC_PANIC 1                  /* 0x080 Current EL/SP_EL0: IRQ         */
     BR_VEC_PANIC 2                  /* 0x100 Current EL/SP_EL0: FIQ         */
     BR_VEC_PANIC 3                  /* 0x180 Current EL/SP_EL0: SError      */
-    BR_VEC_ENTER br_exc_body_fault  /* 0x200 Current EL/SP_ELx: Synchronous → fault(§10.3) */
-    BR_VEC_ENTER br_exc_body_irq    /* 0x280 Current EL/SP_ELx: IRQ         → 中断(§5.2)  */
+    BR_VEC_ENTER br_exc_body_fault  /* 0x200 Current EL/SP_ELx: Synchronous → fault (§10.3) */
+    BR_VEC_ENTER br_exc_body_irq    /* 0x280 Current EL/SP_ELx: IRQ         → interrupt (§5.2) */
     BR_VEC_PANIC 6                  /* 0x300 Current EL/SP_ELx: FIQ         */
     BR_VEC_PANIC 7                  /* 0x380 Current EL/SP_ELx: SError      */
     BR_VEC_PANIC 8                  /* 0x400 Lower EL AArch64: Synchronous  */
@@ -91,37 +92,37 @@ br_plat_vectors:
     BR_VEC_PANIC 14                 /* 0x700 Lower EL AArch32: FIQ          */
     BR_VEC_PANIC 15                 /* 0x780 Lower EL AArch32: SError       */
 
-    /* 把整张表补满到 2 KiB 再放桩体: 保证 0x000..0x7FF 全部属于向量表
-     * (否则槽 15 的 0x80 区间会被紧随其后的桩体字节占据 —— 功能上无害,
-     *  但"表 = 2 KiB"这条架构约束就名不副实了)。 */
+    /* Pad the whole table out to 2 KiB before the stub bodies: ensures 0x000..0x7FF all belongs to the vector table
+     * (otherwise slot 15's 0x80 range would be occupied by the stub bytes right after it —— harmless functionally,
+     *  but the architectural constraint "table = 2 KiB" would no longer hold). */
     .balign 2048
     .size   br_plat_vectors, . - br_plat_vectors
 
 /* =====================================================================
- * 保存/恢复桩体(每槽一份实例, 不共享、不 fallthrough)
+ * Save/restore stub bodies (one instance per slot, not shared, no fallthrough)
  *
- * 入参: \label 本槽专属标签; \idx 槽下标; \is_fault 1 = fault 路径 / 0 = IRQ 路径
+ * Inputs: \label this slot's own label; \idx slot index; \is_fault 1 = fault path / 0 = IRQ path
  *
- * 保存(顺序即正确性):
- *   1) sub sp, sp, #BR_EXC_SIZE —— 帧 16 字节对齐(AAPCS64 硬要求)
- *   2) stp x0..x30 —— caller-saved; x30 = LR, 用 str 单独存
- *   3) 被中断的 SP = **加回去之后**的 sp(此时 sp 指向帧底)
- *   4) elr/spsr/esr/far/daif/槽号/pad
- *   5) fault 路径: `msr daifset, #0xf`(**必须**, 见文件头 §10.2)
+ * Save (order is correctness):
+ *   1) sub sp, sp, #BR_EXC_SIZE —— frame is 16-byte aligned (hard AAPCS64 requirement)
+ *   2) stp x0..x30 —— caller-saved; x30 = LR, stored separately with str
+ *   3) interrupted SP = sp **after adding back** (sp then points at the frame bottom)
+ *   4) elr/spsr/esr/far/daif/slot index/pad
+ *   5) fault path: `msr daifset, #0xf` (**required**, see §10.2 at the top of the file)
  *   6) mov x0, sp; bl br_fault_enter / br_irq_enter
  *
- * 恢复: 系统寄存器(用 x9 作唯一 scratch)→ x0..x30 → 抬栈 → eret
- *   ★ 这里**没有** `msr daif, x9`: 见文件头 P-IRQ-ASM-2。
- *   ★ 恢复 esr/far 是"完整还原现场"的一部分(它们不参与 eret, 但属于帧的语义)。
+ * Restore: system registers (x9 as the only scratch) → x0..x30 → raise stack → eret
+ *   ★ There is **no** `msr daif, x9` here: see P-IRQ-ASM-2 at the top of the file.
+ *   ★ Restoring esr/far is part of "fully restoring the site" (they do not take part in eret, but are frame semantics).
  *
- * x0..x30 的偏移 = 8*n(即 BR_EXC_X_OFF(n)); 这里写字面量是因为
- * BR_EXC_X_OFF 含 C 强制类型转换, 只能给 C 侧用(见 br_exc.h 的说明)。
+ * The offset of x0..x30 = 8*n (i.e. BR_EXC_X_OFF(n)); literals are written here because
+ * BR_EXC_X_OFF contains a C cast and can only be used on the C side (see the note in br_exc.h).
  * ===================================================================== */
 .macro BR_EXC_STUB_BODY label, idx, is_fault
     .balign 16
     .type   \label, %function
 \label:
-    /* ---- 保存 ---- */
+    /* ---- save ---- */
     sub     sp, sp, #BR_EXC_SIZE
     stp     x0,  x1,  [sp, #0x00]      /* BR_EXC_X_OFF(0..1)   */
     stp     x2,  x3,  [sp, #0x10]      /* BR_EXC_X_OFF(2..3)   */
@@ -140,7 +141,7 @@ br_plat_vectors:
     stp     x28, x29, [sp, #0xE0]      /* BR_EXC_X_OFF(28..29) */
     str     x30,      [sp, #0xF0]      /* BR_EXC_X_OFF(30)     */
 
-    add     x9, sp, #BR_EXC_SIZE       /* 抬回后 = 被中断的 SP */
+    add     x9, sp, #BR_EXC_SIZE       /* after adding back = interrupted SP */
     str     x9, [sp, #BR_EXC_SP_OFF]
 
     mrs     x9, elr_el1
@@ -151,7 +152,7 @@ br_plat_vectors:
     str     x9, [sp, #BR_EXC_ESR_OFF]
     mrs     x9, far_el1
     str     x9, [sp, #BR_EXC_FAR_OFF]
-    mrs     x9, daif                    /* 进入时的 DAIF(在下面 daifset 之前) */
+    mrs     x9, daif                    /* DAIF at entry (before the daifset below) */
     str     x9, [sp, #BR_EXC_DAIF_OFF]
     mov     x9, #\idx
     str     x9, [sp, #BR_EXC_VECTOR_OFF]
@@ -159,9 +160,9 @@ br_plat_vectors:
     str     xzr, [sp, #BR_EXC_PAD_OFF + 8]
 
 .if \is_fault
-    /* ★ 同步异常**不依赖硬件是否置位**: 全屏蔽 DAIF(§10.2)。
-     *   I 不覆盖 SError(A)与 debug(D); SError 重入会改写正要保存的现场。
-     *   IRQ 路径不加这条: 硬件进入异常时已置位, 且 v1 不嵌套(§7.2)。 */
+    /* ★ A synchronous exception does **not depend on whether hardware sets it**: mask all of DAIF (§10.2).
+     *   I does not cover SError(A) or debug(D); SError re-entry would overwrite the site being saved.
+     *   The IRQ path omits this: hardware already set it on exception entry, and v1 does not nest (§7.2). */
     msr     daifset, #0xf
 .endif
 
@@ -172,10 +173,10 @@ br_plat_vectors:
     bl      br_irq_enter
 .endif
 
-    /* ---- 恢复 ---- */
+    /* ---- restore ---- */
     ldr     x9, [sp, #BR_EXC_ELR_OFF]
     msr     elr_el1, x9
-    ldr     x9, [sp, #BR_EXC_SPSR_OFF]  /* eret 从这里恢复 PSTATE(含 DAIF) */
+    ldr     x9, [sp, #BR_EXC_SPSR_OFF]  /* eret restores PSTATE (including DAIF) from here */
     msr     spsr_el1, x9
     ldr     x9, [sp, #BR_EXC_ESR_OFF]
     msr     esr_el1, x9
@@ -204,8 +205,8 @@ br_plat_vectors:
     .size   \label, . - \label
 .endm
 
-/* ---- 0x200 同步异常 → fault 路径(§10.3) ---- */
+/* ---- 0x200 synchronous exception → fault path (§10.3) ---- */
 BR_EXC_STUB_BODY br_exc_body_fault, 4, 1
 
-/* ---- 0x280 IRQ → 中断路径(§5.2) ---- */
+/* ---- 0x280 IRQ → interrupt path (§5.2) ---- */
 BR_EXC_STUB_BODY br_exc_body_irq,   5, 0

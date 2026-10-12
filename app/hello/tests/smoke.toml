@@ -30,7 +30,7 @@ platform = ["qemu-aarch64"]
 
 [[case]]
 id       = "TC-PLUG-003"
-pre      = "同上; 各插件 plugin.toml 的 phase 与类别一致(非 Service/Interface ⇒ core, Service/Interface ⇒ late)"
+pre      = "同上; 各插件 brick.toml 的 phase 与类别一致(非 Service/Interface ⇒ core, Service/Interface ⇒ late)"
 steps    = [
   "逐条检查 init 边: rank(提供方完成点) <= rank(消费方完成点)",
   "检查 EARLY 相第一步是否为 platform 插件的 early_init",

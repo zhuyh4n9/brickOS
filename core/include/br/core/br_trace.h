@@ -1,83 +1,82 @@
 /*
- * brickOS prototype v0.1.0 — 最小 trace 环(ISR-safe 的事件留痕设施)
+ * brickOS prototype v0.1.0 — minimal trace ring (ISR-safe event tracing facility)
  *
- * 设计依据: `docs/5-debug/5-01-debug.md`(16 B 定长事件 + ctx 字段; ISR 内可记录)
- * 与 `3-02-int.md` 里大量"**计数 + trace 留痕**"的义务:
- *   §4.2 能力降级的降级行为(须留痕)、§7.1 优先级量化的**两个方向都报**、
- *   §5.2 spurious、§8.3 风暴保护(默认动作 = trace + 继续)、§9.3/§9.4 域事件。
+ * Design basis: `docs/5-debug/5-01-debug.md` (16 B fixed-size event + ctx field; recordable inside ISR)
+ * and the many "**count + trace**" obligations in `3-02-int.md`:
+ *   §4.2 capability-degradation behavior (must trace), §7.1 priority quantization **reports both directions**,
+ *   §5.2 spurious, §8.3 storm protection (default action = trace + continue), §9.3/§9.4 domain events.
  *
- * ⚠ 归属说明: 设计侧的 trace 是 **Service/观测设施**(5-01), 不是 core 内部件。
- *   本原型没有服务注册表(WORKAROUND br-wa-boot-001), 所以这里是一个
- *   **core 内的最小环形缓冲**, 只为把上面那些"必须留痕"的裁决变成可观测的证据;
- *   service/trace 落地后, `br_trace_emit` 的调用点保留, 实现换成服务即可。
+ * ⚠ Ownership note: on the design side trace is a **Service/observation facility** (5-01), not a core internal.
+ *   This prototype has no service registry (WORKAROUND br-wa-boot-001), so this is a
+ *   **minimal ring buffer inside core**, only to turn those "must trace" rulings into observable evidence;
+ *   once service/trace lands, the `br_trace_emit` call sites stay and only the implementation is swapped for the service.
  *
- * ISR 安全性: `br_trace_emit` 是单生产者写、单消费者读的无锁环(单核 v0.1)——
- * 只做一次槽位写 + 一次 head 递增; 不取锁、不分配、不读时钟。
- * 消费者(线程上下文)先快照 head 再逐条拷贝, 最后推进 tail; 生产者溢出会覆盖
- * **尚未消费**的旧槽位(记为 `br_trace_overrun()`), 这是"宁可丢旧事件也不阻塞中断"
- * 的有意取舍。
+ * ISR safety: `br_trace_emit` is a single-producer-write, single-consumer-read lock-free ring (single core, v0.1) —
+ * just one slot write + one head increment; no lock, no allocation, no clock read.
+ * The consumer (thread context) snapshots head, copies entries one by one, then advances tail; a producer overflow overwrites
+ * **unconsumed** old slots (recorded as `br_trace_overrun()`), a deliberate trade of "drop old events rather than block interrupts".
  */
 #ifndef BR_CORE_BR_TRACE_H
 #define BR_CORE_BR_TRACE_H
 
 #include <br/core/br_types.h>
 
-/* 事件 id(与 5-01 §1 的事件族同型: 纯数字, 便于文本/二进制两种呈现) */
+/* event ids (same shape as the 5-01 §1 event family: plain numbers, for both text and binary presentation) */
 enum {
     BR_TRACE_NONE = 0,
-    /* 中断路径 */
+    /* interrupt path */
     BR_TRACE_IRQ_ENTER = 1,          /* a = virq, b = hwirq */
     BR_TRACE_IRQ_EXIT = 2,           /* a = virq */
-    BR_TRACE_IRQ_SPURIOUS_OWNED = 3, /* a = hwirq(有硬件屏蔽却仍到达 ⇒ 真 bug 信号) */
-    BR_TRACE_IRQ_SPURIOUS_NOCAP = 4, /* a = hwirq(无屏蔽能力时的预期丢弃) */
-    BR_TRACE_IRQ_SUPPRESSED = 5,     /* a = virq(CAP_MASK=0 的软件抑制) */
-    BR_TRACE_IRQ_STORM = 6,          /* a = virq, b = 窗口内计数 */
+    BR_TRACE_IRQ_SPURIOUS_OWNED = 3, /* a = hwirq (arrived despite hardware mask ⇒ real bug signal) */
+    BR_TRACE_IRQ_SPURIOUS_NOCAP = 4, /* a = hwirq (expected drop when masking is unavailable) */
+    BR_TRACE_IRQ_SUPPRESSED = 5,     /* a = virq (software suppression with CAP_MASK=0) */
+    BR_TRACE_IRQ_STORM = 6,          /* a = virq, b = count in window */
     BR_TRACE_IRQ_PRIO_QUANTIZED = 7, /* a = virq, b = (encoded << 8) | logical */
-    BR_TRACE_IRQ_DISPATCH_IGNORED = 8, /* a = virq, b = 被忽略的分发形态(★ ADR-0011 后只剩 THREAD) */
-    BR_TRACE_IRQ_UNLOCK_UNDERFLOW = 9, /* a = 多余额度(下溢护栏拦截) */
-    /* 级联域 */
-    BR_TRACE_IRQ_DEMUX = 10,          /* a = dom_id, b = 子位图 */
-    BR_TRACE_IRQ_DEMUX_OVERFLOW = 11, /* a = dom_id(轮数用尽仍未读空) */
-    BR_TRACE_IRQ_DOMAIN_ORPHAN = 12,  /* a = dom_id, b = sub(无属主 ⇒ 屏蔽) */
-    BR_TRACE_IRQ_DOMAIN_DROP = 13,    /* a = dom_id(SLOW 域提交失败的推迟/丢弃) */
-    BR_TRACE_IRQ_DOMAIN_NOBH = 14,    /* a = 请求的 flags(SLOW 域被拒时的原因; ADR-0011 后仅"bh 不可用") */
-    /* fault 路径 */
+    BR_TRACE_IRQ_DISPATCH_IGNORED = 8, /* a = virq, b = ignored dispatch form (★ only THREAD remains after ADR-0011) */
+    BR_TRACE_IRQ_UNLOCK_UNDERFLOW = 9, /* a = excess credits (caught by the underflow guard) */
+    /* cascade domain */
+    BR_TRACE_IRQ_DEMUX = 10,          /* a = dom_id, b = sub-bitmap */
+    BR_TRACE_IRQ_DEMUX_OVERFLOW = 11, /* a = dom_id (rounds exhausted, still not drained) */
+    BR_TRACE_IRQ_DOMAIN_ORPHAN = 12,  /* a = dom_id, b = sub (no owner ⇒ mask) */
+    BR_TRACE_IRQ_DOMAIN_DROP = 13,    /* a = dom_id (defer/drop on SLOW domain commit failure) */
+    BR_TRACE_IRQ_DOMAIN_NOBH = 14,    /* a = requested flags (reason SLOW domain was rejected; only "bh unavailable" after ADR-0011) */
+    /* fault path */
     BR_TRACE_FAULT = 15,              /* a = EC, b = ESR_EL1 */
     BR_TRACE_FAULT_FIXUP = 16,        /* a = (br_u32)ELR, b = errno_val */
-    BR_TRACE_FAULT_DOUBLE = 17,       /* a = in_fault(≥2) */
-    /* 下半部(bottom half; ADR-0011 —— 设计 3-02 §11.1/§11.4.1/§9.4) */
-    BR_TRACE_IRQ_BH_DEFER = 18,       /* a = virq(该线已推迟到 bh; 窗口内硬件线被 mask) */
-    BR_TRACE_IRQ_BH_DROP = 19,        /* a = virq(队满 ⇒ 回滚未提交; IR-10 的唯一失败路径) */
-    BR_TRACE_IRQ_DISPATCH_SUPPRESSED = 20, /* a = virq(派发时已 disable ⇒ 抑制 handler, 不重放) */
-    BR_TRACE_BH_CTX_VIOLATION = 21,   /* a = 违规 API 编号(bh 内调了阻塞/让出/退出) */
-    BR_TRACE_SCHED_PREEMPT = 22,      /* a = 0, b = 1 真的换栈 / 0 = 请求了但无需换 */
+    BR_TRACE_FAULT_DOUBLE = 17,       /* a = in_fault (≥2) */
+    /* bottom half (ADR-0011 — design 3-02 §11.1/§11.4.1/§9.4) */
+    BR_TRACE_IRQ_BH_DEFER = 18,       /* a = virq (line deferred to bh; hardware line masked in the window) */
+    BR_TRACE_IRQ_BH_DROP = 19,        /* a = virq (queue full ⇒ roll back uncommitted; IR-10's only failure path) */
+    BR_TRACE_IRQ_DISPATCH_SUPPRESSED = 20, /* a = virq (disabled at dispatch ⇒ suppress handler, no replay) */
+    BR_TRACE_BH_CTX_VIOLATION = 21,   /* a = violating API id (block/yield/exit called inside bh) */
+    BR_TRACE_SCHED_PREEMPT = 22,      /* a = 0, b = 1 real stack switch / 0 = requested but no switch needed */
     BR_TRACE__COUNT
 };
 
-/* 16 B 定长事件(5-01 §1 的形态) */
+/* 16 B fixed-size event (the shape in 5-01 §1) */
 typedef struct {
     br_u32 id;
     br_u32 a;
     br_u64 b;
 } br_trace_evt_t;
 
-_Static_assert(sizeof(br_trace_evt_t) == 16u, "trace 事件必须是 16 B 定长");
+_Static_assert(sizeof(br_trace_evt_t) == 16u, "trace event must be exactly 16 B");
 
 #define BR_TRACE_RING_SIZE  256u
 
-/* ISR-safe: 记一条事件(不取锁/不分配/不读时钟)。 */
+/* ISR-safe: record one event (no lock / no allocation / no clock read). */
 void br_trace_emit(br_u32 id, br_u32 a, br_u64 b);
 
-/* 累计发出的事件数(单调递增; 用于判断"有没有新事件")。 */
+/* Cumulative number of events emitted (monotonic; used to tell whether anything is new). */
 br_u32 br_trace_total(void);
 
-/* 把**尚未消费**的事件拷进 out(最多 max 条), 返回拷贝条数。线程上下文调用。 */
+/* Copy **unconsumed** events into out (at most max), returns the number copied. Called from thread context. */
 br_u32 br_trace_drain(br_trace_evt_t *out, br_u32 max);
 
-/* 生产者覆盖过尚未消费的槽位的次数(>0 表示 trace 环不够大/消费太慢)。 */
+/* Times a producer overwrote an unconsumed slot (>0 means the trace ring is too small / consumption too slow). */
 br_u32 br_trace_overrun(void);
 
-/* 事件名的可读文本(呈现用; 未知 id ⇒ "?")。 */
+/* Readable text for an event name (for presentation; unknown id ⇒ "?"). */
 const char *br_trace_name(br_u32 id);
 
 #endif /* BR_CORE_BR_TRACE_H */

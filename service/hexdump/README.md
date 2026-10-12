@@ -1,6 +1,6 @@
 # service/hexdump
 
-> 实现态(不再是骨架)。声明面以 `plugin.toml` 为唯一真值, **本目录不改它**。
+> 实现态(不再是骨架)。声明面以 `brick.toml` 为唯一真值, **本目录不改它**。
 
 十六进制 + ASCII 呈现原语: 把一段内存变成"每 16 字节一行"的可读文本,
 给 `service/dump` / debug bridge(`MEMRD`) / panic 报告共用。
@@ -56,10 +56,10 @@ TC-DBG-020/021, 打 `[DBGCONF] PASS/FAIL`, 返回失败项数(失败不停机)�
 
 ## `[[dep]]`(结构依赖)
 
-声明面在 `plugin.toml`, 本目录不改动它。当前:
+声明面在 `brick.toml`, 本目录不改动它。当前:
 
 - 入边: `service/dump → service/hexdump`(kind = runtime, symbol = `br_hexdump_to`),
-  声明在 `service/dump/plugin.toml`;
+  声明在 `service/dump/brick.toml`;
 - 出边: **无**(本插件不认识 region 表, 也不认识其它服务)。
 
 `br_hexdump_init` **不跨插件**调 `br_trace_svc_register`: 没有

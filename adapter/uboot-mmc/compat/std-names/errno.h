@@ -1,25 +1,29 @@
-/* adapter/uboot-mmc — **标准头名** `<errno.h>` 的单元级环境补丁(见 plugin.toml 的偏离说明)
+/* adapter/uboot-mmc — unit-level environment patch for the **standard header name** `<errno.h>` (see the deviation note in brick.toml)
  *
- * ============================== 为什么它在 `std-names/` 而不在 `compat/` ==============================
- * 上游 `drivers/mmc/` 的原件里有字面 `#include <errno.h>`(u-boot 的 `mmc.c` 第 15 行)。
- * 本件是裸机 unikernel, 没有 libc 的 `<errno.h>` ⇒ 必须给它一个。
+ * ============================== Why it lives in `std-names/` and not `compat/` ==============================
+ * The upstream original in `drivers/mmc/` has the literal `#include <errno.h>` (u-boot `mmc.c` line 15).
+ * This is a bare-metal unikernel with no libc `<errno.h>` ⇒ we must provide one.
  *
- * 但 `errno.h` 是**标准头名**, 而 `runtime/posix/include/errno.h` 也叫这个名字。brickie 的
- * 包含面判据(ADR-0018)是**名字级**的: 它把"每个插件 `[build].includes` 列出的目录下的
- * 文件名"建成"名字 → 归属插件"的映射, 再看谁的字面 include 命中 —— **看不到 per-unit 的
- * `-I`**。于是把本文件放进 `compat/`(声明进 `includes`)会让 `runtime/posix/src/posix.c`
- * 与 `iface/posix` 的 `<errno.h>` 被判成"include 了 adapter/uboot-mmc 的头"(7 条
- * BRV-MF-0001) —— 而它们的 `-I` 里根本没有本目录, 那是**误报**。
+ * But `errno.h` is a **standard header name**, and `runtime/posix/include/errno.h` uses it too. brickie's
+ * include-surface criterion (ADR-0018) works at the **name level**: it builds a "name → owning plugin" map
+ * from the file names under each plugin's `[build].includes` directories, then checks whose literal include
+ * hits — it **cannot see per-unit `-I`**. So putting this file in `compat/` (declared in `includes`) would
+ * make `runtime/posix/src/posix.c` and `iface/posix`'s `<errno.h>` be judged as "included a header from
+ * adapter/uboot-mmc" (7 BRV-MF-0001 entries) — yet that directory is not in their `-I` at all, so it is a
+ * **false positive**.
  *
- * ⇒ 处置(与 `plugin.toml` 的 `[build]` 注释、`ADAPTER-NOTES.md` 的"偏离"一节同一处真值):
- *   把两个**标准头名**的壳放进 `compat/std-names/`, **不列进 `includes`**, 改由
- *   `[build].cflags` 里的一条 `-Iadapter/uboot-mmc/compat/std-names` 下发 —— 那条 `-I`
- *   只对本插件的编译单元生效, 于是"名字不进声明面, 单元仍找得到头"。
- *   回归条件: brickie 的包含面判据改为按 **per-unit `-I`** 解析(或显式排除标准 C 头名)时,
- *   这两个壳搬回 `compat/` 并列入 `includes`。
+ * ⇒ Handling (same source of truth as the `[build]` comment in `brick.toml` and the "deviations" section of
+ *   `ADAPTER-NOTES.md`): put the shells for the two **standard header names** in `compat/std-names/`, **not
+ *   listed in `includes`**, and ship them via one `-Iadapter/uboot-mmc/compat/std-names` in
+ *   `[build].cflags` — that `-I` only affects this plugin's translation units, so "the name stays out of the
+ *   declaration surface while units still find the header".
+ *   Regression condition: when brickie's include-surface criterion resolves by **per-unit `-I`** (or
+ *   explicitly excludes standard C header names), move these two shells back to `compat/` and list them in
+ *   `includes`.
  *
- * ★ 语义: 上游用到的就是那批裸名字, 而 ADR-0027 已把 errno 的名字改成 POSIX 原名且与数值
- *   同处 `br/core/br_error.h` ⇒ 这里**只做转发**(不含任何第二处真值)。
+ * ★ Semantics: upstream uses exactly those bare names, and ADR-0027 already renamed errno to the POSIX
+ *   names, colocated with the values in `br/core/br_error.h` ⇒ this file **only forwards** (no second
+ *   source of truth).
  */
 #ifndef BR_ADAPTER_UBOOT_MMC_STDNAME_ERRNO_H
 #define BR_ADAPTER_UBOOT_MMC_STDNAME_ERRNO_H

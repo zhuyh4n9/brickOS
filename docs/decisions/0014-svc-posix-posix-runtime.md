@@ -8,7 +8,7 @@
 
 > 状态: **已落地**(QEMU virt aarch64; `[POSIXCONF] 20/0`; `[VFSCONF] 20/0`(13 → 20);
 > `brickie test -j8` 全量门禁绿: 宿主 7 + QEMU 8 + 脚本 4)。
-> 影响面(**新插件 1 件**): `service/svc-posix/**`(plugin.toml / include/**(12 个 POSIX 头)/
+> 影响面(**新插件 1 件**): `service/svc-posix/**`(brick.toml / include/**(12 个 POSIX 头)/
 > src/svc_posix.c / src/posix_selftest.c / README.md / tests/smoke.toml);
 > `tools/brickie/templates/descriptor/runtime_adapter/c/`(**新模板目录**);
 > `product.toml`(`[select]` 追加 `service/svc-posix`); `tests/gates.toml`(新增 `posix-test`
@@ -142,7 +142,7 @@ ADR-0009 §5 遗留项 5 明写"访问模式策略归 svc-posix 的 fd 层"。�
 | 实现 | `service/svc-posix/src/svc_posix.c`(翻译 + cwd/errno/FILE*/线程记录/记录锁) |
 | 目标套件 | `src/posix_selftest.c` → `[POSIXCONF] 20/0`, 由 core 在全部 `start()` 后驱动(ADR-0010) |
 | 链接族的映射 | `link`/`symlink`/`readlink` + `lstat`/`fstat` —— 底座是 **ADR-0013** 的 vfs 面(本 ADR 不含那些原语) |
-| 声明面 | `plugin.toml`(`api_type = runtime_adapter`, 三条 `[[dep]]`, `[selftest] cases = 20`) |
+| 声明面 | `brick.toml`(`api_type = runtime_adapter`, 三条 `[[dep]]`, `[selftest] cases = 20`) |
 | 门禁 | `tests/gates.toml`: 新增 `posix-test`(链接族自己的 7 条用例与门禁在 ADR-0013) |
 | 用例骨架 | `service/svc-posix/tests/smoke.toml`(TC-POSIX-001..020 的声明面) |
 | 债 | `br-wa-test-001` 扩写(第六组自编号 `TC-POSIX-*`) |

@@ -7,7 +7,7 @@
 > `core/selftest/**`(**新**: `core_selftest.c` + 四套件的搬迁)、
 > `core/src/{plugin,svc,sched,sync}/**`(生产文件里的套件**搬走**)、
 > `core/include/br/core/{br_plugin,br_svc,br_sched,br_sync}.h`(测试入口**移出**对外头)、
-> 各插件 `<plugin>/src/*_selftest.c`(**新**: 测试与生产分离)与 `plugin.toml`(`[selftest]` 表、
+> 各插件 `<plugin>/src/*_selftest.c`(**新**: 测试与生产分离)与 `brick.toml`(`[selftest]` 表、
 > 测试入口**移出** `[[export]]`)、
 > `product.toml`(`[selftest]` 开关 + `[build].selftest_sources`; 并删掉一条 `allow_edges`)、
 > `app/hello/src/main.c`(不再直调任何套件)、`tests/gates.toml`(7 道门禁各加一条 SELFTEST 判据)、
@@ -44,7 +44,7 @@
    同一个概念("跑本件的接口测试")有五种调用形态, 而**没有一个地方能回答**
    "这个镜像里跑了哪些测试、哪些红了"。
 3. **测试入口进了 golden 接口面**: `br_plat_irq_conformance`/`br_vfs_conformance`/
-   `br_bt_selftest` … 都在 `plugin.toml` 的 `[[export]]` 里 ⇒ 改一个用例的名字/签名
+   `br_bt_selftest` … 都在 `brick.toml` 的 `[[export]]` 里 ⇒ 改一个用例的名字/签名
    就是**接口变更**(接口 hash 变、可能要重发快照)。这与 ADR-0005 裁定 9 对生命周期
    钩子的处置("钩子是组合期契约, 不是插件对外能力")自相矛盾。
 4. **APP 被卷进来**: 它要直调四个 core 套件 + 一个 framework 套件, 靠 `allow_edges`
@@ -128,7 +128,7 @@ enabled = "inherit"   # true | false | "inherit"（= 跟随 [product].stage: dev
 
 ### 2.5 测试入口**移出** `[[export]]`
 
-11 个测试入口从 `plugin.toml` 的 `[[export]]` 里删除(清单见 §4)。三条理由:
+11 个测试入口从 `brick.toml` 的 `[[export]]` 里删除(清单见 §4)。三条理由:
 
 1. 与 ADR-0005 裁定 9 一致: **钩子是组合期契约, 不是插件对外能力**;
 2. 测试面进 golden ⇒ 改一个用例就是接口变更(接口 hash 变), 这是**反向激励**:
@@ -240,5 +240,5 @@ enabled = "inherit"   # true | false | "inherit"（= 跟随 [product].stage: dev
 * `tests/gates.toml`: 7 道门禁各加了一条 SELFTEST 判据, 并给
   `[[hosttest]] sched-test`/`sync-test` 的 sources 补了 `core/selftest/*.c`(§3 裁定 9)。
 * 接口快照: 11 个测试入口移出 `[[export]]` ⇒ 相关 `api/iface/**` 快照与
-  `plugin.toml` 的 `[[export]].hash` 必须重发(`brickie iface publish`), 否则
+  `brick.toml` 的 `[[export]].hash` 必须重发(`brickie iface publish`), 否则
   `brickie iface status` 会报不一致。

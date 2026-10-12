@@ -1,0 +1,319 @@
+schema = 1
+
+[plugin]
+name        = "framework/vfs-core"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "framework"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "纯 VFS: br_file_t 句柄 + 挂载表单路由 + 四层 ops(super/inode/file/dentry 预留) + 逐级 lookup 走查"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 8
+notes    = "挂载表 8 槽(路径 64 B/槽)+ 句柄在 core 堆上; 静态部分约 0.6 KiB, 余量给将来的 dentry 预留"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u8        = "uint8_t"
+br_u32       = "uint32_t"
+br_u64       = "uint64_t"
+br_s64       = "int64_t"
+br_size_t    = "size_t"
+br_bool      = "int"
+br_uintptr_t = "uintptr_t"
+
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "vfs"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:744bb3605fe427a7ad376dba45600552c14fbe44d8597459b9a0c81fff1ffb57"
+status       = "experimental"
+
+[[export.entries]]
+kind = "macro"
+name = "BR_O_RDONLY"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_O_WRONLY"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_O_RDWR"
+value = "0x0003u"
+[[export.entries]]
+kind = "macro"
+name = "BR_O_ACCMODE"
+value = "0x0003u"
+[[export.entries]]
+kind = "macro"
+name = "BR_O_CREAT"
+value = "0x0010u"
+[[export.entries]]
+kind = "macro"
+name = "BR_O_EXCL"
+value = "0x0020u"
+[[export.entries]]
+kind = "macro"
+name = "BR_O_TRUNC"
+value = "0x0040u"
+[[export.entries]]
+kind = "macro"
+name = "BR_O_APPEND"
+value = "0x0080u"
+[[export.entries]]
+kind = "macro"
+name = "BR_O_NONBLOCK"
+value = "0x0100u"
+[[export.entries]]
+kind = "macro"
+name = "BR_O_NOFOLLOW"
+value = "0x0200u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SEEK_SET"
+value = "0"
+[[export.entries]]
+kind = "macro"
+name = "BR_SEEK_CUR"
+value = "1"
+[[export.entries]]
+kind = "macro"
+name = "BR_SEEK_END"
+value = "2"
+[[export.entries]]
+kind = "macro"
+name = "BR_INODE_NONE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_INODE_DIR"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_INODE_FILE"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_INODE_SYMLINK"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_POLLIN"
+value = "0x01u"
+[[export.entries]]
+kind = "macro"
+name = "BR_POLLOUT"
+value = "0x02u"
+[[export.entries]]
+kind = "macro"
+name = "BR_POLLERR"
+value = "0x04u"
+[[export.entries]]
+kind = "macro"
+name = "BR_NAME_MAX"
+value = "32u"
+[[export.entries]]
+kind = "macro"
+name = "BR_STAT_SIZE"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_STAT_NLINK"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYMLINK_MAX"
+value = "96u"
+
+[[export.entries]]
+kind = "type"
+name = "br_file_ops_t"
+layout = "# {open, read, write, lseek, ioctl, fsync, poll, poll_attach, close}"
+[[export.entries]]
+kind = "type"
+name = "br_inode_t"
+layout = "# {type, iops, fops, fpriv}"
+[[export.entries]]
+kind = "type"
+name = "br_inode_ops_t"
+layout = "# {lookup, create, unlink, mkdir, rmdir, rename, getattr, setattr, symlink, readlink, link}"
+[[export.entries]]
+kind = "type"
+name = "br_dentry_ops_t"
+layout = "# {revalidate, compare}"
+[[export.entries]]
+kind = "type"
+name = "br_fs_ops_t"
+layout = "# {mount, free_inode, unmount, sync}"
+[[export.entries]]
+kind = "type"
+name = "br_fs_cfg_t"
+layout = "# {path, dev, opts}"
+[[export.entries]]
+kind = "type"
+name = "br_stat_t"
+layout = "# {valid, type, size, nlink}"
+[[export.entries]]
+kind = "type"
+name = "br_dirent_t"
+layout = "# {type, name_len, name}"
+
+[[export.entries]]
+kind = "func"
+name = "br_open"
+sig  = "br_file_t* (const char*, br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_open_err"
+sig  = "br_file_t* (const char*, br_u32, int*)"
+[[export.entries]]
+kind = "func"
+name = "br_file_read"
+sig  = "br_s64 (br_file_t*, void*, br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_file_write"
+sig  = "br_s64 (br_file_t*, const void*, br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_file_lseek"
+sig  = "br_s64 (br_file_t*, br_s64, int)"
+[[export.entries]]
+kind = "func"
+name = "br_file_ioctl"
+sig  = "int (br_file_t*, br_u32, void*)"
+[[export.entries]]
+kind = "func"
+name = "br_file_fsync"
+sig  = "int (br_file_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_file_poll"
+sig  = "int (br_file_t*, br_u32*)"
+[[export.entries]]
+kind = "func"
+name = "br_file_close"
+sig  = "int (br_file_t*)"
+
+[[export.entries]]
+kind = "func"
+name = "br_file_inode"
+sig  = "br_inode_t* (br_file_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_file_fpriv"
+sig  = "void* (br_file_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_file_set_fpriv"
+sig  = "void (br_file_t*, void*)"
+[[export.entries]]
+kind = "func"
+name = "br_file_flags"
+sig  = "br_u32 (br_file_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_file_offset"
+sig  = "br_s64 (br_file_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_file_set_offset"
+sig  = "void (br_file_t*, br_s64)"
+[[export.entries]]
+kind = "func"
+name = "br_inode_priv"
+sig  = "void* (br_inode_t*)"
+
+[[export.entries]]
+kind = "func"
+name = "br_mount_register"
+sig  = "int (const char*, const br_fs_ops_t*, void*)"
+[[export.entries]]
+kind = "func"
+name = "br_mount_count"
+sig  = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_mount_path_at"
+sig  = "const char* (br_u32)"
+
+[[export.entries]]
+kind = "func"
+name = "br_fstat"
+sig  = "int (br_file_t*, br_stat_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_stat"
+sig  = "int (const char*, br_stat_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_lstat"
+sig  = "int (const char*, br_stat_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_symlink"
+sig  = "int (const char*, const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_readlink"
+sig  = "int (const char*, char*, br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_link"
+sig  = "int (const char*, const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_mkdir"
+sig  = "int (const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_rmdir"
+sig  = "int (const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_unlink"
+sig  = "int (const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_rename"
+sig  = "int (const char*, const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_truncate"
+sig  = "int (const char*, br_u64)"
+
+[[export.entries]]
+kind = "func"
+name = "br_opendir"
+sig  = "br_dir_t* (const char*)"
+[[export.entries]]
+kind = "func"
+name = "br_readdir"
+sig  = "int (br_dir_t*, br_dirent_t*)"
+[[export.entries]]
+kind = "func"
+name = "br_closedir"
+sig  = "int (br_dir_t*)"
+
+[selftest]
+
+cases = 13
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

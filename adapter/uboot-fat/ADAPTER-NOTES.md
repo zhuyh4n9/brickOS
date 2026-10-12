@@ -46,7 +46,7 @@
 
 | 文件/目录 | 归属 | 上游对应物 |
 |---|---|---|
-| `plugin.toml` 的 `sources` 里的 `fs/fat/fat_write.c` | **上游原件**(在 `third_party/`, 本目录**没有**副本) | `fs/fat/fat_write.c`(含它 include 的 `fat.c`) |
+| `brick.toml` 的 `sources` 里的 `fs/fat/fat_write.c` | **上游原件**(在 `third_party/`, 本目录**没有**副本) | `fs/fat/fat_write.c`(含它 include 的 `fat.c`) |
 | `compat/fat_env.h` | **本项目**(环境) | 无(兑现上游对 u-boot 运行环境的依赖) |
 | `compat/<头名>.h`(薄壳, 20 个) | **本项目** | 无(只是名字) |
 | `compat/fat.h`、`compat/fs.h`、`compat/rtc_def.h` | **本项目**(转发壳) | `include/fat.h`、`include/fs.h`、`include/rtc_def.h` |

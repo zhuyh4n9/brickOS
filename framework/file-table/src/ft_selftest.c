@@ -1,36 +1,42 @@
 /*
- * brickOS prototype v0.2.0 — 文件表的一致性套件(framework/file-table/src/ft_selftest.c)
+ * brickOS prototype v0.2.0 — file table conformance suite (framework/file-table/src/ft_selftest.c)
  *
- * 设计依据与裁定: `docs/decisions/0010-plugin-selftest.md`(自检与核心代码分离)、
- *                 `docs/decisions/0012-file-table-and-errno.md`(本件与 errno 对齐)。
+ * Design basis and decisions: `docs/decisions/0010-plugin-selftest.md` (self-test separate
+ *                 from core code), `docs/decisions/0012-file-table-and-errno.md` (aligned
+ *                 with errno).
  *
- * ## 为什么本套件一行都不需要 QEMU
- *   文件表是**纯算法**: 它从头到尾**不解引用** `br_file_t`(契约头明写"只持指针与比较")。
- *   于是用例可以拿"几个互不相同的假指针"当句柄, 把表满 / dup2 顶替 / 最后一个引用
- *   这些只有真实负载才碰得到的边界**全部**跑到 —— 而且跑在宿主上只要几毫秒
- *   (`tests/host/ft_test.c` 是同一条腿的宿主版, 判据是退出码)。
+ * ## Why this suite needs no QEMU at all
+ *   The file table is **pure algorithm**: it never **dereferences** `br_file_t` (the contract
+ *   header states "holds pointers and compares only"). So cases can use "a few distinct fake
+ *   pointers" as handles and exercise **all** the boundaries only real load would hit — table
+ *   full / dup2 displacement / last reference — in milliseconds on the host
+ *   (`tests/host/ft_test.c` is the host version of the same leg, judged by exit code).
  *
- * ## 与 br_plugin_manager_selftest() 的契约
- *   返回**失败项数**(0 = 全绿); 日志自己打(`[FTCONF] PASS/FAIL ...` + `SUMMARY`)。
- *   **失败不停机** —— 红绿由门禁判(`tests/gates.toml` 的 plugin-test: require 摘要全绿,
- *   forbid `[FTCONF] FAIL`, require_tags 逐条点名 TC-FT-*)。
+ * ## Contract with br_plugin_manager_selftest()
+ *   Returns the **number of failures** (0 = all green); logs itself
+ *   (`[FTCONF] PASS/FAIL ...` + `SUMMARY`). **Failure does not halt** — red/green is judged by
+ *   the gate (`tests/gates.toml` plugin-test: require an all-green summary, forbid
+ *   `[FTCONF] FAIL`, require_tags naming TC-FT-* entries).
  *
- * WORKAROUND(br-wa-test-001): `TC-FT-*` 是**自编号**(设计 `6-01` 没有文件表这一组);
- * 自述文字才是判据内容, 与设计用例表的逐条对齐见 WORKAROUNDS.md。
+ * WORKAROUND(br-wa-test-001): `TC-FT-*` are **self-assigned** (design `6-01` has no file-table
+ * group); the self-describing text is the criterion, and the per-case alignment with the design
+ * case table is in WORKAROUNDS.md.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 #include <br/core/br_types.h>
 #include <br/ft/br_ft.h>
 
-/* 自检入口原型(定义在本文件末尾; 生成物 `plugin_desc.c` 的 `.selftest` 钩子引用它)。 */
+/* Self-test entry prototype (defined at the end of this file; referenced by the generated
+ * `plugin_desc.c` `.selftest` hook). */
 int file_table_selftest(void);
 
-/* ==================================================================== 假句柄 */
+/* ==================================================================== fake handles */
 
-/* 表不解引用句柄 ⇒ 用例只需要 N 个**互不相同**的指针值。
- * 用静态字节数组取址, 而不是"整数字面量转指针"(后者是实现定义行为, 且会被 -Werror 拦)。
- * 16 个: 0..7 当"文件句柄", 9..15 当"**未被改写**"的哨兵(见 TC-FT-008 的 disp3)。 */
+/* The table never dereferences handles ⇒ cases need only N **distinct** pointer values.
+ * Use the address of static byte arrays, not "integer literal to pointer" (the latter is
+ * implementation-defined and rejected by -Werror).
+ * 16 of them: 0..7 as "file handles", 9..15 as "**unoverwritten**" sentinels (see TC-FT-008 disp3). */
 #define FAKE_N 16u
 static br_u8 s_fake[FAKE_N][16];
 
@@ -39,7 +45,7 @@ static br_file_t *fake(br_u32 i)
     return (br_file_t *)(void *)&s_fake[i][0];
 }
 
-/* ==================================================================== 报告 */
+/* ==================================================================== report */
 
 static br_u32 s_pass;
 static br_u32 s_fail;
@@ -55,7 +61,8 @@ static void pc(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* 把表填满(句柄循环复用 FAKE_N 个假指针 —— 表只按指针相等比较, 重复不影响"满")。 */
+/* Fill the table (handles cycle through the FAKE_N fake pointers — the table compares pointer
+ * equality only, so repeats do not affect "full"). */
 static void fill_all(void)
 {
     for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
@@ -63,16 +70,16 @@ static void fill_all(void)
     }
 }
 
-/* ==================================================================== 用例 */
+/* ==================================================================== cases */
 
 int file_table_selftest(void)
 {
     s_pass = 0u;
     s_fail = 0u;
 
-    br_log_info("[FTCONF] file-table conformance (fd 表 / dup / 引用判定 / errno)");
+    br_log_info("[FTCONF] file-table conformance (fd table / dup / ref counting / errno)");
 
-    /* ---- TC-FT-001: 空表与最小号分配 ---- */
+    /* ---- TC-FT-001: empty table and lowest-number allocation ---- */
     {
         (void)br_ft_reset();
         const br_u32 n0 = br_ft_count();
@@ -81,10 +88,10 @@ int file_table_selftest(void)
 
         pc((n0 == 0u) && (f0 == 0) && (n1 == 1u) &&
            (br_ft_get(0) == fake(0)) && (br_ft_fd_at(0u) == 0) && (br_ft_fd_at(1u) == BR_FT_NONE),
-           "TC-FT-001", "空表 ⇒ 首个 fd = 0; count/fd_at 与在场集合一致");
+           "TC-FT-001", "empty table ⇒ first fd = 0; count/fd_at match the present set");
     }
 
-    /* ---- TC-FT-002: **最小可用** fd(POSIX 的核心约定), 不是"递增计数器" ---- */
+    /* ---- TC-FT-002: **lowest available** fd (the core POSIX convention), not an "incrementing counter" ---- */
     {
         (void)br_ft_reset();
         const int a = br_ft_alloc(fake(0), 0u);
@@ -94,10 +101,10 @@ int file_table_selftest(void)
         const int d = br_ft_alloc(fake(3), 0u);
 
         pc((a == 0) && (b == 1) && (c == 2) && (d == 1) && (br_ft_get(1) == fake(3)),
-           "TC-FT-002", "释放 1 后再分配回到**最小空位** 1(而非 3)");
+           "TC-FT-002", "after releasing 1, allocation returns the **lowest free slot** 1 (not 3)");
     }
 
-    /* ---- TC-FT-003: 表满 ⇒ -EMFILE; 空句柄 ⇒ -EINVAL; 都**不留副作用** ---- */
+    /* ---- TC-FT-003: table full ⇒ -EMFILE; null handle ⇒ -EINVAL; neither **leaves side effects** ---- */
     {
         (void)br_ft_reset();
         fill_all();
@@ -106,28 +113,28 @@ int file_table_selftest(void)
         const br_bool intact = (br_ft_count() == BR_FT_MAX) && (br_ft_get(0) == fake(0));
 
         pc((over == BR_ERR(EMFILE)) && (nul == BR_ERR(EINVAL)) && (intact == BR_TRUE),
-           "TC-FT-003", "表满 ⇒ -EMFILE; 空句柄 ⇒ -EINVAL; 已有 fd 不受影响");
+           "TC-FT-003", "table full ⇒ -EMFILE; null handle ⇒ -EINVAL; existing fds unaffected");
     }
 
-    /* ---- TC-FT-004: 非法 fd 一律 -EBADF(越界与空槽**同一个码**) ---- */
+    /* ---- TC-FT-004: any invalid fd is -EBADF (out of range and empty slot use the **same code**) ---- */
     {
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(0), 0u);
         br_u32 fl = 0u;
         const br_bool ok =
             (br_ft_alloc(fake(1), 0u) == 1) &&
-            (br_ft_release(1, BR_NULL) == 0) &&                    /* 1 变成空槽 */
+            (br_ft_release(1, BR_NULL) == 0) &&                    /* 1 becomes an empty slot */
             (br_ft_get(-1) == BR_NULL) &&
             (br_ft_get((int)BR_FT_MAX) == BR_NULL) &&
             (br_ft_get(1) == BR_NULL) &&
             (br_ft_get_flags(-1, &fl) == BR_ERR(EBADF)) &&
-            (br_ft_get_flags(1, &fl) == BR_ERR(EBADF)) &&       /* 空槽 */
+            (br_ft_get_flags(1, &fl) == BR_ERR(EBADF)) &&       /* empty slot */
             (br_ft_set_flags(1, 0u) == BR_ERR(EBADF)) &&
             (br_ft_release(1, BR_NULL) == BR_ERR(EBADF));
-        pc(ok, "TC-FT-004", "越界 / 空槽 / 负数 ⇒ 一律 -EBADF, get ⇒ BR_NULL");
+        pc(ok, "TC-FT-004", "out of range / empty slot / negative ⇒ always -EBADF, get ⇒ BR_NULL");
     }
 
-    /* ---- TC-FT-005: flags 是**每 fd 的快照**(存与还, 表不解释) ---- */
+    /* ---- TC-FT-005: flags are a **per-fd snapshot** (stored and returned; the table does not interpret them) ---- */
     {
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(0), 0x0021u);
@@ -140,37 +147,37 @@ int file_table_selftest(void)
 
         pc((r_get == 0) && (got == 0x0021u) && (r_set == 0) && (got2 == 0x0042u) &&
            (r_neg == BR_ERR(EINVAL)),
-           "TC-FT-005", "get/set flags 往返; 空 out ⇒ -EINVAL");
+           "TC-FT-005", "get/set flags round-trip; null out ⇒ -EINVAL");
     }
 
-    /* ---- TC-FT-006: release 的"最后一个引用"判定 ---- */
+    /* ---- TC-FT-006: release's "last reference" decision ---- */
     {
-        /* (a) 独占 ⇒ 回报句柄; 空槽 ⇒ -EBADF 且**必把 out 清零** */
+        /* (a) exclusive ⇒ report the handle; empty slot ⇒ -EBADF and **must zero out** */
         (void)br_ft_reset();
-        br_file_t *last = fake(7);                  /* 先塞非空值: 验证"必被改写" */
+        br_file_t *last = fake(7);                  /* seed a non-null value: verify "always overwritten" */
         (void)br_ft_alloc(fake(0), 0u);
         const int r1 = br_ft_release(0, &last);
 
         br_file_t *last2 = fake(7);
-        const int bad = br_ft_release(0, &last2);   /* 同一个槽, 已经空了 */
+        const int bad = br_ft_release(0, &last2);   /* same slot, now empty */
 
-        /* (b) 共享 ⇒ 不回报; 最后一个引用走了 ⇒ 回报 */
+        /* (b) shared ⇒ no report; last reference gone ⇒ report */
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(1), 0u);             /* fd 0 */
-        const int d = br_ft_dup(0);                 /* fd 1 与 fd 0 共享 */
+        const int d = br_ft_dup(0);                 /* fd 1 shares with fd 0 */
         br_file_t *last3 = fake(7);
-        const int r2 = br_ft_release(0, &last3);    /* 仍有 fd 1 ⇒ NULL */
+        const int r2 = br_ft_release(0, &last3);    /* fd 1 remains ⇒ NULL */
         br_file_t *last4 = BR_NULL;
-        const int r3 = br_ft_release(d, &last4);    /* 最后一个 ⇒ 回报 */
+        const int r3 = br_ft_release(d, &last4);    /* last one ⇒ report */
 
         pc((r1 == 0) && (last == fake(0)) &&
            (bad == BR_ERR(EBADF)) && (last2 == BR_NULL) &&
            (d == 1) && (r2 == 0) && (last3 == BR_NULL) &&
            (r3 == 0) && (last4 == fake(1)),
-           "TC-FT-006", "独占 ⇒ 回报句柄; 共享 ⇒ 回报 NULL; 非法 ⇒ -EBADF + 清零");
+           "TC-FT-006", "exclusive ⇒ report handle; shared ⇒ report NULL; invalid ⇒ -EBADF + zeroed");
     }
 
-    /* ---- TC-FT-007: dup 共享同一 open file description ---- */
+    /* ---- TC-FT-007: dup shares the same open file description ---- */
     {
         (void)br_ft_reset();
         br_u32 fl0 = 0u;
@@ -183,31 +190,31 @@ int file_table_selftest(void)
         const br_bool ok =
             (d == 1) && (br_ft_get(d) == fake(2)) && (fl0 == fl1) &&
             (br_ft_count() == 2u) && (dup_bad == BR_ERR(EBADF));
-        pc(ok, "TC-FT-007", "dup: 同句柄 + flags 快照一致; 非法 oldfd ⇒ -EBADF");
+        pc(ok, "TC-FT-007", "dup: same handle + matching flag snapshot; invalid oldfd ⇒ -EBADF");
     }
 
-    /* ---- TC-FT-008: dup2 的目标顶替与 displaced 回报 ----
-     * 状态用注释里的 `fd0=A fd1=B …` 逐步跟踪, 免得断言与表状态对不上。 */
+    /* ---- TC-FT-008: dup2 target displacement and displaced reporting ----
+     * Track state step by step with the `fd0=A fd1=B …` comments so assertions match the table. */
     {
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(0), 0u);      /* fd0=A */
         (void)br_ft_alloc(fake(1), 0u);      /* fd1=B */
         (void)br_ft_alloc(fake(2), 0u);      /* fd2=C */
 
-        /* (a) 目标独占(C) ⇒ 回报被顶掉的句柄; 结果 fd0=A fd1=B fd2=A */
+        /* (a) target is exclusive (C) ⇒ report the displaced handle; result fd0=A fd1=B fd2=A */
         br_file_t *disp1 = fake(9);
         const int r1 = br_ft_dup2(0, 2, &disp1);
 
-        /* (b) 目标句柄(A)仍被 fd0 引用 ⇒ **不**回报; 结果 fd0=A fd1=B fd2=B */
+        /* (b) target handle (A) is still referenced by fd0 ⇒ **not** reported; result fd0=A fd1=B fd2=B */
         br_file_t *disp2 = fake(9);
         const int r2 = br_ft_dup2(1, 2, &disp2);
 
-        /* (c) dup2(f,f) 原地不动: 返回 f, 表不变; `displaced` 按契约被写成 BR_NULL
-         *     (它在**任何**返回路径上都会被写 —— 见 br_ft.h) */
+        /* (c) dup2(f,f) is a no-op: returns f, table unchanged; `displaced` is written as BR_NULL
+         *     per contract (it is written on **every** return path — see br_ft.h) */
         br_file_t *disp3 = fake(9);
         const int r3 = br_ft_dup2(1, 1, &disp3);
 
-        /* (d) 非法 oldfd(空槽)/ 越界 newfd ⇒ -EBADF, 表与状态都不变 */
+        /* (d) invalid oldfd (empty slot) / out-of-range newfd ⇒ -EBADF, table and state unchanged */
         br_file_t *disp4 = fake(9);
         const int r4 = br_ft_dup2(3, 0, &disp4);
         const int r5 = br_ft_dup2(0, (int)BR_FT_MAX, &disp4);
@@ -223,19 +230,19 @@ int file_table_selftest(void)
             (br_ft_get(2) == fake(1)) && (br_ft_count() == 3u);
 
         pc(ok, "TC-FT-008",
-           "dup2: 目标顶替回报 displaced; 共享目标 ⇒ NULL; dup2(f,f) 原地; 非法 ⇒ -EBADF");
+           "dup2: displacing a target reports displaced; shared target ⇒ NULL; dup2(f,f) is a no-op; invalid ⇒ -EBADF");
     }
 
-    /* ---- TC-FT-009: release_all 按指针去重 + 装不下则表不变 ---- */
+    /* ---- TC-FT-009: release_all dedupes by pointer + leaves table unchanged if it does not fit ---- */
     {
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(0), 0u);      /* fd 0 */
         (void)br_ft_alloc(fake(1), 0u);      /* fd 1 */
-        (void)br_ft_dup(0);                  /* fd 2 与 fd 0 共享 */
-        (void)br_ft_dup(1);                  /* fd 3 与 fd 1 共享 */
+        (void)br_ft_dup(0);                  /* fd 2 shares with fd 0 */
+        (void)br_ft_dup(1);                  /* fd 3 shares with fd 1 */
 
         br_file_t *small[1];
-        const int too_small = br_ft_release_all(small, 1u);       /* 需要 2 条 ⇒ -ENOSPC */
+        const int too_small = br_ft_release_all(small, 1u);       /* needs 2 entries ⇒ -ENOSPC */
         const br_bool intact = (br_ft_count() == 4u);
 
         br_file_t *got[4] = { BR_NULL, BR_NULL, BR_NULL, BR_NULL };
@@ -247,27 +254,27 @@ int file_table_selftest(void)
 
         pc((too_small == BR_ERR(ENOSPC)) && (intact == BR_TRUE) &&
            (dedup == BR_TRUE) && (br_ft_count() == 0u) && (br_ft_get(0) == BR_NULL),
-           "TC-FT-009", "release_all: 同句柄只报一条; cap 不足 ⇒ -ENOSPC 且表不变");
+           "TC-FT-009", "release_all: one report per handle; insufficient cap ⇒ -ENOSPC and table unchanged");
     }
 
-    /* ---- TC-FT-010: errno 取值(与 Linux 内核对齐; 宿主 ft-test 拿 <errno.h> 逐码对拍) ---- */
+    /* ---- TC-FT-010: errno values (aligned with the Linux kernel; host ft-test compares each code against <errno.h>) ---- */
     {
         const br_bool ok =
             (EINVAL == 22) && (EBADF == 9) && (EMFILE == 24) && (ENFILE == 23) &&
             (ENOENT == 2) && (ENOTEMPTY == 39) && (ENOTSUP == 95) &&
             (ETIMEDOUT == 110) && (EACCES == 13) && (ESPIPE == 29) &&
             (EOPNOTSUPP == ENOTSUP) && (EWOULDBLOCK == EAGAIN);
-        pc(ok, "TC-FT-010", "errno 编号 = Linux(内核 errno-base/errno.h); 别名同值");
+        pc(ok, "TC-FT-010", "errno values = Linux (kernel errno-base/errno.h); aliases share values");
     }
 
-    /* ---- TC-FT-011: 边界与观测面 ---- */
+    /* ---- TC-FT-011: bounds and observation surface ---- */
     {
         (void)br_ft_reset();
         int last = -2;
         for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
             last = br_ft_alloc(fake(i % FAKE_N), 0u);
         }
-        /* 升序观测: fd_at(k) == k(因为全满) */
+        /* ascending observation: fd_at(k) == k (since fully occupied) */
         br_bool order = BR_TRUE;
         for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
             if (br_ft_fd_at(i) != (int)i) {
@@ -279,8 +286,8 @@ int file_table_selftest(void)
             (last == (int)(BR_FT_MAX - 1u)) &&
             (br_ft_fd_at(BR_FT_MAX) == BR_FT_NONE) &&
             (order == BR_TRUE) &&
-            (br_ft_reset() == BR_FT_MAX);            /* 满表被清 ⇒ 丢弃数 = 槽数 */
-        pc(ok, "TC-FT-011", "最后一个合法 fd = BR_FT_MAX-1; fd_at 升序; reset 回报丢弃数");
+            (br_ft_reset() == BR_FT_MAX);            /* full table cleared ⇒ dropped count = slot count */
+        pc(ok, "TC-FT-011", "last valid fd = BR_FT_MAX-1; fd_at ascending; reset reports dropped count");
     }
 
     br_log_info("[FTCONF] SUMMARY pass=%u fail=%u total=%u", s_pass, s_fail, s_pass + s_fail);

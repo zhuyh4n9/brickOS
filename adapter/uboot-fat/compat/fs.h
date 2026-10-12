@@ -1,12 +1,14 @@
-/* adapter/uboot-fat — `<fs.h>` 的**转发壳**(不是副本)。
+/* adapter/uboot-fat - **forwarding shim** for `<fs.h>` (not a copy).
  *
- * 上游 `fs/fat/fat.c` 写 `#include <fs.h>`, 拿的是 `struct fs_dirent`(目录项)与
- * `struct fs_dir_stream`(目录流), 以及 `FS_DT_DIR/FS_DT_REG`。上一版把这几个结构**抄**
- * 进了插件并**裁掉**了 rtc_time 与时戳字段(那是"改上游") ⇒ 现在转发到 vendor 原件:
- * `struct fs_dirent` 就是 u-boot 的形状(name[256] + 三个 rtc_time), 名字上界的执法仍由
- * glue 负责(见 `glue/fat_vfs.c` 的 `uboot_fat_fill_dirent`)。
+ * Upstream `fs/fat/fat.c` writes `#include <fs.h>` and takes `struct fs_dirent` (directory
+ * entry), `struct fs_dir_stream` (directory stream) and `FS_DT_DIR/FS_DT_REG`. The previous
+ * version **copied** these structs into the plugin and **trimmed** rtc_time and the timestamp
+ * fields (that was "modifying upstream") => now it forwards to the vendor original: `struct
+ * fs_dirent` is u-boot's shape (name[256] + three rtc_time), and enforcing the name bound
+ * remains glue's job (see `uboot_fat_fill_dirent` in `glue/fat_vfs.c`).
  *
- * `include/fs.h` 自己 include `<rtc_def.h>` ⇒ 本目录提供同名的转发壳(指向 vendor 原件)。
+ * `include/fs.h` itself includes `<rtc_def.h>`, so this directory provides a same-named
+ * forwarding shim (pointing at the vendor original).
  */
 #ifndef BR_ADAPTER_UBOOT_FAT_SHIM_FS_H
 #define BR_ADAPTER_UBOOT_FAT_SHIM_FS_H

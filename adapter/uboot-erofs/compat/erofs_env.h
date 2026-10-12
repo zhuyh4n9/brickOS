@@ -1,94 +1,106 @@
 /*
- * adapter/uboot-erofs — **u-boot 运行环境**(适配层)
+ * adapter/uboot-erofs — **u-boot runtime environment** (adapter layer)
  *
- * ============================== 本文件是什么 ==============================
- * 上游 EROFS 是**内核/u-boot 风格**的 C: 它假设有 `linux/compat.h`、`linux/stat.h`、
- * `linux/bug.h`、`linux/log2.h`、`asm/unaligned.h`、`u-boot/lz4.h`、`printf`/`pr_err`
- * 与 libc 的 `malloc/free/memcpy/strnlen`。本插件是**裸机 unikernel(无 libc)**,
- * 所以这一层把那些假设**逐条落回本项目的真值**:
+ * ============================== WHAT THIS FILE IS ==============================
+ * Upstream EROFS is **kernel/u-boot style** C: it assumes `linux/compat.h`,
+ * `linux/stat.h`, `linux/bug.h`, `linux/log2.h`, `asm/unaligned.h`, `u-boot/lz4.h`,
+ * `printf`/`pr_err` and libc `malloc/free/memcpy/strnlen`. This plugin is a
+ * **bare-metal unikernel (no libc)**, so this layer maps those assumptions back to
+ * this project's truths, one by one:
  *
- *   u-boot/Linux 侧                        →  brickOS 侧
+ *   u-boot/Linux side                      →  brickOS side
  *   ---------------------------------------------------------------------------
- *   u8/u16/u32/u64/s64                     →  br_u8/…(br/core/br_types.h)
+ *   u8/u16/u32/u64/s64                     →  br_u8/...(br/core/br_types.h)
  *   bool / true / false                    →  br_bool / BR_TRUE / BR_FALSE
- *   __le16/__le32/__le64 + leN_to_cpu()    →  恒等函数(aarch64 = 小端; 见下方 #error)
- *   get_unaligned_le16/32                 →  __builtin_memcpy 版本(本目标 -mstrict-align)
- *   min_t/max_t/round_up/round_down/ilog2  →  本文件的小宏/函数
- *   DIV_ROUND_UP / BLK_ROUND_UP            →  DIV_ROUND_UP 宏(internal.h 里定义后者)
+ *   __le16/__le32/__le64 + leN_to_cpu()    →  identity fn(aarch64 LE; see #error below)
+ *   get_unaligned_le16/32                  →  __builtin_memcpy versions(target -mstrict-align)
+ *   min_t/max_t/round_up/round_down/ilog2  →  the small macros/functions in this file
+ *   DIV_ROUND_UP / BLK_ROUND_UP            →  DIV_ROUND_UP macro(internal.h defines the latter)
  *   malloc/free/realloc/calloc             →  br_malloc/br_free/br_realloc/br_calloc
- *   memcpy/memset/memcmp/memmove           →  core 提供(项目纪律: 这四个直接用)
- *   strlen/strnlen/strcmp/memcmp 风格比较   →  本文件的 `uboot_erofs_*`(见下)
+ *   memcpy/memset/memcmp/memmove           →  provided by core(rule: use these four directly)
+ *   strlen/strnlen/strcmp/memcmp-style     →  this file's `uboot_erofs_*` (see below)
  *   printf/pr_err/pr_info/pr_debug         →  br_log_error/info/debug
- *   BUG_ON/DBG_BUGON                       →  DBG_BUGON(见下: 打印 + 不崩)
- *   IS_ERR/ERR_PTR/PTR_ERR                 →  本项目**不用** errno 指针; 裁掉
- *   E* 裸名字 / EFSCORRUPTED(EUCLEAN)      →  **core 的 <br/core/br_errno.h>**(见下)
+ *   BUG_ON/DBG_BUGON                       →  DBG_BUGON(see below: log + do not crash)
+ *   IS_ERR/ERR_PTR/PTR_ERR                 →  unused here; dropped
+ *   plain E* names / EFSCORRUPTED(EUCLEAN) →  **core's <br/core/br_errno.h>** (see below)
  *
- * ## 为什么字符串要自己写
- *   硬约束(任务书): `strlen/strcmp/strncmp/strcpy/strnlen/strchr` **必须自己写小的**,
- *   不许依赖 runtime/posix。这里全部是 `static inline` + `uboot_erofs_` 前缀, 再用
- *   **宏**把上游的裸名字映射过来 —— 于是移植过来的 `namei.c`/`fs.c` 代码行**一个字都不用改**
- *   (`strnlen(de_name, n)` 照样写), 而链接期绝不会去够一个不存在的 libc 符号。
- *   因为整个编译单元是 `-fno-builtin`, 编译器不会把我们的定义识别成内建再自调用。
+ * ## Why the string helpers are hand-written
+ *   Hard constraint (task spec): `strlen/strcmp/strncmp/strcpy/strnlen/strchr` **must
+ *   be small local implementations**, with no dependency on runtime/posix. All are
+ *   `static inline` with the `uboot_erofs_` prefix, and **macros** then map the
+ *   upstream plain names over — so ported `namei.c`/`fs.c` lines need **not one
+ *   character changed** (`strnlen(de_name, n)` still reads the same), while the linker
+ *   can never reach a nonexistent libc symbol. The whole translation unit is
+ *   `-fno-builtin`, so the compiler will not treat our definitions as builtins and
+ *   call them recursively.
  *
- * ## 有意偏离(相对上游)
- *   1. 上游用 `IS_ENABLED(CONFIG_LZ4)` 之类的**编译期**开关; 本件一律拆掉, 改成
- *      `erofs_decompress` 里的**运行期**分支(任务书硬约束)。
- *   2. 上游 `internal.h` 里的 `erofs_err()` 自带换行; u-boot 的 `pr_err` 也自带。
- *      本文件的 `erofs_err` 不补换行(br_log_write 自己按行输出)。
- *   3. `erofs_dbg` 只在 `BR_EROFS_VERBOSE_DBG` 打开时才真的输出 —— 默认编译成空语句,
- *      免得没插串口的机器上日志被逐块映射刷屏。
+ * ## Intentional deviations (from upstream)
+ *   1. Upstream uses **compile-time** switches such as `IS_ENABLED(CONFIG_LZ4)`; this
+ *      file removes them all for **run-time** branches in `erofs_decompress` (hard
+ *      constraint of the task spec).
+ *   2. Upstream `internal.h`'s `erofs_err()` appends a newline; u-boot's `pr_err` does
+ *      too. This file's `erofs_err` adds none (br_log_write outputs line by line).
+ *   3. `erofs_dbg` really outputs only when `BR_EROFS_VERBOSE_DBG` is enabled — by
+ *      default it compiles to an empty statement, so machines without a serial port are
+ *      not flooded by per-block mapping logs.
  * ==========================================================================
  */
 #ifndef BR_ADAPTER_UBOOT_EROFS_ENV_H
 #define BR_ADAPTER_UBOOT_EROFS_ENV_H
 
-#include <stddef.h>     /* NULL / size_t —— 编译器自带头, 不是 libc */
+#include <stddef.h>     /* NULL / size_t — compiler-provided header, not libc */
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 #include <br/core/br_mem.h>
 #include <br/core/br_types.h>
-/* 块设备契约: 上游从 `blk.h` 拿, 本件从这里拿。**只有本头**(适配层入口)可以
- * include `<br/...>` —— `src/` 下的上游派生件一律经本头取环境。 */
+/* Block-device contract: upstream gets it from `blk.h`, this file from here. **Only this
+ * header** (the adapter entry) may include `<br/...>` — upstream-derived files under
+ * `src/` always take their environment through this header. */
 #include <br/dev/br_bdev.h>
 
-/* `uintN_t`/`intN_t` 由编译器自带的 <stdint.h> 提供(上游 `erofs_fs.h` 自己 include 它);
- * 本层**不重复定义** —— 重复定义会与编译器头冲突, 那正是"适配层不该做的事"。 */
+/* `uintN_t`/`intN_t` come from the compiler's own <stdint.h> (upstream `erofs_fs.h`
+ * includes it itself); this layer does **not redefine** them — a duplicate definition
+ * would clash with the compiler header, exactly what an adapter layer must not do. */
 #include <stdint.h>
 
-/* ==================================================================== 内存分配
+/* ================================================================== memory allocation
  *
- * 上游 EROFS 用 libc 的 `malloc/free/calloc/realloc`(内核里是 kmalloc 家族)。
- * 本件是裸机 unikernel, 堆在 core(`br_malloc`/`br_free`/`br_realloc`/`br_calloc`)。
- * ★ 这里**不写任何分配器**, 只把名字接过去 —— 移植代码因此一行不用改。
- *   代价: 上游那套"越界/失败"的隐含假设(返回 NULL)必须仍然成立, 而 core 的
- *   `br_malloc` 返回 NULL 的语义与 libc 一致, 所以接得上。
+ * Upstream EROFS uses libc `malloc/free/calloc/realloc` (the kmalloc family in the
+ * kernel). This is a bare-metal unikernel and the heap lives in core (`br_malloc`/
+ * `br_free`/`br_realloc`/`br_calloc`).
+ * * No allocator is written here, the names are merely wired over — ported code
+ *   therefore needs no changes. Cost: upstream's implicit "out of bounds/failure"
+ *   assumption (return NULL) must still hold, and core's `br_malloc` returns NULL just
+ *   like libc, so it fits.
  */
 void *malloc(size_t size);
 void *calloc(size_t nmemb, size_t size);
 void *realloc(void *ptr, size_t size);
 void  free(void *ptr);
 
-/* ==================================================================== 小端前提 */
-/* 上游的 `le32_to_cpu()` 在本件里是**恒等**函数 —— 只有当目标真的小端时才成立。
- * aarch64 的 QEMU virt 与绝大多数同类板子都是小端; 大端目标下这份移植是错的,
- * 所以宁可在这里停住也不要静默给出错的字。 */
+/* ================================================================ little-endian premise */
+/* Upstream's `le32_to_cpu()` is an **identity** function here — valid only if the
+ * target really is little-endian. aarch64 QEMU virt and almost all similar boards are
+ * little-endian; on a big-endian target this port is wrong, so stopping here is better
+ * than silently producing wrong words. */
 #if !defined(__BYTE_ORDER__) || (__BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
-#error "uboot-erofs 的 leN_to_cpu() 是恒等实现: 本移植只支持小端目标"
+#error "uboot-erofs leN_to_cpu() is an identity implementation: little-endian targets only"
 #endif
 
-/* ==================================================================== 基础类型 */
+/* ==================================================================== base types */
 typedef unsigned char       u8;
 typedef signed char         s8;
 typedef unsigned short      u16;
 typedef signed short        s16;
 typedef unsigned int        u32;
 typedef signed int          s32;
-typedef unsigned long long  u64;   /* ★ u-boot 就是 long long(不是 uint64_t) */
-typedef signed long long    s64;   /* ★ 同上 */
+typedef unsigned long long  u64;   /* * u-boot uses long long here (not uint64_t) */
+typedef signed long long    s64;   /* * same as above */
 typedef _Bool               bool;
-/* `size_t` / `uintptr_t` / `uintN_t` / `intN_t` 由**编译器的** <stddef.h>/<stdint.h> 给
- * (上游自己 include <stdint.h>)—— 这里**不再重复 typedef**, 免得与编译器头打架。 */
+/* `size_t` / `uintptr_t` / `uintN_t` / `intN_t` come from the **compiler's**
+ * <stddef.h>/<stdint.h> (upstream includes <stdint.h> itself) — **no duplicate
+ * typedef** here, to avoid clashing with the compiler headers. */
 typedef long long           loff_t;   /* u-boot: `typedef long long loff_t;` */
 typedef unsigned int        dev_t;
 typedef unsigned short      umode_t;
@@ -100,24 +112,26 @@ typedef unsigned short      umode_t;
 #define true  BR_TRUE
 #define false BR_FALSE
 
-_Static_assert(sizeof(br_size_t) == 8u, "size_t 必须是 64 位(与上游的 aarch64 口径一致)");
-_Static_assert(sizeof(br_u64) == 8u, "u64 必须是 64 位");
+_Static_assert(sizeof(br_size_t) == 8u, "size_t must be 64-bit (matching upstream's aarch64 convention)");
+_Static_assert(sizeof(br_u64) == 8u, "u64 must be 64-bit");
 
-/* ---- EROFS 自己的三个类型(上游 internal.h 定义, 逐字照搬) ---- */
-typedef u64 erofs_off_t;    /* 字节偏移 */
-typedef u64 erofs_nid_t;    /* inode 编号(元数据区里的槽号) */
-typedef u32 erofs_blk_t;    /* 文件系统范围里的块号 */
+/* ---- EROFS's own three types (defined in upstream internal.h, copied verbatim) ---- */
+typedef u64 erofs_off_t;    /* byte offset */
+typedef u64 erofs_nid_t;    /* inode number (slot index in the metadata area) */
+typedef u32 erofs_blk_t;    /* block number within the filesystem */
 #define NULL_ADDR     ((unsigned int)-1)
 #define NULL_ADDR_UL  ((unsigned long)-1)
 
-/* inode 槽位(元数据区里一个 inode 占 2^5 = 32 字节) —— 上游 internal.h 的
- * `EROFS_ISLOTBITS`。super.c 把它抄进 `sbi.islotbits`, `iloc()` 靠它算 nid 的字节偏移。 */
+/* inode slot (one inode occupies 2^5 = 32 bytes in the metadata area) — upstream
+ * internal.h's `EROFS_ISLOTBITS`. super.c copies it into `sbi.islotbits`, and `iloc()`
+ * uses it to compute the byte offset of a nid. */
 #define EROFS_ISLOTBITS 5
 
-/* ==================================================================== on-disk 小端 */
-/* 与 Linux 的 `include/uapi/linux/types.h` 同型: `__leN` 是"内容为小端"的整数类型。
- * 本件把稀疏标注(`__bitwise`)去掉 —— 于是上游那套"le32_to_cpu() 的结果直接赋给 __le32"
- * 的写法在类型上也成立(内核里靠 `__force`, 这里根本不需要)。 */
+/* ================================================================ on-disk little-endian */
+/* Same shape as Linux `include/uapi/linux/types.h`: `__leN` is an integer type whose
+ * content is little-endian. This file drops the sparse annotation (`__bitwise`) — so
+ * upstream's habit of assigning a `le32_to_cpu()` result straight to `__le32` also
+ * type-checks (the kernel needs `__force` there; here it is not needed at all). */
 typedef br_u16 __le16;
 typedef br_u32 __le32;
 typedef br_u64 __le64;
@@ -126,7 +140,8 @@ typedef br_u32 __u32;
 typedef br_u64 __u64;
 typedef br_u8  __u8;
 
-/* aarch64 = 小端 ⇒ 四个转换都是恒等。保留函数形态是为了让移植代码**看起来还是上游**。 */
+/* aarch64 = little-endian, so all four conversions are identity. The function form is
+ * kept so ported code **still looks like upstream**. */
 static inline u16 le16_to_cpu(__le16 v) { return (u16)v; }
 static inline u32 le32_to_cpu(__le32 v) { return (u32)v; }
 static inline u64 le64_to_cpu(__le64 v) { return (u64)v; }
@@ -134,9 +149,10 @@ static inline __le16 cpu_to_le16(u16 v) { return (__le16)v; }
 static inline __le32 cpu_to_le32(u32 v) { return (__le32)v; }
 static inline __le64 cpu_to_le64(u64 v) { return (__le64)v; }
 
-/* 非对齐访问: 目标开了 `-mgeneral-regs-only -mstrict-align`, 所以一律走 __builtin_memcpy
- * (GCC 在 aarch64 上把它降成单条 `ldr`/`str`, 不会真的去调 libc 的 memcpy)。
- * 上游用的是 u-boot 的 `get_unaligned_le32()`, 语义完全相同。 */
+/* Unaligned access: the target is built with `-mgeneral-regs-only -mstrict-align`, so
+ * everything goes through __builtin_memcpy (on aarch64 GCC lowers it to a single
+ * `ldr`/`str`, it never really calls libc memcpy). Upstream uses u-boot's
+ * `get_unaligned_le32()`; the semantics are identical. */
 static inline u16 uboot_erofs_get_unaligned_le16(const void *p)
 {
     u16 v;
@@ -168,25 +184,29 @@ static inline void uboot_erofs_put_unaligned_le32(u32 v, void *p)
     (void)__builtin_memcpy(p, &v, sizeof(v));
 }
 
-/* ==================================================================== 内存搬运
+/* ================================================================ memory movement
  *
- * 项目纪律(任务书): `memcpy/memset/memcmp/memmove` **由 core 提供可以直接用**,
- * 不自己写、也不依赖 runtime/posix。符号由 `core/src/string.c` 实现并随 core 链进镜像。
- * 但它们**没有对外头**(core 的 `string_internal.h` 是 core 私有), 所以这里把四个原型
- * 写下来 —— 有原型才有类型检查(`-Wmissing-prototypes` 那条纪律的另一面)。
+ * Project rule (task spec): `memcpy/memset/memcmp/memmove` **are provided by core and may
+ * be used directly** — do not write our own and do not depend on runtime/posix. The
+ * symbols are implemented in `core/src/string.c` and linked into the image with core.
+ * But they have **no public header** (core's `string_internal.h` is private), so the four
+ * prototypes are written out here — prototypes are what gives type checking (the other
+ * side of the `-Wmissing-prototypes` rule).
  *
- * 为什么不像 fs/tmpfs 那样借 `__builtin_memcpy`: 上游 EROFS/LZ4 的代码里
- * `memcpy/memmove/memset/memcmp` 出现几十次, 逐个换成内建会让"认得出是移植"这件事
- * 打折扣; 而 `LZ4_copy8` 本来就该用内建(它与 `get_unaligned` 同源)。
- * 两个手法不冲突: 这里**声明** core 的实现, 那里继续用内建。 */
+ * Why not borrow `__builtin_memcpy` as fs/tmpfs does: in upstream EROFS/LZ4 code
+ * `memcpy/memmove/memset/memcmp` appear dozens of times, and replacing each one with a
+ * builtin would undercut "you can tell this is a port"; and `LZ4_copy8` should use the
+ * builtin anyway (it belongs to the `get_unaligned` family). The two approaches do not
+ * conflict: core's implementations are **declared** here, the builtin stays in use there. */
 void *memcpy (void *dst, const void *src, size_t n);
 void *memmove(void *dst, const void *src, size_t n);
 void *memset (void *dst, int c, size_t n);
 int   memcmp (const void *a, const void *b, size_t n);
 
-/* ==================================================================== 文件类型位
- * 上游从 `linux/stat.h` 拿 `S_IFMT`/`S_ISREG`/…。裸机没有那套头, 这里补上**数值与
- * Linux 逐字对齐**的四个位(只用得到这四个 —— 本插件的 VFS 面只有 DIR/FILE/SYMLINK)。 */
+/* ================================================================ file type bits
+ * Upstream gets `S_IFMT`/`S_ISREG`/... from `linux/stat.h`. Bare metal has no such
+ * header, so the bits are supplied here with **values matching Linux verbatim** (only
+ * these are needed — this plugin's VFS surface has only DIR/FILE/SYMLINK). */
 #define S_IFMT   0170000u
 #define S_IFIFO  0010000u
 #define S_IFCHR  0020000u
@@ -204,7 +224,7 @@ int   memcmp (const void *a, const void *b, size_t n);
 #define S_ISLNK(m)  (((m) & S_IFMT) == S_IFLNK)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
-/* ==================================================================== 工具宏 */
+/* ==================================================================== utility macros */
 #define DIV_ROUND_UP(n, d)   (((n) + (d) - 1u) / (d))
 #define round_up(x, y)       ((((x) + ((y) - 1u)) / (y)) * (y))
 #define round_down(x, y)     (((x) / (y)) * (y))
@@ -219,8 +239,9 @@ int   memcmp (const void *a, const void *b, size_t n);
 #define likely(x)            (x)
 #define unlikely(x)          (x)
 
-/* `ilog2`(上游 super.c 的 `ilog2(EROFS_MAX_BLOCK_SIZE)` 用);
- * 只在常量/运行期两处用得上 —— 运行期版本 ≤ 12 次迭代, 够便宜。 */
+/* `ilog2` (used by upstream super.c's `ilog2(EROFS_MAX_BLOCK_SIZE)`);
+ * needed at both constant and run time — the run-time version iterates <= 12 times,
+ * cheap enough. */
 static inline unsigned int uboot_erofs_ilog2(unsigned int v)
 {
     unsigned int n = 0u;
@@ -234,19 +255,23 @@ static inline unsigned int uboot_erofs_ilog2(unsigned int v)
 #define ilog2(v) uboot_erofs_ilog2(v)
 
 /*
- * `BUILD_BUG_ON` —— **按 u-boot 的机制**兑现, 而不是用 `_Static_assert`。
+ * `BUILD_BUG_ON` — implemented **via u-boot's mechanism**, not via `_Static_assert`.
  *
- * ★ 为什么不能用 `_Static_assert`(ADR-0024 §7): 上游 `erofs_fs.h` 的最后一条自检是
+ * * Why `_Static_assert` cannot be used (ADR-0024 §7): the last self-check in upstream
+ *   `erofs_fs.h` is
  *     BUILD_BUG_ON(__builtin_constant_p(fmh) ? fmh != cpu_to_le64(1ULL<<63) : 0);
- *   `fmh` 是函数内的 `const` 局部量 —— **不是整型常量表达式** ⇒ `_Static_assert` 直接
- *   报 "expression in static assertion is not constant"。而 u-boot 的定义是
- *   "函数体内 `if` + `__compiletime_error` 外部函数"(见 include/linux/build_bug.h 与
- *   include/linux/compiler.h 的 `__compiletime_assert`), 它**允许**条件不是常量:
- *   常量可判定 ⇒ 编译器就地报错并给出 msg; 判不出来 ⇒ 留一次调用。
- *   ⇒ 只有照搬这个机制, 上游 `erofs_fs.h` 才能**逐字**编过(这正是适配层的职责)。
+ *   `fmh` is a function-local `const` — **not an integer constant expression** — so
+ *   `_Static_assert` reports "expression in static assertion is not constant". u-boot's
+ *   definition is "an `if` in the function body plus a `__compiletime_error` external
+ *   function" (see include/linux/build_bug.h and `__compiletime_assert` in
+ *   include/linux/compiler.h); it **allows** a non-constant condition: decidable at
+ *   compile time => the compiler errors in place with msg; not decidable => one call is
+ *   left. Only by copying this mechanism can upstream `erofs_fs.h` compile **verbatim**
+ *   (which is exactly the adapter layer's job).
  *
- * 语义与上游一致: 条件是"**违规**时"才触发(上游把 `!(cond)` 传进 compiletime_assert)。
- * 未开优化(`__OPTIMIZE__` 不定义)时上游把它编译成空语句, 这里照办。
+ * Semantics match upstream: the condition triggers on **violation** (upstream passes
+ * `!(cond)` into compiletime_assert). Without optimisation (`__OPTIMIZE__` undefined)
+ * upstream compiles it to an empty statement; the same is done here.
  */
 #define __br_compiletime_error(msg) __attribute__((__error__(msg)))
 #define __br_cc_assert_id(prefix, suffix) prefix ## suffix
@@ -267,49 +292,57 @@ static inline unsigned int uboot_erofs_ilog2(unsigned int v)
 #endif
 
 /*
- * u-boot 的 `<compiler.h>` / `<linux/bitops.h>` 提供的三个属性/宏。
- * ★ 为什么必须在这里兑现(ADR-0024 §7): `src/erofs_fs.h` 要**与上游逐字相同**,
- *   而上游那里写着 `} __packed u1;`(**位置属性**: 夹在 `}` 与成员名之间)、
- *   `const __le64 fmh __maybe_unused = …` 与 `BIT(n)`。少了任何一个, 上游原文就编不过,
- *   于是"逐字保留"只能退化成"改写上游" —— 那正是本刀要消灭的东西。
+ * The three attributes/macros provided by u-boot's `<compiler.h>` / `<linux/bitops.h>`.
+ * * Why they must be provided here (ADR-0024 §7): `src/erofs_fs.h` must be **verbatim
+ *   identical to upstream**, and upstream writes `} __packed u1;` (**positional
+ *   attribute**: between `}` and the member name), `const __le64 fmh __maybe_unused = ...`
+ *   and `BIT(n)`. Missing any one of them means the upstream text does not compile, so
+ *   "keep it verbatim" would degrade into "rewrite upstream" — exactly what this work is
+ *   meant to eliminate.
  */
 #define __packed        __attribute__((__packed__))
 #define __maybe_unused  __attribute__((__unused__))
 #define BIT(nr)         (1UL << (nr))
 
-/* u-boot `include/linux/compiler.h` 的 `__rcode`(返回码标注; 在 u-boot 里为空或用于
- * 静态检查)。上游 `lib/lz4.c` 拿它当函数限定符写在最前面 —— 给它空定义即可。 */
+/* u-boot `include/linux/compiler.h`'s `__rcode` (a return-code annotation; empty or used
+ * for static checking in u-boot). Upstream `lib/lz4.c` writes it as a leading function
+ * qualifier — an empty definition is enough. */
 #ifndef __rcode
 #define __rcode
 #endif
 
-/* u-boot `include/asm/unaligned.h` 的**通用**非对齐访问(get_unaligned/put_unaligned)。
- * 上游 `lib/lz4.c` 用它们搬运 8 字节。语义 = "按本机字节序的非对齐读写";
- * aarch64 小端 ⇒ 与 LE 版本等价(同一份 __builtin_memcpy 实现)。
- * ★ 目标开了 `-mstrict-align`, 不能真的做非对齐解引用 —— __builtin_memcpy 会被
- *   GCC 降成安全的单条 ldr/str, 这正是我们要的。 */
+/* u-boot `include/asm/unaligned.h`'s **generic** unaligned access (get_unaligned/
+ * put_unaligned). Upstream `lib/lz4.c` uses them to move 8 bytes. Semantics = "unaligned
+ * read/write in native byte order"; aarch64 is little-endian, so equivalent to the LE
+ * versions (the same __builtin_memcpy implementation).
+ * * The target is built with `-mstrict-align`, so real unaligned dereferences are not
+ *   allowed — GCC lowers __builtin_memcpy to a safe single ldr/str, which is what we want. */
 #define get_unaligned(ptr)      (*(const __typeof__(*(ptr)) *)(ptr))
 #define put_unaligned(val, ptr) (*(__typeof__(*(ptr)) *)(ptr) = (val))
 
-/* `CONFIG_IS_ENABLED(RELOC_LOADER)`: 本件没有重定位加载器 ⇒ 恒 0。
- * (必须显式定义, 否则 `#if CONFIG_IS_ENABLED(RELOC_LOADER)` 在 -Wundef 下报"未定义"。) */
+/* `CONFIG_IS_ENABLED(RELOC_LOADER)`: there is no relocation loader here, so always 0.
+ * (It must be defined explicitly, otherwise `#if CONFIG_IS_ENABLED(RELOC_LOADER)` warns
+ * "undefined" under -Wundef.) */
 #define RELOC_LOADER            0
 
-/* u-boot 的 `PAGE_SIZE` 来自 `<asm/page.h>`。上游 `fs/erofs/internal.h` 会
- * `#if PAGE_SIZE != 4096 #error` 检查它 —— 本平台的页大小就是 4096(与 mmu/页池一致),
- * 所以这里是**平台事实**而不是可调参数。 */
+/* u-boot's `PAGE_SIZE` comes from `<asm/page.h>`. Upstream `fs/erofs/internal.h` checks
+ * it with `#if PAGE_SIZE != 4096 #error` — this platform's page size really is 4096
+ * (consistent with the mmu/page pool), so this is a **platform fact**, not a tunable. */
 #ifndef PAGE_SIZE
 #define PAGE_SIZE       4096u
 #endif
 
 /*
- * `struct list_head` —— u-boot 的 `<linux/list.h>`(经 `<linux/compat.h>`)提供它,
- * 而上游 `fs/erofs/internal.h` 的 `struct erofs_inode` / `struct erofs_dentry` 里
- * **有它的字段**(`i_hash` / `i_subdirs` / `i_xattrs` / `d_child`)。
+ * `struct list_head` — provided by u-boot's `<linux/list.h>` (through
+ * `<linux/compat.h>`), and upstream `fs/erofs/internal.h`'s `struct erofs_inode` /
+ * `struct erofs_dentry` **contain its fields** (`i_hash` / `i_subdirs` / `i_xattrs` /
+ * `d_child`).
  *
- * ★ 我们只提供**类型本身**, 不提供任何遍历/插入函数 —— 因为它们是**缓存与 dentry 层**
- *   的字段, 而本移植的 inode 是"瞬态路径包装"(ADR-0022 D-3), 从不用这些链。
- *   类型大小对了, 上游的结构体布局就成立; 没人遍历 ⇒ 不需要实现。
+ * * Only the **type itself** is provided, no traversal/insertion functions — those
+ *   fields belong to the **cache and dentry layer**, while this port's inode is a
+ *   "transient path wrapper" (ADR-0022 D-3) that never uses these lists. With the right
+ *   type size the upstream structure layout holds; nobody traverses them, so nothing
+ *   needs implementing.
  */
 struct list_head {
     struct list_head *next;
@@ -317,11 +350,14 @@ struct list_head {
 };
 
 /*
- * ★ 有意偏离: 上游的 `DBG_BUGON()` = `BUG_ON()` = **停机**。本插件在挂载期与读路径上
- * 大量用它做"不可能发生"的断言, 而任务书的原则是"挂载失败 ⇒ 首败即停机是刻意的"、
- * 但**读路径不该因为一个可疑的盘上字段把内核打死**(那份镜像坏掉时, 正确的行为是
- * 给调用方一个 -EIO, 而不是带走整个设备)。所以这里改成"打印 + 继续", 由调用方紧接着的
- * `return -EFSCORRUPTED` 收敛(每处 DBG_BUGON 后面都跟着一个错误返回或等价分支)。
+ * * Intentional deviation: upstream `DBG_BUGON()` = `BUG_ON()` = **halt**. This plugin
+ *   uses it heavily on the mount path and the read path for "cannot happen" assertions,
+ *   and the task spec's principle is "mount failure => first-failure halt is
+ *   intentional", but **the read path must not kill the kernel over one suspicious
+ *   on-disk field** (when that image is corrupt the right behaviour is to give the
+ *   caller -EIO, not take the whole device down). So it becomes "log + continue" here,
+ *   converged by the caller's immediately following `return -EFSCORRUPTED` (every
+ *   DBG_BUGON is followed by an error return or an equivalent branch).
  */
 #define BUG_ON(cond)                                                                    \
     do {                                                                                \
@@ -331,48 +367,64 @@ struct list_head {
     } while (0)
 
 
-/* ==================================================================== 日志
+/* ==================================================================== logging
  *
- * 上游: `erofs_err(fmt, ...)` = `pr_err(fmt "\n", ...)`。本件不补换行(br_log_write
- * 按行输出)。
+ * Upstream: `erofs_err(fmt, ...)` = `pr_err(fmt "\n", ...)`. This file adds no newline
+ * (br_log_write outputs line by line).
  *
- * ★ 为什么写成**函数**而不是变参宏: C11 的 `__VA_ARGS__` 在"零个可变参数"时是错的
- *   (GNU 的 `##__VA_ARGS__` 是扩展, 而本件按 `-std=c11` 的纪律走)。上游有几处
- *   `erofs_err("...")` 不带参数(例如 "failed to read packed inode from disk"), 于是
- *   这里用两个**包装函数**把可变参数原样转给 core 的日志入口 —— 调用点保持上游原样,
- *   零参调用也合法。它们**不带** `format(printf)` 属性: core 的 `br_log_write` 自己带,
- *   而本件把格式串前缀("uboot-erofs: ")拼在前面, 属性会让编译器对复合串重复校验。
+ * * Why **functions** instead of a variadic macro: C11's `__VA_ARGS__` is wrong with
+ *   zero variadic arguments (GNU's `##__VA_ARGS__` is an extension, and this file
+ *   follows the `-std=c11` rule). Upstream has several argument-less `erofs_err("...")`
+ *   calls (e.g. "failed to read packed inode from disk"), so two **wrapper functions**
+ *   forward the variadic arguments as-is to core's log entry — call sites stay exactly
+ *   as upstream wrote them and zero-argument calls remain legal. They do **not** carry
+ *   the `format(printf)` attribute: core's `br_log_write` has its own, and this file
+ *   prefixes the format string with "uboot-erofs: ", which would make the compiler
+ *   check the composed string twice.
  */
 /*
- * ★ 为什么要"先格式化再转发": `br_log_write()` 是**变参**函数, 想"把参数原样传下去"
- *   只有两条路 —— 要么 `<stdarg.h>` 的 `va_list` 接口(裸机没有那个头, 它是 libc 的),
- *   要么让调用方自己格式化。本件走后者: 用编译器自带的 `__builtin_vsnprintf` 把
- *   "uboot-erofs: <内容>" 整行拼进一个栈上小缓冲, 再把**已成行的字符串**当格式串交给
- *   core(日志子系统会对它做一次无害的再格式化; 见 br_log_write 的口径)。
- *   为什么不走 `__builtin_va_list`: `br_log.h` 只暴露 `br_log_write(...)`, 没有
- *   "v" 变体 —— 那就只剩"自己格式化"这一条路(而不是往 core 的契约面上加函数)。
+ * * Why "format first, then forward": `br_log_write()` is a **variadic** function, and
+ *   there are only two ways to "pass the arguments through as-is" — either
+ *   `<stdarg.h>`'s `va_list` interface (bare metal has no such header, it is libc's),
+ *   or let the caller format first. This file takes the latter: compiler-provided
+ *   `__builtin_vsnprintf` builds the whole "uboot-erofs: <content>" line into a small
+ *   stack buffer, then the **already-complete line** is handed to core as a format
+ *   string (the log subsystem re-formats it harmlessly; see br_log_write's contract).
+ *   Why not `__builtin_va_list`: `br_log.h` exposes only `br_log_write(...)`, with no
+ *   "v" variant — so "format it ourselves" is the only remaining route (rather than
+ *   adding a function to core's contract surface).
  *
- * ★ 上界与截断: 256 字节的栈缓冲。本件的日志是**诊断面**: 最长的一条(压缩解压失败)
- *   约 60 字节, 其余都更短 ⇒ 正常路径永远不截断; 真截断了也只是少几个字符, 不影响判据。
+ * * Bound and truncation: a 256-byte stack buffer. These logs are a **diagnostic
+ *   surface**: the longest one (decompression failure) is about 60 bytes and the rest
+ *   are shorter, so the normal path never truncates; a real truncation only drops a few
+ *   characters and does not affect any criterion.
  *
- * ★ 为什么带 `format(printf)` 属性: 调用点的格式串与实参仍然被编译器逐条校验(与
- *   core 的 `br_log_write` 同款检查)。属性属于**内联包装**自身, 不会重复校验。
+ * * Why the `format(printf)` attribute: call sites' format strings and arguments are
+ *   still checked one by one by the compiler (the same check core's `br_log_write`
+ *   gets). The attribute belongs to the **inline wrapper** itself and is not checked
+ *   twice.
  */
 #define UBOOT_EROFS_LOG_MAX  256u
 
 /*
- * ★ 为什么不直接用 `__builtin_vsnprintf`: GCC 的 `__builtin_vsnprintf` **不是**自足的 ——
- *   展开后仍是一次对 libc `vsnprintf` 的调用(实测: 链接期 `undefined reference to
- *   vsnprintf`)。本仓库没有 libc(core 只提供编译器支持例程 mem*), `runtime/posix`
- *   也没有 printf 家族(ADR-0014 §4 明示不做)。而 v 变体接口 core 也没抛
- *   (`br_log.h` 只有变参的 `br_log_write`, 没有 `br_log_vwrite`)⇒ 只剩两条路:
- *     ① 让 core 多抛一个 v 接口(改 core 契约面, 为一处诊断打印不值得);
- *     ② 本件自带一个极小格式化器(只覆盖本件实际用到的转换)。
- *   选 ②。它的判据面很窄: **输出只喂给日志**, 不参与任何文件系统判定。
+ * * Why not use `__builtin_vsnprintf` directly: GCC's `__builtin_vsnprintf` is **not**
+ *   self-contained — it still expands to a call to libc `vsnprintf` (observed:
+ *   link-time `undefined reference to vsnprintf`). This repo has no libc (core provides
+ *   only the compiler support routines mem*), and `runtime/posix` has no printf family
+ *   either (ADR-0014 §4 says explicitly it will not). Core exposes no v-variant
+ *   interface either (`br_log.h` has only the variadic `br_log_write`, no
+ *   `br_log_vwrite`), so only two routes remain:
+ *     1. have core expose one more v interface (a change to core's contract surface,
+ *        not worth it for one diagnostic print);
+ *     2. carry a tiny formatter in this file (covering only the conversions actually
+ *        used here).
+ *   Route 2 is chosen. Its criterion surface is narrow: **the output only feeds the
+ *   log** and takes part in no filesystem decision.
  *
- * 覆盖范围 = 逐个调用点查过的实际用法: `%s %d %u %x %lu %lx %llu %llx %%` 与
- * 长度修饰 `l`/`ll`/`z`。宽度/精度/其它标志**一处都没用** ⇒ 不实现; 真遇到了就
- * 原样吐出(不静默吞掉 —— 宁可日志难看, 也不假装格式化成功)。
+ * Coverage = the real usage checked call site by call site: `%s %d %u %x %lu %lx %llu
+ * %llx %%` plus the length modifiers `l`/`ll`/`z`. Width/precision/other flags are used
+ * **nowhere**, so they are not implemented; if one does appear it is echoed verbatim
+ * (not silently swallowed — better an ugly log than pretending formatting succeeded).
  */
 static inline char *uboot_erofs_fmt_uint(char *p, char *end, unsigned long long v,
                                          unsigned base, br_bool upper)
@@ -462,10 +514,10 @@ static inline int uboot_erofs_vformat(char *dst, br_size_t cap, const char *fmt,
         case '%':
             if (p < end) { *p++ = '%'; }
             break;
-        case '\0':                     /* 尾随 '%': 原样收尾 */
+        case '\0':                     /* trailing '%': finish as-is */
             fmt--;
             break;
-        default:                       /* 未实现的修饰语: 原样吐出 */
+        default:                       /* unimplemented modifier: echo as-is */
             if (p < end) { *p++ = '%'; }
             if (p < end) { *p++ = *fmt; }
             break;
@@ -507,12 +559,14 @@ static inline void uboot_erofs_log_dbg_inline(const char *fmt, ...)
 
 
 
-/* ==================================================================== u-boot 的 pr_*
+/* ==================================================================== u-boot pr_*
  *
- * 上游 `fs/erofs/internal.h` 自己把 `erofs_err/info/dbg` 映射到 `pr_err/pr_info/pr_debug`
- * —— 所以**名字由它给, 实现由我们给**(这正是"不改上游、只做适配")。
- * 注意它写的是 `pr_err(fmt "\n", ##__VA_ARGS__)`: 带 GNU 的逗号吞并扩展, 且格式串
- * 末尾自带换行(我们的日志按行输出, 多一个换行无害)。
+ * Upstream `fs/erofs/internal.h` itself maps `erofs_err/info/dbg` to
+ * `pr_err/pr_info/pr_debug` — so **it supplies the names, we supply the
+ * implementations** (exactly "do not change upstream, only adapt"). Note it writes
+ * `pr_err(fmt "\n", ##__VA_ARGS__)`: with the GNU comma-swallowing extension, and the
+ * format string already ends in a newline (our logs are line-based, so the extra
+ * newline is harmless).
  */
 static inline void uboot_erofs_log_info_inline(const char *fmt, ...)
     __attribute__((format(printf, 1, 2)));
@@ -533,9 +587,10 @@ static inline void uboot_erofs_log_info_inline(const char *fmt, ...)
 #define pr_debug(fmt, ...)  uboot_erofs_log_dbg_inline(fmt, ##__VA_ARGS__)
 #define pr_warn(fmt, ...)   uboot_erofs_log_err_inline(fmt, ##__VA_ARGS__)
 
-/* ==================================================================== 内核风格小工具 */
-/* 上游在 `data.c`/`zmap.c`/`super.c` 里用到的几个 Linux 惯用物。它们是**纯宏/纯函数**,
- * 语义必须是内核那一套(不能自创), 所以逐条照 Linux 的写法。 */
+/* ================================================================ kernel-style helpers */
+/* A few Linux idioms used by upstream in `data.c`/`zmap.c`/`super.c`. They are **pure
+ * macros/functions** whose semantics must be the kernel's (not invented), so each one
+ * follows the Linux wording. */
 #ifndef UINT_MAX
 #define UINT_MAX            0xffffffffu
 #endif
@@ -543,7 +598,7 @@ static inline void uboot_erofs_log_info_inline(const char *fmt, ...)
 #define ULONG_MAX           (~0UL)
 #endif
 
-/* `roundup_pow_of_two()`: 向上取到 2 的幂(Linux `include/linux/log2.h`)。 */
+/* `roundup_pow_of_two()`: round up to a power of two (Linux `include/linux/log2.h`). */
 static inline unsigned long uboot_erofs_roundup_pow_of_two(unsigned long n)
 {
     unsigned long r = 1ul;
@@ -559,10 +614,12 @@ static inline unsigned long uboot_erofs_roundup_pow_of_two(unsigned long n)
 #define roundup_pow_of_two(n) uboot_erofs_roundup_pow_of_two(n)
 
 /*
- * `IS_ERR/ERR_PTR/PTR_ERR`(Linux `include/linux/err.h`)—— 上游 `namei.c` 用它把
- * "找不到目录项"与"真出错"合在一个返回值里。
- * ★ 上一轮的移植把这些裁掉了(改成出参), 但那是**改上游代码**; 本刀要上游原文成立,
- *   所以必须原样提供这套约定: 错误码放在指针值的**高地址侧**(> -4096)。
+ * `IS_ERR/ERR_PTR/PTR_ERR` (Linux `include/linux/err.h`) — upstream `namei.c` uses them
+ * to fold "directory entry not found" and "a real error" into a single return value.
+ * * An earlier port removed these (switching to an out parameter), but that **changes
+ *   upstream code**; this work needs the upstream text to hold, so the convention must
+ *   be provided as-is: error codes live on the **high-address side** of the pointer
+ *   value (> -4096).
  */
 #define MAX_ERRNO           4095
 #define IS_ERR_VALUE(x)     unlikely((unsigned long)(void *)(x) >= (unsigned long)-MAX_ERRNO)
@@ -588,38 +645,42 @@ static inline bool IS_ERR_OR_NULL(const void *ptr)
 }
 
 /*
- * `IS_ENABLED()`/`CONFIG_IS_ENABLED()`(u-boot `include/linux/kconfig.h`)。
- * 上游 `decompress.c` 用它做编译期裁剪: `#if IS_ENABLED(CONFIG_LZ4)`。
- * ★ 本件支持 LZ4, 不支持 zlib/deflate —— 所以把 CONFIG_LZ4 置 1、CONFIG_ZLIB 置 0,
- *   于是 `#if` 分支按上游原样成立, 我们**不用改它的任何一行**。
+ * `IS_ENABLED()`/`CONFIG_IS_ENABLED()` (u-boot `include/linux/kconfig.h`).
+ * Upstream `decompress.c` uses them for compile-time pruning: `#if IS_ENABLED(CONFIG_LZ4)`.
+ * * This file supports LZ4, not zlib/deflate — so CONFIG_LZ4 is 1 and CONFIG_ZLIB is 0,
+ *   which makes the `#if` branches hold exactly as upstream wrote them, with **no line
+ *   of its code changed**.
  */
 #define IS_ENABLED(opt)         (opt)
 #define CONFIG_IS_ENABLED(opt)  (opt)
 #define CONFIG_LZ4              1
 #define CONFIG_ZLIB             0
 
-/* ==================================================================== errno 口径
+/* ==================================================================== errno convention
  *
- * 裸名字(`EIO`/`ENOENT`/`EOPNOTSUPP`/…)与 `EUCLEAN` 由 **core** 提供
- * (`<br/core/br_errno.h>`, ADR-0023), 值与 `br_error.h` 一一对应(逐字取自 Linux 内核,
- * 宿主 `ft-test` 逐码对拍)。本件**不自带映射表** —— 那既是第二处真值, 也是对上游代码的
- * 多余改动。
+ * The plain names (`EIO`/`ENOENT`/`EOPNOTSUPP`/...) and `EUCLEAN` are provided by
+ * **core** (`<br/core/br_errno.h>`, ADR-0023); the values correspond one-to-one with
+ * `br_error.h` (taken verbatim from the Linux kernel and cross-checked code by code by
+ * the host `ft-test`). This file carries **no mapping table of its own** — that would be
+ * both a second source of truth and a needless change to upstream code.
  *
- * ★ `EFSCORRUPTED` 这里**照抄上游 `internal.h` 的构造**(`#ifdef EUCLEAN` 那一支),
- *   一个字都没改; 之所以以前映射到 `EIO`, 是因为本仓库当时没有 117 号 —— 现在
- *   `EUCLEAN` 已按 ADR-0023 D-4 从内核表补入。 */
+ * * `EFSCORRUPTED` here **copies upstream `internal.h`'s construction** (the
+ *   `#ifdef EUCLEAN` branch) with not one character changed; it used to be mapped to
+ *   `EIO` because this repo had no errno 117 then — now `EUCLEAN` has been added from
+ *   the kernel table per ADR-0023 D-4. */
 #include <br/core/br_errno.h>
 
 #define EFSCORRUPTED  EUCLEAN
 
-/* ==================================================================== 字符串小工具
+/* ================================================================ string helpers
  *
- * 全部 `static inline` + `uboot_erofs_` 前缀(任务书硬约束: 不依赖 runtime/posix)。
- * 随后用宏把上游的裸名字接过来 —— 这就是"移植代码认得出是移植"的做法:
- * `strnlen(de_name, n)` 的调用点保持上游原样, 展开后却是我们自己的实现。
+ * All `static inline` with the `uboot_erofs_` prefix (hard constraint of the task spec:
+ * no dependency on runtime/posix). Macros then wire upstream's plain names over — that
+ * is how "you can tell ported code is a port" works: the `strnlen(de_name, n)` call site
+ * stays as upstream wrote it while expanding to our own implementation.
  *
- * 长度上界的纪律(与 fs/tmpfs 的 `tmpfs_name_ok` 同款): 这些函数只按调用方给的
- * `n` 走, 绝不多读一个字节。 */
+ * Length-bound discipline (the same as fs/tmpfs's `tmpfs_name_ok`): these functions
+ * honour only the caller-supplied `n` and never read one byte beyond it. */
 static inline br_size_t uboot_erofs_strlen(const char *s)
 {
     br_size_t n = 0u;
@@ -665,12 +726,14 @@ static inline int uboot_erofs_strncmp(const char *a, const char *b, br_size_t n)
 }
 
 /*
- * ★ 本件**故意不提供** `strcpy` 这种"复制到 NUL 为止"的工具(上游也没有调用点)。
- *   原因是一个真踩到的坑: EROFS 目录块里的名字**没有 NUL 结尾** —— 它们是一条接一条
- *   紧挨着拼在名字区里的(长度由相邻两条 dirent 的 `nameoff` 相减得到)。拿"扫到 NUL"
- *   去读它, 会把后面所有名字一起吞进缓冲区(实测症状: "comp" 变成
- *   "compdirhello.txtraw.bin")。所以凡是搬盘上字节的地方一律用**带长度**的
- *   `uboot_erofs_copy_n()` / `__builtin_memcpy`。
+ * * This file **deliberately does not provide** a "copy until NUL" helper such as
+ *   `strcpy` (upstream has no call site either). The reason is a trap actually hit:
+ *   names in an EROFS directory block are **not NUL-terminated** — they are packed one
+ *   after another in the name area (the length comes from subtracting the `nameoff` of
+ *   two adjacent dirents). Reading them by "scan until NUL" swallows every following
+ *   name into the buffer (observed symptom: "comp" becoming
+ *   "compdirhello.txtraw.bin"). So wherever on-disk bytes are moved, the
+ *   **length-aware** `uboot_erofs_copy_n()` / `__builtin_memcpy` is used.
  */
 static inline void uboot_erofs_copy_n(char *dst, br_size_t cap, const char *src, br_size_t n)
 {
@@ -678,7 +741,7 @@ static inline void uboot_erofs_copy_n(char *dst, br_size_t cap, const char *src,
         return;
     }
     if (n > (cap - 1u)) {
-        n = cap - 1u;               /* 截断(调用方负责保证 n 本来就在界内) */
+        n = cap - 1u;               /* truncate (the caller guarantees n was in bounds) */
     }
     for (br_size_t i = 0u; i < n; i++) {
         dst[i] = src[i];
@@ -700,7 +763,8 @@ static inline char *uboot_erofs_strchr(const char *s, int c)
     }
 }
 
-/* 认得出是移植: 上游的裸名字 → 我们的实现(整编译单元 -fno-builtin, 不会自撞) */
+/* Recognisably a port: upstream plain names -> our implementations (whole TU is
+ * -fno-builtin, so no self-collision) */
 #define strlen(s)          uboot_erofs_strlen(s)
 #define strnlen(s, n)      uboot_erofs_strnlen((s), (n))
 #define strcmp(a, b)       uboot_erofs_strcmp((a), (b))
@@ -708,19 +772,21 @@ static inline char *uboot_erofs_strchr(const char *s, int c)
 #define strchr(s, c)       uboot_erofs_strchr((s), (c))
 #define copy_n(d, cap, s, n) uboot_erofs_copy_n((d), (cap), (s), (n))
 
-/* 非对齐取小端(上游的 `get_unaligned_le32`) */
+/* unaligned little-endian loads (upstream's `get_unaligned_le32`) */
 #define get_unaligned_le16(p) uboot_erofs_get_unaligned_le16(p)
 #define get_unaligned_le32(p) uboot_erofs_get_unaligned_le32(p)
 #define get_unaligned_le64(p) uboot_erofs_get_unaligned_le64(p)
 #define put_unaligned_le16(v, p) uboot_erofs_put_unaligned_le16((v), (p))
 #define put_unaligned_le32(v, p) uboot_erofs_put_unaligned_le32((v), (p))
 
-/* 日志包装(定义在本插件的 erofs_vfs.c 里 —— 那里是本插件唯一的"胶水"编译单元) */
+/* log wrappers (defined in this plugin's erofs_vfs.c — the plugin's only "glue"
+ * translation unit) */
 
-/* ==================================================================== 格式串
- * 上游用 `PRIu64`/`PRIx64`(<inttypes.h>)。本件的日志格式化器只认 `%llu`/`%llx`,
- * 于是这两个宏**带上强转** —— 调用点因此不需要额外写 `(unsigned long long)`。
- * 这是"认得出是移植"的取舍: 上游的格式串一字不改。 */
+/* ==================================================================== format strings
+ * Upstream uses `PRIu64`/`PRIx64` (<inttypes.h>). This file's log formatter knows only
+ * `%llu`/`%llx`, so these macros **include the cast** — call sites therefore need no
+ * extra `(unsigned long long)`. This is the "recognisably a port" trade-off: upstream
+ * format strings stay unchanged character for character. */
 #define PRIu64 "llu"
 #define PRIx64 "llx"
 #define PRId64 "lld"

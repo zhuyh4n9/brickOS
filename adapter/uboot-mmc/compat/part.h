@@ -1,33 +1,35 @@
-/* adapter/uboot-mmc — `<part.h>` 的**接口类型壳**(不是 u-boot 那份的复制)
+/* adapter/uboot-mmc — **interface type shell** for `<part.h>` (not a copy of u-boot's)
  *
- * ============================== 为什么是"壳" ==============================
- * 与 `compat/blk.h` 同源的理由: 上游 `include/part.h` 第 9-12 行 include
- * `<blk.h> <u-boot/uuid.h> <linux/errno.h> <linux/list.h>`, 而它自带**整族分区表解析器**
- * 的声明(dos/gpt/iso/amiga/efi…)。本件要的只有三件:
+ * ============================== why a "shell" ==============================
+ * Same rationale as `compat/blk.h`: upstream `include/part.h` lines 9-12 include
+ * `<blk.h> <u-boot/uuid.h> <linux/errno.h> <linux/list.h>`, and it itself declares a **whole
+ * family of partition-table parsers** (dos/gpt/iso/amiga/efi…). This file needs only three:
  *
- *   1. `LOG2()` —— ★ 这一条不显眼但必需: 上游 `mmc_startup()` 写
- *      `bdesc->log2blksz = LOG2(bdesc->blksz)`, 而 `LOG2` 的**唯一定义处**就是
- *      `include/part.h`(不在 `linux/log2.h` 里 —— 那是 `ilog2`)。少了它上游立刻编不过。
- *      下面的定义**逐字**来自上游;
- *   2. `struct disk_partition` —— 分区表解析器的输出类型, 属块层公共接口面。本件不解析
- *      分区, 但类型要在场(`CONFIG_PARTITION_UUIDS`/`CONFIG_PARTITION_TYPE_GUID`/
- *      `CONFIG_DOS_PARTITION` 全不定义 ⇒ 与上游一样只剩四个字段);
- *   3. `part_init()` —— `mmc_startup()` 末尾在 `!DM_MMC` 时会调它(扫描分区表)。
- *      本件不做软件分区(v1 暴露裸设备), 所以 glue 给一个**显式的空实现**并写明理由
- *      (而不是悄悄把上游那一行删掉 —— 那才是"改上游")。
+ *   1. `LOG2()` — ★ inconspicuous but required: upstream `mmc_startup()` writes
+ *      `bdesc->log2blksz = LOG2(bdesc->blksz)`, and the **only definition** of `LOG2` is
+ *      `include/part.h` (not `linux/log2.h` — that has `ilog2`). Without it upstream fails to
+ *      compile immediately. The definition below is **verbatim** from upstream;
+ *   2. `struct disk_partition` — the partition parser's output type, part of the block layer's
+ *      public interface. This file does not parse partitions, but the type must be present
+ *      (`CONFIG_PARTITION_UUIDS`/`CONFIG_PARTITION_TYPE_GUID`/`CONFIG_DOS_PARTITION` are all
+ *      undefined ⇒ only four fields remain, as with upstream);
+ *   3. `part_init()` — called at the end of `mmc_startup()` when `!DM_MMC` (scans the partition
+ *      table). This file does no software partitioning (v1 exposes the raw device), so the glue
+ *      provides an **explicit empty implementation** with the reason stated (rather than
+ *      quietly deleting that upstream line — that would be "modifying upstream").
  */
 #ifndef BR_ADAPTER_UBOOT_MMC_SHIM_PART_H
 #define BR_ADAPTER_UBOOT_MMC_SHIM_PART_H
 
 #include "blk.h"
 
-/* ★ 逐字取自上游 `include/part.h`(它是 `LOG2` 的定义处, 不是 `linux/log2.h`)。 */
+/* ★ Verbatim from upstream `include/part.h` (it is where `LOG2` is defined, not `linux/log2.h`). */
 #define LOG2(x) (((x & 0xaaaaaaaa) ? 1 : 0) + ((x & 0xcccccccc) ? 2 : 0) + \
                  ((x & 0xf0f0f0f0) ? 4 : 0) + ((x & 0xff00ff00) ? 8 : 0) + \
                  ((x & 0xffff0000) ? 16 : 0))
 #define LOG2_INVALID(type) ((type)((sizeof(type) << 3) - 1))
 
-/* Part types(上游同名同值) */
+/* Part types (same names and values as upstream) */
 #define PART_TYPE_UNKNOWN   0x00
 #define PART_TYPE_MAC       0x01
 #define PART_TYPE_DOS       0x02
@@ -37,7 +39,7 @@
 #define PART_TYPE_MTD       0x06
 #define PART_TYPE_UBI       0x07
 
-/* device types(上游同名同值) */
+/* device types (same names and values as upstream) */
 #define DEV_TYPE_UNKNOWN    0xff
 #define DEV_TYPE_HARDDISK   0x00
 #define DEV_TYPE_TAPE       0x01
@@ -57,8 +59,8 @@ struct block_drvr {
 };
 
 /*
- * 分区表里的一条。★ 三个 `#if CONFIG_IS_ENABLED(...)` 的字段**不参与**(矩阵里全关),
- * 于是布局与上游"最小配置"下的形态一致。
+ * One entry in a partition table. ★ The three `#if CONFIG_IS_ENABLED(...)` fields are **not
+ * present** (all off in the matrix), so the layout matches upstream's "minimal config" form.
  */
 struct disk_partition {
     lbaint_t start;                  /* # of first block in partition */
@@ -66,15 +68,16 @@ struct disk_partition {
     ulong    blksz;                  /* block size in bytes */
     uchar    name[PART_NAME_LEN];    /* partition name */
     uchar    type[PART_TYPE_LEN];    /* string type description */
-    int      bootable;               /* 见上游的位掩码口径 */
+    int      bootable;               /* see upstream's bitmask convention */
     u16      type_flags;             /* top 16 bits of GPT partition attributes */
 };
 
-/* `mmc_startup()` 末尾(`!DM_MMC`)会调它。本件不解析分区表 ⇒ glue 给空实现。 */
+/* Called at the end of `mmc_startup()` (`!DM_MMC`). This file does not parse partition tables ⇒ glue provides an empty implementation. */
 void part_init(struct blk_desc *desc);
 
-/* 块层读写 shim(上游 `include/blk.h` 声明; 本件的 MMC 路径**不经过**它们, 但接口面
- * 要在场: `adapter/uboot-fat` 那类消费者正是走 `blk_dread`/`blk_dwrite`)。 */
+/* Block layer read/write shims (declared by upstream `include/blk.h`; this file's MMC path does
+ * **not** go through them, but the interface must be present: consumers like `adapter/uboot-fat`
+ * do use `blk_dread`/`blk_dwrite`). */
 unsigned long blk_dread(struct blk_desc *block_dev, lbaint_t start,
                         lbaint_t blkcnt, void *buffer);
 unsigned long blk_dwrite(struct blk_desc *block_dev, lbaint_t start,

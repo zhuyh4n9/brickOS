@@ -1,34 +1,40 @@
 /*
- * brickOS prototype v0.2.0 — 同步原语 + 时间的**自检套件**(core/selftest/)
+ * brickOS prototype v0.2.0 — **selftest suite** for sync primitives + time (core/selftest/)
  *
- * 设计依据与逐条裁定: `docs/decisions/0010-plugin-selftest.md`。
- * 用例口径: `6-01-test.md` §3.2/§3.3(`TC-SYNC-001..009` / `TC-TIME-001..003`);
- * 实现依据 `3-01` §7、`3-02` §11.3、`docs/decisions/0007-sync-primitives.md`。
+ * Design basis and per-item rulings: `docs/decisions/0010-plugin-selftest.md`.
+ * Case definitions: `6-01-test.md` §3.2/§3.3 (`TC-SYNC-001..009` / `TC-TIME-001..003`);
+ * implementation basis `3-01` §7, `3-02` §11.3, `docs/decisions/0007-sync-primitives.md`.
  *
- * ## 为什么这些用例从 `sync.c` 搬出来
- *   它们本来就是**测试**, 却与生产实现同住一个 .c —— 于是"关掉自检"关不掉它们,
- *   而"读生产实现"的人要在一千行机制里翻找判定逻辑。搬到本目录后:
- *     - `core/src/sync/sync.c` 只留机制(mutex/sem/cond/spinlock);
- *     - 自检关掉 ⇒ `core/selftest/` 整目录不参与编译 ⇒ 用例代码**不进镜像**
- *       (机械事实, 不是"编了不跑"; 见 product.toml 的 selftest_sources 与 build.rs);
- *     - 用例的读者与实现的读者不再互相干扰(套件里那段"白盒造非持有者"的说明
- *       与生产语义解释也不该再混在一起)。
- *   代码是**搬移**, 不是重写: 判据/日志/顺序逐字未动(见下面的日志契约)。
+ * ## Why these cases moved out of `sync.c`
+ *   They are **tests** but used to live in the same .c as the production implementation — so
+ *   "turn off selftests" could not turn them off, and readers of the production implementation had
+ *   to hunt for decision logic among a thousand lines of mechanism. After moving here:
+ *     - `core/src/sync/sync.c` keeps only mechanism (mutex/sem/cond/spinlock);
+ *     - with selftests off, the whole `core/selftest/` directory is not compiled ⇒ the case code
+ *       **never enters the image** (a mechanical fact, not "compiled but not run"; see
+ *       selftest_sources in product.toml and build.rs);
+ *     - readers of the cases and readers of the implementation no longer interfere (the suite's
+ *       explanation of "white-box forging a non-owner" should not be mixed with production
+ *       semantics either).
+ *   The code was **moved**, not rewritten: criteria/logs/order are byte-for-byte unchanged (see
+ *   the log contract below).
  *
- * ## 夹具的归属
- *   静态夹具(`s_m`/`s_sem`/`s_cv`/`s_sp`/两条线程栈/共享计数器)**只有本套件用**
- *   (已 grep 全树的 `core/`/`tests/` 确认), 所以整组跟用例一起搬到这里 ——
- *   生产侧不持有它们, 也就不需要 `sync_internal.h` 这条新边界。
- *   唯一的跨边界依赖是 `sched_internal.h` 的 `struct br_thread`(白盒造"外部持有者")
- *   与 `br_waitq_len()`(判"无幽灵等待者")。
+ * ## Fixture ownership
+ *   The static fixtures (`s_m`/`s_sem`/`s_cv`/`s_sp`/two thread stacks/shared counters) are used
+ *   **only by this suite** (confirmed by grepping `core/`/`tests/` across the tree), so the whole
+ *   group moved here with the cases — the production side does not own them, so no new
+ *   `sync_internal.h` boundary is needed.
+ *   The only cross-boundary dependency is `struct br_thread` from `sched_internal.h` (white-box
+ *   forging of an "external owner") and `br_waitq_len()` (checking "no ghost waiters").
  *
- * ## 日志契约(门禁按**逐字**匹配 ⇒ 改一个字就是改判据)
+ * ## Log contract (gates match **verbatim** ⇒ changing a word changes the criterion)
  *   `[SYNCCONF] PASS/FAIL/SKIP <tag> <desc>` … `[SYNCCONF] SUMMARY pass=%u fail=%u total=%u`
- *   `tests/gates.toml` 的 require/forbid/require_tags 与 `docs/decisions/0007` §门禁
- *   都锚在这两行上(含"调度框架未注册"时那条 SKIP 行)。
+ *   The require/forbid/require_tags of `tests/gates.toml` and `docs/decisions/0007` §gates all
+ *   anchor on these two lines (including the SKIP line when "scheduler not registered").
  *
- * ## 返回值
- *   `int` = **失败项数**(ADR-0010 §2.4: 套件只汇总不下判决)。任何失败都**不停机**。
+ * ## Return value
+ *   `int` = **number of failed items** (ADR-0010 §2.4: the suite only aggregates, it does not
+ *   judge). Any failure **does not halt** the system.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -38,16 +44,18 @@
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
-/* TCB 布局与等待链四原语是 core 内部契约: 本套件要"白盒造非持有者"并用
- * `br_waitq_len()` 判幽灵节点。跨目录相对包含在本仓有先例(sync.c 原本就这么写)。 */
+/* The TCB layout and the four wait-chain primitives are a core-internal contract: this suite needs
+ * to "white-box forge a non-owner" and use `br_waitq_len()` to check for ghost nodes. Cross-directory
+ * relative includes have precedent in this repo (sync.c originally did the same). */
 #include "../src/sched/sched_internal.h"
 
-/* 入口的可见声明集中在 `core/selftest/core_selftest.c`(它是唯一聚合器); 这里再声明
- * 一次是为了满足本文件"每个函数使用前都有原型"的纪律(-Wmissing-prototypes)。 */
+/* The entry's visible declaration is centralized in `core/selftest/core_selftest.c` (the only
+ * aggregator); declaring it again here satisfies this file's discipline of "every function has a
+ * prototype before use" (-Wmissing-prototypes). */
 int br_sync_selftest(void);
 
 /* =====================================================================
- * 一致性用例(TC-SYNC-001..009 / TC-TIME-001..003; 6-01 §3.2/§3.3)
+ * Conformance cases (TC-SYNC-001..009 / TC-TIME-001..003; 6-01 §3.2/§3.3)
  * ===================================================================== */
 
 #define CONF_ITER        400u
@@ -67,7 +75,7 @@ static volatile br_u32 s_overlap;
 static volatile br_u32 s_count;
 static int s_wrc[4];
 
-/* 无线程上下文时的"假持有者"(白盒: 只为了造出"非持有者"这一情形, 见 ADR-0007 §3)。 */
+/* "Fake holder" when there is no thread context (white-box: only to create the "non-owner" case, see ADR-0007 §3). */
 static struct br_thread s_foreign_owner;
 
 static void conf_line(const char *tag, br_bool ok, const char *desc,
@@ -111,8 +119,9 @@ static br_bool conf_join(br_thread_t *t, int *code)
     return (br_task_join(t, code) == 0) ? BR_TRUE : BR_FALSE;
 }
 
-/* ---------------------------------------------------------------- workers  * WORKAROUND(br-wa-test-001): 本套件的 `TC-SYNC-*`/`TC-TIME-*` id 与 `6-01` §3.2/§3.3 的
- * 表**尚未逐条对齐**(含义漂移, 自述文字准确); 对齐动作见 WORKAROUNDS.md。
+/* ---------------------------------------------------------------- workers  * WORKAROUND(br-wa-test-001): this suite's `TC-SYNC-*`/`TC-TIME-*` ids and the
+ * table in `6-01` §3.2/§3.3 are **not yet aligned one by one** (meaning has drifted; this note is
+ * accurate); the alignment action is tracked in WORKAROUNDS.md.
  */
 
 static void conf_mutex_worker(void *arg)
@@ -124,12 +133,12 @@ static void conf_mutex_worker(void *arg)
             return;
         }
         if (s_inside != 0u) {
-            s_overlap++;                 /* 两线程同时处于临界区 ⇒ 互斥被破坏 */
+            s_overlap++;                 /* both threads in the critical section ⇒ mutual exclusion broken */
         }
         s_inside = 1u;
         s_count++;
         if ((i & 7u) == 0u) {
-            br_task_yield();             /* 制造争用: 让另一个线程来撞锁并阻塞 */
+            br_task_yield();             /* create contention: let the other thread hit the lock and block */
         }
         s_inside = 0u;
         (void)br_mutex_unlock(&s_m);
@@ -139,13 +148,13 @@ static void conf_mutex_worker(void *arg)
 static void conf_eperm_worker(void *arg)
 {
     (void)arg;
-    s_wrc[1] = br_mutex_unlock(&s_m);    /* main 持锁 ⇒ 非持有者 */
+    s_wrc[1] = br_mutex_unlock(&s_m);    /* main holds the lock ⇒ non-owner */
 }
 
 static void conf_timeout_worker(void *arg)
 {
     (void)arg;
-    s_wrc[2] = br_mutex_lock_to(&s_m, 20000u);   /* 20 ms 后超时 */
+    s_wrc[2] = br_mutex_lock_to(&s_m, 20000u);   /* times out after 20 ms */
 }
 
 static void conf_sem_worker(void *arg)
@@ -163,7 +172,7 @@ static void conf_cond_worker(void *arg)
         return;
     }
     const int rc = br_cond_wait(&s_cv, &s_m, BR_TIMEOUT_INF);
-    /* 返回时必须仍持有 m */
+    /* on return it must still hold m */
     if (!(br_mutex_owner(&s_m) == br_task_self() && br_mutex_is_locked(&s_m) == BR_TRUE)) {
         *out = -2;
     } else {
@@ -179,12 +188,12 @@ static void conf_wait_for_waiters(volatile br_u32 *n, br_u32 want)
     }
 }
 
-/* ---------------------------------------------------------------- 用例 */
+/* ---------------------------------------------------------------- cases */
 
 static void conf_sync_001(br_u32 *pass, br_u32 *fail, br_bool sched)
 {
     if (sched != BR_TRUE) {
-        conf_skip("TC-SYNC-001", "调度框架未注册(mutex 互斥需要两个真线程)");
+        conf_skip("TC-SYNC-001", "scheduler not registered (mutex exclusion needs two real threads)");
         return;
     }
 
@@ -206,23 +215,23 @@ static void conf_sync_001(br_u32 *pass, br_u32 *fail, br_bool sched)
                     && (s_count == 2u * CONF_ITER) && (s_overlap == 0u)
                     && (br_mutex_is_locked(&s_m) == BR_FALSE)
                     && (s_m.owner == BR_NULL) && (br_waitq_len(s_m.head) == 0u);
-    conf_line("TC-SYNC-001", ok, "mutex 互斥: 双线程 x400 交叉计数, 无重叠无丢失", pass, fail);
+    conf_line("TC-SYNC-001", ok, "mutex exclusion: two threads x400 interleaved counts, no overlap, no loss", pass, fail);
 }
 
 static void conf_sync_002(br_u32 *pass, br_u32 *fail)
 {
     (void)br_mutex_init(&s_m);
 
-    const int r1 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* 空闲 ⇒ 0 */
-    const int r2 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* 已锁 ⇒ -ETIMEDOUT(6-01 TC-SYNC-002) */
+    const int r1 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* free ⇒ 0 */
+    const int r2 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* locked ⇒ -ETIMEDOUT (6-01 TC-SYNC-002) */
     const int r3 = br_mutex_unlock(&s_m);
-    const int r4 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* 又空闲 ⇒ 0 */
+    const int r4 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* free again ⇒ 0 */
     const int r5 = br_mutex_unlock(&s_m);
 
     const br_bool ok = (r1 == BR_OK) && (r2 == BR_ERR(ETIMEDOUT)) && (r3 == BR_OK)
                     && (r4 == BR_OK) && (r5 == BR_OK)
                     && (br_mutex_is_locked(&s_m) == BR_FALSE);
-    conf_line("TC-SYNC-002", ok, "mutex lock_to(ZERO): 空闲 0 / 忙 -ETIMEDOUT(不阻塞)", pass, fail);
+    conf_line("TC-SYNC-002", ok, "mutex lock_to(ZERO): free 0 / busy -ETIMEDOUT (non-blocking)", pass, fail);
 }
 
 static void conf_sync_003(br_u32 *pass, br_u32 *fail, br_bool sched)
@@ -240,7 +249,7 @@ static void conf_sync_003(br_u32 *pass, br_u32 *fail, br_bool sched)
         const int rr = br_mutex_unlock(&s_m);
         ok = (j == BR_TRUE) && (s_wrc[1] == BR_ERR(EPERM)) && (rr == BR_OK);
     } else {
-        /* 没有第二个线程 ⇒ 白盒地伪造"锁被别的线程持有", 仍走同一条 owner 判定。 */
+        /* no second thread ⇒ white-box forge "lock held by another thread", same owner check. */
         s_m.locked = 1u;
         s_m.owner  = &s_foreign_owner;
         const int rr = br_mutex_unlock(&s_m);
@@ -248,18 +257,18 @@ static void conf_sync_003(br_u32 *pass, br_u32 *fail, br_bool sched)
         (void)br_mutex_init(&s_m);
     }
 
-    conf_line("TC-SYNC-003", ok, "非持有者 unlock ⇒ -EPERM", pass, fail);
+    conf_line("TC-SYNC-003", ok, "non-owner unlock ⇒ -EPERM", pass, fail);
 }
 
 static void conf_sync_004(br_u32 *pass, br_u32 *fail, br_bool sched)
 {
     if (sched != BR_TRUE) {
-        conf_skip("TC-SYNC-004", "调度框架未注册(超时需要一个真线程被阻塞)");
+        conf_skip("TC-SYNC-004", "scheduler not registered (timeout needs a real blocked thread)");
         return;
     }
 
     (void)br_mutex_init(&s_m);
-    (void)br_mutex_lock(&s_m);            /* main 持锁, 并阻塞在 join 上等超时送达 */
+    (void)br_mutex_lock(&s_m);            /* main holds the lock and blocks in join until the timeout is delivered */
     s_wrc[2] = 0;
 
     br_thread_t *t = conf_spawn(conf_timeout_worker, BR_NULL, s_stack_a);
@@ -287,7 +296,7 @@ static void conf_sync_004(br_u32 *pass, br_u32 *fail, br_bool sched)
                     && (br_mutex_is_locked(&s_m) == BR_FALSE)
                     && (br_mutex_owner(&s_m) == BR_NULL)
                     && (br_waitq_len(s_m.head) == 0u);
-    conf_line("TC-SYNC-004", ok, "lock_to 超时 ⇒ -ETIMEDOUT 且无幽灵等待者, 锁随后可再获取",
+    conf_line("TC-SYNC-004", ok, "lock_to timeout ⇒ -ETIMEDOUT with no ghost waiters; lock acquirable again",
               pass, fail);
 }
 
@@ -297,7 +306,7 @@ static void conf_sync_005(br_u32 *pass, br_u32 *fail, br_bool sched)
 
     const int a = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* count 2 -> 1 */
     const int b = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* count 1 -> 0 */
-    const int c = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* 空 ⇒ -ETIMEDOUT */
+    const int c = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* empty ⇒ -ETIMEDOUT */
     const int g = br_sem_give(&s_sem);                    /* count -> 1 */
     const int d = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* count -> 0 */
 
@@ -305,20 +314,20 @@ static void conf_sync_005(br_u32 *pass, br_u32 *fail, br_bool sched)
               && (d == BR_OK) && (br_sem_count(&s_sem) == 0u)
               && (br_waitq_len(s_sem.head) == 0u);
 
-    const char *desc = "sem 计数语义(init(2)/take x2/take(ZERO)/give) + give 唤醒阻塞者";
+    const char *desc = "sem counting semantics (init(2)/take x2/take(ZERO)/give) + give wakes a blocked thread";
 
     if (sched == BR_TRUE) {
         s_wrc[3] = 0;
         br_thread_t *t = conf_spawn(conf_sem_worker, &s_wrc[3], s_stack_a);
-        conf_wait_for_waiters(&s_sem.waiters, 1u);        /* 等 T 真阻塞在 take 上 */
-        const int wg = br_sem_give(&s_sem);               /* 直接交接给等待者 */
+        conf_wait_for_waiters(&s_sem.waiters, 1u);        /* wait until T really blocks in take */
+        const int wg = br_sem_give(&s_sem);               /* hand directly to the waiter */
         int code = 0;
         const br_bool j = conf_join(t, &code);
         ok = (ok == BR_TRUE) && (wg == BR_OK) && (j == BR_TRUE) && (s_wrc[3] == BR_OK)
            && (s_sem.waiters == 0u) && (br_waitq_len(s_sem.head) == 0u);
     } else {
-        conf_skip("TC-SYNC-005(wake)", "调度框架未注册: give 唤醒阻塞者未验, 只验计数语义");
-        desc = "sem 计数语义(init(2)/take x2/take(ZERO)/give)[无线程子集]";
+        conf_skip("TC-SYNC-005(wake)", "scheduler not registered: give-wakes-blocked-thread not verified, counting semantics only");
+        desc = "sem counting semantics (init(2)/take x2/take(ZERO)/give) [no-thread subset]";
     }
 
     conf_line("TC-SYNC-005", ok, desc, pass, fail);
@@ -327,7 +336,7 @@ static void conf_sync_005(br_u32 *pass, br_u32 *fail, br_bool sched)
 static void conf_sync_006(br_u32 *pass, br_u32 *fail, br_bool sched)
 {
     if (sched != BR_TRUE) {
-        conf_skip("TC-SYNC-006", "调度框架未注册(需要一个线程阻塞在 take 上)");
+        conf_skip("TC-SYNC-006", "scheduler not registered (needs one thread blocked in take)");
         return;
     }
 
@@ -337,10 +346,11 @@ static void conf_sync_006(br_u32 *pass, br_u32 *fail, br_bool sched)
     conf_wait_for_waiters(&s_sem.waiters, 1u);
 
     /*
-     * 模拟 ISR 上下文: `br_irq_lock()` 关中断 —— 这正是 ISR 运行时的上下文(IRQ 已屏蔽),
-     * 且 ISR 里**不允许**任何会让出 CPU 的调用。所以"关中断临界区里调 br_sem_give()"
-     * 与"在 ISR 里调"的可观测约束完全一致: 只改计数/挂链/置唤醒位, 不切换。
-     * (真起一个 timer ISR 也只能证明同一件事, 却把用例绑到平台上。)
+     * Simulate ISR context: `br_irq_lock()` disables interrupts — that is exactly the context an
+     * ISR runs in (IRQs already masked), and an ISR is **not allowed** any call that yields the
+     * CPU. So "call br_sem_give() inside an IRQ-disabled critical section" has exactly the same
+     * observable constraints as "call it in an ISR": only counter/link/wake-bit changes, no switch.
+     * (Actually raising a timer ISR would prove the same thing while binding the case to a platform.)
      */
     const br_irq_state_t ist = br_irq_lock();
     const int give_rc = br_sem_give(&s_sem);
@@ -351,7 +361,7 @@ static void conf_sync_006(br_u32 *pass, br_u32 *fail, br_bool sched)
 
     const br_bool ok = (give_rc == BR_OK) && (j == BR_TRUE) && (s_wrc[3] == BR_OK)
                     && (br_sem_count(&s_sem) == 0u) && (br_waitq_len(s_sem.head) == 0u);
-    conf_line("TC-SYNC-006", ok, "ISR 上下文 give(CA-3 白名单): 关中断里 give 唤醒线程", pass, fail);
+    conf_line("TC-SYNC-006", ok, "ISR-context give (CA-3 whitelist): give with IRQs off wakes the thread", pass, fail);
 }
 
 static void conf_sync_007(br_u32 *pass, br_u32 *fail, br_bool sched)
@@ -359,11 +369,12 @@ static void conf_sync_007(br_u32 *pass, br_u32 *fail, br_bool sched)
     (void)br_cond_init(&s_cv);
     (void)br_mutex_init(&s_m);
 
-    /* (a) signal 无等待者 ⇒ no-op 且**不计数** */
+    /* (a) signal with no waiters ⇒ no-op and **no count** */
     const int s0 = br_cond_signal(&s_cv);
     const br_u32 w0 = br_cond_waiters(&s_cv);
 
-    /* 不计数的机械判据: 随后的 wait(ZERO) 仍必须是超时(若 signal 记了账就会立即返回 0) */
+    /* Mechanical criterion for "no count": the following wait(ZERO) must still time out (if signal
+     * had accounted for it, it would return 0 immediately) */
     (void)br_mutex_lock(&s_m);
     const int z = br_cond_wait(&s_cv, &s_m, BR_TIMEOUT_ZERO);
     const br_bool held_z = (br_mutex_owner(&s_m) == br_task_self())
@@ -375,14 +386,14 @@ static void conf_sync_007(br_u32 *pass, br_u32 *fail, br_bool sched)
 
     if (sched != BR_TRUE) {
         conf_skip("TC-SYNC-007(signal/wait/broadcast)",
-                  "调度框架未注册: 只验了 signal 无等待者 no-op 与 wait(ZERO) 的可恢复性");
+                  "scheduler not registered: only signal-no-waiters no-op and wait(ZERO) recoverability verified");
         conf_line("TC-SYNC-007", ok,
-                  "cond(无线程子集): signal 无等待者 no-op(不计数) + wait(ZERO) 返回后仍持锁",
+                  "cond (no-thread subset): signal no-waiters no-op (no count) + lock still held after wait(ZERO)",
                   pass, fail);
         return;
     }
 
-    /* (b) signal → wait 配对 */
+    /* (b) signal → wait pairing */
     s_wrc[2] = 123;
     br_thread_t *t = conf_spawn(conf_cond_worker, &s_wrc[2], s_stack_a);
     conf_wait_for_waiters(&s_cv.waiters, 1u);
@@ -392,7 +403,7 @@ static void conf_sync_007(br_u32 *pass, br_u32 *fail, br_bool sched)
     ok = (ok == BR_TRUE) && (sig == BR_OK) && (s_wrc[2] == BR_OK)
        && (br_cond_waiters(&s_cv) == 0u) && (br_waitq_len(s_cv.head) == 0u);
 
-    /* (c) broadcast 唤醒全部(N=2) */
+    /* (c) broadcast wakes all (N=2) */
     (void)br_cond_init(&s_cv);
     (void)br_mutex_init(&s_m);
     s_wrc[2] = 123;
@@ -410,13 +421,13 @@ static void conf_sync_007(br_u32 *pass, br_u32 *fail, br_bool sched)
        && (br_cond_waiters(&s_cv) == 0u) && (br_waitq_len(s_cv.head) == 0u);
 
     conf_line("TC-SYNC-007", ok,
-              "cond: signal 无等待者 no-op(不计数) + wait/signal 配对 + broadcast 全醒", pass, fail);
+              "cond: signal no-waiters no-op (no count) + wait/signal pairing + broadcast wakes all", pass, fail);
 }
 
 static void conf_sync_008(br_u32 *pass, br_u32 *fail, br_bool sched)
 {
     if (sched != BR_TRUE) {
-        conf_skip("TC-SYNC-008", "调度框架未注册(cond 超时需要真阻塞 + tick)");
+        conf_skip("TC-SYNC-008", "scheduler not registered (cond timeout needs real blocking + tick)");
         return;
     }
 
@@ -424,7 +435,7 @@ static void conf_sync_008(br_u32 *pass, br_u32 *fail, br_bool sched)
     (void)br_mutex_init(&s_m);
     (void)br_mutex_lock(&s_m);
 
-    const int rc = br_cond_wait(&s_cv, &s_m, 20000u);       /* 20 ms 后超时 */
+    const int rc = br_cond_wait(&s_cv, &s_m, 20000u);       /* times out after 20 ms */
     const br_bool held = (br_mutex_owner(&s_m) == br_task_self())
                       && (br_mutex_is_locked(&s_m) == BR_TRUE);
     const br_bool clean = (br_cond_waiters(&s_cv) == 0u) && (br_waitq_len(s_cv.head) == 0u);
@@ -434,16 +445,16 @@ static void conf_sync_008(br_u32 *pass, br_u32 *fail, br_bool sched)
                     && (br_mutex_is_locked(&s_m) == BR_FALSE)
                     && (br_mutex_owner(&s_m) == BR_NULL)
                     && (br_waitq_len(s_m.head) == 0u) && (s_m.waiters == 0u);
-    conf_line("TC-SYNC-008", ok, "cond_wait 超时 ⇒ -ETIMEDOUT 且持锁状态已恢复(m 仍持有)",
+    conf_line("TC-SYNC-008", ok, "cond_wait timeout ⇒ -ETIMEDOUT and lock state restored (m still held)",
               pass, fail);
 }
 
 static void conf_sync_009(br_u32 *pass, br_u32 *fail)
 {
-    /* ---- spinlock 配对 + 中断状态 ---- */
+    /* ---- spinlock pairing + IRQ state ---- */
     (void)br_spinlock_init(&s_sp);
 
-    const br_irq_state_t base = br_irq_lock();     /* 进入前的中断状态基线(depth 0) */
+    const br_irq_state_t base = br_irq_lock();     /* IRQ state baseline before entry (depth 0) */
     br_irq_unlock(base);
 
     const br_irq_state_t got = br_spinlock_lock(&s_sp);
@@ -451,7 +462,7 @@ static void conf_sync_009(br_u32 *pass, br_u32 *fail)
     br_spinlock_unlock(&s_sp, got);
     const br_bool unlocked = (br_spinlock_is_locked(&s_sp) == BR_FALSE);
 
-    /* 嵌套: 外层 irq_lock 里再拿 spinlock, 交回后中断状态与进入前一致 */
+    /* nesting: take a spinlock inside an outer irq_lock; after returning, IRQ state matches entry */
     const br_irq_state_t outer = br_irq_lock();
     const br_irq_state_t inner = br_spinlock_lock(&s_sp);
     br_spinlock_unlock(&s_sp, inner);
@@ -459,7 +470,7 @@ static void conf_sync_009(br_u32 *pass, br_u32 *fail)
     const br_irq_state_t after = br_irq_lock();
     br_irq_unlock(after);
 
-    /* trylock: 忙 ⇒ -EBUSY 且不动 *saved、不持锁 */
+    /* trylock: busy ⇒ -EBUSY, leaves *saved untouched and holds no lock */
     const br_irq_state_t held = br_spinlock_lock(&s_sp);
     br_irq_state_t saved = 0xDEADBEEFu;
     const int tb = br_spinlock_trylock(&s_sp, &saved);
@@ -470,7 +481,7 @@ static void conf_sync_009(br_u32 *pass, br_u32 *fail)
         br_spinlock_unlock(&s_sp, saved);
     }
 
-    /* ---- magic 校验: 未初始化/被踩坏必须 -EINVAL, 不静默当"没锁" ---- */
+    /* ---- magic check: uninitialized/corrupted must give -EINVAL, never silently "not locked" ---- */
     br_mutex_t zm;
     br_sem_t   zs;
     br_cond_t  zc;
@@ -488,22 +499,22 @@ static void conf_sync_009(br_u32 *pass, br_u32 *fail)
     const br_bool ok = (got == base) && (base == after)
                     && (locked == BR_TRUE) && (unlocked == BR_TRUE)
                     && (tb == BR_ERR(EBUSY)) && (saved_kept == BR_TRUE) && (tf == BR_OK)
-                    && (br_spinlock_contention() == 0u)   /* 单核: 自旋计数恒 0 */
+                    && (br_spinlock_contention() == 0u)   /* single core: contention count is always 0 */
                     && (em == BR_ERR(EINVAL)) && (es == BR_ERR(EINVAL))
                     && (ec == BR_ERR(EINVAL)) && (et == BR_ERR(EINVAL));
     conf_line("TC-SYNC-009", ok,
-              "spinlock lock/unlock 中断状态一致 + trylock -EBUSY + 争用计数 0 + magic -EINVAL",
+              "spinlock lock/unlock IRQ state consistent + trylock -EBUSY + contention count 0 + magic -EINVAL",
               pass, fail);
 }
 
 static void conf_time_001(br_u32 *pass, br_u32 *fail, br_bool sched)
 {
     if (sched != BR_TRUE) {
-        conf_skip("TC-TIME-001", "调度框架未注册(sleep 需要 tick 唤醒)");
+        conf_skip("TC-TIME-001", "scheduler not registered (sleep needs tick wakeup)");
         return;
     }
 
-    /* 单调不减(6-01 TC-TIME-001 的原始口径) */
+    /* monotonically non-decreasing (the original wording of 6-01 TC-TIME-001) */
     br_bool mono = BR_TRUE;
     br_time_t prev = br_clock_now();
     for (br_u32 i = 0u; i < 1000u; i++) {
@@ -515,17 +526,17 @@ static void conf_time_001(br_u32 *pass, br_u32 *fail, br_bool sched)
         prev = now;
     }
 
-    /* sleep 不早醒(实测; tick = 1/HZ, 缺省 5 ms ⇒ 请求 1000 us 会晚到约一个 tick) */
+    /* sleep does not wake early (measured; tick = 1/HZ, default 5 ms ⇒ a 1000 us request lands about one tick late) */
     const br_time_t t0 = br_clock_now();
     const int rc = br_task_sleep(1000u);
     const br_time_t dt = br_clock_now() - t0;
 
-    /* 明确打出"请求 vs 实测": 平台 tick 粒度决定的晚到量是可观测事实, 不是猜的。 */
+    /* Print "requested vs measured" explicitly: the lateness set by the platform tick granularity is an observable fact, not a guess. */
     br_log_info("[SYNCCONF] MEASURE TC-TIME-001 request=1000us measured=%lu us (tick granularity)",
                 (br_u64)dt);
 
     const br_bool ok = (mono == BR_TRUE) && (rc == BR_OK) && (dt >= 1000u);
-    conf_line("TC-TIME-001", ok, "sleep(1000us) 不早醒: 实测差值 >= 请求值; clock 单调不减",
+    conf_line("TC-TIME-001", ok, "sleep(1000us) does not wake early: measured delta >= requested; clock monotonic",
               pass, fail);
 }
 
@@ -536,23 +547,23 @@ static void conf_time_002(br_u32 *pass, br_u32 *fail)
     const br_time_t dt = br_clock_now() - t0;
 
     const br_bool ok = (rc == BR_OK);
-    conf_line("TC-TIME-002", ok, "br_task_sleep(0) 立即返回 0", pass, fail);
+    conf_line("TC-TIME-002", ok, "br_task_sleep(0) returns 0 immediately", pass, fail);
     (void)dt;
 }
 
 static void conf_time_003(br_u32 *pass, br_u32 *fail)
 {
-    /* 裁定 G13: 相对睡眠没有"无限"的语义 —— 那是不返回 */
+    /* Ruling G13: relative sleep has no "infinite" semantics — that would mean never returning */
     const int rc = br_task_sleep(BR_TIMEOUT_INF);
 
-    /* deadline 饱和不回绕(TC-TIME-003 原始口径) */
+    /* deadline saturates instead of wrapping (original wording of TC-TIME-003) */
     const br_time_t now = br_clock_now();
     const br_time_t d_inf = br_deadline_from_now(BR_TIMEOUT_INF);
     const br_time_t d_near = br_deadline_from_now(BR_TIMEOUT_INF - 1u);
     const br_time_t d_zero = br_deadline_from_now(0u);
-    const br_time_t d_edge = br_deadline_from_now(BR_TIMEOUT_INF - now); /* now + rel == INF 精确 */
+    const br_time_t d_edge = br_deadline_from_now(BR_TIMEOUT_INF - now); /* exactly now + rel == INF */
 
-    /* 真溢出: now + rel 超过 UINT64_MAX ⇒ 必须饱和到 BR_TIMEOUT_INF, 不回绕成过去 */
+    /* true overflow: now + rel exceeds UINT64_MAX ⇒ must saturate to BR_TIMEOUT_INF, not wrap into the past */
     br_bool sat = BR_TRUE;
     if (now > 0u) {
         sat = (br_deadline_from_now((BR_TIMEOUT_INF - now) + 1u) == BR_TIMEOUT_INF)
@@ -562,11 +573,11 @@ static void conf_time_003(br_u32 *pass, br_u32 *fail)
     const br_bool ok = (rc == BR_ERR(EINVAL))
                     && (d_inf == BR_TIMEOUT_INF)
                     && (d_edge == BR_TIMEOUT_INF)
-                    && (d_near >= now)                    /* 绝不回绕到 now 之前 */
+                    && (d_near >= now)                    /* never wraps to before now */
                     && (d_zero >= now)
                     && (sat == BR_TRUE);
     conf_line("TC-TIME-003", ok,
-              "sleep(INF) ⇒ -EINVAL(G13); deadline_from_now 近 UINT64_MAX 饱和不回绕",
+              "sleep(INF) ⇒ -EINVAL (G13); deadline_from_now saturates near UINT64_MAX instead of wrapping",
               pass, fail);
 }
 
@@ -580,8 +591,9 @@ int br_sync_selftest(void)
     br_log_info("[SYNCCONF] sync primitives conformance (core; sched_registered=%u)",
                 (br_u32)sched);
     if (sched != BR_TRUE) {
-        br_log_info("[SYNCCONF] SKIP 调度框架未注册: 线程相关用例(001/004/006/007/008/TC-TIME-001)"
-                    " 未执行; 只跑不依赖线程的子集(002/003/005 计数/009/TC-TIME-002/003)");
+        br_log_info("[SYNCCONF] SKIP scheduler not registered: thread-dependent cases (001/004/006/007/008/"
+                    "TC-TIME-001) not run; only the thread-independent subset runs (002/003/005 counting/009/"
+                    "TC-TIME-002/003)");
     }
 
     conf_sync_001(&pass, &fail, sched);
@@ -598,7 +610,7 @@ int br_sync_selftest(void)
     conf_time_002(&pass, &fail);
     conf_time_003(&pass, &fail);
 
-    /* 收尾复位: 用例是判据, 不留破坏现场(对象回到未持有/无等待者)。 */
+    /* Teardown reset: cases are criteria, leave no mess (objects back to unheld/no waiters). */
     (void)br_mutex_init(&s_m);
     (void)br_sem_init(&s_sem, 0u);
     (void)br_cond_init(&s_cv);
@@ -607,6 +619,6 @@ int br_sync_selftest(void)
     br_log_info("[SYNCCONF] SUMMARY pass=%u fail=%u total=%u",
                 (br_u32)pass, (br_u32)fail, (br_u32)(pass + fail));
 
-    /* 返回**失败项数**: 聚合器相加, 红绿由门禁判(ADR-0010 §2.4)。 */
+    /* Return the **failure count**: the aggregator sums them, red/green is decided by the gate (ADR-0010 §2.4). */
     return (int)fail;
 }

@@ -1,16 +1,17 @@
 /*
- * tests/host/mem_test.c — 宿主侧内存语义用例(设计 6-01 的 TC-MEM / TC-MM 两组)
+ * tests/host/mem_test.c — host-side memory semantics cases (design 6-01, TC-MEM / TC-MM)
  *
- * 为什么在宿主跑: TLSF 的合并/分裂/碎片、页位图的 run 分配、region 表的重叠判定
- * 是**算法性质**, 宿主上几秒钟能跑几十万次操作(`make mem-test`, 见 Makefile 的注释);
- * 同一批性质在 QEMU 上只能靠几条用例撞运气。本文件**不使用 malloc**: 用 2 MiB
- * 静态缓冲区模拟 RAM, 自己经 `br_mm_region_add()` 声明 IMAGE/HEAP/CONTIG/PAGE/DMA/
- * RESERVED 各一条, 再交给 `br_mem_init()` 认领三池。
+ * Why the host: TLSF merge/split/fragmentation, page-bitmap run allocation and region-table
+ * overlap checks are **algorithmic properties** that a host can exercise hundreds of thousands
+ * of times in seconds (`make mem-test`, see the Makefile); on QEMU the same properties can only
+ * be sampled by a few lucky cases. This file **does not use malloc**: a 2 MiB static buffer
+ * emulates RAM, declares one IMAGE/HEAP/CONTIG/PAGE/DMA/RESERVED region each via
+ * `br_mm_region_add()`, then hands over to `br_mem_init()` to claim the three pools.
  *
- * 输出协议(与 target 侧 [MEMCONF] 同型, 便于 CI grep):
+ * Output protocol (same shape as target-side [MEMCONF], easy for CI grep):
  *   [HOSTTEST] PASS|FAIL <tag> <desc>
  *   [HOSTTEST] SUMMARY pass=N fail=0 total=N
- * 有失败 ⇒ 退出码非 0。
+ * Any failure ⇒ non-zero exit code.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_mem.h>
@@ -22,7 +23,7 @@
 #include <stdio.h>
 
 /* =====================================================================
- * 用例框架
+ * Test harness
  * ===================================================================== */
 
 static int s_pass;
@@ -57,7 +58,7 @@ static br_bool str_is(const char *a, const char *b)
 }
 
 /* =====================================================================
- * 模拟 RAM(静态; 不用 malloc)
+ * Emulated RAM (static; no malloc)
  * ===================================================================== */
 
 static br_u8 g_ram[2u * 1024u * 1024u] BR_ALIGN(4096);
@@ -77,7 +78,7 @@ static br_uintptr_t g_dma_base;
 static br_uintptr_t g_resv_base;
 
 /* =====================================================================
- * br_mm_ops 替身(记录派发; 只为验证 core 侧状态机/一致性, 不建真页表)
+ * br_mm_ops stub (records dispatch; checks core state machine/consistency only, no real page tables)
  * ===================================================================== */
 
 static struct {
@@ -88,7 +89,7 @@ static struct {
     br_u32       query_calls;
     br_u32       flush_calls;
     br_u32       inv_calls;
-    br_uintptr_t fail_base;      /* map_region 对这个 base 返回 -EIO(回滚用例) */
+    br_uintptr_t fail_base;      /* map_region returns -EIO for this base (rollback case) */
 } s_ops_stats;
 
 static int stub_activate(const br_mm_region_t *regions, br_u32 count)
@@ -152,7 +153,7 @@ static const br_mm_ops_t s_ops = {
 };
 
 /* =====================================================================
- * region 声明
+ * Region declarations
  * ===================================================================== */
 
 static int add_region(br_uintptr_t base, br_size_t size, br_u32 attrs)
@@ -183,14 +184,14 @@ static int setup_regions(void)
                      BR_MM_WITH_KIND(BR_MM_CACHED, BR_MM_KIND_PAGE));
     g_dma_base = g_page_base + SZ_PAGE;
     rc |= add_region(g_dma_base, SZ_DMA,
-                     BR_MM_WITH_KIND(0u, BR_MM_KIND_DMA));   /* 非 CACHED */
+                     BR_MM_WITH_KIND(0u, BR_MM_KIND_DMA));   /* not CACHED */
     g_resv_base = g_dma_base + SZ_DMA;
     rc |= add_region(g_resv_base, SZ_RESV, BR_MM_WITH_KIND(0u, BR_MM_KIND_RESERVED));
     return rc;
 }
 
 /* =====================================================================
- * TC-MEM-001: malloc 对齐 >= BR_MALLOC_ALIGN
+ * TC-MEM-001: malloc alignment >= BR_MALLOC_ALIGN
  * ===================================================================== */
 
 static void test_mem_001_align(void)
@@ -200,7 +201,7 @@ static void test_mem_001_align(void)
         100u, 255u, 256u, 1000u, 4096u,
     };
 
-    section("TC-MEM-001", "malloc 对齐 >= BR_MALLOC_ALIGN");
+    section("TC-MEM-001", "malloc alignment >= BR_MALLOC_ALIGN");
 
     br_u32 bad_align = 0u;
     br_u32 bad_null  = 0u;
@@ -232,16 +233,16 @@ static void test_mem_001_align(void)
            (unsigned)BR_ARRAY_SIZE(sizes), (unsigned)bad_null, (unsigned)bad_align,
            (unsigned)bad_data, (unsigned)BR_MALLOC_ALIGN);
     CHECK((bad_null == 0u) && (bad_align == 0u) && (bad_data == 0u),
-          "TC-MEM-001", "全部 size 分配成功、16 对齐且内容可读写");
+          "TC-MEM-001", "all sizes allocate, 16-aligned, contents read/write");
 }
 
 /* =====================================================================
- * TC-MEM-007: br_heap_usage 记账(分配增量 >= 请求量; 全释放回基线)
+ * TC-MEM-007: br_heap_usage accounting (alloc delta >= request; full free returns to baseline)
  * ===================================================================== */
 
 static void test_mem_007_usage(void)
 {
-    section("TC-MEM-007", "heap_usage 记账");
+    section("TC-MEM-007", "heap_usage accounting");
 
     br_size_t u0 = 0u;
     br_size_t t0 = 0u;
@@ -260,24 +261,24 @@ static void test_mem_007_usage(void)
            (unsigned long)u0, (unsigned long)u1, (unsigned long)u2,
            (unsigned long)t0);
 
-    CHECK(p != NULL, "TC-MEM-007", "3000 B 分配成功");
-    CHECK(u1 >= (u0 + 3000u), "TC-MEM-007", "used 增量 >= 请求量");
-    CHECK(u2 == u0, "TC-MEM-007", "释放后 used 回到基线");
-    CHECK(t1 == t0, "TC-MEM-007", "total 不随分配变化");
+    CHECK(p != NULL, "TC-MEM-007", "3000 B allocation succeeds");
+    CHECK(u1 >= (u0 + 3000u), "TC-MEM-007", "used delta >= requested size");
+    CHECK(u2 == u0, "TC-MEM-007", "used back to baseline after free");
+    CHECK(t1 == t0, "TC-MEM-007", "total unchanged by allocation");
 }
 
 /* =====================================================================
- * TC-MEM-003: calloc 零化 / 溢出 / realloc 保前缀 + 旧块回收
+ * TC-MEM-003: calloc zeroing / overflow / realloc prefix + old block reclaim
  * ===================================================================== */
 
 static void test_mem_003_calloc_realloc(void)
 {
-    section("TC-MEM-003", "calloc / realloc 语义");
+    section("TC-MEM-003", "calloc / realloc semantics");
 
     br_heap_stats_t st0;
     (void)br_heap_stats_get(&st0);
 
-    /* calloc 零化 */
+    /* calloc zeroing */
     br_u8 *c = (br_u8 *)br_calloc(16u, 8u);
     br_u32 nz = 0u;
     if (c != NULL) {
@@ -287,21 +288,21 @@ static void test_mem_003_calloc_realloc(void)
             }
         }
     }
-    CHECK((c != NULL) && (nz == 0u), "TC-MEM-003", "calloc 返回全零");
+    CHECK((c != NULL) && (nz == 0u), "TC-MEM-003", "calloc returns all zeros");
     br_free(c);
 
-    /* 乘法溢出 ⇒ NULL + n_fail++ */
+    /* multiplication overflow ⇒ NULL + n_fail++ */
     br_heap_stats_t st_a;
     (void)br_heap_stats_get(&st_a);
     void *ov = br_calloc(~(br_size_t)0u, 2u);
     br_heap_stats_t st_b;
     (void)br_heap_stats_get(&st_b);
-    printf("[HOSTTEST]   calloc 溢出 ptr=%p n_fail %u -> %u\n",
+    printf("[HOSTTEST]   calloc overflow ptr=%p n_fail %u -> %u\n",
            ov, (unsigned)st_a.n_fail, (unsigned)st_b.n_fail);
     CHECK((ov == NULL) && (st_b.n_fail > st_a.n_fail), "TC-MEM-003",
-          "calloc 乘法溢出被拦截并计数");
+          "calloc multiplication overflow intercepted and counted");
 
-    /* realloc 保前缀 */
+    /* realloc keeps the prefix */
     br_size_t ub = 0u;
     br_size_t tb = 0u;
     (void)br_heap_usage(&ub, &tb);
@@ -334,19 +335,19 @@ static void test_mem_003_calloc_realloc(void)
            (unsigned long)u_before, (unsigned long)u_after,
            (unsigned)st_c.n_live, (unsigned)bad);
 
-    CHECK((q != NULL) && (bad == 0u), "TC-MEM-003", "realloc 保留 min(old,new) 前缀");
-    CHECK(st_c.n_live == 1u, "TC-MEM-003", "realloc 后只剩一个新块(旧块已回收)");
-    CHECK(u_after <= (u_before + 200u + 64u), "TC-MEM-003", "realloc 未额外堆增长");
+    CHECK((q != NULL) && (bad == 0u), "TC-MEM-003", "realloc keeps min(old,new) prefix");
+    CHECK(st_c.n_live == 1u, "TC-MEM-003", "only one block left after realloc (old reclaimed)");
+    CHECK(u_after <= (u_before + 200u + 64u), "TC-MEM-003", "realloc causes no extra heap growth");
 
     br_free(q);
 
     br_size_t u_end = 0u;
     (void)br_heap_usage(&u_end, &tb);
-    CHECK(u_end == ub, "TC-MEM-003", "realloc 链全部释放后回到基线");
+    CHECK(u_end == ub, "TC-MEM-003", "back to baseline after freeing the whole realloc chain");
 }
 
 /* =====================================================================
- * TC-MEM-004: contig 对齐 / 互不重叠 / 释放可复用
+ * TC-MEM-004: contig alignment / non-overlap / free-then-reuse
  * ===================================================================== */
 
 static void test_mem_004_contig(void)
@@ -373,37 +374,37 @@ static void test_mem_004_contig(void)
     printf("[HOSTTEST]   a=%p b=%p rc=(%d,%d) disjoint=%d\n",
            (void *)a, (void *)b, r1, r2, (int)disjoint);
 
-    CHECK(a_ok && b_ok, "TC-MEM-004", "两次 4 KiB 对齐分配均 4096 对齐");
-    CHECK(disjoint, "TC-MEM-004", "两次分配区间互不重叠");
+    CHECK(a_ok && b_ok, "TC-MEM-004", "both 4 KiB-granular allocations are 4096-aligned");
+    CHECK(disjoint, "TC-MEM-004", "the two allocations do not overlap");
 
-    /* 非 2 的幂 align ⇒ -EINVAL */
+    /* align not a power of 2 ⇒ -EINVAL */
     void *x = NULL;
     const int rbad = br_mem_alloc_contig(4096u, 3000u, &x);
-    CHECK(rbad == BR_ERR(EINVAL), "TC-MEM-004", "align 非 2 的幂 ⇒ -EINVAL");
+    CHECK(rbad == BR_ERR(EINVAL), "TC-MEM-004", "align not a power of 2 ⇒ -EINVAL");
 
     br_mem_free_contig(a, 4096u);
     const int r3 = br_mem_alloc_contig(4096u, 4096u, &c);
-    printf("[HOSTTEST]   释放 a 后重分配 c=%p (a=%p) rc=%d\n", (void *)c, (void *)a, r3);
-    CHECK((r3 == 0) && (c == a), "TC-MEM-004", "释放后可复分配同一 run");
+    printf("[HOSTTEST]   realloc after freeing a: c=%p (a=%p) rc=%d\n", (void *)c, (void *)a, r3);
+    CHECK((r3 == 0) && (c == a), "TC-MEM-004", "same run reusable after free");
 
-    /* size 入参与记录不一致: 按记录释放(不切坏池) */
+    /* size argument disagrees with the record: free by record (no pool corruption) */
     br_mem_free_contig(b, 123u);
     br_mem_free_contig(c, 4096u);
 
     void *d = NULL;
     const int r4 = br_mem_alloc_contig(8192u, 4096u, &d);
-    printf("[HOSTTEST]   合并后 8192 B 分配 d=%p rc=%d\n", (void *)d, r4);
-    CHECK((r4 == 0) && (d == a), "TC-MEM-004", "相邻释放即合并(整块 8 KiB 可复用)");
+    printf("[HOSTTEST]   8192 B allocation after merge: d=%p rc=%d\n", (void *)d, r4);
+    CHECK((r4 == 0) && (d == a), "TC-MEM-004", "adjacent frees merge (full 8 KiB reusable)");
     br_mem_free_contig(d, 8192u);
 }
 
 /* =====================================================================
- * TC-MEM-005: 页分配连续 + 释放复用
+ * TC-MEM-005: page allocation contiguity + free reuse
  * ===================================================================== */
 
 static void test_mem_005_page(void)
 {
-    section("TC-MEM-005", "page alloc(3) 连续 + 复用");
+    section("TC-MEM-005", "page alloc(3) contiguous + reuse");
 
     void *p3 = br_page_alloc(3u, 0u);
     void *p1 = br_page_alloc(1u, BR_PAGE_F_ZERO);
@@ -423,21 +424,21 @@ static void test_mem_005_page(void)
             }
         }
     }
-    CHECK(contig, "TC-MEM-005", "3 页 run 连续(后一分配紧随其后)");
-    CHECK(nz == 0u, "TC-MEM-005", "BR_PAGE_F_ZERO 生效");
+    CHECK(contig, "TC-MEM-005", "3-page run is contiguous (next allocation follows)");
+    CHECK(nz == 0u, "TC-MEM-005", "BR_PAGE_F_ZERO works");
 
     br_page_free(p3, 3u);
 
     void *p3b = br_page_alloc(3u, 0u);
-    printf("[HOSTTEST]   释放 3 页后重分配=%p (原=%p)\n", p3b, p3);
-    CHECK((p3b != NULL) && (p3b == p3), "TC-MEM-005", "释放后首次适配复现同一 run");
+    printf("[HOSTTEST]   realloc after freeing 3 pages = %p (was %p)\n", p3b, p3);
+    CHECK((p3b != NULL) && (p3b == p3), "TC-MEM-005", "first-fit reproduces the same run after free");
 
     br_page_free(p3b, 3u);
     br_page_free(p1, 1u);
 
     br_page_stats_t ps;
     (void)br_page_stats(&ps);
-    CHECK(ps.used == 0u, "TC-MEM-005", "页池净空 used=0");
+    CHECK(ps.used == 0u, "TC-MEM-005", "page pool empty, used=0");
 }
 
 /* =====================================================================
@@ -467,31 +468,31 @@ static void test_mem_006_dma(void)
     printf("[HOSTTEST]   vaddr=%p dma=0x%lx size=%lu nz=%u\n",
            b.vaddr, (unsigned long)b.dma_addr, (unsigned long)b.size, (unsigned)nz);
 
-    CHECK(ident, "TC-MEM-006", "v1 恒等: dma_addr == vaddr");
-    CHECK(aligned, "TC-MEM-006", "默认 4 KiB 对齐");
-    CHECK(nz == 0u, "TC-MEM-006", "BR_DMA_F_ZERO 生效");
-    CHECK(br_dma_free(&b) == 0, "TC-MEM-006", "br_dma_free 成功归还");
+    CHECK(ident, "TC-MEM-006", "v1 identity: dma_addr == vaddr");
+    CHECK(aligned, "TC-MEM-006", "4 KiB aligned by default");
+    CHECK(nz == 0u, "TC-MEM-006", "BR_DMA_F_ZERO works");
+    CHECK(br_dma_free(&b) == 0, "TC-MEM-006", "br_dma_free returns the buffer");
 
-    /* dma_addr 与 vaddr 不一致 ⇒ 拒收(不许归还错地址) */
+    /* dma_addr differs from vaddr ⇒ reject (never return a wrong address) */
     br_dma_buf_t c;
     (void)br_dma_alloc(4096u, 0u, &c);
     br_dma_buf_t bad = c;
     bad.dma_addr = (br_uintptr_t)c.vaddr + 4096u;
     const int rbad = br_dma_free(&bad);
-    printf("[HOSTTEST]   不一致 dma_free rc=%d\n", rbad);
-    CHECK(rbad == BR_ERR(EINVAL), "TC-MEM-006", "dma_addr 不一致被拒");
-    CHECK(br_dma_free(&c) == 0, "TC-MEM-006", "拒收后真身仍可归还");
+    printf("[HOSTTEST]   mismatched dma_free rc=%d\n", rbad);
+    CHECK(rbad == BR_ERR(EINVAL), "TC-MEM-006", "mismatched dma_addr rejected");
+    CHECK(br_dma_free(&c) == 0, "TC-MEM-006", "original still returnable after rejection");
 }
 
 /* =====================================================================
- * 页池耗尽 ⇒ NULL 且 fail 增长; 全释放后 used==0
+ * Pool exhaustion ⇒ NULL and fail grows; used==0 after full free
  * ===================================================================== */
 
 static void *s_page_arr[BR_PAGE_MAX_PAGES];
 
 static void test_page_exhaust(void)
 {
-    section("TC-MEM-PAGE-EXHAUST", "页池耗尽");
+    section("TC-MEM-PAGE-EXHAUST", "page pool exhaustion");
 
     br_page_stats_t ps0;
     (void)br_page_stats(&ps0);
@@ -512,63 +513,63 @@ static void test_page_exhaust(void)
     br_page_stats_t ps2;
     (void)br_page_stats(&ps2);
 
-    printf("[HOSTTEST]   total=%u 分配=%u free=%u over=%p fail %u -> %u\n",
+    printf("[HOSTTEST]   total=%u alloc=%u free=%u over=%p fail %u -> %u\n",
            (unsigned)ps0.total, (unsigned)n, (unsigned)ps1.free, over,
            (unsigned)ps1.fail, (unsigned)ps2.fail);
 
-    CHECK(n == ps0.total, "TC-MEM-PAGE-EXHAUST", "可分配页数 == 池总页数");
-    CHECK(ps1.free == 0u, "TC-MEM-PAGE-EXHAUST", "池满时 free==0");
+    CHECK(n == ps0.total, "TC-MEM-PAGE-EXHAUST", "allocatable pages == pool total");
+    CHECK(ps1.free == 0u, "TC-MEM-PAGE-EXHAUST", "free==0 when the pool is full");
     CHECK((over == NULL) && (ps2.fail > ps1.fail), "TC-MEM-PAGE-EXHAUST",
-          "耗尽后返回 NULL 且 fail 增长");
+          "returns NULL after exhaustion and fail grows");
 
     for (br_u32 i = 0u; i < n; i++) {
         br_page_free(s_page_arr[i], 1u);
     }
     br_page_stats_t ps3;
     (void)br_page_stats(&ps3);
-    printf("[HOSTTEST]   全释放后 used=%u free=%u max_run=%u\n",
+    printf("[HOSTTEST]   after full free used=%u free=%u max_run=%u\n",
            (unsigned)ps3.used, (unsigned)ps3.free, (unsigned)ps3.max_run);
-    CHECK(ps3.used == 0u, "TC-MEM-PAGE-EXHAUST", "全释放后 used==0");
+    CHECK(ps3.used == 0u, "TC-MEM-PAGE-EXHAUST", "used==0 after full free");
 
-    /* 重复释放: 忽略 + fail++ */
+    /* double free: ignored + fail++ */
     const br_u32 fail_before = ps3.fail;
     br_page_free(s_page_arr[0], 1u);
     br_page_stats_t ps4;
     (void)br_page_stats(&ps4);
-    CHECK(ps4.fail > fail_before, "TC-MEM-PAGE-EXHAUST", "重复释放被忽略并计数");
+    CHECK(ps4.fail > fail_before, "TC-MEM-PAGE-EXHAUST", "double free ignored and counted");
 }
 
 /* =====================================================================
- * TC-LEAK-UNIT: 红区 / 双重释放 / 非本堆指针
+ * TC-LEAK-UNIT: red zone / double free / foreign pointer
  * ===================================================================== */
 
 static br_u8 g_outside[64] BR_ALIGN(16);
 
 static void test_leak_unit(void)
 {
-    section("TC-LEAK-UNIT", "红区 / 双重释放 / 非本堆指针");
+    section("TC-LEAK-UNIT", "red zone / double free / foreign pointer");
 
     br_heap_stats_t s0;
     (void)br_heap_stats_get(&s0);
 
-    /* ① 写用户区后一字节: 必然落在红区(红区最小 8 B) */
+    /* ① write one byte past the user area: always lands in the red zone (min 8 B) */
     br_u8 *p = (br_u8 *)br_malloc(37u);
     p[37] = 0x00u;
     const br_u32 v1 = br_heap_check();
     br_heap_stats_t s1;
     (void)br_heap_stats_get(&s1);
-    printf("[HOSTTEST]   红区越界: check=%u redzone_hits %u -> %u\n",
+    printf("[HOSTTEST]   red zone overrun: check=%u redzone_hits %u -> %u\n",
            (unsigned)v1, (unsigned)s0.redzone_hits, (unsigned)s1.redzone_hits);
 
     CHECK((v1 >= 1u) && (s1.redzone_hits > s0.redzone_hits), "TC-LEAK-UNIT",
-          "红区越界被 br_heap_check() 检出");
+          "red zone overrun detected by br_heap_check()");
 
-    p[37] = 0xA5u;   /* 复原, 使堆重回干净 */
+    p[37] = 0xA5u;   /* restore, making the heap clean again */
     const br_u32 v2 = br_heap_check();
-    CHECK(v2 == 0u, "TC-LEAK-UNIT", "复原后 br_heap_check()==0");
+    CHECK(v2 == 0u, "TC-LEAK-UNIT", "br_heap_check()==0 after restore");
     br_free(p);
 
-    /* ② 双重释放 */
+    /* ② double free */
     void *q = br_malloc(64u);
     br_free(q);
     br_free(q);
@@ -577,33 +578,33 @@ static void test_leak_unit(void)
     const br_u32 v3 = br_heap_check();
     printf("[HOSTTEST]   double_free=%u check=%u\n",
            (unsigned)s2.double_free, (unsigned)v3);
-    CHECK(s2.double_free >= 1u, "TC-LEAK-UNIT", "双重释放被拦截并计数");
-    CHECK(v3 == 0u, "TC-LEAK-UNIT", "双重释放后堆仍完好");
+    CHECK(s2.double_free >= 1u, "TC-LEAK-UNIT", "double free intercepted and counted");
+    CHECK(v3 == 0u, "TC-LEAK-UNIT", "heap still intact after double free");
 
-    /* ③ 释放非本堆指针 */
+    /* ③ free a pointer not from this heap */
     br_heap_stats_t s3;
     (void)br_heap_stats_get(&s3);
     br_free(g_outside);
     br_heap_stats_t s4;
     (void)br_heap_stats_get(&s4);
-    CHECK(s4.bad_free > s3.bad_free, "TC-LEAK-UNIT", "非本堆指针被拦截");
+    CHECK(s4.bad_free > s3.bad_free, "TC-LEAK-UNIT", "foreign pointer intercepted");
 
-    /* ④ 未对齐指针 */
+    /* ④ unaligned pointer */
     void *r = br_malloc(32u);
     br_free((void *)((br_u8 *)r + 1u));
     br_heap_stats_t s5;
     (void)br_heap_stats_get(&s5);
-    CHECK(s5.bad_free > s4.bad_free, "TC-LEAK-UNIT", "未对齐指针被拦截");
+    CHECK(s5.bad_free > s4.bad_free, "TC-LEAK-UNIT", "unaligned pointer intercepted");
     br_free(r);
 }
 
 /* =====================================================================
- * TC-MEM-TLSF: 直接压 TLSF 单实例(br_tlsf_check / block_size)
+ * TC-MEM-TLSF: drive the TLSF singleton directly (br_tlsf_check / block_size)
  * ===================================================================== */
 
 static void test_tlsf_direct(void)
 {
-    section("TC-MEM-TLSF", "直接调用 TLSF 接口");
+    section("TC-MEM-TLSF", "call the TLSF interface directly");
 
     printf("[HOSTTEST]   overhead=%lu max_free=%lu used=%lu\n",
            (unsigned long)br_tlsf_overhead(),
@@ -631,12 +632,12 @@ static void test_tlsf_direct(void)
     const br_u32 v1 = br_tlsf_check();
     printf("[HOSTTEST]   check before=%u after=%u\n", (unsigned)v0, (unsigned)v1);
 
-    CHECK(ok, "TC-MEM-TLSF", "alloc 16 对齐 + block_size >= 请求+头");
-    CHECK((v0 == 0u) && (v1 == 0u), "TC-MEM-TLSF", "tlsf_check 前后均 0 违约");
+    CHECK(ok, "TC-MEM-TLSF", "alloc 16-aligned + block_size >= request+header");
+    CHECK((v0 == 0u) && (v1 == 0u), "TC-MEM-TLSF", "tlsf_check reports 0 violations before and after");
 }
 
 /* =====================================================================
- * TC-MEM-WALK: 存活块遍历按 seq 升序
+ * TC-MEM-WALK: live-block walk in ascending seq order
  * ===================================================================== */
 
 static struct {
@@ -658,7 +659,7 @@ static int walk_cb(void *ctx, const br_heap_block_t *blk)
 
 static void test_walk(void)
 {
-    section("TC-MEM-WALK", "存活块按 seq 升序回调");
+    section("TC-MEM-WALK", "live blocks reported in ascending seq order");
 
     void *a = br_malloc(10u);
     void *b = br_malloc(20u);
@@ -672,8 +673,8 @@ static void test_walk(void)
     printf("[HOSTTEST]   walk n=%d seen=%u order_bad=%u\n",
            n, (unsigned)s_walk.seen, (unsigned)s_walk.order_bad);
 
-    CHECK((n == 3) && (s_walk.seen == 3u), "TC-MEM-WALK", "遍历到 3 个存活块");
-    CHECK(s_walk.order_bad == 0u, "TC-MEM-WALK", "回调序严格按 seq 升序");
+    CHECK((n == 3) && (s_walk.seen == 3u), "TC-MEM-WALK", "three live blocks visited");
+    CHECK(s_walk.order_bad == 0u, "TC-MEM-WALK", "callback order strictly ascending by seq");
 
     br_free(a);
     br_free(b);
@@ -681,12 +682,12 @@ static void test_walk(void)
 }
 
 /* =====================================================================
- * 归属标签(5-01 §4 的 v1.x 形态)
+ * Owner tags (v1.x form of 5-01 §4)
  * ===================================================================== */
 
 static void test_owner(void)
 {
-    section("TC-MEM-OWNER", "归属标签注册/命名/记账");
+    section("TC-MEM-OWNER", "owner tag register/name/accounting");
 
     const br_owner_t o1 = br_heap_owner_register("hosttest");
     const br_owner_t dup = br_heap_owner_register("hosttest");
@@ -697,7 +698,7 @@ static void test_owner(void)
     void *p = br_malloc(16u);
     const br_owner_t cur = br_heap_owner_get();
 
-    /* 让 walk 把 owner 带出来 */
+    /* let the walk carry the owner out */
     s_walk.seen = 0u;
     s_walk.last_seq = 0u;
     s_walk.order_bad = 0u;
@@ -714,16 +715,16 @@ static void test_owner(void)
            (unsigned)o1, (unsigned)dup, (unsigned)cur, name_none, name_unk,
            (unsigned)st.owner_count);
 
-    CHECK(o1 != BR_OWNER_NONE, "TC-MEM-OWNER", "注册返回非 NONE 标签");
-    CHECK(dup == BR_OWNER_NONE, "TC-MEM-OWNER", "重名注册返回 NONE");
-    CHECK(str_is(br_heap_owner_name(o1), "hosttest"), "TC-MEM-OWNER", "标签→名字");
+    CHECK(o1 != BR_OWNER_NONE, "TC-MEM-OWNER", "register returns a non-NONE tag");
+    CHECK(dup == BR_OWNER_NONE, "TC-MEM-OWNER", "duplicate-name register returns NONE");
+    CHECK(str_is(br_heap_owner_name(o1), "hosttest"), "TC-MEM-OWNER", "tag → name");
     CHECK(str_is(name_none, "(none)") && str_is(name_unk, "?"), "TC-MEM-OWNER",
-          "NONE/未知名字约定");
-    CHECK(st.owner_count >= 1u, "TC-MEM-OWNER", "owner_count 反映注册数");
+          "NONE/unknown name convention");
+    CHECK(st.owner_count >= 1u, "TC-MEM-OWNER", "owner_count reflects registrations");
 }
 
 /* =====================================================================
- * TC-MEM-002: 碎片压力(自写 LCG, 20 万次交错 alloc/free/write/verify)
+ * TC-MEM-002: fragmentation stress (own LCG, 200k interleaved alloc/free/write/verify)
  * ===================================================================== */
 
 #define STRESS_OPS    200000u
@@ -746,7 +747,7 @@ static br_u32 rng_next(void)
 
 static void test_mem_002_stress(void)
 {
-    section("TC-MEM-002", "碎片压力 20 万次(LCG)");
+    section("TC-MEM-002", "fragmentation stress 200k ops (LCG)");
 
     br_u32 alloc_fail  = 0u;
     br_u32 mismatch    = 0u;
@@ -800,7 +801,7 @@ static void test_mem_002_stress(void)
         }
     }
 
-    /* 清场: 剩余块全部释放 */
+    /* cleanup: free all remaining blocks */
     br_u32 left = 0u;
     for (br_u32 i = 0u; i < (br_u32)STRESS_SLOTS; i++) {
         if (s_slots[i].p != NULL) {
@@ -819,26 +820,26 @@ static void test_mem_002_stress(void)
     printf("[HOSTTEST]   ops=%u alloc=%u free=%u left=%u alloc_fail=%u mismatch=%u check_bad=%u\n",
            (unsigned)STRESS_OPS, (unsigned)allocs, (unsigned)frees, (unsigned)left,
            (unsigned)alloc_fail, (unsigned)mismatch, (unsigned)check_bad);
-    printf("[HOSTTEST]   收尾: tlsf_check=%u heap_check=%u used=%lu total=%lu max_free=%lu n_live=%u\n",
+    printf("[HOSTTEST]   final: tlsf_check=%u heap_check=%u used=%lu total=%lu max_free=%lu n_live=%u\n",
            (unsigned)vf, (unsigned)vh, (unsigned long)st.used,
            (unsigned long)st.total, (unsigned long)st.max_free_block,
            (unsigned)st.n_live);
 
     CHECK((mismatch == 0u) && (check_bad == 0u), "TC-MEM-002",
-          "20 万次操作内容不变 + 不变量恒 0");
-    CHECK((vf == 0u) && (vh == 0u), "TC-MEM-002", "收尾自检 0 违约");
-    CHECK((st.n_live == 0u) && (st.used == 0u), "TC-MEM-002", "全部释放后无存活块");
+          "200k ops keep contents intact + invariants always 0");
+    CHECK((vf == 0u) && (vh == 0u), "TC-MEM-002", "final self-check: 0 violations");
+    CHECK((st.n_live == 0u) && (st.used == 0u), "TC-MEM-002", "no live blocks after freeing all");
     CHECK((st.max_free_block * 10u) >= (st.total * 8u), "TC-MEM-002",
-          "收尾最大空闲块 >= 池的 80%(完全合并)");
+          "final largest free block >= 80% of pool (fully merged)");
 }
 
 /* =====================================================================
- * TC-MM-001: region 重叠/重复 ⇒ -EEXIST; 非对齐/ size 0 ⇒ -EINVAL
+ * TC-MM-001: region overlap/duplicate ⇒ -EEXIST; unaligned / size 0 ⇒ -EINVAL
  * ===================================================================== */
 
 static void test_mm_001_region(void)
 {
-    section("TC-MM-001", "region 重叠/重复/非法粒度");
+    section("TC-MM-001", "region overlap/duplicate/illegal granularity");
 
     const int r_null = br_mm_region_add(NULL);
     const int r_dup  = add_region(g_heap_base, SZ_HEAP, BR_MM_WITH_KIND(0u, BR_MM_KIND_HEAP));
@@ -851,11 +852,11 @@ static void test_mm_001_region(void)
            r_null, r_dup, r_ovl, r_unal, r_zero, r_gran);
 
     CHECK(r_null == BR_ERR(EINVAL), "TC-MM-001", "NULL ⇒ -EINVAL");
-    CHECK(r_dup == BR_ERR(EEXIST), "TC-MM-001", "完全相同 ⇒ -EEXIST");
-    CHECK(r_ovl == BR_ERR(EEXIST), "TC-MM-001", "部分重叠 ⇒ -EEXIST");
-    CHECK(r_unal == BR_ERR(EINVAL), "TC-MM-001", "base 非 4 KiB 对齐 ⇒ -EINVAL");
+    CHECK(r_dup == BR_ERR(EEXIST), "TC-MM-001", "exact duplicate ⇒ -EEXIST");
+    CHECK(r_ovl == BR_ERR(EEXIST), "TC-MM-001", "partial overlap ⇒ -EEXIST");
+    CHECK(r_unal == BR_ERR(EINVAL), "TC-MM-001", "base not 4 KiB aligned ⇒ -EINVAL");
     CHECK(r_zero == BR_ERR(EINVAL), "TC-MM-001", "size==0 ⇒ -EINVAL");
-    CHECK(r_gran == BR_ERR(EINVAL), "TC-MM-001", "size 非 4 KiB 粒度 ⇒ -EINVAL");
+    CHECK(r_gran == BR_ERR(EINVAL), "TC-MM-001", "size not 4 KiB granular ⇒ -EINVAL");
 
     const br_u32 nkind = br_mm_region_count_kind(BR_MM_KIND_HEAP);
     const br_mm_region_t *hit = br_mm_region_find(g_heap_base + 16u);
@@ -863,31 +864,31 @@ static void test_mm_001_region(void)
     printf("[HOSTTEST]   heap_kind=%u find(hit)=%p find(miss)=%p count=%u\n",
            (unsigned)nkind, (const void *)hit, (const void *)miss,
            (unsigned)br_mm_region_count());
-    CHECK(nkind == 1u, "TC-MM-001", "region_count_kind 统计正确");
-    CHECK((hit != NULL) && (miss == NULL), "TC-MM-001", "region_find 命中/未命中");
+    CHECK(nkind == 1u, "TC-MM-001", "region_count_kind counts correctly");
+    CHECK((hit != NULL) && (miss == NULL), "TC-MM-001", "region_find hit/miss");
 }
 
 /* =====================================================================
- * TC-MM-002: 非 CACHED region 的 cache 维护 = 0(含未激活)
+ * TC-MM-002: cache maintenance on non-CACHED regions = 0 (incl. inactive)
  * ===================================================================== */
 
 static void test_mm_002_cache(void)
 {
-    section("TC-MM-002", "非 CACHED region cache 维护 = 0");
+    section("TC-MM-002", "non-CACHED region cache maintenance = 0");
 
     const br_u32 before = s_ops_stats.flush_calls;
 
-    void *np = (void *)g_dma_base;   /* DMA region: 非 CACHED */
+    void *np = (void *)g_dma_base;   /* DMA region: not CACHED */
     const int r1 = br_mm_cache_flush(np, 4096u);
     const int r2 = br_mm_cache_invalidate(np, 4096u);
     const int r3 = br_mm_cache_flush(np, 0u);
 
-    printf("[HOSTTEST]   未激活: flush=%d inv=%d size0=%d flush_calls=%u\n",
+    printf("[HOSTTEST]   inactive: flush=%d inv=%d size0=%d flush_calls=%u\n",
            r1, r2, r3, (unsigned)(s_ops_stats.flush_calls - before));
 
     CHECK((r1 == 0) && (r2 == 0) && (r3 == 0), "TC-MM-002",
-          "未激活 + 非 CACHED ⇒ 0(无操作)");
-    CHECK(s_ops_stats.flush_calls == before, "TC-MM-002", "非 CACHED 不派发 ops");
+          "inactive + non-CACHED ⇒ 0 (no-op)");
+    CHECK(s_ops_stats.flush_calls == before, "TC-MM-002", "non-CACHED dispatches no ops");
 }
 
 /* =====================================================================
@@ -896,7 +897,7 @@ static void test_mm_002_cache(void)
 
 static void test_mm_003_map(void)
 {
-    section("TC-MM-003", "map/unmap 签名先行");
+    section("TC-MM-003", "map/unmap signature first");
 
     br_mm_region_t r;
     r.base  = g_resv_base;
@@ -907,46 +908,46 @@ static void test_mm_003_map(void)
     const int r2 = br_mm_unmap(g_resv_base, SZ_RESV);
     printf("[HOSTTEST]   map=%d unmap=%d\n", r1, r2);
     CHECK((r1 == BR_ERR(ENOTSUP)) && (r2 == BR_ERR(ENOTSUP)),
-          "TC-MM-003", "v1 br_mm_map/unmap 一律 -ENOTSUP");
+          "TC-MM-003", "v1 br_mm_map/unmap always -ENOTSUP");
 }
 
 /* =====================================================================
- * 激活状态机 + TC-MM-EXTRA(未声明地址 / 表满) + 回滚
+ * Activation state machine + TC-MM-EXTRA (undeclared address / full table) + rollback
  * ===================================================================== */
 
 static void test_mm_extra(void)
 {
-    section("TC-MM-EXTRA", "未声明地址 / 表满 / 落表回滚");
+    section("TC-MM-EXTRA", "undeclared address / full table / rollback");
 
-    /* 未激活时 set_attrs/query ⇒ -ENOTSUP */
+    /* set_attrs/query while inactive ⇒ -ENOTSUP */
     br_u32 attrs = 0u;
     const int pre1 = br_mm_set_attrs(g_heap_base, 4096u, BR_MM_RO);
     const int pre2 = br_mm_query(g_heap_base, 4096u, &attrs);
     CHECK((pre1 == BR_ERR(ENOTSUP)) && (pre2 == BR_ERR(ENOTSUP)),
-          "TC-MM-EXTRA", "未激活 set_attrs/query ⇒ -ENOTSUP");
+          "TC-MM-EXTRA", "inactive set_attrs/query ⇒ -ENOTSUP");
 
-    /* 注册状态机 */
+    /* register state machine */
     const int reg1 = br_mm_register(&s_ops);
     const int reg2 = br_mm_register(&s_ops);
-    CHECK(reg1 == 0, "TC-MM-EXTRA", "首次 register 成功");
-    CHECK(reg2 == BR_ERR(EBUSY), "TC-MM-EXTRA", "二次 register ⇒ -EBUSY");
+    CHECK(reg1 == 0, "TC-MM-EXTRA", "first register succeeds");
+    CHECK(reg2 == BR_ERR(EBUSY), "TC-MM-EXTRA", "second register ⇒ -EBUSY");
 
     const int act1 = br_mm_activate();
     const int act2 = br_mm_activate();
     printf("[HOSTTEST]   activate=%d again=%d active=%d count_at_activate=%u\n",
            act1, act2, (int)br_mm_active(), (unsigned)s_ops_stats.activate_count);
-    CHECK(act1 == 0, "TC-MM-EXTRA", "activate 成功");
-    CHECK(act2 == BR_ERR(EBUSY), "TC-MM-EXTRA", "二次 activate ⇒ -EBUSY");
-    CHECK(br_mm_active() == BR_TRUE, "TC-MM-EXTRA", "br_mm_active() 置位");
+    CHECK(act1 == 0, "TC-MM-EXTRA", "activate succeeds");
+    CHECK(act2 == BR_ERR(EBUSY), "TC-MM-EXTRA", "second activate ⇒ -EBUSY");
+    CHECK(br_mm_active() == BR_TRUE, "TC-MM-EXTRA", "br_mm_active() set");
     CHECK(s_ops_stats.activate_count == br_mm_region_count(), "TC-MM-EXTRA",
-          "activate 收到当前 region 表快照");
+          "activate receives a snapshot of the current region table");
 
-    /* 未声明地址 ⇒ -EINVAL(即使已激活) */
+    /* undeclared address ⇒ -EINVAL (even when active) */
     const int r_un = br_mm_cache_flush((void *)(br_uintptr_t)0x1000u, 4096u);
-    printf("[HOSTTEST]   未声明地址 flush=%d\n", r_un);
-    CHECK(r_un == BR_ERR(EINVAL), "TC-MM-EXTRA", "未声明地址 ⇒ -EINVAL");
+    printf("[HOSTTEST]   undeclared address flush=%d\n", r_un);
+    CHECK(r_un == BR_ERR(EINVAL), "TC-MM-EXTRA", "undeclared address ⇒ -EINVAL");
 
-    /* 已激活 + CACHED ⇒ 派发 ops; 非 CACHED ⇒ 不派发 */
+    /* active + CACHED ⇒ dispatch ops; non-CACHED ⇒ no dispatch */
     const br_u32 f0 = s_ops_stats.flush_calls;
     const int rc_cached = br_mm_cache_flush((void *)g_heap_base, 4096u);
     const br_u32 f1 = s_ops_stats.flush_calls;
@@ -955,35 +956,35 @@ static void test_mm_extra(void)
     printf("[HOSTTEST]   cached flush=%d calls=%u->%u ; noncached=%d calls=%u\n",
            rc_cached, (unsigned)f0, (unsigned)f1, rc_nc, (unsigned)f2);
     CHECK((rc_cached == 0) && (f1 == (f0 + 1u)), "TC-MM-EXTRA",
-          "CACHED region 经 ops 派发");
-    CHECK((rc_nc == 0) && (f2 == f1), "TC-MM-EXTRA", "非 CACHED 不派发");
+          "CACHED region dispatched via ops");
+    CHECK((rc_nc == 0) && (f2 == f1), "TC-MM-EXTRA", "non-CACHED not dispatched");
 
-    /* set_attrs / query 派发 */
+    /* set_attrs / query dispatch */
     attrs = 0u;
     const int rc_sa = br_mm_set_attrs(g_heap_base, 4096u, BR_MM_RO);
     const int rc_q  = br_mm_query(g_heap_base, 4096u, &attrs);
     CHECK((rc_sa == 0) && (rc_q == 0) && (attrs == BR_MM_CACHED), "TC-MM-EXTRA",
-          "set_attrs/query 经 ops 派发");
+          "set_attrs/query dispatched via ops");
 
-    /* 落表失败 ⇒ 回滚表项(不留第二真值) */
+    /* table insert fails ⇒ roll back the entry (no second source of truth) */
     const br_uintptr_t fail_at = (br_uintptr_t)(void *)g_regspace;
     s_ops_stats.fail_base = fail_at;
     const br_u32 count_before = br_mm_region_count();
     const int rc_fail = add_region(fail_at, 4096u, BR_MM_WITH_KIND(0u, BR_MM_KIND_RESERVED));
     const br_u32 count_after = br_mm_region_count();
     s_ops_stats.fail_base = 0u;
-    printf("[HOSTTEST]   map_region 失败 rc=%d count %u -> %u\n",
+    printf("[HOSTTEST]   map_region failure rc=%d count %u -> %u\n",
            rc_fail, (unsigned)count_before, (unsigned)count_after);
     CHECK((rc_fail == BR_ERR(EIO)) && (count_after == count_before),
-          "TC-MM-EXTRA", "map_region 失败即回滚 region 表项");
+          "TC-MM-EXTRA", "map_region failure rolls back the region entry");
 
-    /* 表满 ⇒ -ENOSPC(用一个不与已有 region 重叠的新区) */
+    /* table full ⇒ -ENOSPC (use a new area that overlaps no existing region) */
     br_u32 i = 0u;
     while ((br_mm_region_count() < (br_u32)BR_MM_MAX_REGIONS) && (i < 32u)) {
         const int rc = add_region((br_uintptr_t)(void *)g_regspace + (br_uintptr_t)(i * 4096u),
                                   4096u, BR_MM_WITH_KIND(0u, BR_MM_KIND_RESERVED));
         if (rc != 0) {
-            printf("[HOSTTEST]   填充 region 第 %u 条失败 rc=%d\n", (unsigned)i, rc);
+            printf("[HOSTTEST]   filling region entry %u failed rc=%d\n", (unsigned)i, rc);
             break;
         }
         i++;
@@ -995,12 +996,12 @@ static void test_mm_extra(void)
            (unsigned)br_mm_region_count(), (unsigned)BR_MM_MAX_REGIONS,
            rc_full, (unsigned)s_ops_stats.map_calls);
     CHECK(br_mm_region_count() == (br_u32)BR_MM_MAX_REGIONS, "TC-MM-EXTRA",
-          "region 表填满");
-    CHECK(rc_full == BR_ERR(ENOSPC), "TC-MM-EXTRA", "表满 ⇒ -ENOSPC");
+          "region table full");
+    CHECK(rc_full == BR_ERR(ENOSPC), "TC-MM-EXTRA", "table full ⇒ -ENOSPC");
 }
 
 /* =====================================================================
- * 池几何观测
+ * Pool geometry observation
  * ===================================================================== */
 
 static void test_layout(void)
@@ -1014,10 +1015,10 @@ static void test_layout(void)
            (unsigned long)l.page.size, (unsigned)l.page_total,
            (unsigned long)l.dma.size, (int)br_mem_ready());
 
-    CHECK(rc == 0, "TC-MEM-LAYOUT", "br_mem_layout 成功");
-    CHECK(l.heap.size == SZ_HEAP, "TC-MEM-LAYOUT", "heap 池尺寸 = region 声明");
+    CHECK(rc == 0, "TC-MEM-LAYOUT", "br_mem_layout succeeds");
+    CHECK(l.heap.size == SZ_HEAP, "TC-MEM-LAYOUT", "heap pool size = region declaration");
     CHECK(l.page_total == (br_u32)(SZ_PAGE / BR_PAGE_SIZE), "TC-MEM-LAYOUT",
-          "page_total 按 4 KiB 粒度换算");
+          "page_total computed on 4 KiB granularity");
     CHECK(br_mem_ready() == BR_TRUE, "TC-MEM-LAYOUT", "br_mem_ready() == TRUE");
 }
 
@@ -1027,24 +1028,24 @@ static void test_layout(void)
 
 int main(void)
 {
-    printf("[HOSTTEST] brickOS prototype — 宿主侧内存语义门禁\n");
+    printf("[HOSTTEST] brickOS prototype — host-side memory semantics gate\n");
 
     const int rsetup = setup_regions();
-    printf("[HOSTTEST] region 声明 rc=%d count=%u\n",
+    printf("[HOSTTEST] region declarations rc=%d count=%u\n",
            rsetup, (unsigned)br_mm_region_count());
     if (rsetup != 0) {
-        printf("[HOSTTEST] FAIL SETUP region 声明失败\n");
+        printf("[HOSTTEST] FAIL SETUP region declaration failed\n");
         printf("[HOSTTEST] SUMMARY pass=%d fail=%d total=%d\n",
                s_pass, s_fail + 1, s_pass + s_fail + 1);
         return 1;
     }
 
-    /* 幂等: 二次调用返回首次结果 */
+    /* idempotent: second call returns the first result */
     const int init1 = br_mem_init();
     const int init2 = br_mem_init();
     printf("[HOSTTEST] br_mem_init rc=%d again=%d\n", init1, init2);
-    CHECK(init1 == 0, "TC-MEM-INIT", "br_mem_init 成功");
-    CHECK(init2 == init1, "TC-MEM-INIT", "br_mem_init 幂等");
+    CHECK(init1 == 0, "TC-MEM-INIT", "br_mem_init succeeds");
+    CHECK(init2 == init1, "TC-MEM-INIT", "br_mem_init is idempotent");
 
     test_layout();
     test_mem_001_align();
@@ -1064,7 +1065,7 @@ int main(void)
     test_mm_003_map();
     test_mm_extra();
 
-    /* 压力放最后: 它把堆清空, 便于验证合并回单一空闲块 */
+    /* stress last: it empties the heap, easing verification of merge back to one free block */
     test_mem_002_stress();
 
     printf("[HOSTTEST] SUMMARY pass=%d fail=%d total=%d\n",

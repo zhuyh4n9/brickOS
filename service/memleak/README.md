@@ -1,7 +1,7 @@
 # service/memleak
 
 > **泄漏 / 堆破坏报告服务**: 按"归属标签"出存活块账 + 红区/魔数/毒化违约计数。
-> 本 README 由实现者维护(声明面 `plugin.toml` 是唯一真值, 不在这里复述)。
+> 本 README 由实现者维护(声明面 `brick.toml` 是唯一真值, 不在这里复述)。
 
 ## 能力面(声明面 `include/br/debug/br_memleak.h` 的转述)
 
@@ -87,7 +87,7 @@
    并缓存成功结果(失败不缓存, 下次再试), init 只是它的显式入口。这样
    `memleak_selftest()`(由 core 驱动)在 `init` 未跑过的组合下也能工作。
 5. **不注册 trace 事件名**: 头文件抬头提到 memleak init 还要"注册 trace 事件名", 但
-   `plugin.toml` **没有** `service/trace` 依赖边 ⇒ 不造一条未声明的调用边
+   `brick.toml` **没有** `service/trace` 依赖边 ⇒ 不造一条未声明的调用边
    (声明面唯一真值的纪律)。留待依赖边被显式声明后再补。
 
 ## 依赖与红区约定(集成前提)
@@ -102,13 +102,13 @@
 
 - **`service/dump`**: `br_dump_leaks()` → `br_memleak_report()`(只调**呈现面**; dump 不再
   代跑任何自检)。`product.toml [select].plugins` 只选了 `service/dump`, memleak 作为它的
-  `[[dep]]` 被**同镜像编译**(源集合由本插件 `plugin.toml` 的 `[build].sources` 声明、
+  `[[dep]]` 被**同镜像编译**(源集合由本插件 `brick.toml` 的 `[build].sources` 声明、
   `brickie build` 按依赖闭包消费); 插件管理器扫 `.br_plugins` 时按 dump 的 init 闭包把它
   带入, LATE 相按拓扑序调到 `memleak_init()` → `br_memleak_init()`。
 - **自检**: `memleak_selftest()` 由 **core** 的 `br_plugin_manager_selftest()` 在全部
   `start()` 之后、按 init 拓扑序统一驱动 —— dump 的四条 `kind = "init"` 边保证 memleak 的
   钩子排在 dump 自己的 `dump_selftest()` 之前(后者要观测"堆已被 memleak 用例恢复干净")。
-- **APP 不直调 memleak**(`app/hello/plugin.toml` 没有这条 dep), 也不直调 dump。
+- **APP 不直调 memleak**(`app/hello/brick.toml` 没有这条 dep), 也不直调 dump。
 
 ## 验证
 
@@ -131,7 +131,7 @@ make dbg-test                           # 运行期门禁(需 core 堆实现就�
 1. **`br_memleak_corruptions()` 的累计峰值口径**: 头文件抬头提到"+ 本插件累计观察到的
    峰值", 本原型按当前状态实现(见上文裁定 3)。若要累计, 需要明确"峰值"的定义与复位点
    (否则用例判据不可判)。
-2. **trace 事件名**: `br_memleak_init()` 的文档提到注册 trace 事件名, 但 plugin.toml
+2. **trace 事件名**: `br_memleak_init()` 的文档提到注册 trace 事件名, 但 brick.toml
    无 `service/trace` 依赖边 —— 需要先补声明边, 再补调用。
 3. **memleak 行数观测**: `br_dump_all()` 只能把 report 的"存活块数"折算成行数
    (下界口径)。若要精确, 需要 `br_memleak_report()` 回传"本次打印行数"的新函数。

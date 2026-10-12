@@ -1,0 +1,75 @@
+schema = 1
+
+[plugin]
+name        = "app/hello"
+plugin_type = "app"
+api_type    = "native"
+lang        = "c"
+phase       = "app"
+version     = "0.1.0.0"
+summary     = "MainLoop: 延时 + 日志 + 启动期自检(启动链演示)"
+license     = "WTFPL"
+
+[[res]]
+kind     = "ram"
+used_kib = 2
+[[res]]
+kind     = "stack"
+used_kib = 4
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[[mount]]
+target = "/"
+fstype = "tmpfs"
+order  = 1
+
+[[mount]]
+target = "/dev"
+fstype = "devfs"
+order  = 2
+
+[[mount]]
+source = "emmc0"
+target = "/fat12"
+fstype = "fat"
+order  = 3
+
+[[mount]]
+source = "emmc1"
+target = "/fat16"
+fstype = "fat"
+order  = 4
+
+[[mount]]
+source = "emmc2"
+target = "/fat32"
+fstype = "fat"
+order  = 5
+
+[[mount]]
+source = "emmc3"
+target = "/assets"
+fstype = "erofs"
+order  = 6
+
+[[dep]]
+name   = "iface/posix"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "usleep"
+
+[[dep]]
+name   = "iface/min"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_log_info"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

@@ -1,27 +1,27 @@
-# tests/gates.toml — 门禁声明面(人写; `brickie test` / `brickie build` 消费)
+# tests/gates.toml — gate declaration surface (hand-written; consumed by `brickie test` / `brickie build`)
 #
-# 为什么门禁要有声明面:
-#   门禁的"红绿判据"以前住在顶层 `Makefile` 的 recipe 里(grep 一串模式 + 一个用例名单)。
-#   那是**第二处真值**: 同一个判据在 Makefile、CI、文档里各写一遍就会漂。搬到这里之后,
-#   `brickie test` 只按本文件编排, 判据由 brickie-core 应用 —— 于是 `--json`、文本输出与
-#   CI 的退出码全从同一份 `data` 来。
+# Why gates need a declaration surface:
+#   The red/green criterion used to live in top-level `Makefile` recipes (grep a set of patterns + a test list).
+#   That was a **second source of truth**: written again in Makefile, CI and docs, it drifts. Moved here,
+#   `brickie test` orchestrates purely from this file and brickie-core applies the criteria — so `--json`,
+#   text output and CI exit codes all come from one `data`.
 #
-# 三张表(与 `6-01-test.md` 的用例表是不同层次的东西: 那是**用例内容**, 这是**怎么跑**):
-#   [[hosttest]]  宿主可执行用例(不碰交叉工具链/QEMU): 编 → 跑 → 退出码即判据
-#   [[gate]]      QEMU 门禁: 限时跑镜像 → 日志按 require/forbid 正则判 + 用例 tag 点名
-#   [[script]]    脚本门禁: 跑一个脚本 → 退出码 + 可选 stdout 正则
+# Three tables (a different layer from `6-01-test.md`'s case table: that is **case content**, this is **how to run**):
+#   [[hosttest]]  host executables (no cross toolchain/QEMU): build -> run -> exit code is the criterion
+#   [[gate]]      QEMU gate: run the image under a timeout -> judge log by require/forbid regex + tags
+#   [[script]]    script gate: run a script -> exit code + optional stdout regex
 #
-# ⚠ 正则子集(如实声明, 免得写出"永不匹配"的假绿): 支持 `.` `*` `+` `?` `[...]`(`^` 取反、
-#   `a-z` 区间)与 `\x` 转义; **不支持**分组/交替/锚点(`( ) | ^ $ { }`)—— 写了它们
-#   core 会**报形状错**(BRV-BLD-0012)而不是静默不匹配。
-#   所以"三种 CONF 的 FAIL"写成三条 forbid, 而不是一条交替正则。
+# ! Regex subset (declared honestly, to avoid "never matches" false green): supports `.` `*` `+` `?` `[...]`
+#   (`^` negation, `a-z` ranges) and `\x` escapes; **not** supported: grouping/alternation/anchors
+#   (`( ) | ^ $ { }`) — core reports a **shape error** (BRV-BLD-0012) instead of silently not matching.
+#   Hence "FAIL of three CONFs" is three forbid entries, not one alternation regex.
 schema = 1
 
-# ------------------------------------------------------------------ QEMU 运行
+# ------------------------------------------------------------------ QEMU run
 [run]
 default_timeout_s = 5
 
-# ------------------------------------------------------------------ 宿主用例
+# ------------------------------------------------------------------ host tests
 [host]
 cc = "cc"
 bin_dir = "build/hosttest"
@@ -33,11 +33,11 @@ cflags = [
 
 [[hosttest]]
 name     = "sync-test"
-# 同步原语的主判据: 被测 = sync.c(+ time.c 的 br_deadline_from_now + string.c),
-# 桩 = sync_test.c 里的 ucontext 假调度器(真跑阻塞/唤醒/超时) + host_stubs.c。
-# 自检套件(`core/selftest/sync_selftest.c`, ADR-0010)必须列进来: 宿主的退出码是
-# sched/sync 的**主判据**, 套件搬出生产 .c 后不列就既缺符号(链接失败)又丢掉整套用例。
-# 宿主上自检**恒在** —— 宿主测试只在开发/CI 跑, 没有需要尊重的产品开关(§2.3)。
+# Main criterion for sync primitives: under test = sync.c (+ time.c's br_deadline_from_now + string.c),
+# stubs = ucontext fake scheduler in sync_test.c (really runs block/wake/timeout) + host_stubs.c.
+# The selftest suite (`core/selftest/sync_selftest.c`, ADR-0010) must be listed: the host exit code is
+# sched/sync's **main criterion**; omitting the suite (moved out of the production .c) both breaks the
+# link and drops the whole case set. On host, selftest is **always on** — host tests run only in dev/CI,
 sources  = [
   "core/src/sync/sync.c", "core/src/time.c", "core/src/string.c",
   "core/selftest/sync_selftest.c",
@@ -55,7 +55,7 @@ includes = ["core/include", "core/src", "tests/host"]
 
 [[hosttest]]
 name     = "mem-test"
-# 与旧 Makefile 的 `mem-test: string-test` 同义: 内存语义门禁跑之前先跑支持例程用例。
+# Same as the old Makefile's `mem-test: string-test`: run the support-routine case before the mem gate.
 depends  = ["string-test"]
 sources  = [
   "core/src/mem/tlsf.c", "core/src/mem/mem.c", "core/src/mem/page.c",
@@ -63,23 +63,23 @@ sources  = [
 ]
 includes = ["core/include", "core/src", "core/src/mem", "core/src/mm", "tests/host"]
 
-# sched-test(宿主): 调度框架 + **coop** 的语义门禁。
-# 切换层 `core/src/sched/switch.S` **只在 aarch64 编**(宿主是 x86-64)⇒ 用例自备
-# ucontext 版的 `br_sched_switch_to()` 与时钟/L2/日志/panic 桩; 共享装置在
-# `tests/host/host_sched.c`(接口与理由见 host_sched.h), 本用例只放 coop 特有的判据。
-# 判据两类: 宿主专用的 FIFO/block-wake/超时/sleep_until/idle,
-# 加上 core 的 `br_sched_selftest()`(TC-TASK-* / TC-TIME-*, kind=coop ⇒ 跑 TC-TASK-101)。
-# ★ ADR-0011 之后镜像选的是 sched/rr ⇒ **本用例是 coop 的唯一腿**(含"忙线程不被切走"
-#   那条 coop/preempt 分界)。
+# sched-test (host): semantic gate for the scheduler framework + **coop**.
+# The switch layer `core/src/sched/switch.S` builds **only on aarch64** (host is x86-64) => the case brings
+# its own ucontext `br_sched_switch_to()` plus clock/L2/log/panic stubs; shared rig in
+# `tests/host/host_sched.c` (interface/rationale in host_sched.h); this case holds coop-specific criteria.
+# Two criterion families: host-only FIFO/block-wake/timeout/sleep_until/idle,
+# plus core's `br_sched_selftest()` (TC-TASK-* / TC-TIME-*, kind=coop => runs TC-TASK-101).
+# * After ADR-0011 the image selects sched/rr => **this case is coop's only leg** (including "a busy
+#   thread is not preempted").
 [[hosttest]]
 name     = "sched-test"
-# 与内存语义门禁同样的支持例程前置(编译器可能把整块清零降低成 memset)。
+# Same support-routine prerequisite as the mem gate (the compiler may lower a block clear to memset).
 depends  = ["string-test"]
-# 自检套件 `core/selftest/sched_selftest.c` 的理由同上面的 sync-test(宿主是主判据,
-# 套件已搬出 sched_core.c; 宿主上自检恒在)。
-# `core/src/work/work_core.c` 必须一起编: sched_core.c 的 bh 禁令与 host_sched.c 的
-# `br_irq_in_atomic()` 都引用 `br_work_in_bh()`。
-# `core/src/trace.c` 同理: ADR-0011 之后 sched_core.c 的抢占/bh 禁令都会留痕。
+# The `core/selftest/sched_selftest.c` suite is listed for the same reason as sync-test above (host is the
+# main criterion; the suite moved out of sched_core.c; selftest is always on host).
+# `core/src/work/work_core.c` must be compiled too: sched_core.c's bh ban and host_sched.c's
+# `br_irq_in_atomic()` both reference `br_work_in_bh()`.
+# Same for `core/src/trace.c`: after ADR-0011 sched_core.c's preempt/bh bans leave traces.
 sources  = [
   "core/src/sched/sched_core.c", "core/src/work/work_core.c",
   "core/src/trace.c", "core/src/string.c",
@@ -89,10 +89,10 @@ sources  = [
 ]
 includes = ["core/include", "core/src", "core/src/sched", "sched/coop/include", "tests/host"]
 
-# rr-test(宿主): **sched/rr**(时间片轮转抢占)的语义门禁(ADR-0011)。
-# 与 sched-test 共用装置; 判据是"tick 驱动的抢占"这一族: AABB 交替序列 / 无 tick 不抢占 /
-# need_resched 的置位与消费, 加上 core 的 `br_sched_selftest()`(kind=preempt ⇒ 会跑
-# TC-TASK-102 时间片抢占与 TC-TASK-103 临界区不抢占)。
+# rr-test (host): semantic gate for **sched/rr** (round-robin preemption) (ADR-0011).
+# Shares the rig with sched-test; criteria are the "tick-driven preemption" family: AABB alternation / no
+# preemption without a tick / need_resched set-and-consume, plus core's `br_sched_selftest()`
+# (kind=preempt => runs TC-TASK-102 slice preemption and TC-TASK-103 no preempt in critical section).
 [[hosttest]]
 name     = "rr-test"
 depends  = ["string-test"]
@@ -105,10 +105,10 @@ sources  = [
 ]
 includes = ["core/include", "core/src", "core/src/sched", "sched/rr/include", "tests/host"]
 
-# work-test(宿主): 下半部/工作队列的语义门禁(ADR-0011)。
-# 被测 = `core/src/work/work_core.c`(+ trace 环, 用来观察 bh 禁令的留痕);
-# 队列有界/FIFO/预算/非重入/bh 上下文与禁令 —— 目标上要构造"队列满"得靠中断风暴。
-# 带上 sched_core.c + trace.c: 前者提供 bh 内阻塞/让出的真实禁令路径, 后者是留痕的证据源。
+# work-test (host): semantic gate for bottom halves / work queues (ADR-0011).
+# Under test = `core/src/work/work_core.c` (+ trace ring, to observe bh-ban traces);
+# queue bounded/FIFO/budget/non-reentrant/bh context and bans — on target a full queue needs an IRQ storm.
+# Include sched_core.c + trace.c: the former gives the real ban path for blocking/yielding in bh, the latter
 [[hosttest]]
 name     = "work-test"
 depends  = ["string-test"]
@@ -120,15 +120,15 @@ sources  = [
 ]
 includes = ["core/include", "core/src", "core/src/sched", "sched/rr/include", "tests/host"]
 
-# ft-test(宿主): **文件表(framework/file-table) + errno 值域**的门禁(ADR-0012)。
-# 为什么值得一条宿主用例: 表是**纯算法**(契约头明写"不解引用 br_file_t")—— 表满 /
-# dup2 顶替 / 最后一个引用 / 极端 fd 这些只有真实负载才碰得到的边界, 宿主上几毫秒全跑到,
-# 不必开 QEMU(与 mem-test / sync-test 的分工同型)。
-# ★ 它还兼任**errno 对拍**: 拿宿主 <errno.h> 逐码比 `br_error.h` 的每一个 BR_E* ——
-#   这是"errno 与 Linux kernel 保持一致"的可执行判据(宿主 x86-64 与目标 aarch64 共用
-#   内核 asm-generic 编号, 所以对目标同样成立)。
-# 源集合里带上 `src/ft_selftest.c`: in-image 套件(TC-FT-001..011)在宿主上**重跑同一份**,
-# 于是宿主与目标两条腿的判据同源, 不会各自漂。
+# ft-test (host): gate for the **file table (framework/file-table) + errno value range** (ADR-0012).
+# Why a host case is worthwhile: the table is a **pure algorithm** (contract header says "never dereferences
+# br_file_t") — table full / dup2 replacement / last reference / extreme fd are boundaries only real load
+# reaches, and the host covers them in milliseconds without QEMU (same split as mem-test / sync-test).
+# * It also serves as the **errno cross-check**: compare every BR_E* in `br_error.h` code by code against
+#   host <errno.h> — an executable criterion for "errno matches the Linux kernel" (host x86-64 and target
+#   aarch64 share the asm-generic numbering, so it holds for the target too).
+# The source set includes `src/ft_selftest.c`: the in-image suite (TC-FT-001..011) **reruns verbatim** on
+# the host, so both legs share one criterion source and cannot drift apart.
 [[hosttest]]
 name     = "ft-test"
 sources  = [
@@ -138,61 +138,61 @@ sources  = [
 ]
 includes = ["core/include", "framework/file-table/include", "tests/host"]
 
-# ⚠ **同名是刻意的**: `sync-test` / `sched-test` 在 `[[hosttest]]` 与 `[[gate]]` 里各有一条。
-#   同一个名字指的是"同一套用例的两种跑法" —— 宿主侧(秒级、能用 ucontext 造真阻塞)与
-#   目标侧(真地址空间、真中断、真 tick)。于是 `brickie test sync-test` 会**两条都跑**,
-#   这正是我们要的: 宿主红与目标红是两种不同的信息, 少一个都不算验证过。
-#   (判据仍各自独立: 宿主的判据是退出码, 目标的判据是 require/forbid/require_tags。)
+# ! **Duplicate names are deliberate**: `sync-test` / `sched-test` appear in both `[[hosttest]]` and `[[gate]]`.
+#   One name means "two ways to run one case set" — host side (seconds, real blocking via ucontext) and
+#   target side (real address space, real IRQs, real tick). So `brickie test sync-test` **runs both**,
+#   which is what we want: host-red and target-red are different information; neither alone is verification.
+#   (Criteria stay independent: host = exit code, target = require/forbid/require_tags.)
 
-# ------------------------------------------------------------------ QEMU 门禁
-# smoke: 只看"启动 / MainLoop / 延时判据 / 中断心跳 / 各套一致性用例摘要"。
-# ★ ADR-0022 把超时从 3 s 抬到 12 s: 本刀加了两件介质类 FS, 启动相要经真 SDHCI 读
-#   ~80 KiB(夹具里的 70000 B 压缩件 + 4096 B 平面件等), 而这些读**每次一个扇区**
-#   (驱动的最强满足口径: 单次 I/O 1 扇区 ≤ max_rw); 自检相因此从 ~0.2 s 变成 ~1.5 s。
-#   再加上 `tick=2 ` 这条判据本身要等两个 1 s 心跳 ⇒ 3 s 已不够(实测: 自检 SUMMARY
-#   正好落在 2.97 s, tick=2 永远赶不上)。
+# ------------------------------------------------------------------ QEMU gates
+# smoke: only "boot / MainLoop / delay criterion / IRQ heartbeat / each conformance suite summary".
+# * ADR-0022 raised the timeout from 3 s to 12 s: this cut adds two media-class FS, and the start phase
+#   reads ~80 KiB over real SDHCI (the 70000 B compressed + 4096 B flat fixtures etc.), one sector per
+#   read (the driver's strongest claim: one I/O sector <= max_rw); selftest phase went ~0.2 s -> ~1.5 s.
+#   Also `tick=2 ` itself waits for two 1 s heartbeats => 3 s no longer suffices (measured: the selftest
+#   SUMMARY landed at exactly 2.97 s, so tick=2 never made it).
 [[gate]]
 name      = "smoke"
 timeout_s = 12
 log       = "build/logs/smoke.log"
 require   = [
-  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
-  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
-  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
+  # SUMMARY line must exist (ran >= 1) with fails=0/errors=0 — proving two things at once:
+  # selftest was driven, and the switch is on (that line does not exist in an image with selftest off).
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "core MainLoop",
   "tick=2 ",
-  # ★ 替代原 `int: conformance ALL PASS`(ADR-0010): 那行由 platform.start 打印,
-  # 而中断/内存两套用例已搬到 selftest。这里直接钉 IRQCONF 的 SUMMARY ——
-  # 比原判据更强(它同时断言"跑了 67 项"且"全绿", 原来那句只是 platform 的一句自述)。
+  # * Replaces the old `int: conformance ALL PASS` (ADR-0010): that line was printed by platform.start,
+  # while the IRQ/memory suites moved into selftest. Here we pin IRQCONF's SUMMARY directly —
+  # stronger than before (asserts both "67 cases ran" and "all green"; the old line was self-reported).
   "\\[IRQCONF\\] SUMMARY pass=[0-9]+ fail=0 ",
-  # ★ ADR-0011: 下半部/工作队列的套件摘要(有界/FIFO/非重入/bh 禁令)。
+  # * ADR-0011: bottom-half/work-queue suite summary (bounded/FIFO/non-reentrant/bh bans).
   "\\[WQCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[MEMCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[DBGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
-  # ★ ADR-0021: 块设备子分类(bdev-core)的套件摘要 —— 存储域第二条设备链的框架件。
-  #   驱动接入前 TC-BDEV-006/008 走"不适用"分支, 框架机制(注册/取回/几何/raw 面)仍逐条判。
+  # * ADR-0021: block-device subclass (bdev-core) suite summary — framework part of the 2nd device chain.
+  #   Before a driver joins, TC-BDEV-006/008 take the "not applicable" branch; the framework mechanisms
   "\\[BDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
-  # ★ ADR-0021 D-2: 通用 PCI(e) 框架件的套件摘要(枚举到 sdhci-pci、BAR 已分配、
-  #   命令寄存器开了 MEM/BUS_MASTER、INTx swizzle 正确)。
+  # * ADR-0021 D-2: generic PCI(e) framework suite summary (sdhci-pci enumerated, BARs assigned,
+  #   command register with MEM/BUS_MASTER set, INTx swizzle correct).
   "\\[PCICONF\\] SUMMARY pass=[0-9]* fail=0 ",
-  # ★ ADR-0019: APP 侧的 POSIX 多线程样例(经 iface/posix 皮肤)。它证明"多线程在真镜像上
-  #   真的跑过且判据全绿", 而不是只靠 runtime/posix 自己的自检。
+  # * ADR-0019: APP-side POSIX multithreading sample (through the iface/posix skin). It proves threads
+  #   really ran on a real image with all green, not just runtime/posix's own selftest.
   "\\[APPCONF\\] SUMMARY pass=[0-9]* fail=0 ",
-  # ★ ADR-0022: 两件**介质类文件系统**移植件的套件摘要(FAT12/16/32 三卷 + EROFS 只读镜像)。
-  #   它们与上面几条的分工: 这里是"卷挂上了且用例全绿"的**粗判据**, 逐条点名与
-  #   "外部权威工具造的字节读得对"这两件事由 `fat-test` / `erofs-test` 两关细判。
+  # * ADR-0022: suite summary of the two **media-class filesystem** ports (FAT12/16/32 volumes + EROFS image).
+  #   Split vs. the entries above: here is the **coarse criterion** "volumes mounted and cases green";
+  #   per-case naming and "bytes made by an external authority tool read back correctly" are judged in detail
   "\\[FATCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[EROFCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
-  # 延时自检的判据行("... us: ok"): 它证明"不早醒"这条性质**被测过且通过**,
-  # 而不只是"没出现失败字样"。
+  # The delay-selftest criterion line ("... us: ok"): proves the "no early wake" property was **tested and**
+  # **passed**, not merely that no failure string appeared.
   "us: ok\\)",
 ]
 forbid    = [
-  # ⚠ 这里**不能**写裸词 "EARLY": 插件管理器的启动横幅里有 `(EARLY/CORE/LATE -> …)`,
-  # 会误伤(实测踩到)。判据要精确到"延时自检报早醒"那一行: `... us: EARLY)`
-  # —— 门禁模式必须钉在**判据本身**上, 而不是判据可能用到的词上。
+  # ! A bare "EARLY" **must not** be used here: the plugin manager's boot banner contains
+  # `(EARLY/CORE/LATE -> ...)`, a false hit in practice. Pin the criterion to the delay-selftest line:
+  # `... us: EARLY)` — gate patterns must pin **the criterion itself**, not words it may use.
   "us: EARLY\\)",
   "FATAL",
   "\\[PANIC\\]",
@@ -207,26 +207,26 @@ forbid    = [
   "\\[EROFCONF\\] FAIL",
 ]
 require_tags = [
-  # ADR-0019: 逐项点名 —— APP 的多线程用例被裁掉/没跑, 门禁即红。
+  # ADR-0019: name each case — if an APP multithreading case is trimmed/skipped the gate goes red.
   "APP-PT-001", "APP-PT-002", "APP-PT-003", "APP-PT-004",
   "APP-PT-005", "APP-PT-006", "APP-PT-007",
-  # ★ ADR-0022: APP 侧的介质类文件系统用例(经 iface/posix)逐项点名。
+  # * ADR-0022: APP-side media-class filesystem cases (through iface/posix), named individually.
   "APP-FS-001", "APP-FS-002", "APP-FS-003", "APP-FS-004",
   "APP-FS-005", "APP-FS-006", "APP-FS-007",
-  # ★ ADR-0021 D-2: PCIe 框架件逐条点名(裁掉用例也算红)。
+  # * ADR-0021 D-2: PCIe framework cases named individually (trimming one is red too).
   "TC-PCI-001", "TC-PCI-002", "TC-PCI-003", "TC-PCI-004",
   "TC-PCI-005", "TC-PCI-006", "TC-PCI-007", "TC-PCI-008",
 ]
 
-# irq-test: **逐用例**门禁(裁掉用例也算红 —— 与 smoke 的分工就在这里)。
+# irq-test: **per-case** gate (trimming a case is red too — that is the split from smoke).
 [[gate]]
 name      = "irq-test"
 timeout_s = 6
 log       = "build/logs/irq.log"
 require   = [
-  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
-  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
-  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
+  # SUMMARY line must exist (ran >= 1) with fails=0/errors=0 — proving two things at once:
+  # selftest was driven, and the switch is on (that line does not exist in an image with selftest off).
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[IRQCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -241,29 +241,29 @@ require_tags = [
   "TC-IRQ-010", "TC-IRQ-012", "TC-IRQ-013", "TC-IRQ-014", "TC-IRQ-016",
   "TC-IRQ-018", "TC-IRQ-019", "TC-IRQ-021", "TC-IRQ-022", "TC-IRQ-101",
   "TC-IRQ-102", "TC-IRQ-STATS",
-  # ★ ADR-0011 新增(下半部 bh): 015 = 按线的 BH 分发(handler 真的在 bh 上下文里);
-  #   017 = §11.4.1 的抑制 / 不重放。016 本来就在名单里, 本刀把它的判据从
-  #   "ISR 守卫"扩到"原子上下文(ISR **或** bh)守卫", tag 不变。
+  # * ADR-0011 additions (bottom-half bh): 015 = per-line BH dispatch (handler really in bh context);
+  #   017 = §11.4.1 suppression / no replay. 016 was already listed; this cut widened its criterion
+  #   from "ISR guard" to "atomic context (ISR **or** bh) guard", tag unchanged.
   "TC-IRQ-015", "TC-IRQ-017",
 ]
 
-# dbg-test: 内存映射 + 调试插件两个摘要同时全绿, 且用例 tag 一个不缺。
+# dbg-test: memory-mapping and debug-plugin summaries both all green, with no case tag missing.
 [[gate]]
 name      = "dbg-test"
 timeout_s = 8
 log       = "build/logs/dbg.log"
 require   = [
-  # ★ 替代原先的 `DBG-INIT` 用例(ADR-0010): 那条例外是 dump **代调**四家 LATE init 时
-  # 写的本地断言; 现在 init 由 plugin_manager 驱动, 事实在**管理器的日志**里 ——
-  # 于是判据直接钉在管理器自己的行上: 四个插件各自被驱动过且 init 返回 0。
-  # 比原用例更强: 它同时证明"被驱动"(而 DBG-INIT 只证明"dump 调过")。
+  # * Replaces the old `DBG-INIT` case (ADR-0010): that exception asserted things about dump **calling on**
+  # behalf of four LATE inits; now plugin_manager drives init, so the fact lives in **the manager's log** —
+  # the criterion pins the manager's own lines: each of the four plugins was driven and init returned 0.
+  # Stronger: it proves "was driven" (DBG-INIT only proved "dump called it").
   "\\[PLUGIN\\] phase=late name=service/trace rc=0",
   "\\[PLUGIN\\] phase=late name=service/backtrace rc=0",
   "\\[PLUGIN\\] phase=late name=service/hexdump rc=0",
   "\\[PLUGIN\\] phase=late name=service/memleak rc=0",
-  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
-  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
-  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
+  # SUMMARY line must exist (ran >= 1) with fails=0/errors=0 — proving two things at once:
+  # selftest was driven, and the switch is on (that line does not exist in an image with selftest off).
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[MEMCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[DBGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
@@ -283,114 +283,114 @@ require_tags = [
   "TC-DBG-040", "TC-DBG-041", "TC-DBG-042", "TC-DBG-043", "TC-DBG-100",
 ]
 
-# ------------------------------------------------------------------ 脚本门禁
-# 这三条是"机械判据"(反汇编扫描 / 登记表 ↔ 源码标记一致性 / 构建接线), 逻辑本身
-# 就是脚本 —— 由 brickie 编排(而不是由 Makefile 编排)才是本表的重点。
+# ------------------------------------------------------------------ script gates
+# These three are "mechanical criteria" (disassembly scan / registry <-> source-marker consistency /
+# build wiring); the logic *is* a script — that brickie orchestrates it (not the Makefile) is the point.
 [[script]]
 name    = "check-string"
 argv    = ["bash", "tools/check-string.sh", "build/obj/core/src/string.o"]
-require = ["ok   编译器支持例程无自递归"]
+require = ["ok   compiler support routines have no self-recursion"]
 
 [[script]]
 name    = "check-headers"
 argv    = ["bash", "tools/check-headers.sh"]
-require = ["ok   [0-9]* 个对外头"]
+require = ["ok   [0-9]* public headers"]
 
-# check-errno: errno 单一真值门禁(ADR-0023)。
-# ★ 它守的是本刀刚立的一条纪律: **POSIX 错误码的名字归 core**(`br/core/br_errno.h`),
-#   于是 ① 有没有 `runtime/posix` 都拿得到 POSIX 编号; ② 三方移植件不必各自抄一份映射表
-#   (那既是第二处真值, 也是对上游代码的多余改动)。三条判据: 名值配对 / 全集覆盖 / 无第二处定义。
+# check-errno: errno single-source-of-truth gate (ADR-0023).
+# * It guards a rule established this cut: **POSIX error-code names belong to core** (`br/core/br_errno.h`),
+#   so (1) POSIX numbers exist with or without `runtime/posix`; (2) third-party ports need not each copy a
+#   mapping (a second truth and a needless upstream edit). Three criteria: name/value pairing / full coverage
 [[script]]
 name    = "check-errno"
 argv    = ["bash", "tools/check-errno.sh"]
-require = ["ok   errno 表"]
+require = ["ok   errno table"]
 
 [[script]]
 name = "check-workarounds"
 argv = ["bash", "tools/check-workarounds.sh"]
 
-# check-third-party-pristine: third_party 是**只读 vendor 树**的门禁(ADR-0025 / ADR-0026)。
-# ★ 它守的是"三方代码与 brickOS 代码必须隔离"这条政策, 且把它做**可机械判定**:
-#   ① 锁元数据齐; ② vendor 树**逐字节等于锁里的 sha256**(任一字节被改 ⇒ 红);
-#   ③ 锁里每条都在磁盘上(丢了也红); ④ vendor 树里没有锁外的文件(塞东西也红);
-#   ⑤ third_party/ 下没有 plugin.toml; ⑥ 无人以**绝对路径** include 三方件的头
-#   (ADR-0026 起 vendor 的 `.c` **确实参与编译** —— 各 plugin.toml 的 `sources` 直接指向
-#   它们; 需要 vendor 的头时经 adapter/*/compat/ 的相对路径**转发壳**)。
-#   ★ 为什么必须有这条: 上一轮反复犯的正是"顺手改一行三方件让它编过"(加注释/SPDX、
-#     改 include、删裁剪)。纪律写在文档里拦不住, 写成 hash 锁才拦得住。
-#   ★ 它还有**另一半**(ADR-0029): `check-adapter-copies` 守"adapter/ 里不许有 vendor 源码副本"。
-# check-posix-conformance: iface/posix 与 **POSIX 一致**的门禁(ADR-0028)。
-# ★ 它守的是"APP 看见的 POSIX 面必须与真 POSIX 一致" —— 不一致的后果不是编不过, 而是
-#   **静默错值**(类型宽度不同 ⇒ 布局不同)、**flag 位含义不同**(常量不同)、
-#   或**移植代码编不过**(少一个必需的名字)。四条判据全部以宿主 glibc 为对照:
-#   ① 类型宽度 ② 常量值 ③ 函数签名(赋值兼容) ④ struct stat/dirent 的必需成员与类型宽度。
-#   ★ **不**比字段偏移: POSIX 不规定 struct stat 的成员顺序, 拿 glibc 的偏移当判据
-#     会把"glibc 的 ABI"误当成"POSIX 的要求"。少数有意偏离走白名单 + 写明理由。
-# check-mount-ownership: **挂载归属**门禁(ADR-0030)。
-# ★ 它守的是"挂载由 APP 决定"这条新分工: FS 插件只登记**驱动**(fstype 名 → ops),
-#   APP 用 POSIX mount() 按名挂载, 计划写在 APP 自己的 [[mount]] 里。
-#   两条机械判据: ① fs/ 与 adapter/ 里无人 br_mount_register(不许自挂载);
-#   ② [[mount]] 只出现在 app/ 的声明面(挂载计划归消费者) —— 加上一条正面判据:
-#   APP 的 [[mount]] 必须真的被 brickie 生成成可执行入口(mount_plan_apply)。
-#   ★ 为什么必须机械: 谁再往 FS 里写一行 br_mount_register, 功能测试**照旧能挂上**,
-#     只是挂载又变回 FS 自己的决定 —— 没人会发现(ADR-0030 之前正是这样)。
+# check-third-party-pristine: gate that third_party is a **read-only vendor tree** (ADR-0025 / ADR-0026).
+# * It guards the "third-party code and brickOS code must be isolated" policy, made **machine-decidable**:
+#   (1) lock metadata complete; (2) vendor tree **byte-equal to the sha256 in the lock** (any byte changed => red);
+#   (3) every lock entry is on disk (missing => red); (4) no files outside the lock in the vendor tree (red);
+#   (5) no brick.toml under third_party/; (6) nobody includes third-party headers by **absolute path**
+#   (since ADR-0026 vendor `.c` files **really are compiled** — each brick.toml's `sources` points at
+#   them; vendor headers come in via relative-path **forwarding shells** in adapter/*/compat/).
+#   * Why it must exist: the previous round repeatedly "edited one line of third-party code to make it
+#     build" (comments/SPDX, include edits, trimming). Prose discipline does not stop it; a hash lock does.
+#   * Its **other half** (ADR-0029): `check-adapter-copies` guards "no vendor source copies under adapter/".
+# check-posix-conformance: gate that iface/posix **matches POSIX** (ADR-0028).
+# * It guards "the POSIX surface APP sees must match real POSIX" — mismatch does not fail the build, it
+#   gives **silent wrong values** (different type widths => different layout), **different flag-bit meanings**
+#   (different constants), or **ported code that will not build** (a required name missing). All four
+#   criteria compare against host glibc: (1) type widths (2) constant values (3) function signatures
+#   * Field offsets are **not** compared: POSIX does not fix struct stat member order, so using glibc
+#     offsets would mistake glibc's ABI for a POSIX requirement. Few deliberate deviations: whitelist + reason.
+# check-mount-ownership: **mount ownership** gate (ADR-0030).
+# * It guards the new split "mounting is decided by APP": FS plugins only register **drivers** (fstype name
+#   -> ops); APP mounts by name via POSIX mount() with the plan in APP's own [[mount]].
+#   Two mechanical criteria: (1) nobody in fs/ or adapter/ calls br_mount_register (no self-mounting);
+#   (2) [[mount]] appears only in app/ declarations (the plan belongs to the consumer) — plus a positive
+#   criterion: APP's [[mount]] must really be generated into an executable entry (mount_plan_apply).
+#   * Why mechanical: if someone writes br_mount_register in an FS again, functional tests **still mount**,
+#     it just becomes the FS's own decision again — nobody would notice (exactly the pre-ADR-0030 state).
 [[script]]
 name = "check-mount-ownership"
 argv = ["bash", "tools/check-mount-ownership.sh"]
-require = ["PASS: 挂载归属正确"]
+require = ["PASS: mount ownership correct"]
 
 [[script]]
 name = "check-posix-conformance"
 argv = ["bash", "tools/check-posix-conformance.sh"]
-require = ["PASS: iface/posix 与 POSIX 一致"]
+require = ["PASS: iface/posix matches POSIX"]
 
 [[script]]
 name = "check-third-party-pristine"
 argv = ["bash", "tools/check-third-party-pristine.sh"]
-require = ["PASS: third_party 只读 vendor 树"]
+require = ["PASS: third_party is a read-only vendor tree"]
 
-# check-adapter-copies: **adapter/ 里不许夹带三方件源码副本**的门禁(ADR-0026 D-3 / ADR-0029)。
-# ★ 它守的是三方件纪律的**另一半**: `check-third-party-pristine` 盯的是 vendor 侧
-#   ("原件一个字节都没被改"), 而"**把上游抄一份到 adapter/ 再改名改缩进**"在文件系统上
-#   与"写适配层"长得一模一样 —— 上一轮的 `adapter/uboot-fat/src/fat_core.c` 与上游
-#   `fs/fat/fat.c` 的行级相似度就有 0.58。判据(归一化去空行/纯注释/预处理行 后算
-#   `difflib` 行级相似度): adapter 的任一 .c/.h 与任一 vendor .c/.h **≥ 0.30 且双方
-#   都 ≥ 30 行** ⇒ 红, 除非在脚本里**具名豁免并写明理由**(豁免是记账, 不是消音)。
-#   正例已实测: 迁移前的两个 `src/fat_*.c` 报红; 迁移后全树最高远低于阈值。
+# check-adapter-copies: gate that **adapter/ carries no third-party source copies** (ADR-0026 D-3 / ADR-0029).
+# * It guards the **other half** of third-party discipline: `check-third-party-pristine` watches the vendor
+#   side ("not one byte of the original changed"), while "**copy upstream into adapter/ and rename**" looks
+#   identical on disk to "writing an adaptation layer" — the previous round's `adapter/uboot-fat/src/
+#   fat_core.c` had 0.58 line-level similarity to upstream `fs/fat/fat.c`. Criterion (after normalizing
+#   away blank/comment-only/preprocessor lines, using `difflib` line similarity): any adapter .c/.h vs. any
+#   vendor .c/.h with **>= 0.30 and both >= 30 lines** => red, unless **named and justified** in the
+#   script (an exemption is bookkeeping, not silencing). Measured: the two pre-migration `src/fat_*.c`
 [[script]]
 name = "check-adapter-copies"
 argv = ["python3", "tools/check-adapter-copies.py"]
-require = ["PASS: adapter 无三方件源码副本"]
+require = ["PASS: adapter has no third-party source copies"]
 
 [[script]]
 name = "check-build"
 argv = ["bash", "tools/check-build.sh"]
 
-# fs-images: 造**四块**块设备后备镜像(ADR-0022)。
-# ★ 它同时列在 `[build].post` 里 ⇒ 每次 `brickie build`(以及 `brickie test` 的自动构建)
-#   之后、任何 QEMU 门禁之前, `build/emmc0..3.img` 一定在位。这解决两件事:
-#     ① 工程事实: QEMU 不会自己创建块设备后备文件;
-#     ② 判据来源: FAT/EROFS 卷必须由**外部权威工具**造(mkfs.fat / mkfs.erofs), 自研
-#        mkfs 与自研 reader 互为镜像证明不了任何东西。
-#   ★ 脚本**每次都重建**(不像旧的 emmc-image 那样幂等跳过): 卷里有文件系统的**活状态**,
-#     上一轮 QEMU 跑完写进去的东西必须消失, 否则 rw 用例的判据会被历史污染。
-#   ★ 工具候选序与交叉工具链同款: `prebuilts/toolchain/` → PATH(锁版本见 toolchain.lock.toml)。
+# fs-images: create the **four** block-device backing images (ADR-0022).
+# * It is also listed in `[build].post` => after every `brickie build` (and `brickie test`'s auto build)
+#   and before any QEMU gate, `build/emmc0..3.img` is in place. This solves two things:
+#     (1) engineering fact: QEMU does not create block-device backing files itself;
+#     (2) criterion provenance: FAT/EROFS volumes must be made by **external authority tools** (mkfs.fat /
+#         mkfs.erofs); a homegrown mkfs mirroring a homegrown reader proves nothing.
+#   * The script **rebuilds every time** (unlike the old idempotent emmc-image skip): volumes hold live FS
+#     state, and what the last QEMU run wrote must vanish or rw criteria get polluted by history.
+#   * Tool candidate order matches the cross toolchain: `prebuilts/toolchain/` -> PATH (versions in
 [[script]]
 name    = "fs-images"
 argv    = ["bash", "tools/mk-fs-images.sh", "build"]
 require = ["ok   fs images"]
 
-# sync-test: 同步原语的端到端门禁(线程 + 阻塞 + 超时, 在 QEMU 上)。
-# 依赖 F2 的调度框架与 F1 把 br_sync_selftest() 接到 APP 的 start 里;
-# 框架未注册时 sync.c 只打 SKIP + 部分 tag ⇒ 本门禁**如实判红**(不放宽判据)。
+# sync-test: end-to-end gate for sync primitives (threads + blocking + timeout, on QEMU).
+# Depends on F2's scheduler framework and on F1 wiring br_sync_selftest() into APP's start;
+# with no framework registered sync.c only prints SKIP + some tags => this gate **honestly goes red**
 [[gate]]
 name      = "sync-test"
 timeout_s = 8
 log       = "build/logs/sync.log"
 require   = [
-  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
-  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
-  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
+  # SUMMARY line must exist (ran >= 1) with fails=0/errors=0 — proving two things at once:
+  # selftest was driven, and the switch is on (that line does not exist in an image with selftest off).
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[SYNCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -405,26 +405,26 @@ require_tags = [
   "TC-TIME-001", "TC-TIME-002", "TC-TIME-003",
 ]
 
-# plugin-test: 插件管理器 + 服务注册表的端到端门禁(在 QEMU 上)。
-# 判据 = `[PLGCONF]`(段条数/拓扑序/相位单调/环检测负例)与 `[SVCCONF]`(注册表)两族摘要
-# 全绿, 且 `irq_ticks` 非 0(证明 START 相之后的 timer 心跳真的在跑 —— 即"插件管理器确实
-# 驱动了 platform 的 start, 而不是把它省掉")。
-# 注意: 相名与 tag 正则都在本文件的正则子集内(无分组/交替/锚点); `[PLGCONF] FAIL` 与
-# `[PANIC]` 是禁止模式 —— 首败即停机会打 [PANIC], 与本门禁的红一致。
+# plugin-test: end-to-end gate for the plugin manager + service registry (on QEMU).
+# Criteria = the two summary families `[PLGCONF]` (section count/topological order/phase monotonicity/cycle
+# negative) and `[SVCCONF]` (registry) all green, plus non-zero `irq_ticks` (proves the timer heartbeat
+# after the START phase really runs — i.e. "the plugin manager did drive platform's start").
+# Note: phase names and tag regexes stay inside this file's regex subset (no groups/alternation/anchors);
+# `[PLGCONF] FAIL` and `[PANIC]` are forbidden patterns — a first-failure panic prints [PANIC], matching
 [[gate]]
 name      = "plugin-test"
 timeout_s = 8
 log       = "build/logs/plugin.log"
 require   = [
-  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
-  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
-  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
+  # SUMMARY line must exist (ran >= 1) with fails=0/errors=0 — proving two things at once:
+  # selftest was driven, and the switch is on (that line does not exist in an image with selftest off).
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[PLGCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[SVCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
-  # ★ ADR-0012: 文件表(fd 表)的一致性套件。它与 PLGCONF/SVCCONF 同属"插件基础设施"
-  #   ——都跑在 core 的自检 pass 里, 所以挂在本门禁下而不是另开一次 QEMU。
-  #   宿主腿是独立的 `ft-test`(含 errno 与内核逐码对拍)。
+  # * ADR-0012: the file-table (fd table) conformance suite. It and PLGCONF/SVCCONF are both "plugin
+  #   infrastructure", both run in core's selftest pass, so it hangs off this gate instead of another QEMU run.
+  #   The host leg is the separate `ft-test` (incl. errno cross-check against the kernel).
   "\\[FTCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
@@ -437,27 +437,27 @@ forbid    = [
 require_tags = [
   "TC-PLUG-001", "TC-PLUG-002", "TC-PLUG-003", "TC-PLUG-002b",
   "TC-SVC-001", "TC-SVC-002", "TC-SVC-003",
-  # 文件表逐条点名(裁掉用例也算红 —— 与 smoke 的分工就在这里)。
+  # File-table cases named individually (trimming one is red too — that is the split from smoke).
   "TC-FT-001", "TC-FT-002", "TC-FT-003", "TC-FT-004", "TC-FT-005", "TC-FT-006",
   "TC-FT-007", "TC-FT-008", "TC-FT-009", "TC-FT-010", "TC-FT-011",
 ]
 
-# sched-test(QEMU): 调度框架 + coop 的端到端门禁。
-# 依赖 F1 把 APP 的 start() 改成"创建 APP 线程"(于是插件管理器在全部 start 之后
-# 进 `br_sched_run()`)并把 `br_sched_selftest()` 接在 APP 线程里; 未接线时镜像里
-# 没有 `[TASKCONF]` 输出 ⇒ 本门禁**如实判红**(不放宽判据)。
-# `irq_ticks=[1-9]` 是"START 相之后的 timer 心跳真的在跑"的证据, 也保证超时扫描有 tick 源。
+# sched-test (QEMU): end-to-end gate for the scheduler framework + coop.
+# Depends on F1 changing APP's start() to "create the APP thread" (so the plugin manager enters
+# `br_sched_run()` after all starts) and wiring `br_sched_selftest()` into the APP thread; unwired, the image
+# has no `[TASKCONF]` output => this gate **honestly goes red** (criteria are not relaxed).
+# `irq_ticks=[1-9]` evidences "the timer heartbeat really runs after START" and gives timeout scanning a tick source.
 [[gate]]
 name      = "sched-test"
 timeout_s = 8
 log       = "build/logs/sched.log"
 require   = [
-  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
-  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
-  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
+  # SUMMARY line must exist (ran >= 1) with fails=0/errors=0 — proving two things at once:
+  # selftest was driven, and the switch is on (that line does not exist in an image with selftest off).
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "\\[TASKCONF\\] SUMMARY pass=[0-9]* fail=0 ",
-  # ★ ADR-0011: 下半部在工作队列里的可观测证据(这一镜像是 preempt 调度器)。
+  # * ADR-0011: observable evidence of bottom halves in the work queue (this image has a preempt scheduler).
   "\\[WQCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
@@ -469,37 +469,37 @@ forbid    = [
 require_tags = [
   "TC-TASK-001", "TC-TASK-002", "TC-TASK-003", "TC-TASK-004", "TC-TASK-005",
   "TC-TASK-006", "TC-TASK-007", "TC-TASK-104",
-  # ★ ADR-0011: 镜像的调度器是 sched/rr(preempt)⇒ 目标侧跑的是**抢占**那两条
-  #   (TC-TASK-102 时间片 / TC-TASK-103 临界区不抢占); coop 的反面判据 TC-TASK-101
-  #   由宿主的 sched-test(coop)覆盖 —— 两边各跑自己那一面, 没有一条被裁掉。
+  # * ADR-0011: the image scheduler is sched/rr (preempt) => the target runs the **preemption** pair
+  #   (TC-TASK-102 time slice / TC-TASK-103 no preempt in critical section); coop's opposite criterion
+  #   TC-TASK-101 is covered by the host sched-test (coop) — each side runs its own face, none trimmed.
   "TC-TASK-102", "TC-TASK-103",
   "TC-TIME-001", "TC-TIME-002", "TC-TIME-003",
 ]
 
-# fs-test: 存储/设备域端到端门禁(ADR-0009)。
-# 判据 = 四套新用例摘要全绿 + 挂载证据 + 设备真的被投影出来:
-#   [VFSCONF] 存储域总套件(挂载表/走查链/文件面/目录面, APP 的 start 调)
-#   [DEVCONF] 通用设备注册表(framework/dev-core 的 start)
-#   [CDEVCONF] 字符设备子分类与适配层(framework/cdev-core 的 start)
-#   [IOCONF]  PL011 器件经 /dev/uart0 的完整往返(io/uart-pl011 的 start)
-# `vfs: mount /` 与 `vfs: mount /dev` 是"挂载计划真的执行了"的证据(不是只看摘要);
-# `irq_ticks` 非 0 保证这一切发生在中断已开的 START 相之后。
+# fs-test: storage/device domain end-to-end gate (ADR-0009).
+# Criteria = four new suite summaries all green + mount evidence + devices really projected:
+#   [VFSCONF] storage-domain suite (mount table/walk chain/file surface/dir surface, called by APP start)
+#   [DEVCONF] generic device registry (framework/dev-core start)
+#   [CDEVCONF] char-device subclass and adaptation layer (framework/cdev-core start)
+#   [IOCONF]  full PL011 round-trip through /dev/uart0 (io/uart-pl011 start)
+# `vfs: mount /` and `vfs: mount /dev` evidence "the mount plan really executed" (not just summaries);
+# non-zero `irq_ticks` ensures all this happens after the START phase with IRQs enabled.
 [[gate]]
 name      = "fs-test"
 timeout_s = 10
 log       = "build/logs/fs.log"
 require   = [
-  # ADR-0010: 自检 pass 存在且全绿。★ 这条**不是**"没有 FAIL 字样就算过", 而是
-  # 要求 SUMMARY 行真的在(ran >= 1)且 fails=0/errors=0 —— 于是它同时证明两件事:
-  # 自检被驱动过, 且开关是打开的(关掉自检的镜像里这一行根本不存在)。
+  # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
+  # SUMMARY line must exist (ran >= 1) with fails=0/errors=0 — proving two things at once:
+  # selftest was driven, and the switch is on (that line does not exist in an image with selftest off).
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "vfs: mount / ",
   "vfs: mount /dev ",
   "\\[VFSCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[DEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[CDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
-  # ★ ADR-0021: 块设备子分类框架(bdev-core)。与 CDEVCONF 并列的存储域第二条设备链;
-  #   驱动接入(adapter/uboot-mmc)后其端到端套件另开门禁。
+  # * ADR-0021: block-device subclass framework (bdev-core). Second device chain of the storage domain,
+  #   beside CDEVCONF; once the driver joins (adapter/uboot-mmc) its e2e suite gets its own gate.
   "\\[BDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[IOCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -512,47 +512,47 @@ forbid    = [
   "\\[IOCONF\\] FAIL",
   "\\[PANIC\\]",
 ]
-# 用例 tag 逐条点名(裁掉用例也算红 —— 与 smoke 的分工)。
+# Case tags named individually (trimming one is red too — the split from smoke).
 require_tags = [
   "TC-VFS-001", "TC-VFS-002", "TC-VFS-003", "TC-VFS-004", "TC-VFS-005",
   "TC-VFS-006", "TC-VFS-007", "TC-VFS-008", "TC-VFS-009", "TC-VFS-010",
   "TC-VFS-011", "TC-VFS-012", "TC-VFS-013",
-  # ★ ADR-0013 新增(链接族): 符号链接的展开在 vfs-core, 硬链接的共享数据体在 FS。
+  # * ADR-0013 additions (link family): symlink expansion in vfs-core, hard-link shared data body in the FS.
   "TC-VFS-014", "TC-VFS-015", "TC-VFS-016", "TC-VFS-017", "TC-VFS-018",
   "TC-VFS-019", "TC-VFS-020",
   "TC-DEV-001", "TC-DEV-002", "TC-DEV-003", "TC-DEV-004", "TC-DEV-005", "TC-DEV-006",
   "TC-CDEV-001", "TC-CDEV-002", "TC-CDEV-003", "TC-CDEV-004", "TC-CDEV-005",
   "TC-CDEV-006", "TC-CDEV-007", "TC-CDEV-008",
-  # ★ ADR-0021: 块设备子分类框架(bdev-core)逐条点名。TC-BDEV-006/008 在驱动缺席时
-  #   走"不适用"分支, 但它们照旧打 tag ⇒ 被裁掉/没跑仍然判红。
+  # * ADR-0021: block-device subclass framework (bdev-core) named individually. TC-BDEV-006/008 take the
+  #   "not applicable" branch without a driver, but still emit tags => trimmed/not run is still red.
   "TC-BDEV-001", "TC-BDEV-002", "TC-BDEV-003", "TC-BDEV-004",
   "TC-BDEV-005", "TC-BDEV-006", "TC-BDEV-007", "TC-BDEV-008",
   "TC-IO-001", "TC-IO-002", "TC-IO-003", "TC-IO-004", "TC-IO-005", "TC-IO-006",
   "TC-IO-007", "TC-IO-008", "TC-IO-009", "TC-IO-010", "TC-IO-011", "TC-IO-012",
 ]
 
-# emmc-test: eMMC(SDHCI)驱动经 bdev 的端到端门禁(ADR-0021 / 多卡见 ADR-0022)。
-# 判据 = **四块卡**都被枚举并识别 + bdev 就绪 + 两套框架摘要(PCI 枚举/分配、eMMC 往返)
-#        + 8 条用例逐条点名。
-# 它同时证明: PCIe INTx 真的投递(ISR→bh→信号量)、ADMA2 与 PIO 两条数据通路都能写后读回、
-# 以及"多实例"这条改造(一块卡切 PIO 不影响另一块)。
-# 机器参数(platform 的 [build.target.qemu].extra)挂四个 `-device sdhci-pci` + 四块 emmc,
-# 后备镜像由构建后门禁 `fs-images` 生成(见上)。
+# emmc-test: end-to-end gate for the eMMC (SDHCI) driver through bdev (ADR-0021 / multi-card: ADR-0022).
+# Criteria = **four cards** enumerated and identified + bdev ready + two framework summaries (PCI enum/alloc,
+#        eMMC round-trip) + 8 cases named individually.
+# It also proves: PCIe INTx really delivers (ISR->bh->semaphore), both ADMA2 and PIO data paths read back
+# after write, and the "multi-instance" rework (switching one card to PIO does not affect another).
+# Machine args (platform's [build.target.qemu].extra) attach four `-device sdhci-pci` + four emmc,
+# with backing images made by the post-build gate `fs-images` (see above).
 [[gate]]
 name      = "emmc-test"
 timeout_s = 30
 log       = "build/logs/emmc.log"
 require   = [
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
-  # 四个 PCI 端点都枚举到(设备号 3..6 ⇒ INTx swizzle D/A/B/C ⇒ virq 10/7/8/9, 互不撞线)
+  # All four PCI endpoints enumerated (device 3..6 => INTx swizzle D/A/B/C => virq 10/7/8/9, no collisions)
   "pci: 00:03.0 1b36:0007",
   "pci: 00:04.0 1b36:0007",
   "pci: 00:05.0 1b36:0007",
   "pci: 00:06.0 1b36:0007",
   "uboot-mmc: eMMC ready",
-  "uboot-mmc: /dev/emmc0 就绪",
-  "uboot-mmc: /dev/emmc3 就绪",
-  "uboot-mmc: 共接管 4 块 sdhci-pci 卡",
+  "uboot-mmc: /dev/emmc0 ready",
+  "uboot-mmc: /dev/emmc3 ready",
+  "uboot-mmc: took over 4 sdhci-pci cards",
   "\\[PCICONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[EMMCCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -567,13 +567,13 @@ require_tags = [
   "TC-EMMC-005", "TC-EMMC-006", "TC-EMMC-007", "TC-EMMC-008",
 ]
 
-# fat-test: **第三方 FAT 移植件**(adapter/uboot-fat)的端到端门禁(ADR-0022)。
-# 判据 = 三卷都挂上 + `[FATCONF]` 摘要全绿 + 8 条用例逐条点名。
-# 它证明的是"真介质上的真 FAT 卷": 卷由宿主用 mkfs.fat + mcopy 造(外部权威工具),
-# 驱动读出来的字节要能逐字节对上宿主放进去的内容 —— 自研 mkfs 与自研 reader 互为镜像
-# 证明不了任何东西, 所以这一步必须由外部工具造字节。
-# 三卷刻意选 FAT12/FAT16/FAT32: 三者的**根目录形态与 FAT 表宽度**各不相同
-# (12/16 是固定根目录区、表项 1.5/2 字节; 32 是根目录簇链 + FSInfo)。
+# fat-test: end-to-end gate for the **third-party FAT port** (adapter/uboot-fat) (ADR-0022).
+# Criteria = all three volumes mounted + `[FATCONF]` summary all green + 8 cases named individually.
+# It proves "real FAT volumes on real media": volumes built on the host by mkfs.fat + mcopy (external
+# authority tools), with bytes read by the driver matching host-written content byte for byte — a homegrown
+# mkfs mirroring a homegrown reader proves nothing, so an external tool must make the bytes.
+# The three volumes deliberately use FAT12/FAT16/FAT32: their **root-dir form and FAT width** all differ
+# (12/16: fixed root-dir area, 1.5/2-byte entries; 32: root-dir cluster chain + FSInfo).
 [[gate]]
 name      = "fat-test"
 timeout_s = 30
@@ -583,9 +583,9 @@ require   = [
   "vfs: mount /fat12 ",
   "vfs: mount /fat16 ",
   "vfs: mount /fat32 ",
-  "uboot-fat: /fat12 就绪",
-  "uboot-fat: /fat16 就绪",
-  "uboot-fat: /fat32 就绪",
+  "uboot-fat: /fat12 ready",
+  "uboot-fat: /fat16 ready",
+  "uboot-fat: /fat32 ready",
   "\\[FATCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
@@ -598,11 +598,11 @@ require_tags = [
   "TC-FAT-005", "TC-FAT-006", "TC-FAT-007", "TC-FAT-008",
 ]
 
-# erofs-test: **第三方 EROFS 移植件**(adapter/uboot-erofs)的端到端门禁(ADR-0022)。
-# 判据 = /assets 挂上 + `[EROFCONF]` 摘要全绿 + 8 条用例逐条点名。
-# 它证明两条读路径都真的能读**外部工具造出来的**镜像:
-#   未压缩(FLAT_INLINE / FLAT_PLAIN: hello.txt、dir/a.bin、dir/sub/deep.txt)
-#   与压缩(**LZ4**: comp/lz4.txt 70000 B、raw.bin 8192 B)。
+# erofs-test: end-to-end gate for the **third-party EROFS port** (adapter/uboot-erofs) (ADR-0022).
+# Criteria = /assets mounted + `[EROFCONF]` summary all green + 8 cases named individually.
+# It proves both read paths really read an image **made by an external tool**:
+#   uncompressed (FLAT_INLINE / FLAT_PLAIN: hello.txt, dir/a.bin, dir/sub/deep.txt)
+#   and compressed (**LZ4**: comp/lz4.txt 70000 B, raw.bin 8192 B).
 [[gate]]
 name      = "erofs-test"
 timeout_s = 30
@@ -610,7 +610,7 @@ log       = "build/logs/erofs.log"
 require   = [
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
   "vfs: mount /assets ",
-  "uboot-erofs: /assets 就绪",
+  "uboot-erofs: /assets ready",
   "\\[EROFCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
@@ -623,19 +623,19 @@ require_tags = [
   "TC-EROFS-005", "TC-EROFS-006", "TC-EROFS-007", "TC-EROFS-008",
 ]
 
-# posix-test: **runtime/posix 的 POSIX 面**端到端门禁(ADR-0014/0015)。
-# 判据 = `[POSIXCONF]` 摘要全绿 + 20 个 tag 逐条点名 + 启动证据行。这一关的意义与
-# fs-test 不同: fs-test 测的是**框架件契约**(VFSCONF 只经 native API), 本关测的是
-# **POSIX 面本身**(用例只 include POSIX 头, 一行 br_* 都不调)—— 名字/签名/错误通道
-# (系统调用 -1+errno vs pthread 返回错误号)正是最容易出错的地方。
+# posix-test: end-to-end gate for **runtime/posix's POSIX surface** (ADR-0014/0015).
+# Criteria = `[POSIXCONF]` summary all green + 20 tags named individually + boot evidence lines. This gate
+# differs from fs-test: fs-test tests the **framework contract** (VFSCONF via native API only), this one
+# tests the **POSIX surface itself** (cases include POSIX headers only, no br_* calls) — names/signatures/
+# error channel (syscalls -1+errno vs pthread returning an error number) is where bugs live.
 [[gate]]
 name      = "posix-test"
 timeout_s = 25
 log       = "build/logs/posix.log"
 require   = [
-  # ADR-0010: 自检 pass 存在且全绿(同时证明"自检被驱动过"与"开关是打开的")。
+  # ADR-0010: selftest pass present and all green (proves both "selftest was driven" and "switch is on").
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
-  "runtime/posix: POSIX 运行时就绪",
+  "runtime/posix: POSIX runtime ready",
   "\\[POSIXCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]
@@ -648,14 +648,14 @@ require_tags = [
   "TC-POSIX-006", "TC-POSIX-007", "TC-POSIX-008", "TC-POSIX-009", "TC-POSIX-010",
   "TC-POSIX-011", "TC-POSIX-012", "TC-POSIX-013", "TC-POSIX-014", "TC-POSIX-015",
   "TC-POSIX-016", "TC-POSIX-017", "TC-POSIX-018", "TC-POSIX-019", "TC-POSIX-020",
-  # ADR-0019: pthread 面补齐后的新用例(每线程 errno / mutexattr / once / rwlock /
-  # key(TLS) / detach 惰性回收 / attr+name / timed* 超时)。
+  # ADR-0019: new cases after the pthread surface was completed (per-thread errno / mutexattr / once / rwlock /
+  # key(TLS) / lazy detach reclamation / attr+name / timed* timeouts).
   "TC-POSIX-021", "TC-POSIX-022", "TC-POSIX-023", "TC-POSIX-024", "TC-POSIX-025",
   "TC-POSIX-026", "TC-POSIX-027", "TC-POSIX-028",
 ]
 
-# ------------------------------------------------------------------ 构建后门禁
+# ------------------------------------------------------------------ post-build gates
 [build]
-# `brickie build` 成功后**自动**跑的短名单(与旧 Makefile 的 `all: … check-string` 同义)。
-# 放在脚本门禁里而不是编进编译流程, 是因为它是**判据**而不是构建步骤。
+# Short list run **automatically** after a successful `brickie build` (same as the old `all: ... check-string`).
+# It lives in the script gates rather than in the compile flow because it is a **criterion**, not a build step.
 post = ["check-string", "check-headers", "check-errno", "fs-images"]

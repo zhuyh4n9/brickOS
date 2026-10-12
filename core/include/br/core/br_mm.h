@@ -1,149 +1,175 @@
 /*
- * brickOS prototype v0.1.0 — 内存映射(MMU / region 表 / cache)契约
+ * brickOS prototype v0.1.0 — memory mapping (MMU / region table / cache) contract
  *
- * 权威设计: `docs/3-os-core/3-01-core-api-list.md` §7(br-mm 组, 5 函数)+ §6(页池)
- * + §13.6(特权分级的 memory 三轴: ops × granularity × regions)
- * + `docs/3-os-core/3-04-memory.md`(三池 + region 表 + 虚拟内存政策)。
+ * Authoritative design: `docs/3-os-core/3-01-core-api-list.md` §7 (br-mm group, 5 functions)
+ * + §6 (page pool) + §13.6 (privilege grading's memory axes: ops × granularity × regions)
+ * + `docs/3-os-core/3-04-memory.md` (three pools + region table + virtual memory policy).
  *
- * 三层模式(设计 1-01 §8): **接口在 core / 构造在 platform(设计里是 ISA 共享库)/
- * 数据在 platform 的 region 表**。所以本头文件有两半:
- *   ① native 面(§7 的 5 个函数: region_add / map / unmap / cache_flush / cache_invalidate)
- *      —— 设计原样, 签名不改;
- *   ② platform 面(`br_mm_ops_t` + `br_mm_register`, 照 `br_pic_ops` 的同型手法)
- *      —— platform 填"页表构造"这张表; core 只做派发与一致性。
+ * Three-layer pattern (design 1-01 §8): **interface in core / construction in platform
+ * (the ISA shared library in the design) / data in the platform region table**. So this
+ * header has two halves:
+ *   ① native face (§7's 5 functions: region_add / map / unmap / cache_flush /
+ *      cache_invalidate) — signatures unchanged from the design;
+ *   ② platform face (`br_mm_ops_t` + `br_mm_register`, same pattern as `br_pic_ops`)
+ *      — platform fills in the "page-table construction" table; core only dispatches and
+ *      keeps consistency.
  *
- * v1 的虚拟内存政策 = **恒等映射 + 属性隔离**(3-04 §1): 静态 region 表在 platform
- * early_init 里声明, 页表由 `br_mm_ops.activate()` 一次构造。因此
- *   - `br_mm_map`/`br_mm_unmap` 在 v1 **返回 -ENOTSUP**(签名先行, 实现归 v2 重定位;
- *     用例 `TC-MM-003` 正是这条: "map/unmap(v1) = -ENOTSUP, 主文档风险 R4 的签名先行验证");
- *   - 运行期改属性走 `br_mm_set_attrs()`(→ `ops.set_attrs`)——这是 v2 重定位要用的
- *     同一条机械通路, 在 v1 里由 platform 的一致性用例拿来做 RO 页保护验证。
+ * v1 virtual memory policy = **identity mapping + attribute isolation** (3-04 §1): the
+ * static region table is declared in platform early_init, and the page table is built once
+ * by `br_mm_ops.activate()`. Hence
+ *   - `br_mm_map`/`br_mm_unmap` **return -ENOTSUP** in v1 (signatures come first, the
+ *     implementation belongs to v2 relocation; case `TC-MM-003` is exactly this:
+ *     "map/unmap(v1) = -ENOTSUP, signature-first validation of main-doc risk R4");
+ *   - runtime attribute changes go through `br_mm_set_attrs()` (→ `ops.set_attrs`) — the
+ *     same mechanical path v2 relocation needs, used in v1 by platform consistency cases
+ *     for RO page protection validation.
  */
 #ifndef BR_CORE_BR_MM_H
 #define BR_CORE_BR_MM_H
 
 #include <br/core/br_types.h>
 
-/* ---------------------------------------------------------------- region 属性
- * 设计 3-01 §7: BR_MM_RO | BR_MM_NX | BR_MM_DEVICE | BR_MM_CACHED(**append-only, D14**)。
- * 下面 4 位是设计既定的; 新增位只许往后加, 不许改语义。
+/* ---------------------------------------------------------------- region attributes
+ * Design 3-01 §7: BR_MM_RO | BR_MM_NX | BR_MM_DEVICE | BR_MM_CACHED (**append-only, D14**).
+ * The 4 bits below are fixed by the design; new bits may only be appended, never redefined.
  */
-#define BR_MM_RO      0x0001u   /* 只读(写 ⇒ permission fault) */
-#define BR_MM_NX      0x0002u   /* 不可执行(取指 ⇒ instruction abort) */
-#define BR_MM_DEVICE  0x0004u   /* 设备内存(Device-nGnRnE; 非对齐访问会 fault) */
-#define BR_MM_CACHED  0x0008u   /* 可缓存(Normal WB; cache 维护对其有意义) */
+#define BR_MM_RO      0x0001u   /* read-only (write ⇒ permission fault) */
+#define BR_MM_NX      0x0002u   /* non-executable (instruction fetch ⇒ instruction abort) */
+#define BR_MM_DEVICE  0x0004u   /* device memory (Device-nGnRnE; unaligned access faults) */
+#define BR_MM_CACHED  0x0008u   /* cacheable (Normal WB; cache maintenance is meaningful) */
 
 /*
- * region **种类**(位 8..11)：把 3-01 §13.6 的 `regions` 轴
- * (heap | dma | contig | page | mmio | reserved)从"声明面"落到"region 表"的可执行形式。
- * 三池划分(3-01 §6 "platform region 表把 RAM 划为 heap / contig 池 / 页池")正是靠它表达：
- * `br_mem_init()` 按种类认领自己的池, 平台只声明"哪块 RAM 是什么池"。
- * ★ 这是原型的**新增**(设计 §13.6 只定义了取值域, 没定义载体), 已在
- *   `docs/decisions/0003-memory-map-heap-and-debug-plugins.md` 登记为增量。
+ * region **kind** (bits 8..11): turns the `regions` axis of 3-01 §13.6
+ * (heap | dma | contig | page | mmio | reserved) from a declaration into an executable
+ * form in the region table. The three-pool split (3-01 §6 "the platform region table
+ * splits RAM into heap / contig pool / page pool") is expressed exactly this way:
+ * `br_mem_init()` claims its pools by kind, and the platform only declares "which RAM
+ * is which pool".
+ * ★ This is a prototype **addition** (design §13.6 defines only the value domain, not the
+ *   carrier), registered in
+ *   `docs/decisions/0003-memory-map-heap-and-debug-plugins.md` as an increment.
  */
 #define BR_MM_KIND_SHIFT   8u
 #define BR_MM_KIND_MASK    0x00000F00u
 #define BR_MM_KIND_NONE    0u
-#define BR_MM_KIND_IMAGE   1u   /* 镜像(text/rodata/data/bss) */
-#define BR_MM_KIND_STACK   2u   /* 启动栈 */
-#define BR_MM_KIND_HEAP    3u   /* TLSF 堆池(CA-7 之外的字节池) */
-#define BR_MM_KIND_CONTIG  4u   /* 物理连续池(CA-7) */
-#define BR_MM_KIND_PAGE    5u   /* 页池(CA-8) */
-#define BR_MM_KIND_DMA     6u   /* DMA 缓冲池(CA-6: 建于 contig 语义之上) */
-#define BR_MM_KIND_MMIO    7u   /* 寄存器窗口(Device) */
-#define BR_MM_KIND_RESERVED 8u  /* 保留区(不分配给任何池) */
+#define BR_MM_KIND_IMAGE   1u   /* image (text/rodata/data/bss) */
+#define BR_MM_KIND_STACK   2u   /* boot stack */
+#define BR_MM_KIND_HEAP    3u   /* TLSF heap pool (byte pool outside CA-7) */
+#define BR_MM_KIND_CONTIG  4u   /* physically contiguous pool (CA-7) */
+#define BR_MM_KIND_PAGE    5u   /* page pool (CA-8) */
+#define BR_MM_KIND_DMA     6u   /* DMA buffer pool (CA-6: built on contig semantics) */
+#define BR_MM_KIND_MMIO    7u   /* register window (Device) */
+#define BR_MM_KIND_RESERVED 8u  /* reserved (given to no pool) */
 
 #define BR_MM_KIND(a)          (((a) & BR_MM_KIND_MASK) >> BR_MM_KIND_SHIFT)
 #define BR_MM_WITH_KIND(a, k)  (((a) & ~BR_MM_KIND_MASK) | (((k) << BR_MM_KIND_SHIFT) & BR_MM_KIND_MASK))
 
-/* region 表容量。原型取静态上界(设计 3-04 §2: 静态 region 表; manifest 裁剪归 v1.x)。 */
+/* region table capacity. The prototype uses a static bound (design 3-04 §2: static
+ * region table; manifest trimming is v1.x). */
 #define BR_MM_MAX_REGIONS   24u
 
-/* 一条 region 描述(设计 3-01 §7 原样: base/size/attrs) */
+/* One region descriptor (design 3-01 §7 verbatim: base/size/attrs) */
 typedef struct {
     br_uintptr_t base;
     br_size_t    size;
-    br_u32       attrs;     /* BR_MM_RO|NX|DEVICE|CACHED + 种类 */
+    br_u32       attrs;     /* BR_MM_RO|NX|DEVICE|CACHED + kind */
 } br_mm_region_t;
 
-/* ---------------------------------------------------------------- native 面 */
+/* ---------------------------------------------------------------- native face */
 
 /*
- * platform early_init 声明一条恒等区(设计 3-01 §7 / §10: 归 Platform)。
- * 语义: 纯登记(不碰页表)—— 页表在 `br_mm_ops.activate()` 里按**当时**的表一次构造。
- * 错误: `-EINVAL`(r==NULL / size==0 / base 未页对齐 / size 非页粒度)
- *       `-EEXIST`(与已有 region 重叠或重复 —— 用例 TC-MM-001)
- *       `-ENOSPC`(表满)
- * 激活之后追加的 region 会**顺带**经 `ops.map_region` 落表(表与页表不留第二真值)。
+ * platform early_init declares one identity region (design 3-01 §7 / §10: owned by Platform).
+ * Semantics: pure registration (no page-table touch) — the page table is built in
+ * `br_mm_ops.activate()` from the table **as of that moment**.
+ * Errors: `-EINVAL` (r==NULL / size==0 / base not page aligned / size not page granular)
+ *       `-EEXIST` (overlaps or duplicates an existing region — case TC-MM-001)
+ *       `-ENOSPC` (table full)
+ * Regions appended after activation are **also** mapped via `ops.map_region` (the table and
+ * the page table keep no second truth).
  */
 int br_mm_region_add(const br_mm_region_t *r);
 
-/* 运行期映射/改属性(设计 3-01 §7)。v1 签名先行、实现未到 ⇒ 一律 `-ENOTSUP`(TC-MM-003)。 */
+/* Runtime map/attribute change (design 3-01 §7). v1 has signatures only, no
+ * implementation ⇒ always `-ENOTSUP` (TC-MM-003). */
 int br_mm_map  (const br_mm_region_t *r);
 int br_mm_unmap(br_uintptr_t addr, br_size_t size);
 
 /*
- * cache 维护(设计 3-01 §7; 驱动 DMA 前后, 风险 R4)。
- * 语义(按 3-01 §13.6 的正交表, `flush`/`invalidate` 属 P2 且 `granularity` 可为 byte):
- *   - 命中**非缓存**(DEVICE 或未标 CACHED)的 region ⇒ 无操作返回 0(用例 TC-MM-002);
- *   - 未激活 MMU(cache 本就未开)⇒ 无操作返回 0;
- *   - 地址未声明 ⇒ `-EINVAL`(原型刻意不"猜"属性; 见 ADR-0003)。
+ * cache maintenance (design 3-01 §7; around driver DMA, risk R4).
+ * Semantics (per the orthogonal table in 3-01 §13.6, `flush`/`invalidate` are P2 and
+ * `granularity` may be byte):
+ *   - hitting a **non-cacheable** region (DEVICE or not marked CACHED) ⇒ no-op, return 0
+ *     (case TC-MM-002);
+ *   - MMU not activated (cache was never on) ⇒ no-op, return 0;
+ *   - address not declared ⇒ `-EINVAL` (the prototype deliberately does not guess
+ *     attributes; see ADR-0003).
  */
 int br_mm_cache_flush     (void *addr, br_size_t size);
 int br_mm_cache_invalidate(void *addr, br_size_t size);
 
-/* ---------------------------------------------------------------- 只读观测面
- * 三个查询函数是**观测契约**(ramdump/dump 插件要枚举 region 表), 不属 3-01 的
- * 48 函数 native 面 —— 已在 ADR-0003 登记为增量(与 3-02 §17.4 对 `br_irq_stats_get`
- * 的处置同型: 消费方是 debug 插件 ⇒ 不能藏在 core 内部)。
+/* ---------------------------------------------------------------- read-only observation face
+ * The three query functions are an **observation contract** (the ramdump/dump plugins
+ * enumerate the region table); they are not part of the 48-function native face of 3-01
+ * — registered in ADR-0003 as an increment (same treatment as 3-02 §17.4 gives
+ * `br_irq_stats_get`: the consumer is a debug plugin ⇒ it cannot hide inside core).
  */
 br_u32                br_mm_region_count(void);
-const br_mm_region_t *br_mm_region_get(br_u32 index);          /* 越界 ⇒ NULL */
-const br_mm_region_t *br_mm_region_find(br_uintptr_t addr);    /* 未声明 ⇒ NULL */
+const br_mm_region_t *br_mm_region_get(br_u32 index);          /* out of range ⇒ NULL */
+const br_mm_region_t *br_mm_region_find(br_uintptr_t addr);    /* undeclared ⇒ NULL */
 br_u32                br_mm_region_count_kind(br_u32 kind);
 
-/* ---------------------------------------------------------------- platform 面
- * 页表构造 ops(照 3-01 §10 的"`br_pic` ops 表(中断控制器实现) | Platform 插件(填表)"
- * 同型): core 定义形状, platform 填实现。
+/* ---------------------------------------------------------------- platform face
+ * Page-table construction ops (same pattern as 3-01 §10's "`br_pic` ops table (interrupt
+ * controller implementation) | Platform plugin (fills the table)"): core defines the
+ * shape, platform fills the implementation.
  */
 typedef struct br_mm_ops {
-    /* 建页表 + 装 TTBR/MAIR/TCR + 开 MMU(SCTLR.M)。regions/count = core 的 region 表快照。 */
+    /* Build the page table + install TTBR/MAIR/TCR + enable MMU (SCTLR.M).
+     * regions/count = snapshot of core's region table. */
     int  (*activate)(const br_mm_region_t *regions, br_u32 count);
 
-    /* 单条 region 落表(激活后 `br_mm_region_add` 会调它; 也供 platform 自用) */
+    /* Map one region (called by `br_mm_region_add` after activation; also for platform use) */
     int  (*map_region)(const br_mm_region_t *r);
 
-    /* 改一段已映射区间的属性(重定位与保护验证共用的一条通路) */
+    /* Change attributes of an already-mapped range (shared path for relocation and
+     * protection validation) */
     int  (*set_attrs)(br_uintptr_t addr, br_size_t size, br_u32 attrs);
 
-    /* 读回一段区间当前生效的属性(**页表遍历**, 不是查 region 表) */
+    /* Read back the currently effective attributes of a range (**page-table walk**,
+     * not a region-table lookup) */
     int  (*query)(br_uintptr_t addr, br_size_t size, br_u32 *out_attrs);
 
     void (*cache_flush)(void *addr, br_size_t size);
     void (*cache_invalidate)(void *addr, br_size_t size);
 } br_mm_ops_t;
 
-/* 平台侧注册一次(重复注册 ⇒ 后者被拒, 返回 -EBUSY)。
- * 由 platform 插件的 `early_init` 在启动链阶段 ② 调用(只注册机制, 不建表)。 */
+/* Platform-side one-time registration (duplicate registration ⇒ the later one is
+ * rejected with -EBUSY).
+ * Called by the platform plugin's `early_init` in boot-chain phase ② (registers the
+ * mechanism only, builds no table). */
 int br_mm_register(const br_mm_ops_t *ops);
 
 /*
- * 建表并开 MMU —— 地址映射的**建立动作**, 由 core 的入口 `br_core_main()` 在
- * `br_mem_init()` 之后调用(启动链阶段 ③, ADR-0008)。
- * 语义: 把**当前**的 region 表快照交给 `ops.activate()`(页表构造的机制在 platform);
- * 成功(返回 0)后 core 记 "已激活", `br_mm_active()` 自此为真。
- * ★ 一开 MMU, 之后每次取指/访存都过翻译 ⇒ 它必须是插件 init 之前的最后一格。
- * 错误: `-ENOTSUP`(未注册 ops)/ `-EBUSY`(已激活)/ `-ENOMEM`(页表内存不足)/
- *       其它 = ops 的返回值原样上传。
- * 为什么不把"激活"放进 ops: 那是**状态机**(未注册→已注册→已激活)的归属问题 ——
- * 状态与编排归 core, 构造机制归 platform(三层模式的边界)。
+ * Build the table and enable the MMU — the address-mapping **construction action** —
+ * called by the core entry `br_core_main()` after `br_mem_init()` (boot-chain phase ③,
+ * ADR-0008).
+ * Semantics: hand the **current** region-table snapshot to `ops.activate()` (page-table
+ * construction mechanism lives in platform); on success (returns 0) core records
+ * "activated", and `br_mm_active()` is true thereafter.
+ * ★ Once the MMU is on, every fetch and access goes through translation ⇒ this must be the
+ *   last step before plugin init.
+ * Errors: `-ENOTSUP` (ops not registered) / `-EBUSY` (already active) / `-ENOMEM`
+ *        (not enough page-table memory) / others = ops return value passed through.
+ * Why "activate" is not inside ops: that is a **state machine** (unregistered→registered→
+ * activated) ownership question — state and orchestration belong to core, construction
+ * mechanism to platform (the three-layer pattern boundary).
  */
 int br_mm_activate(void);
 
-/* MMU 是否已由 `br_mm_activate()` 打开。 */
+/* Whether the MMU has been enabled by `br_mm_activate()`. */
 br_bool br_mm_active(void);
 
-/* 以上 ops 的 core 侧派发(未注册/未激活 ⇒ `-ENOTSUP`)。 */
+/* core-side dispatch for the ops above (not registered / not active ⇒ `-ENOTSUP`). */
 int br_mm_set_attrs(br_uintptr_t addr, br_size_t size, br_u32 attrs);
 int br_mm_query    (br_uintptr_t addr, br_size_t size, br_u32 *out_attrs);
 

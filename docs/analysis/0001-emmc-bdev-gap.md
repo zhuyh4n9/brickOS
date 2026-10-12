@@ -49,7 +49,7 @@
 
 | 维度 | u-boot | brickOS 原型 | 移植含义 |
 |---|---|---|---|
-| 设备模型 | DM + uclass + `struct udevice` + 设备树 | 插件(`plugin.toml`)+ 静态组合 | `mmc-uclass.c` 整文件不移植;配置从 DT 改为**静态平台数据头**(照 `pl011_internal.h` 模式) |
+| 设备模型 | DM + uclass + `struct udevice` + 设备树 | 插件(`brick.toml`)+ 静态组合 | `mmc-uclass.c` 整文件不移植;配置从 DT 改为**静态平台数据头**(照 `pl011_internal.h` 模式) |
 | 块设备出口 | `blk-uclass`(`blk_desc`/`lbaint_t`/`blk_ops`/分区 `part.h`) | **bdev-core**(`br_bdev_ops` + LBA/扇区) | `mmc_bread/bwrite` 改写成 `br_bdev_ops.read/write`;丢掉 `blk_desc`/hwpart/blk_dselect |
 | 命名空间 | `mmc0`/`mmc 0` 命令行 | dev-core 扁平设备名 + devfs | bdev 设备名如 `emmc0`,自动出现在 `/dev/emmc0`(v1 看得见打不开) |
 | 初始化时机 | `mmc_initialize()` + 各驱动 probe | 插件 CORE 相 `*_init()` + EARLY/CORE/START | PCIe 枚举放 EARLY/CORE(要在任何 `br_dma_alloc` 之前?见 §4.4) |
@@ -206,7 +206,7 @@ eMMC 模型(`hw/sd/sd.c`):`EXT_CSD_CARD_TYPE = 0b11`(仅 26/52 MHz)、`EXT_CSD_R
 | `drivers/mmc/sdhci-adma.c` | `GPL-2.0+` |
 | `include/mmc.h` / `include/sdhci.h` | `GPL-2.0+` |
 
-brickOS 仓库 `LICENSE` = **WTFPL v2**,所有 `plugin.toml` 的 `license = "WTFPL"`。
+brickOS 仓库 `LICENSE` = **WTFPL v2**,所有 `brick.toml` 的 `license = "WTFPL"`。
 
 **逐行/逐结构移植并静态链进同一镜像 = 衍生作品**,GPL-2.0+ 的义务(源码提供、同许可分发)会覆盖整个镜像。
 三条路:

@@ -13,7 +13,7 @@
 > 逐条裁定与偏离: `docs/decisions/0009-vfs-storage-stack.md`(§2.1 两条 `type` 边是刻意的 /
 > §3 裁定 1 `type` 边不进闭包、形态 B 可裁剪 —— O-S7 的类型依赖成本如实保留)。
 
-## 声明面(`plugin.toml` 是唯一真值)
+## 声明面(`brick.toml` 是唯一真值)
 
 | 项 | 值 | 依据 |
 |---|---|---|
@@ -24,7 +24,7 @@
 | 依赖(type) | `framework/vfs-core` `>=0.1.0`, kind = **type** | `8-01` §1.3 原话"vfs-core(类型, 仅头文件)"; ADR-0009 §2.1: 写成 runtime 会把 vfs-core 拉进组合, 推翻 D19/O-S7 的形态 B |
 | 依赖(init/runtime) | **无** | dev-core 不调用 vfs-core 的任何函数, 也不参与它的 init 顺序 |
 | 导出面 | 单元 `dev`(`sha256:2c7a26ef…`, `unfrozen`/`experimental`): **7 宏 + 1 类型布局 + 6 函数**(自检入口已移出 `[[export]]`) | `br-devcore.txt` 的候选面 |
-| `[selftest]` | `cases = 6`; 钩子 `dev_core_selftest()` 在描述符里, 由 core 在全部 `start()` 之后驱动 | `plugin.toml` `[selftest]`; ADR-0010 |
+| `[selftest]` | `cases = 6`; 钩子 `dev_core_selftest()` 在描述符里, 由 core 在全部 `start()` 之后驱动 | `brick.toml` `[selftest]`; ADR-0010 |
 | 资源 | `ram` 2 KiB: 注册表 16 槽(名字 32 B + 条目 32 B/槽 ≈ 1 KiB); **无动态分配** | `[[res]]` |
 | `sched_class` | `SAFE_PREEMPT` | 纯静态表操作, 不睡眠 |
 
@@ -90,7 +90,7 @@
 ## 目录
 
 ```
-plugin.toml                    人写   ← 插件级唯一真值(本目录不改它)
+brick.toml                    人写   ← 插件级唯一真值(本目录不改它)
 include/br/dev/br_dev.h        人写   ← 通用设备契约(注册表条目 / 命名 / ioctl 编码)
 src/dev_core.c                 人写   ← 静态注册表 + 命名执法(只留机制)
 src/dev_selftest.c             人写   ← [DEVCONF] 用例(由 core 驱动; 无内部头, 只走公开 API)

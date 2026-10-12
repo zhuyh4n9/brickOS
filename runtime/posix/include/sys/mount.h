@@ -2,31 +2,34 @@
 #define BR_POSIX_SYS_MOUNT_H
 
 /*
- * `mount()` / `umount()` —— **APP 决定挂载什么、挂在哪**(ADR-0029)。
+ * `mount()` / `umount()` — **the APP decides what is mounted and where** (ADR-0029).
  *
- * ★ 归属: 本仓的挂载由 **APP** 发起(不是 FS 插件在自己的 start 相自动挂)。
- *   FS 插件只把自己的能力登记成**驱动**(fstype 名), 例如 `"tmpfs"`/`"devfs"`/
- *   `"fat"`/`"erofs"`; APP 用本头的 `mount()` 按名把它们挂到挂载点上。
+ * ★ Ownership: in this repo mounting is initiated by the **APP** (not by an FS plugin
+ *   auto-mounting in its own start phase). An FS plugin only registers its capability as a
+ *   **driver** (fstype name), e.g. `"tmpfs"`/`"devfs"`/`"fat"`/`"erofs"`; the APP uses this
+ *   header's `mount()` to attach them by name at a mount point.
  *
- * 形参口径与 POSIX(以及 Linux)一致:
- *   `source`         介质类 FS 的设备名(`"emmc0"`); 无介质的(tmpfs/devfs)传 NULL。
- *   `target`         挂载点(绝对路径, 如 `"/"`、`"/fat12"`)。
- *   `filesystemtype` 驱动名, 例如 `"tmpfs"`。
- *   `mountflags`     POSIX 的 flags。**v1 保留**: 本代一律传 0; 非 0 ⇒ -EINVAL
- *                    (宁可显式拒绝, 也不要"收下不用"而让 APP 以为生效了)。
- *   `data`           FS 自有选项。**v1 保留**: 本代一律传 NULL; 非 NULL ⇒ -EINVAL。
+ * Parameters match POSIX (and Linux):
+ *   `source`         device name for media-backed FSes (`"emmc0"`); NULL for media-less ones (tmpfs/devfs).
+ *   `target`         mount point (absolute path, e.g. `"/"`, `"/fat12"`).
+ *   `filesystemtype` driver name, e.g. `"tmpfs"`.
+ *   `mountflags`     POSIX flags. **Reserved for v1**: always pass 0 this generation; non-0 ⇒ -EINVAL
+ *                    (better to reject explicitly than accept-and-ignore and let the APP think it worked).
+ *   `data`           FS-specific options. **Reserved for v1**: always pass NULL this generation; non-NULL ⇒ -EINVAL.
  *
- * 错误: `-EINVAL`(target/fstype 为 NULL 或 flags/data 非空)/ `-ENODEV`(没有该 fstype 的
- *       驱动 —— 通常是该 FS 插件没被选进组合)/ `-EEXIST`(该挂载点已挂)/ `-ENOSPC`(表满)/
- *       `-ENODEV`(父挂载不存在)/ 其余原样上传自 FS 的 mount。
+ * Errors: `-EINVAL` (target/fstype NULL or flags/data non-empty) / `-ENODEV` (no driver for that
+ *       fstype — usually that FS plugin was not selected into the composition) / `-EEXIST` (mount
+ *       point already mounted) / `-ENOSPC` (table full) / `-ENODEV` (parent mount missing) /
+ *       otherwise passed through from the FS's mount.
  */
 int mount(const char *source, const char *target, const char *filesystemtype,
           unsigned long mountflags, const void *data);
 
 /*
- * 卸载。**v1 保留**: 挂载表是静态组合期产物且挂载表持有根 inode, 卸载需要先把该挂载点
- * 下所有打开的文件句柄与瞬态 inode 收回 —— 那是"运行期挂载"(设计 O-S3, 不早于 v3)。
- * 本代恒返回 -ENOTSUP(**显式不实现**, 而不是假装成功)。
+ * Unmount. **Reserved for v1**: the mount table is a static composition-time artifact and holds the
+ * root inode, so unmounting would first have to reclaim every open file handle and transient inode
+ * under that mount point — that is "runtime mounting" (design O-S3, no earlier than v3).
+ * This generation always returns -ENOTSUP (**explicitly unimplemented**, not faking success).
  */
 int umount(const char *target);
 

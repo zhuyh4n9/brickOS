@@ -1,30 +1,31 @@
 /*
- * brickOS prototype v0.2.0 — 调度框架(core): 线程/任务 + 调度器注册点
+ * brickOS prototype v0.2.0 — scheduling framework (core): threads/tasks + scheduler registration
  *
- * 设计依据: `3-01` §5.1(`br_sched_ops` 注册点)、§6(任务/线程)、§14 CA-1(时间单位),
- *           `3-03`(调度器总纲)、`3-02` §16.4(IRQ ↔ 调度接缝)。
+ * Design basis: `3-01` §5.1 (`br_sched_ops` registration point), §6 (task/thread), §14 CA-1 (time
+ *   units), `3-03` (scheduler overview), `3-02` §16.4 (IRQ ↔ scheduling seam).
  *
- * ## 分工(ADR-0006 §1; 与设计的两处偏离在这里说清)
+ * ## Split (ADR-0006 §1; the two deviations from the design are stated here)
  *
- * | 面 | 归属 |
+ * | face | owner |
  * |---|---|
- * | 上下文切换 asm / TCB 公共头 / 栈与 trampoline / 超时唤醒框架 / idle / 首次调度 | **core** |
- * | 就绪队列 / `pick_next` / tick 策略 / 抢占决策 / 调度表 | **调度器插件** |
- * | 阻塞与唤醒的**机制**(block_current / wake / 等待链) | **core**(见 §偏离 1) |
- * | 锁与信号量的**对象与语义**(mutex/sem/cond) | **core**(`br_sync.h`) |
+ * | context-switch asm / TCB common header / stack and trampoline / timeout wakeup framework / idle / first schedule | **core** |
+ * | ready queue / `pick_next` / tick policy / preemption decision / scheduling table | **scheduler plugin** |
+ * | block and wake **mechanism** (block_current / wake / wait chain) | **core** (see deviation 1) |
+ * | lock and semaphore **objects and semantics** (mutex/sem/cond) | **core** (`br_sync.h`) |
  *
- * **偏离 1**: 设计 `3-01` §5.1 把 `sem_take/mutex_lock/…` 放进 `br_sched_ops`
- * (即"同步实现在调度插件", `3-01` §115 行)。本原型改为 **core 实现同步原语**,
- * 插件只提供"下一个人是谁"。理由: (a) 锁对象要被**所有**插件看见, 放进调度插件会让
- * 每个使用者反向依赖插件头; (b) 阻塞/唤醒机制对 coop 与 preempt 是同一套, 只有
- * "谁先跑"不同; (c) 设计的 ops 字段表本身是**带省略号的草案**(`3-03` §2 待成文)。
- * 逐条登记在 ADR-0006 §2。
+ * **Deviation 1**: design `3-01` §5.1 puts `sem_take/mutex_lock/…` into `br_sched_ops` (i.e.
+ * "sync implemented in the scheduler plugin", `3-01` line 115). This prototype instead has
+ * **core implement the sync primitives**; the plugin only provides "who runs next". Reasons:
+ * (a) lock objects must be visible to **all** plugins, and putting them in the scheduler plugin
+ * would make every user depend back on the plugin header; (b) the block/wake mechanism is the
+ * same for coop and preempt, only "who runs first" differs; (c) the design's ops field table is
+ * itself a **draft with ellipsis** (`3-03` §2, pending). Recorded item by item in ADR-0006 §2.
  *
- * **偏离 2**: `br_sched_ops` 的字段表在此**成文**(补齐设计省略的 5 类槽位):
- * `tcb_size`(TCB 总尺寸: core 公共头 + 插件私有尾)、`sleep_until`(登记唤醒期限)、
- * `idle`(插件自定义 idle; 缺省走 core 的 WFI 循环)。原草案里的
- * `sem_take/sem_give/mutex_lock/mutex_unlock/work_submit/irq_epilogue` 不再进 ops
- * (见偏离 1 与下面的 `br_sched_irq_epilogue`)。
+ * **Deviation 2**: the `br_sched_ops` field table is **finalized** here (filling the 5 slot
+ * classes the design omitted): `tcb_size` (total TCB size: core common header + plugin private
+ * tail), `sleep_until` (register a wake deadline), `idle` (plugin-specific idle; default is
+ * core's WFI loop). The original draft's `sem_take/sem_give/mutex_lock/mutex_unlock/work_submit/
+ * irq_epilogue` no longer enter ops (see deviation 1 and `br_sched_irq_epilogue` below).
  */
 #ifndef BR_CORE_BR_SCHED_H
 #define BR_CORE_BR_SCHED_H
@@ -32,49 +33,51 @@
 #include <br/core/br_types.h>
 #include <br/core/br_time.h>
 
-/* ==================================================================== 线程 */
+/* ==================================================================== threads */
 
-/* TCB 是**不透明**的: 公共头在 `core/src/sched/sched_internal.h`, 插件私有尾跟在后面
- * (`tcb_size` 由插件给)。插件头只需要这个前向声明。 */
+/* The TCB is **opaque**: the common header is in `core/src/sched/sched_internal.h`, the plugin
+ * private tail follows it (`tcb_size` comes from the plugin). Plugin headers need only this
+ * forward declaration. */
 typedef struct br_thread br_thread_t;
 
-/* 线程状态(观测与自检用; 设计 `3-01` §6 的状态机)。 */
+/* Thread states (observation and self-test; the state machine of design `3-01` §6). */
 #define BR_TASK_NEW      0u
 #define BR_TASK_READY    1u
 #define BR_TASK_RUNNING  2u
 #define BR_TASK_BLOCKED  3u
 #define BR_TASK_ZOMBIE   4u
 
-/* 线程栈的最小尺寸(设计 `3-01` §2.2 的 `BR_STACK_MIN [?]`; 原型取 2 KiB)。
- * 小于它 ⇒ `br_task_create` 返回 `-EINVAL`。 */
+/* Minimum thread stack size (design `3-01` §2.2 `BR_STACK_MIN [?]`; prototype uses 2 KiB).
+ * Smaller ⇒ `br_task_create` returns `-EINVAL`. */
 #define BR_STACK_MIN 2048u
 
-/* 创建参数。`stack` 由**调用方**提供(无动态分配 —— 原型口径, ADR-0006 §2)。
- * `stack` 指向栈区间的**高地址端**(栈顶), 区间 = `[stack - stack_size, stack)`。 */
+/* Creation parameters. `stack` is provided by the **caller** (no dynamic allocation — prototype
+ * scope, ADR-0006 §2). `stack` points at the **high-address end** of the stack range (stack top);
+ * range = `[stack - stack_size, stack)`. */
 typedef struct br_task_attr {
     const char *name;
-    void       *stack;        /* 栈顶(高地址); aarch64 栈向下生长 */
+    void       *stack;        /* stack top (high address); aarch64 stacks grow down */
     br_size_t   stack_size;
-    br_u8       prio;         /* 0 = 最低; 只对 preempt/tt 有意义(coop 忽略) */
-    br_u32      flags;        /* 保留(0) */
+    br_u8       prio;         /* 0 = lowest; only meaningful for preempt/tt (coop ignores) */
+    br_u32      flags;        /* reserved (0) */
 } br_task_attr_t;
 
-/* 创建线程: NEW → READY(进就绪队列)。失败: -EINVAL / -ENOMEM(TCB 池满) / -ENOTSUP。 */
+/* Create a thread: NEW → READY (enters the ready queue). Failure: -EINVAL / -ENOMEM (TCB pool full) / -ENOTSUP. */
 int br_task_create(br_thread_t **out, const br_task_attr_t *attr,
                    void (*entry)(void *), void *arg);
 
-/* 等一个线程结束(ZOMBIE → 回收 TCB)。`exit_code` 可空。 */
+/* Wait for a thread to finish (ZOMBIE → reclaim TCB). `exit_code` may be null. */
 int br_task_join(br_thread_t *t, int *exit_code);
 
-/* 结束当前线程(不返回)。 */
+/* End the current thread (does not return). */
 BR_NORETURN void br_task_exit(int code);
 
-/* 让出 CPU(READY 队尾; 立刻触发一次调度)。coop 下这是唯一的"自愿让出"。 */
+/* Yield the CPU (tail of READY; triggers a schedule immediately). Under coop this is the only "voluntary yield". */
 void br_task_yield(void);
 
-/* 睡眠: `rel_us` 微秒后变 READY。0 ⇒ 立即返回 0; BR_TIMEOUT_INF ⇒ -EINVAL
- * (裁定 G13: 相对睡眠没有"无限"的语义 —— 那是不返回)。保证**不早醒**,
- * 晚到无上界(`3-01` INV-2)。 */
+/* Sleep: become READY after `rel_us` microseconds. 0 ⇒ return 0 immediately; BR_TIMEOUT_INF ⇒
+ * -EINVAL (ruling G13: relative sleep has no "infinite" meaning — that is not returning).
+ * Guaranteed **not to wake early**; no upper bound on lateness (`3-01` INV-2). */
 int br_task_sleep(br_time_t rel_us);
 int br_task_sleep_until(br_time_t abs_us);
 
@@ -82,109 +85,120 @@ br_thread_t *br_task_self(void);
 const char *br_task_name(const br_thread_t *t);
 br_u32 br_task_state(const br_thread_t *t);
 
-/* ==================================================================== 注册点 */
+/* ==================================================================== registration */
 
-/* 调度器形态(与插件侧 `[plugin].sched_kind` 对应)。 */
+/* Scheduler kind (corresponds to plugin-side `[plugin].sched_kind`). */
 #define BR_SCHED_KIND_COOP    0u
 #define BR_SCHED_KIND_PREEMPT 1u
 #define BR_SCHED_KIND_TT      2u
 
 /*
- * 调度器插件实现的**全部**接口(偏离 2 的成文表)。core 只在这些点回调。
- * 除 `idle` 外都不可为空(空 ⇒ 注册被拒, -EINVAL)。
+ * The **entire** interface a scheduler plugin implements (the finalized table of deviation 2).
+ * core calls back only at these points. All but `idle` must be non-null (null ⇒ registration
+ * rejected, -EINVAL).
  */
 typedef struct br_sched_ops {
-    const char *name;         /* 呈现用(如 "sched/coop") */
+    const char *name;         /* for display (e.g. "sched/coop") */
     br_u32      kind;         /* BR_SCHED_KIND_* */
-    br_u32      tcb_size;     /* 每个 TCB 的总字节数(>= core 公共头尺寸) */
+    br_u32      tcb_size;     /* total bytes per TCB (>= core common header size) */
 
-    /* NEW/唤醒 → READY 时调用(把 t 挂进就绪结构)。 */
+    /* Called on NEW/wakeup → READY (attach t to the ready structure). */
     int  (*thread_ready)(br_thread_t *t);
-    /* RUNNING → BLOCKED 时调用(从就绪结构里摘掉)。 */
+    /* Called on RUNNING → BLOCKED (detach from the ready structure). */
     void (*thread_block)(br_thread_t *t);
-    /* 下一个该跑的线程; BR_NULL ⇒ "没人可跑"(core 进 idle/WFI)。 */
+    /* Next thread to run; BR_NULL ⇒ "nobody runnable" (core enters idle/WFI). */
     br_thread_t *(*pick_next)(void);
-    /* tick 驱动点(定时器中断里调; COOP 可为 BR_NULL)。 */
+    /* Tick driver point (called from the timer interrupt; may be BR_NULL for COOP). */
     void (*on_tick)(void);
-    /* 登记"到 abs_us 唤醒 t"(core 的超时框架会遍历唤醒)。可为 BR_NULL(不支持超时)。 */
+    /* Register "wake t at abs_us" (core's timeout framework walks these). May be BR_NULL (no timeout support). */
     int  (*sleep_until)(br_thread_t *t, br_time_t abs_us);
-    /* 自定义 idle(可为 BR_NULL ⇒ 用 core 的 WFI 临界区)。 */
+    /* Custom idle (may be BR_NULL ⇒ use core's WFI critical section). */
     void (*idle)(void);
 } br_sched_ops_t;
 
-/* EARLY 相注册, **恰一次**(二次 ⇒ panic, `3-01` §5.1)。 */
+/* EARLY-phase registration, **exactly once** (second ⇒ panic, `3-01` §5.1). */
 void br_sched_register(const br_sched_ops_t *ops);
 
-/* 有没有注册过(插件管理器的过渡桥用它: 没有调度器时由 APP 的 start 占住 CPU)。 */
+/* Whether registration happened (the plugin manager's transition bridge uses it: with no scheduler, the APP start holds the CPU). */
 br_bool br_sched_registered(void);
 
-/* 首次调度 + idle 循环(不返回)。由插件管理器在全部 start() 之后调用。 */
+/* First schedule + idle loop (does not return). Called by the plugin manager after all start(). */
 BR_NORETURN void br_sched_run(void);
 
-/* IRQ 出口决策点(`core/src/irq/irq_core.c` 已经在 IRQ 退出路径上调用它)。
- * COOP 下它只扫到期表(不切栈 —— I4); PREEMPT 类调度器置了 need_resched(见
- * `br_sched_request_resched`)时在这里**真的换栈**。 */
+/* IRQ exit decision point (`core/src/irq/irq_core.c` already calls it on the IRQ exit path).
+ * Under COOP it only scans the expiry table (no stack switch — I4); when a PREEMPT-class
+ * scheduler has set need_resched (see `br_sched_request_resched`) it **really switches stacks**
+ * here. */
 void br_sched_irq_epilogue(void);
 
 /*
- * 请求"本次中断出口做一次调度"(ADR-0011; ISR-safe)。**抢占的唯一入口**。
+ * Request "schedule once at this interrupt exit" (ADR-0011; ISR-safe). **The only preemption entry**.
  *
- * 语义: 只置一个 need_resched 位(不切栈、不动就绪结构 —— I2 说 state 只有 core 改)。
- * core 在 IRQ 出口(eoi 之后、ERET 之前)看到它, 就把**当前线程放回就绪结构(队尾)**、
- * 按 `pick_next` 选下一个, 需要时 `br_sched_switch_to` 换栈。
+ * Semantics: set only a need_resched bit (no stack switch, no ready-structure change — I2 says
+ * only core changes state). When core sees it at IRQ exit (after eoi, before ERET), it puts the
+ * **current thread back into the ready structure (tail)**, picks the next one per `pick_next`,
+ * and calls `br_sched_switch_to` to switch stacks when needed.
  *
- * 谁该调: 有 tick 策略的调度器(如 `sched/rr` 的时间片用尽)。
- * **COOP 永不调用它** ⇒ coop 的行为与 ADR-0006 那一刀逐字一致(无抢占)。
- * 为什么用"置位 + core 统一执行"而不是让插件自己切: 换栈必须与"state 机 + 异常出口
- * 顺序(eoi 之后)"绑在一起, 那是机制(core); 插件只回答"什么时候该换"。
+ * Who should call: schedulers with a tick policy (e.g. `sched/rr` slice expiry).
+ * **COOP never calls it** ⇒ coop behavior matches the ADR-0006 cut verbatim (no preemption).
+ * Why "set a bit + core executes uniformly" instead of letting the plugin switch itself: stack
+ * switching must be bound to the state machine and the exception exit order (after eoi) — that
+ * is mechanism (core); the plugin only answers "when to switch".
  */
 void br_sched_request_resched(void);
 
-/* need_resched 当前位置(观测/自检用; 消费点 = `br_sched_irq_epilogue`)。 */
+/* Current need_resched state (observation/self-test; consumed by `br_sched_irq_epilogue`). */
 br_bool br_sched_resched_pending(void);
 
-/* 定时器 tick 的驱动点(平台 timer ISR 调): 推进内核时间基并唤醒到期线程,
- * 然后回调 `ops.on_tick`。 */
+/* Timer tick driver point (called by the platform timer ISR): advance the kernel time base and
+ * wake expired threads, then call back `ops.on_tick`. */
 void br_sched_on_tick(br_time_t now);
 
-/* 当前线程主动阻塞(等待链的机制面; `br_sync.h` 的原语建在它上面)。
- * `abs_deadline == BR_TIMEOUT_INF` ⇒ 无限等待。返回 0 = 被唤醒,
- * -ETIMEDOUT = 超时。
+/* Current thread blocks voluntarily (mechanism face of the wait chain; `br_sync.h` primitives
+ * build on it). `abs_deadline == BR_TIMEOUT_INF` ⇒ wait forever. Return 0 = woken,
+ * -ETIMEDOUT = timed out.
  *
- * ★ **ICB 握手前置义务**(ADR-0006 §3b; 与 `sync.c` 逐条对齐): 调用方必须在
- *   **开窗之前**(关中断临界区内)先把 `br_task_self()->wait_status` 置成
- *   `-ETIMEDOUT`, 然后才挂等待链、开中断、调本函数。本函数入口若读到
- *   `wait_status == 0`, 就认为"在窗口里已经被 `br_sched_wake` 交接过了", 直接返回 0
- *   且**不置 BLOCKED / 不登记期限 / 不切栈** —— 这是丢掉"push 之后、真正阻塞之前"
- *   窗口的唯一手段。`wait_status` 是唯一握手位: 谁先写谁赢。
+ * ★ **ICB handshake pre-obligation** (ADR-0006 §3b; item by item with `sync.c`): the caller must,
+ *   **before opening the window** (inside the IRQ-off critical section), first set
+ *   `br_task_self()->wait_status` to `-ETIMEDOUT`, and only then push the wait chain, enable
+ *   IRQs and call this function. If the entry reads `wait_status == 0`, it assumes "already
+ *   handed over by `br_sched_wake` inside the window" and returns 0 directly **without setting
+ *   BLOCKED / registering a deadline / switching stacks** — the only way to close the window
+ *   between "push" and "actually blocked". `wait_status` is the single handshake bit: first
+ *   writer wins.
  *
- * ★ **bh 禁令**(ADR-0011): 下半部(bh)跑在关中断的异常出口上, **没有可回退的调度
- *   上下文** ⇒ 在 bh 内调用本函数返回 `-EPERM`(不置状态、不切栈)。这是运行期执法,
- *   不是纸面纪律。 */
+ * ★ **bh prohibition** (ADR-0011): bottom halves (bh) run on the IRQ-off exception exit with
+ *   **no schedulable context to fall back to** ⇒ calling this function inside bh returns
+ *   `-EPERM` (no state change, no stack switch). This is runtime enforcement, not paper
+ *   discipline. */
 int br_sched_block_current(br_time_t abs_deadline);
 
-/* 把 t 变回 READY(ISR-safe: 只改状态 + 挂链, 不动栈)。
- * ICB 步 3: **先**写 `t->wait_status = 0`, 只有 `t->state == BLOCKED` 才置 READY + 入队;
- * 否则只写握手位(窗口里的早唤醒)。幂等。 */
+/* Turn t back to READY (ISR-safe: only state change + chain attach, no stack change).
+ * ICB step 3: **first** write `t->wait_status = 0`, and set READY + enqueue only if
+ * `t->state == BLOCKED`; otherwise only the handshake bit is written (early wake inside the
+ * window). Idempotent. */
 void br_sched_wake(br_thread_t *t);
 
-/* TCB 公共头的字节数(= 插件私有尾的偏移)。插件在填 `br_sched_ops.tcb_size` 时用它:
- *   `tcb_size = br_sched_tcb_size() + sizeof(私有尾)`
- * (设计 `3-01` §2.2 的 CA-2 同型; 私有尾由插件经 `br_thread_priv` 取用。) */
+/* Byte size of the TCB common header (= offset of the plugin private tail). Plugins use it when
+ * filling `br_sched_ops.tcb_size`:
+ *   `tcb_size = br_sched_tcb_size() + sizeof(private tail)`
+ * (same shape as CA-2 in design `3-01` §2.2; the private tail is reached via `br_thread_priv`.) */
 br_size_t br_sched_tcb_size(void);
 
-/* 插件私有尾指针(紧跟在公共头之后)。core 不碰它; 插件只读写自己的尾。 */
+/* Plugin private tail pointer (immediately after the common header). core does not touch it; a plugin only reads/writes its own tail. */
 void *br_thread_priv(br_thread_t *t);
 
-/* 就绪/阻塞/存活计数(观测; dump 与自检用)。 */
+/* Ready/blocked/live counts (observation; dump and self-test). */
 br_u32 br_sched_task_count(void);
 br_u32 br_sched_ready_count(void);
 
 /*
- * 这里**不再**声明调度套件的入口 `br_sched_selftest()`。理由: 自检入口**不是插件的
- * 对外能力**, 留在本头就会进 golden 接口面 —— 于是"改一个用例"变成接口变更(与
- * ADR-0005 裁定 9 对钩子的处置同源)。声明集中在 `core/selftest/core_selftest.c`,
- * 实现随套件一起在 `core/selftest/sched_selftest.c`(ADR-0010)。
+ * The scheduling suite entry `br_sched_selftest()` is deliberately **not** declared here.
+ * Reason: a self-test entry is **not a plugin's external capability**, and keeping it here would
+ * put it on the golden interface surface — turning "change one test case" into an interface
+ * change (same root as ADR-0005 ruling 9 on hooks). Declarations are centralized in
+ * `core/selftest/core_selftest.c`, and the implementation lives with the suite in
+ * `core/selftest/sched_selftest.c` (ADR-0010).
  */
 
 #endif /* BR_CORE_BR_SCHED_H */

@@ -104,7 +104,7 @@ public:
         skipWs();
         if (!value(out)) return false;
         skipWs();
-        if (i_ != s_.size()) return fail("末尾有多余内容");
+        if (i_ != s_.size()) return fail("trailing content after value");
         return true;
     }
 
@@ -130,12 +130,12 @@ private:
     }
     bool lit(const char *t) {
         size_t n = std::strlen(t);
-        if (s_.compare(i_, n, t) != 0) return fail(std::string("期望 `") + t + "`");
+        if (s_.compare(i_, n, t) != 0) return fail(std::string("expected `") + t + "`");
         i_ += n;
         return true;
     }
     bool hex4(unsigned &out) {
-        if (i_ + 4 > s_.size()) return fail("\\u 转义不完整");
+        if (i_ + 4 > s_.size()) return fail("incomplete \\u escape");
         out = 0;
         for (int k = 0; k < 4; ++k) {
             char c = s_[i_ + k];
@@ -147,7 +147,7 @@ private:
             else if (c >= 'A' && c <= 'F')
                 d = static_cast<unsigned>(c - 'A' + 10);
             else
-                return fail("\\u 转义含非十六进制字符");
+                return fail("\\u escape contains a non-hex character");
             out = (out << 4) | d;
         }
         i_ += 4;
@@ -155,7 +155,7 @@ private:
     }
 
     bool value(J &out) {
-        if (i_ >= s_.size()) return fail("值缺失");
+        if (i_ >= s_.size()) return fail("missing value");
         char c = s_[i_];
         switch (c) {
             case 'n':
@@ -186,11 +186,11 @@ private:
     }
 
     bool string(std::string &out) {
-        if (s_[i_] != '"') return fail("期望字符串");
+        if (s_[i_] != '"') return fail("expected a string");
         ++i_;
         out.clear();
         while (true) {
-            if (i_ >= s_.size()) return fail("字符串未闭合");
+            if (i_ >= s_.size()) return fail("unterminated string");
             unsigned char c = static_cast<unsigned char>(s_[i_]);
             if (c == '"') {
                 ++i_;
@@ -198,7 +198,7 @@ private:
             }
             if (c == '\\') {
                 ++i_;
-                if (i_ >= s_.size()) return fail("转义未闭合");
+                if (i_ >= s_.size()) return fail("unterminated escape");
                 char e = s_[i_++];
                 switch (e) {
                     case '"': out.push_back('"'); break;
@@ -213,26 +213,26 @@ private:
                         unsigned cp = 0;
                         if (!hex4(cp)) return false;
                         if (cp >= 0xD800 && cp <= 0xDBFF) {
-                            // 代理对高半区 ⇒ 必须跟低半区
+                            // high surrogate ⇒ a low surrogate must follow
                             if (i_ + 1 < s_.size() && s_[i_] == '\\' && s_[i_ + 1] == 'u') {
                                 i_ += 2;
                                 unsigned lo = 0;
                                 if (!hex4(lo)) return false;
-                                if (lo < 0xDC00 || lo > 0xDFFF) return fail("代理对低半区非法");
+                                if (lo < 0xDC00 || lo > 0xDFFF) return fail("invalid low surrogate");
                                 cp = 0x10000 + ((cp - 0xD800) << 10) + (lo - 0xDC00);
                             } else {
-                                return fail("代理对缺少低半区");
+                                return fail("surrogate pair is missing its low half");
                             }
                         }
                         appendUtf8(out, cp);
                         break;
                     }
                     default:
-                        return fail("未知转义");
+                        return fail("unknown escape");
                 }
                 continue;
             }
-            if (c < 0x20) return fail("字符串含未转义控制字符");
+            if (c < 0x20) return fail("string contains an unescaped control character");
             out.push_back(static_cast<char>(c));
             ++i_;
         }
@@ -258,7 +258,7 @@ private:
             if (i_ < s_.size() && (s_[i_] == '-' || s_[i_] == '+')) ++i_;
             while (i_ < s_.size() && s_[i_] >= '0' && s_[i_] <= '9') ++i_;
         }
-        if (!digits) return fail("非法数字");
+        if (!digits) return fail("invalid number");
         out = J::num(std::strtod(s_.substr(start, i_ - start).c_str(), nullptr));
         return true;
     }
@@ -277,7 +277,7 @@ private:
             if (!value(v)) return false;
             out.push(std::move(v));
             skipWs();
-            if (i_ >= s_.size()) return fail("数组未闭合");
+            if (i_ >= s_.size()) return fail("unterminated array");
             if (s_[i_] == ',') {
                 ++i_;
                 continue;
@@ -286,7 +286,7 @@ private:
                 ++i_;
                 return true;
             }
-            return fail("数组元素后期望 `,` 或 `]`");
+            return fail("expected `,` or `]` after array element");
         }
     }
 
@@ -301,17 +301,17 @@ private:
         while (true) {
             skipWs();
             std::string key;
-            if (i_ >= s_.size() || s_[i_] != '"') return fail("对象键必须是字符串");
+            if (i_ >= s_.size() || s_[i_] != '"') return fail("an object key must be a string");
             if (!string(key)) return false;
             skipWs();
-            if (i_ >= s_.size() || s_[i_] != ':') return fail("键后期望 `:`");
+            if (i_ >= s_.size() || s_[i_] != ':') return fail("expected `:` after key");
             ++i_;
             skipWs();
             J v;
             if (!value(v)) return false;
             out.set(key, std::move(v));
             skipWs();
-            if (i_ >= s_.size()) return fail("对象未闭合");
+            if (i_ >= s_.size()) return fail("unterminated object");
             if (s_[i_] == ',') {
                 ++i_;
                 continue;
@@ -320,7 +320,7 @@ private:
                 ++i_;
                 return true;
             }
-            return fail("对象成员后期望 `,` 或 `}`");
+            return fail("expected `,` or `}` after object member");
         }
     }
 };

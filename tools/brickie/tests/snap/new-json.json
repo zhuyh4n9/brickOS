@@ -4,8 +4,8 @@
     "artifacts": [
       {
         "kind": "human",
-        "path": "service/crypto/plugin.toml",
-        "template": "native/ability/c/plugin.toml.tmpl",
+        "path": "service/crypto/brick.toml",
+        "template": "native/ability/c/brick.toml.tmpl",
         "vars": {
           "API_REV": "1",
           "API_TYPE": "native",
@@ -27,7 +27,7 @@
           "REVISE": "0",
           "SHORT": "crypto",
           "SUBKIND": "service",
-          "SUMMARY": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "SUMMARY": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "SYMPREFIX": "crypto_",
           "VERSION": "0.1.0.0",
           "abi_id": "",
@@ -48,6 +48,8 @@
           "init_proto": "int crypto_init(void);",
           "lang": "c",
           "license": "WTFPL",
+          "mount_plan": "",
+          "mount_plan_n": "",
           "name": "service/crypto",
           "ns": "service",
           "phase": "late",
@@ -64,7 +66,7 @@
           "start_proto": "int crypto_start(void);",
           "subkind": "service",
           "subkind_id": "BR_SUBKIND_SERVICE",
-          "summary": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "summary": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "symbol_prefix": "crypto_",
           "version": "0.1.0.0"
         }
@@ -94,7 +96,7 @@
           "REVISE": "0",
           "SHORT": "crypto",
           "SUBKIND": "service",
-          "SUMMARY": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "SUMMARY": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "SYMPREFIX": "crypto_",
           "VERSION": "0.1.0.0",
           "abi_id": "",
@@ -115,6 +117,8 @@
           "init_proto": "int crypto_init(void);",
           "lang": "c",
           "license": "WTFPL",
+          "mount_plan": "",
+          "mount_plan_n": "",
           "name": "service/crypto",
           "ns": "service",
           "phase": "late",
@@ -131,7 +135,7 @@
           "start_proto": "int crypto_start(void);",
           "subkind": "service",
           "subkind_id": "BR_SUBKIND_SERVICE",
-          "summary": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "summary": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "symbol_prefix": "crypto_",
           "version": "0.1.0.0"
         }
@@ -161,7 +165,7 @@
           "REVISE": "0",
           "SHORT": "crypto",
           "SUBKIND": "service",
-          "SUMMARY": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "SUMMARY": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "SYMPREFIX": "crypto_",
           "VERSION": "0.1.0.0",
           "abi_id": "",
@@ -182,6 +186,8 @@
           "init_proto": "int crypto_init(void);",
           "lang": "c",
           "license": "WTFPL",
+          "mount_plan": "",
+          "mount_plan_n": "",
           "name": "service/crypto",
           "ns": "service",
           "phase": "late",
@@ -198,7 +204,7 @@
           "start_proto": "int crypto_start(void);",
           "subkind": "service",
           "subkind_id": "BR_SUBKIND_SERVICE",
-          "summary": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "summary": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "symbol_prefix": "crypto_",
           "version": "0.1.0.0"
         }
@@ -228,7 +234,7 @@
           "REVISE": "0",
           "SHORT": "crypto",
           "SUBKIND": "service",
-          "SUMMARY": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "SUMMARY": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "SYMPREFIX": "crypto_",
           "VERSION": "0.1.0.0",
           "abi_id": "",
@@ -249,6 +255,8 @@
           "init_proto": "int crypto_init(void);",
           "lang": "c",
           "license": "WTFPL",
+          "mount_plan": "",
+          "mount_plan_n": "",
           "name": "service/crypto",
           "ns": "service",
           "phase": "late",
@@ -265,7 +273,7 @@
           "start_proto": "int crypto_start(void);",
           "subkind": "service",
           "subkind_id": "BR_SUBKIND_SERVICE",
-          "summary": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "summary": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "symbol_prefix": "crypto_",
           "version": "0.1.0.0"
         }
@@ -295,7 +303,7 @@
           "REVISE": "0",
           "SHORT": "crypto",
           "SUBKIND": "service",
-          "SUMMARY": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "SUMMARY": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "SYMPREFIX": "crypto_",
           "VERSION": "0.1.0.0",
           "abi_id": "",
@@ -316,6 +324,8 @@
           "init_proto": "int crypto_init(void);",
           "lang": "c",
           "license": "WTFPL",
+          "mount_plan": "",
+          "mount_plan_n": "",
           "name": "service/crypto",
           "ns": "service",
           "phase": "late",
@@ -332,7 +342,7 @@
           "start_proto": "int crypto_start(void);",
           "subkind": "service",
           "subkind_id": "BR_SUBKIND_SERVICE",
-          "summary": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "summary": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "symbol_prefix": "crypto_",
           "version": "0.1.0.0"
         }
@@ -362,7 +372,7 @@
           "REVISE": "0",
           "SHORT": "crypto",
           "SUBKIND": "service",
-          "SUMMARY": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "SUMMARY": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "SYMPREFIX": "crypto_",
           "VERSION": "0.1.0.0",
           "abi_id": "",
@@ -383,6 +393,8 @@
           "init_proto": "int crypto_init(void);",
           "lang": "c",
           "license": "WTFPL",
+          "mount_plan": "",
+          "mount_plan_n": "",
           "name": "service/crypto",
           "ns": "service",
           "phase": "late",
@@ -399,7 +411,7 @@
           "start_proto": "int crypto_start(void);",
           "subkind": "service",
           "subkind_id": "BR_SUBKIND_SERVICE",
-          "summary": "TODO: 一句话描述本插件的能力面(见 §8.1)",
+          "summary": "TODO: one-line description of this plugin's capability surface (see §8.1)",
           "symbol_prefix": "crypto_",
           "version": "0.1.0.0"
         }
@@ -409,7 +421,7 @@
     "planned": [
       {
         "kind": "human",
-        "path": "service/crypto/plugin.toml"
+        "path": "service/crypto/brick.toml"
       },
       {
         "kind": "human",
@@ -438,7 +450,7 @@
   "protocol": 1,
   "status": "ok",
   "written": [
-    "service/crypto/plugin.toml",
+    "service/crypto/brick.toml",
     "service/crypto/src/crypto.c",
     "service/crypto/include/crypto/crypto.h",
     "service/crypto/tests/smoke.toml",

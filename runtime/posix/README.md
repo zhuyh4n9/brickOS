@@ -69,7 +69,7 @@ robust mutex(`EOWNERDEAD`)、rwlock 的**同线程递归读**、`sem_open`、`ex
 ## 目录
 
 ```
-plugin.toml                    人写   ← 插件级唯一真值(fd/元数据/线程… 的导出面)
+brick.toml                    人写   ← 插件级唯一真值(fd/元数据/线程… 的导出面)
 include/                       人写   ← **POSIX 头文件面**(unistd.h / fcntl.h / sys/stat.h / …)
 src/posix.c                人写   ← 全部实现(翻译 + 本服务的状态)
 src/posix_selftest.c           人写   ← [POSIXCONF] 用例(只经 POSIX 头驱动)

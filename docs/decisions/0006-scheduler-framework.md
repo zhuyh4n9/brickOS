@@ -322,7 +322,7 @@ tick(100 ms)", 1 ms 阈值把两者分得很开。
 | `platform/qemu-aarch64/src/board_irq.c` | timer ISR 加 `br_sched_on_tick(br_clock_now());` + 两个 include。**其余未动** |
 | `product.toml` | `[select].plugins` 追加 `"sched/coop"`; `[build].core_sources` 追加 `"core/src/*/*.S"`(否则 `switch.S` 不进镜像) |
 | `app/hello/src/main.c` | **接线**(主控划归本刀): `hello_start` 创建 APP 线程 + return 0; MainLoop 移入线程体 `hello_mainloop`; `br_delay_ms` → `br_task_sleep`; 钩子名/自检调用序列/管理器契约不变 |
-| `sched/coop/**` | 新插件(`plugin.toml` / `src/coop.c` / `include/br/sched/coop.h` / `README.md` / `tests/smoke.toml`) |
+| `sched/coop/**` | 新插件(`brick.toml` / `src/coop.c` / `include/br/sched/coop.h` / `README.md` / `tests/smoke.toml`) |
 | `tests/host/sched_test.c` | 新(宿主切换层 + 桩 + 五条宿主判据) |
 | `tests/gates.toml` | 追加 `[[hosttest]] sched-test` 与 `[[gate]] sched-test` |
 

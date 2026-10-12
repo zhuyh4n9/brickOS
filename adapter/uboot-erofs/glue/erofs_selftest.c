@@ -1,28 +1,29 @@
 /*
- * adapter/uboot-erofs — 自检套件(TC-EROFS-001..008)
+ * adapter/uboot-erofs — selftest suite (TC-EROFS-001..008)
  *
- * 设计依据: `docs/decisions/0010-plugin-selftest.md`(自检与生产分离)。
- * 与 br_plugin_manager_selftest() 的契约: 返回**失败项数**(0 = 全绿); 每条打
- * `[EROFCONF] PASS/FAIL <tag> <desc>`, 收尾打 `[EROFCONF] SUMMARY pass=N fail=M`。
+ * Design basis: `docs/decisions/0010-plugin-selftest.md` (selftest separate from production).
+ * Contract with br_plugin_manager_selftest(): return the **number of failures** (0 = all green); each case logs
+ * `[EROFCONF] PASS/FAIL <tag> <desc>`, and the summary logs `[EROFCONF] SUMMARY pass=N fail=M`.
  *
- * WORKAROUND(br-wa-test-001): `TC-EROFS-*` 是**自编号** —— 设计 `6-01` 的用例表里
- * 整组不存在(属 7-storage 域的**新增面**); 与其余各族的编号债同一处登记。
+ * WORKAROUND(br-wa-test-001): `TC-EROFS-*` is a **self-assigned numbering** — the whole group does not exist in
+ * the design `6-01` case table (it is **new surface** of the 7-storage domain); registered alongside the other
+ * families' numbering debt.
  *
- * ============================== 判据从哪来 ==============================
- *   1. **公开面驱动**: 走 `br_stat` / `br_open` / `br_file_read` / `br_file_lseek` /
- *      `br_opendir` / `br_readdir` / `br_unlink` / `br_mkdir` —— 也就是 APP 能用的那一套。
- *      这样"EROFS 真的接进了 VFS"这件事才有判据(只看内部的 `erofs_ilookup` 不够)。
- *   2. **盘上事实**: 「magic 必须在偏移 1024」这条判据**直接读介质字节**再比对
- *      (`erofs_dev_read()`), 不拿我们自己解析出来的结果自证。
- *   3. **生成式内容判据**: 夹具里的两个压缩件分别有可重算的式子(见 erofs_internal.h
- *      的"夹具常量"), 所以本文件里**没有任何大块字面量** —— 70000 字节的内容用
- *      `"ABCDEFGH"[i % 8]` 现算, raw.bin 用线性同余式现算。
- *   4. **按名字断言目录条目, 不数总数**: 夹具加一个文件不该让用例变红。
+ * ============================== Where the criteria come from ==============================
+ *   1. **Public-surface driven**: uses `br_stat` / `br_open` / `br_file_read` / `br_file_lseek` /
+ *      `br_opendir` / `br_readdir` / `br_unlink` / `br_mkdir` —— exactly what an APP can use.
+ *      Only then is "EROFS is really wired into the VFS" actually tested (looking at the internal `erofs_ilookup` is not enough).
+ *   2. **On-disk fact**: the criterion "magic must be at offset 1024" reads the **medium bytes** directly and compares
+ *      (`erofs_dev_read()`), rather than self-certifying with our own parse result.
+ *   3. **Generative content criteria**: the two compressed fixtures have recomputable formulas (see the "fixture constants"
+ *      in erofs_internal.h), so this file has **no large literals** — 70000 bytes of content are computed as
+ *      `"ABCDEFGH"[i % 8]`, and raw.bin from a linear congruential formula.
+ *   4. **Assert directory entries by name, not by total count**: adding one file to the fixture must not turn a case red.
  *
- * ============================== 一个刻意的取舍 ==============================
- *   TC-EROFS-007 会调 `br_unlink()` / `br_mkdir()` —— 它们**不会**改动卷
- *   (返回值就是 -EROFS, 一个字节都不写)。所以这些"变更"用例在只读卷上是安全的,
- *   也不需要清理。
+ * ============================== One deliberate tradeoff ==============================
+ *   TC-EROFS-007 calls `br_unlink()` / `br_mkdir()` — they do **not** modify the volume
+ *   (the return value is just -EROFS, not a byte is written). So these "mutation" cases are safe on a read-only volume
+ *   and need no cleanup.
  * ==========================================================================
  */
 #include <br/core/br_error.h>
@@ -30,13 +31,13 @@
 #include <br/core/br_types.h>
 #include <br/vfs/br_vfs.h>
 
-#include "internal.h"        /* 上游 fs/erofs/internal.h(原样编译) */
-#include "erofs_glue.h"      /* 适配层内部契约(本项目的声明) */
+#include "internal.h"        /* upstream fs/erofs/internal.h (compiled as-is) */
+#include "erofs_glue.h"      /* adapter-internal contract (declarations of this project) */
 
 int uboot_erofs_selftest(void);
 
 /* =====================================================================
- * 汇总与打印
+ * Summary and printing
  * ===================================================================== */
 
 static br_u32 s_pass;
@@ -54,7 +55,7 @@ static void er_conf(br_bool ok, const char *tag, const char *what)
 }
 
 /* =====================================================================
- * 小工具(自检自己的; 不依赖 runtime/posix)
+ * Small helpers (selftest's own; no dependency on runtime/posix)
  * ===================================================================== */
 
 static br_size_t ef_strlen(const char *s)
@@ -72,7 +73,7 @@ static br_bool ef_streq(const char *a, const char *b)
     return (uboot_erofs_strcmp(a, b) == 0) ? BR_TRUE : BR_FALSE;
 }
 
-/* 字节缓冲的所有字节都等于 (seed + i) & 0xFF 这条式子? */
+/* Do all bytes of the buffer equal (seed + i) & 0xFF? */
 static br_bool ef_check_seq(const u8 *p, br_size_t n, br_size_t base)
 {
     for (br_size_t i = 0u; i < n; i++) {
@@ -83,7 +84,7 @@ static br_bool ef_check_seq(const u8 *p, br_size_t n, br_size_t base)
     return BR_TRUE;
 }
 
-/* 压缩夹具: 第 i 字节 = "ABCDEFGH"[i % 8] */
+/* Compressed fixture: byte i = "ABCDEFGH"[i % 8] */
 static u8 ef_lz4_byte(br_size_t i)
 {
     static const char pat[EROFS_FX_LZ4_PERIOD + 1u] = EROFS_FX_LZ4_PATTERN;
@@ -91,7 +92,7 @@ static u8 ef_lz4_byte(br_size_t i)
     return (u8)pat[i % (br_size_t)EROFS_FX_LZ4_PERIOD];
 }
 
-/* 压缩夹具: raw.bin 的线性同余式(与宿主脚本逐字一致) */
+/* Compressed fixture: linear congruential formula for raw.bin (identical to the host script) */
 static u8 ef_raw_byte(br_size_t i)
 {
     const br_u32 v = (br_u32)(((br_u64)i * 1103515245u) + 12345u);
@@ -100,8 +101,8 @@ static u8 ef_raw_byte(br_size_t i)
 }
 
 /*
- * 按名字取一条目录项。`want_dir` = 只接受目录项(否则只接受非目录项)。
- * 返回 1 = 找到, 0 = 没有这个名字, 负数 = errno。
+ * Fetch one directory entry by name. `want_dir` = accept only directory entries (otherwise only non-directory entries).
+ * Returns 1 = found, 0 = no such name, negative = errno.
  */
 static int ef_find_dirent(const char *dir_path, const char *name, br_u32 *type_out,
                           br_u64 *size_out)
@@ -121,11 +122,11 @@ static int ef_find_dirent(const char *dir_path, const char *name, br_u32 *type_o
             break;
         }
         if (r == 0) {
-            break;                          /* 穷尽 */
+            break;                          /* exhausted */
         }
         if (ef_streq(de.name, name) == BR_TRUE) {
             *type_out = de.type;
-            /* 目录项不带大小(契约的 br_dirent_t 没有这个字段)—— 调用方按需 br_stat */
+            /* A directory entry carries no size (the contract's br_dirent_t has no such field) — caller does br_stat if needed */
             *size_out = 0u;
             rc = 1;
             break;
@@ -135,7 +136,7 @@ static int ef_find_dirent(const char *dir_path, const char *name, br_u32 *type_o
     return rc;
 }
 
-/* 读整个文件(经 VFS)并与生成式判据比对。`kind` 决定用哪条式子。 */
+/* Read a whole file (through the VFS) and compare against the generative criterion. `kind` selects the formula. */
 static br_bool ef_read_whole(const char *path, br_u64 expect_size, br_u32 kind)
 {
     br_file_t *f = br_open(path, BR_O_RDONLY);
@@ -170,7 +171,7 @@ static br_bool ef_read_whole(const char *path, br_u64 expect_size, br_u32 kind)
                 good = (buf[i] == (u8)EROFS_FX_HELLO_TEXT[pos]) ? BR_TRUE : BR_FALSE;
             }
             if (good == BR_FALSE) {
-                br_log_error("uboot-erofs: %s 第 %llu 字节不符(实得 0x%02x)",
+                br_log_error("uboot-erofs: %s byte %llu mismatch (got 0x%02x)",
                              path, (unsigned long long)pos, (unsigned)buf[i]);
                 ok = BR_FALSE;
                 break;
@@ -187,7 +188,7 @@ static br_bool ef_read_whole(const char *path, br_u64 expect_size, br_u32 kind)
         return BR_FALSE;
     }
     if ((br_u64)done != expect_size) {
-        br_log_error("uboot-erofs: %s 长度对不上(实得 %llu, 期望 %llu)",
+        br_log_error("uboot-erofs: %s length mismatch (got %llu, expected %llu)",
                      path, (unsigned long long)done, (unsigned long long)expect_size);
         return BR_FALSE;
     }
@@ -195,10 +196,10 @@ static br_bool ef_read_whole(const char *path, br_u64 expect_size, br_u32 kind)
 }
 
 /* =====================================================================
- * 用例
+ * Test cases
  * ===================================================================== */
 
-/* ---- TC-EROFS-001: 挂载表 / 超级块 / 根 inode ---- */
+/* ---- TC-EROFS-001: mount table / superblock / root inode ---- */
 static void ef_tc001(void)
 {
     br_bool in_table = BR_FALSE;
@@ -212,7 +213,7 @@ static void ef_tc001(void)
         }
     }
 
-    /* ★ 盘上事实: 直接读偏移 1024 的 4 字节 magic, 不拿解析结果自证 */
+    /* ★ On-disk fact: read the 4-byte magic at offset 1024 directly, no self-certifying with the parse result */
     u8 sb[16];
     br_u32 magic = 0u;
     const int rd = erofs_dev_read(0, sb, (u64)EROFS_SUPER_OFFSET, sizeof(sb));
@@ -222,11 +223,11 @@ static void ef_tc001(void)
                 ((br_u32)sb[3] << 24);
     }
 
-    /* 根 inode: nid 必须真的是一个目录(只查"nid 在范围内"太弱) */
+    /* Root inode: nid must really be a directory ("nid in range" alone is too weak) */
     struct erofs_inode root;
     root.nid = sbi.root_nid;
     const int irc = erofs_read_inode_from_disk(&root);
-    const umode_t rmode = root.i_mode;      /* 立刻取走: 别的读会盖掉 scratch 里的 inode */
+    const umode_t rmode = root.i_mode;      /* take it immediately: another read overwrites the inode in scratch */
     const erofs_nid_t rnid = root.nid;
 
     const br_bool ok =
@@ -243,16 +244,16 @@ static void ef_tc001(void)
         (uboot_erofs_dev.n_sectors > 0u);
 
     er_conf(ok, "TC-EROFS-001",
-            "挂载表含 /assets; 盘上偏移 1024 的 magic 正确; blkszbits=12; root_nid 是目录");
+            "mount table has /assets; on-disk magic at offset 1024 correct; blkszbits=12; root_nid is a directory");
 }
 
-/* ---- TC-EROFS-002: 未压缩(FLAT_INLINE)整文件读 ---- */
+/* ---- TC-EROFS-002: uncompressed (FLAT_INLINE) whole-file read ---- */
 static void ef_tc002(void)
 {
     br_stat_t st;
     const int src = br_stat("/assets/" EROFS_FX_HELLO_PATH, &st);
 
-    /* 未压缩 flat 的判据: 布局是 FLAT_INLINE / FLAT_PLAIN 之一 + 内容逐字节一致 */
+    /* Uncompressed flat criterion: layout is FLAT_INLINE / FLAT_PLAIN and content matches byte for byte */
     struct erofs_inode vi;
     vi.nid = 0;
     const int lrc = erofs_ilookup(EROFS_FX_HELLO_PATH, &vi);
@@ -268,10 +269,10 @@ static void ef_tc002(void)
         (ef_strlen(EROFS_FX_HELLO_TEXT) == (br_size_t)EROFS_FX_HELLO_SIZE);
 
     er_conf(ok, "TC-EROFS-002",
-            "hello.txt: 12 字节 \"erofs hello\\n\" 逐字节一致(FLAT_INLINE/FLAT_PLAIN 路径)");
+            "hello.txt: 12 bytes \"erofs hello\\n\" byte for byte (FLAT_INLINE/FLAT_PLAIN path)");
 }
 
-/* ---- TC-EROFS-003: 非零 offset 的 extent 切分(中段读) ---- */
+/* ---- TC-EROFS-003: extent split at non-zero offset (mid-file read) ---- */
 static void ef_tc003(void)
 {
     br_file_t *f = br_open("/assets/" EROFS_FX_ABIN_PATH, BR_O_RDONLY);
@@ -288,10 +289,10 @@ static void ef_tc003(void)
         (void)br_file_close(f);
     }
     er_conf(ok, "TC-EROFS-003",
-            "dir/a.bin 中段读(offset 1000, len 500)逐字节 = i&0xFF(非零 offset 的 extent 切分)");
+            "dir/a.bin mid read (offset 1000, len 500) byte for byte = i&0xFF (extent split at non-zero offset)");
 }
 
-/* ---- TC-EROFS-004: 压缩路径 + LZ4 解压(70000 B 的 "ABCDEFGH" 重复) ---- */
+/* ---- TC-EROFS-004: compressed path + LZ4 decompression (70000 B of repeated "ABCDEFGH") ---- */
 static void ef_tc004(void)
 {
     struct erofs_inode vi;
@@ -307,10 +308,10 @@ static void ef_tc004(void)
         (ef_read_whole("/assets/" EROFS_FX_LZ4_PATH, EROFS_FX_LZ4_SIZE, 0u) == BR_TRUE);
 
     er_conf(ok, "TC-EROFS-004",
-            "comp/lz4.txt: 70000 B 逐字节 = \"ABCDEFGH\"[i%8](压缩块 + LZ4 解压, 含尾 extent)");
+            "comp/lz4.txt: 70000 B byte for byte = \"ABCDEFGH\"[i%8] (compressed blocks + LZ4 decompression, with tail extent)");
 }
 
-/* ---- TC-EROFS-005: 目录面(readdir)按名字/类型断言 ---- */
+/* ---- TC-EROFS-005: directory surface (readdir) asserted by name/type ---- */
 static void ef_tc005(void)
 {
     br_u32  t = 0u;
@@ -357,17 +358,17 @@ static void ef_tc005(void)
         (drc == 0) && (dsize == (erofs_off_t)EROFS_FX_DEEP_SIZE);
 
     er_conf(ok, "TC-EROFS-005",
-            "readdir /assets 与 /assets/dir/sub: ./.. 在, comp/dir 是目录, hello.txt/raw.bin/deep.txt 是文件");
+            "readdir /assets and /assets/dir/sub: ./.. present, comp/dir are directories, hello.txt/raw.bin/deep.txt are files");
 }
 
-/* ---- TC-EROFS-006: 不存在 ⇒ BR_NULL / -ENOENT; br_stat 的类型/大小正确 ---- */
+/* ---- TC-EROFS-006: nonexistent ⇒ BR_NULL / -ENOENT; br_stat type/size correct ---- */
 
 /*
- * ★ 这里刻意**不**复用同一个 `br_stat_t` 变量横跨多次调用: 上一版的写法
- *   `br_stat(a, &st); br_stat(b, &st); ...; (st.size == 12)` 里, 最后一次调用会把
- *   前一次的结果盖掉 —— 判据于是"总是拿最后一个文件的 size 比" (实测: deep.txt 的
- *   5 被拿去和 hello.txt 的 12 比)。把"调用 + 立刻取快照"收进这个小函数,
- *   每个路径各拿一份自己的属性。
+ * ★ Deliberately does **not** reuse one `br_stat_t` variable across calls: in the previous form
+ *   `br_stat(a, &st); br_stat(b, &st); ...; (st.size == 12)` the last call overwrote the earlier
+ *   result — so the criterion "always compared the last file's size" (measured: deep.txt's
+ *   5 was compared against hello.txt's 12). This helper wraps "call + take snapshot immediately",
+ *   so each path gets its own attributes.
  */
 static int ef_stat_snapshot(const char *path, br_stat_t *out)
 {
@@ -383,17 +384,17 @@ static void ef_tc006(void)
 {
     br_stat_t sd, sf, ss, sk;
 
-    /* 公开面: 不存在的路径 ⇒ -ENOENT(用 br_open 与 br_stat 两条路各验一次) */
+    /* Public surface: nonexistent path ⇒ -ENOENT (checked via both br_open and br_stat) */
     br_file_t *nf = br_open("/assets/no-such-file", BR_O_RDONLY);
     const int  nst = ef_stat_snapshot("/assets/no-such-file", &sd);
 
-    /* 类型/大小: 每个路径一份独立快照 */
+    /* Type/size: one independent snapshot per path */
     const int dird = ef_stat_snapshot("/assets/dir", &sd);
     const int fild = ef_stat_snapshot("/assets/" EROFS_FX_HELLO_PATH, &sf);
     const int subd = ef_stat_snapshot("/assets/dir/sub", &ss);
     const int deep = ef_stat_snapshot("/assets/" EROFS_FX_DEEP_PATH, &sk);
 
-    /* 内部面: "没这个名字"必须与"读失败"分开(上游用 ERR_PTR, 本件用 errno) */
+    /* Internal surface: "no such name" must be distinct from "read failure" (upstream uses ERR_PTR, this file uses errno) */
     struct erofs_inode vi;
     vi.nid = 0;
     const int lrc = erofs_ilookup("dir/not-here.txt", &vi);
@@ -408,15 +409,15 @@ static void ef_tc006(void)
         (lrc == BR_ERR(ENOENT));
 
     er_conf(ok, "TC-EROFS-006",
-            "lookup 不存在 ⇒ BR_NULL(vfs 得 -ENOENT); br_stat 对目录/文件类型与大小正确");
+            "lookup nonexistent ⇒ BR_NULL (vfs gets -ENOENT); br_stat type and size correct for dirs/files");
 }
 
-/* ---- TC-EROFS-007: 只读执法 ---- */
+/* ---- TC-EROFS-007: read-only enforcement ---- */
 static void ef_tc007(void)
 {
     br_file_t *w  = br_open("/assets/" EROFS_FX_HELLO_PATH, BR_O_WRONLY);
     br_file_t *rw = br_open("/assets/" EROFS_FX_HELLO_PATH, BR_O_RDWR);
-    br_file_t *df = br_open("/assets", BR_O_RDONLY);      /* 目录只读打开: 应当成功 */
+    br_file_t *df = br_open("/assets", BR_O_RDONLY);      /* read-only open of a directory: should succeed */
     const int  un = br_unlink("/assets/" EROFS_FX_ABIN_PATH);
     const int  mk = br_mkdir("/assets/newdir");
     const int  rm = br_rmdir("/assets/dir");
@@ -425,7 +426,7 @@ static void ef_tc007(void)
     const int  sl = br_symlink("target", "/assets/newlink");
     const int  lk = br_link("/assets/" EROFS_FX_HELLO_PATH, "/assets/hardlink.txt");
 
-    /* 目录确实能只读打开(别把"只读"做成了"打不开") */
+    /* A directory can indeed be opened read-only (don't make "read-only" mean "cannot open") */
     const br_bool dirok = (df != BR_NULL) ? BR_TRUE : BR_FALSE;
     if (df != BR_NULL) {
         (void)br_file_close(df);
@@ -439,18 +440,18 @@ static void ef_tc007(void)
         (sl == BR_ERR(EROFS)) && (lk == BR_ERR(EROFS));
 
     er_conf(ok, "TC-EROFS-007",
-            "写打开 ⇒ BR_NULL; unlink/mkdir/rmdir/rename/truncate/symlink/link ⇒ -EROFS");
+            "write open ⇒ BR_NULL; unlink/mkdir/rmdir/rename/truncate/symlink/link ⇒ -EROFS");
 }
 
-/* ---- TC-EROFS-008: 跨 extent 整文件读 + size 边界(EOF 后 read == 0) ---- */
+/* ---- TC-EROFS-008: whole-file read across extents + size boundary (read == 0 after EOF) ---- */
 static void ef_tc008(void)
 {
-    /* raw.bin 是 8192 B(2 个块)的压缩件 ⇒ 整文件读必然跨 extent; a.bin 是 4096 B 的
-     * 平面件 ⇒ 整文件读覆盖"整块 + 块边界"两条路径。 */
+    /* raw.bin is a compressed 8192 B (2 blocks) file ⇒ a whole-file read must cross extents; a.bin is a
+     * 4096 B flat file ⇒ a whole-file read covers both "full block + block boundary" paths. */
     const br_bool raw_ok  = ef_read_whole("/assets/" EROFS_FX_RAW_PATH, EROFS_FX_RAW_SIZE, 1u);
     const br_bool abin_ok = ef_read_whole("/assets/" EROFS_FX_ABIN_PATH, EROFS_FX_ABIN_SIZE, 2u);
 
-    /* size 边界: lseek 到 EOF(与越过 EOF)之后 read 必须返回 0,**不是**错误 */
+    /* size boundary: after lseek to EOF (and past EOF) read must return 0, **not** an error */
     br_file_t *f = br_open("/assets/" EROFS_FX_LZ4_PATH, BR_O_RDONLY);
     br_bool eof_ok = BR_FALSE;
     br_bool past_ok = BR_FALSE;
@@ -472,11 +473,11 @@ static void ef_tc008(void)
                        (eof_ok == BR_TRUE) && (past_ok == BR_TRUE);
 
     er_conf(ok, "TC-EROFS-008",
-            "raw.bin(8192)/a.bin(4096) 整文件逐字节一致; SEEK_END 与越过 EOF 后 read == 0");
+            "raw.bin(8192)/a.bin(4096) whole-file byte for byte; read == 0 at SEEK_END and past EOF");
 }
 
 /* =====================================================================
- * 入口
+ * Entry point
  * ===================================================================== */
 
 int uboot_erofs_selftest(void)

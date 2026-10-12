@@ -1,7 +1,7 @@
 # 0004 — brickie 构建功能(声明面驱动的镜像组合)与 `Makefile` 退役
 
 > 状态: **已落地**(S1–S3 + S4 的入口切换; 见 §2.8)
-> 影响面: `tools/brickie/**`(新命令族)、`product.toml` / `platform/*/plugin.toml`(新声明面)、
+> 影响面: `tools/brickie/**`(新命令族)、`product.toml` / `platform/*/brick.toml`(新声明面)、
 > `tests/gates.toml`(新文件)、顶层 `Makefile`(降级)、`tools/check-build.sh`(判据重写)、
 > `WORKAROUNDS.md`(`br-wa-entry-001` / `br-wa-toolchain-001` / `br-wa-mem-001`)
 > 设计依据: `Design/docs/decisions/0003-build-ownership-makefile-retirement.md`(S0–S4 台阶)、
@@ -50,7 +50,7 @@ make 或 ninja, 出**逐字节一致**的镜像)→ S3(入口换成 `brickie bui
 | 事实 | 写在哪 | 为什么是这里 |
 |---|---|---|
 | 选哪些插件 | `product.toml [select].plugins` + 各插件 `[[dep]]` 闭包 | 已是既有唯一真值 |
-| 每个插件怎么编(源/包含/宏) | 各插件 `plugin.toml [build]` | 插件自述(`§9.1` 规则 1) |
+| 每个插件怎么编(源/包含/宏) | 各插件 `brick.toml [build]` | 插件自述(`§9.1` 规则 1) |
 | **目标事实**(arch / 交叉前缀 / arch 标志 / 链接脚本 / QEMU 型号) | **platform 插件**的 `[build.target]` | 每镜像恰一个 platform(§8.3 ④); "平台是什么"本来就包含这些 |
 | **产品策略**(编译/汇编/链接标志、产物落点、核心本体源集合、profile 追加标志) | `product.toml [build]` / `[build.release]` | 产品级选择与预算的既有归属 |
 | **门禁的判据**(宿主用例 / 日志正则 / 脚本) | `tests/gates.toml` | 判据以前散在 `Makefile` recipe 里, 那是第二处真值 |

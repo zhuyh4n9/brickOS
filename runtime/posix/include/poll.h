@@ -1,12 +1,14 @@
 /*
- * brickOS prototype v0.2.0 — 事件等待(poll.h; runtime/posix 插件提供)
+ * brickOS prototype v0.2.0 — event waiting (poll.h; provided by the runtime/posix plugin)
  *
- * ★ v1 的语义 = 设计 SD-7 的既有口径("**轮询 + 粗粒度 sleep**"): 逐 fd 查就绪位
- *   (`br_file_poll`), 没人就绪就 `br_task_sleep` 一小片再查, 直到超时。
- *   与 `11-02` §2.1 的 TR-B 判定一致; `poll_attach`(真正的 wait-queue)是 v2 面,
- *   且设计明确要求它与 preempt **同期**(R-S1)。
- * ★ 因此**实际唤醒延迟 ≈ 一个 tick(`1/HZ`, 缺省 5 ms)**, 不是 `poll` 的 timeout 值。
- *   `timeout = 0` 是"只查一次"(立刻返回), `timeout < 0` 是"无限等"。
+ * ★ v1 semantics = the existing design SD-7 line ("**polling + coarse-grained sleep**"):
+ *   check the ready bits per fd (`br_file_poll`); if none is ready, `br_task_sleep` a short
+ *   slice and check again until the timeout. Consistent with the TR-B decision in `11-02`
+ *   §2.1; `poll_attach` (a real wait-queue) is a v2 surface, and the design explicitly
+ *   requires it to be **concurrent with preempt** (R-S1).
+ * ★ Hence the **actual wakeup latency ≈ one tick (`1/HZ`, 5 ms by default)**, not poll's
+ *   timeout value. `timeout = 0` means "check once" (return immediately), `timeout < 0`
+ *   means "wait forever".
  */
 #ifndef BR_POSIX_POLL_H
 #define BR_POSIX_POLL_H
@@ -15,8 +17,8 @@
 
 struct pollfd {
     int   fd;
-    short events;    /* 想等的事件(入参) */
-    short revents;   /* 实际发生的事件(出参) */
+    short events;    /* events to wait for (in) */
+    short revents;   /* events that actually occurred (out) */
 };
 
 typedef unsigned long nfds_t;

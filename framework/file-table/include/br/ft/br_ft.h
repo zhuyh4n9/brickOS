@@ -1,154 +1,174 @@
 /*
- * brickOS prototype v0.2.0 — 文件表契约(framework/file-table 插件的对外面)
+ * brickOS prototype v0.2.0 — file table contract (public face of the
+ * framework/file-table plugin)
  *
- * 设计依据(设计仓库):
- *   - `11-01-service.md` §1(D18): POSIX 的 **fd 表 = 共享状态单一主人**判例;
- *   - `1-01-architecture.md` §7.2 规则 3(共享状态唯一主人)+ D19(能力框架以**插件**形态
- *     存在 —— "框架件 = 插件的身份, core 的纪律");
- *   - `3-06-service-mgmt.md` §2(三类共享状态主人: fd 表 / socket 表 / trace 环);
- *   - `7-01-vfs.md` §1/§4.1(fd 表项统一持有 `br_file_t*`; `br_open` 是 fd 表的底层原语)。
+ * Design basis (design repo):
+ *   - `11-01-service.md` §1 (D18): POSIX **fd table = sole owner of shared state**;
+ *   - `1-01-architecture.md` §7.2 rule 3 (one owner for shared state) + D19 (the capability
+ *     framework exists as a **plugin** — "framework piece = plugin identity, core discipline");
+ *   - `3-06-service-mgmt.md` §2 (three shared-state owners: fd table / socket table / trace ring);
+ *   - `7-01-vfs.md` §1/§4.1 (fd table entries uniformly hold `br_file_t*`; `br_open` is the
+ *     low-level primitive of the fd table).
  *
- * ============================== 本件是什么, 不是什么 ==============================
- * **是**: 一张"小整数 → `br_file_t*`"的**静态定长表** + 它的全部语义
- *       (最小可用 fd / 表满 / 非法 fd / dup 共享 / 释放时判"最后一个引用")。
- * **不是**: POSIX 的 `open/read/write` —— 那些是 **runtime/posix** 的面(runtime/posix 把
- *       `open()` 映射成 `br_open_err()` + 本表的 `br_ft_alloc()`, 把 `close()` 映射成
- *       `br_ft_release()` + `br_file_close()`)。本件**只做表**, 不做文件的读写。
+ * ============================== what this file is, and is not ==============================
+ * **Is**: a **static fixed-size table** of "small integer → `br_file_t*`" plus all its semantics
+ *       (lowest free fd / table full / invalid fd / dup sharing / "last reference" on release).
+ * **Is not**: POSIX `open/read/write` — those are the face of **runtime/posix** (runtime/posix
+ *       maps `open()` to `br_open_err()` + this table's `br_ft_alloc()`, and `close()` to
+ *       `br_ft_release()` + `br_file_close()`). This file **only does the table**, not file I/O.
  *
- * ## 为什么 fd 表要独立成件(而不是留在 runtime/posix 里)
- *   设计说"fd 表 = svc-posix 的唯一主人"(设计侧的插件名, 本树里叫 `runtime/posix`,
- *   见 ADR-0015), 那条规则要保的是**单一主人**(规则 3),
- *   不是"主人必须是 POSIX 服务"。把表抽成框架件之后:
- *     ① **主人更清楚了** —— 状态住在 `framework/file-table`, 它是全树唯一写 `s_slots`
- *        的地方; runtime/posix 变成**消费者**, 不再自己揣一张表;
- *     ② v2 的 **socket 表** 可以复用同一张表的语义(设计 `3-06` §2 把二者的主人问题
- *        并列), 而不必再写一遍"最小可用 fd / dup / 最后一个引用";
- *     ③ 表是**纯算法**(无设备、无 FS、无 POSIX), 于是能在宿主上把
- *        "表满/dup2 顶替/引用判空"这些边界跑到, 不需要 QEMU。
+ * ## Why the fd table is its own piece (not left inside runtime/posix)
+ *   The design says "fd table = sole owner of svc-posix" (design-side plugin name; this tree
+ *   calls it `runtime/posix`, see ADR-0015). That rule protects **single ownership** (rule 3),
+ *   not "the owner must be the POSIX service". After extracting the table into a framework piece:
+ *     ① **ownership is clearer** — the state lives in `framework/file-table`, the only place in
+ *        the tree that writes `s_slots`; runtime/posix becomes a **consumer** and no longer
+ *        keeps a table of its own;
+ *     ② the v2 **socket table** can reuse the same table semantics (design `3-06` §2 puts their
+ *        ownership side by side) instead of rewriting "lowest free fd / dup / last reference";
+ *     ③ the table is **pure algorithm** (no device, no FS, no POSIX), so boundaries such as
+ *        "table full / dup2 displacement / reference emptiness" run on the host without QEMU.
  *
- * ## 零依赖(刻意的)
- *   `br_file_t` 只作**前向声明** —— 本件从头到尾**不解引用**它, 只持有与比较指针。
- *   于是本件**没有 `[[dep]]`**(与 `framework/vfs-core` 同型: "deps 为空是设计结果,
- *   不是漏写"), 也不把 vfs-core 拉进任何组合。
+ * ## Zero dependencies (deliberate)
+ *   `br_file_t` is only **forward-declared** — this file never dereferences it, only holds and
+ *   compares pointers. So it has **no `[[dep]]`** (same shape as `framework/vfs-core`: "empty
+ *   deps is the design result, not an omission") and does not pull vfs-core into any composition.
  *
- * ## 引用语义: 引用数 = **在场槽位的个数**(不设计数器)
- *   POSIX 的"同一 open file description"在本件里就是**同一个 `br_file_t*`**:
- *   两个 fd 指向同一个指针 ⇒ 共享偏移与状态(这正是 `dup`/`dup2` 的语义)。
- *   于是"最后一个引用走了没有"**由表自己回答**(扫一遍在场槽位), 不需要一个要与槽位
- *   保持同步的 `refcount` 字段 —— 少一个字段, 就少一类"计数漂移"缺陷。
- *   代价是 `release`/`release_all` 里的 O(n) 扫描(n = `BR_FT_MAX` = 32, 可忽略)。
+ * ## Reference semantics: refcount = **number of live slots** (no counter)
+ *   POSIX's "same open file description" is here simply the **same `br_file_t*`**: two fds
+ *   pointing at one pointer ⇒ shared offset and state (exactly `dup`/`dup2` semantics). Thus
+ *   "has the last reference gone" **is answered by the table itself** (scan the live slots),
+ *   with no `refcount` field to keep in sync with slots — one field less, one class of "count
+ *   drift" defect less. The cost is the O(n) scan in `release`/`release_all` (n = `BR_FT_MAX` =
+ *   32, negligible).
  *
- * ## 生命周期归属(为什么 `release` 要**回报**句柄)
- *   本件**不调用** `br_file_close()`: 那会把 vfs-core 变成一条真依赖, 也会让"表"越过
- *   自己的边界去管文件的生死。于是 `br_ft_release(fd, &last_file)` 在**最后一个引用
- *   消失时**把句柄交回调用方, 由 runtime/posix 调 `br_file_close()`:
+ * ## Lifetime ownership (why `release` **hands back** the handle)
+ *   This file **does not call** `br_file_close()`: that would make vfs-core a real dependency
+ *   and let the "table" reach past its own boundary to manage file lifetime. So
+ *   `br_ft_release(fd, &last_file)` returns the handle to the caller when the **last reference
+ *   disappears**, and runtime/posix calls `br_file_close()`:
  *
  *       int close(int fd) {
  *           br_file_t *f = BR_NULL;
- *           int rc = br_ft_release(fd, &f);      // -EBADF ⇒ 用户态 EBADF
+ *           int rc = br_ft_release(fd, &f);      // -EBADF ⇒ userspace EBADF
  *           if (rc != 0) { return rc; }
- *           if (f != BR_NULL) { return br_file_close(f); }   // 最后一个引用: 真关
- *           return 0;                                        // 只是摘了一个 fd
+ *           if (f != BR_NULL) { return br_file_close(f); }   // last reference: really close
+ *           return 0;                                        // only dropped one fd
  *       }
  *
- *   这是 POSIX `close(2)` 语义的**逐字翻译**, 而不是"表顺手把文件关了"。
+ *   This is a **verbatim translation** of POSIX `close(2)` semantics, not "the table closes the
+ *   file along the way".
  */
 #ifndef BR_FT_BR_FT_H
 #define BR_FT_BR_FT_H
 
 #include <br/core/br_types.h>
 
-/* 前向声明:`br_file_t` 是不透明句柄(vfs-core 的 D14 契约)。本件只持指针。 */
+/* Forward declaration: `br_file_t` is an opaque handle (vfs-core D14 contract). Only pointers here. */
 typedef struct br_file br_file_t;
 
-/* ==================================================================== 上界 */
+/* ==================================================================== upper bound */
 
-/* fd 槽数上界(编译期; 与 plugin.toml 的 `[[res]] ram` 对齐 —— 32 × 16 B = 512 B)。
- * POSIX 的 0/1/2(stdin/stdout/stderr)不是特殊槽: runtime/posix 在 init 里先装三个
- * 标准流, 于是它们**自然**占住最小三个号 —— 不需要"保留段"这种额外机制。 */
+/* Upper bound on fd slots (compile time; aligned with brick.toml `[[res]] ram` — 32 × 16 B = 512 B).
+ * POSIX 0/1/2 (stdin/stdout/stderr) are not special slots: runtime/posix installs three standard
+ * streams in init, so they **naturally** take the lowest three numbers — no "reserved range" needed. */
 #define BR_FT_MAX   32u
 
-/* "没有这个 fd"的返回值(`br_ft_fd_at` 用; 与"fd 0"区分开)。 */
+/* Return value for "no such fd" (`br_ft_fd_at`; keeps it distinct from "fd 0"). */
 #define BR_FT_NONE  (-1)
 
-/* ==================================================================== 生命周期 */
+/* ==================================================================== lifecycle */
 
-/* 清空全表, 返回**被丢弃的槽位数**(0 = 本来就空)。
- * ★ 它**不回报**句柄 —— 这是刻意的诚实: "把表清零"与"把文件关掉"是两件事, 而本件
- *   不负责后者。正常退出路径请用 `br_ft_release_all()`; 本函数只用于插件 init
- *   (静态表是 BSS, 本来就是空的)与用例的隔离前置。返回非 0 说明**有人忘了关文件**。 */
+/* Clear the whole table, return the **number of discarded slots** (0 = already empty).
+ * ★ It does **not** hand back handles — deliberately honest: "zero the table" and "close the
+ *   files" are two different things, and this file owns only the former. Use
+ *   `br_ft_release_all()` on the normal exit path; this function is only for plugin init
+ *   (the static table is BSS, already empty) and test isolation. Non-zero means **someone forgot
+ *   to close a file**. */
 br_u32 br_ft_reset(void);
 
-/* 在场 fd 个数(观测)。 */
+/* Number of live fds (observation). */
 br_u32 br_ft_count(void);
 
-/* 第 `index` 个**在场** fd(按 fd 升序; `index` 从 0 起, 越界 ⇒ `BR_FT_NONE`)。
- * 用途 = 观测/遍历(dump 出"谁开着什么"), 与 `br_mount_path_at` 同型。 */
+/* The `index`-th **live** fd (ascending fd order; `index` from 0, out of range ⇒ `BR_FT_NONE`).
+ * Use = observation/iteration (dump "who has what open"); same shape as `br_mount_path_at`. */
 int br_ft_fd_at(br_u32 index);
 
-/* ==================================================================== 表操作 */
+/* ==================================================================== table ops */
 
 /*
- * 分配一个槽写下 `{file, flags}`, 返回**最小可用 fd**。
- *   `file == BR_NULL` ⇒ `-EINVAL`(空槽位不是"合法的空文件", 见下面的"在场判据")。
- *   表满 ⇒ `-EMFILE`(进程级 fd 用尽; `ENFILE` 是系统级的, 本件是单进程表)。
- *   `flags` 对本件是**不透明**的: 表不解释它, 只存与还(解释权归 runtime/posix)。
+ * Allocate a slot holding `{file, flags}`, return the **lowest free fd**.
+ *   `file == BR_NULL` ⇒ `-EINVAL` (an empty slot is not a "legal empty file"; see the "live test" below).
+ *   Table full ⇒ `-EMFILE` (process-level fd exhaustion; `ENFILE` is system-level, this is a
+ *   single-process table).
+ *   `flags` is **opaque** here: the table does not interpret it, only stores and returns it
+ *   (runtime/posix owns interpretation).
  */
 int br_ft_alloc(br_file_t *file, br_u32 flags);
 
-/* 取句柄(不改变任何状态)。fd 非法/空槽 ⇒ `BR_NULL`。
- * ★ **在场判据 = `file != BR_NULL`**: 没有独立的 used 位, 于是"表里有几个 fd"与
- *   "表里有几个非空句柄"永远是同一个答案(不可能对不上)。 */
+/* Get the handle (changes no state). Invalid fd / empty slot ⇒ `BR_NULL`.
+ * ★ **Live test = `file != BR_NULL`**: there is no separate used bit, so "how many fds are in the
+ *   table" and "how many non-null handles are in the table" always give the same answer (they
+ *   cannot disagree). */
 br_file_t *br_ft_get(int fd);
 
-/* 读/写槽位里的 flags。非法 fd ⇒ `-EBADF`; `out == BR_NULL` ⇒ `-EINVAL`。
- * `br_ft_set_flags` 是**整体替换**(不是"只改状态位"): 要保留访问模式就自己按位并回来
- *   —— 因为访问模式由"打开时"决定, 让一个能改访问模式的 setter 存在才是危险的。 */
+/* Read/write the flags in the slot. Invalid fd ⇒ `-EBADF`; `out == BR_NULL` ⇒ `-EINVAL`.
+ * `br_ft_set_flags` is a **whole replacement** (not "change status bits only"): OR back any
+ *   access mode you want to keep — the access mode is fixed at "open time", and a setter able to
+ *   change it would be the dangerous thing. */
 int br_ft_get_flags(int fd, br_u32 *out);
 int br_ft_set_flags(int fd, br_u32 flags);
 
 /*
- * 释放一个 fd(= POSIX `close` 的前半步)。
- *   fd 非法 ⇒ `-EBADF`, 表不变。
- *   `last_file` 可空; 非空时: **该句柄的最后一个引用消失** ⇒ 写入句柄(调用方负责
- *   `br_file_close`); 还有别的 fd 指向它 ⇒ 写入 `BR_NULL`(调用方什么都不用做)。
- *   返回 0 = 成功(无论有没有回报句柄)。
+ * Release one fd (= first half of POSIX `close`).
+ *   Invalid fd ⇒ `-EBADF`, table unchanged.
+ *   `last_file` may be null; when non-null: the **last reference to this handle disappeared** ⇒
+ *   write the handle (caller owns `br_file_close`); another fd still points at it ⇒ write
+ *   `BR_NULL` (caller does nothing).
+ *   Return 0 = success (whether or not a handle was handed back).
  */
 int br_ft_release(int fd, br_file_t **last_file);
 
 /*
- * 释放**全部** fd(退出/收尾路径; 语义 = 逐个 `br_ft_release`)。
- *   `out[0..cap)` 收"最后一个引用消失"的句柄, **每个句柄恰好一条**(按指针去重,
- *   所以在场 fd 数可以大于 `cap` 而仍然装得下)。
- *   返回写出的条数; 装不下 ⇒ `-ENOSPC` 且**表不变**(先干跑一遍再动手 —— 半途清空
- *   会更糟: 调用方既拿不到全部句柄, 也回不到原状态)。
- *   `out == BR_NULL && cap != 0` ⇒ `-EINVAL`。
+ * Release **all** fds (exit/teardown path; semantics = repeated `br_ft_release`).
+ *   `out[0..cap)` collects handles whose "last reference disappeared", **exactly one entry per
+ *   handle** (deduplicated by pointer, so the live fd count may exceed `cap` and still fit).
+ *   Returns the number written; if it does not fit ⇒ `-ENOSPC` and the **table is unchanged**
+ *   (dry run first — clearing halfway is worse: the caller gets neither all handles nor the
+ *   original state).
+ *   `out == BR_NULL && cap != 0` ⇒ `-EINVAL`.
  */
 int br_ft_release_all(br_file_t **out, br_u32 cap);
 
-/* ==================================================================== dup 族 */
+/* ==================================================================== dup family */
 
 /*
- * `dup(2)`: 新 fd 指向同一句柄(共享偏移与状态), flags 随槽位复制一份快照。
- *   返回最小可用 fd, 或 `-EBADF`(oldfd 非法)/ `-EMFILE`(表满 —— 此时**不动** oldfd)。
+ * `dup(2)`: new fd points at the same handle (shared offset and state); flags are copied as a
+ *   per-slot snapshot.
+ *   Returns the lowest free fd, or `-EBADF` (bad oldfd) / `-EMFILE` (table full — oldfd is
+ *   **untouched** in that case).
  *
- * ★ flags 的两个身份(用的人必须知道): 访问模式是**每 fd**的(dup 出来的新 fd 不能因为
- *   共享就变成可写), 而 `O_APPEND`/`O_NONBLOCK` 按 POSIX 属**open file description**
- *   (共享)。本件只能存一份快照; "共享的那些位"由 `br_file_t` 侧(`br_file_flags`)与
- *   驱动自己保存 —— runtime/posix 的 `F_SETFL` 应把共享位同时落到文件侧, 不要只改本表。
- *   这是本件**已知的语义边界**, 登记在 `docs/decisions/0012-…`。
+ * ★ The two identities of flags (callers must know): the access mode is **per fd** (a dup'ed fd
+ *   must not become writable just by sharing), while `O_APPEND`/`O_NONBLOCK` belong to the
+ *   **open file description** per POSIX (shared). This file can store only one snapshot; "the
+ *   shared bits" are kept on the `br_file_t` side (`br_file_flags`) and by the driver —
+ *   runtime/posix `F_SETFL` must land shared bits on the file side too, not only in this table.
+ *   This is a **known semantic boundary**, recorded in `docs/decisions/0012-…`.
  */
 int br_ft_dup(int oldfd);
 
 /*
- * `dup2(2)`: 把 `oldfd` 复制到**指定**的 `newfd`。
- *   `oldfd` 非法 ⇒ `-EBADF`; `newfd` 越界 ⇒ `-EBADF`; `oldfd == newfd` ⇒ 返回 newfd(不动)。
- *   `newfd` 已占用 ⇒ 先等价 `close(newfd)`: 被顶掉的句柄若已无其它引用, 经 `displaced`
- *   回报(可空)交调用方 `br_file_close`, 否则不回报。
- *   返回 `newfd` ≥ 0, 或负 errno。
- * ★ `displaced` 在**任何**返回路径上都会被写(失败/无需回报 ⇒ `BR_NULL`)——
- *   于是调用方永远读不到未初始化的值; 想区分"没人被顶掉"与"被顶掉的还有人引用",
- *   不需要: 两种情况的动作都是"什么都不做"。
+ * `dup2(2)`: copy `oldfd` to a **specified** `newfd`.
+ *   Bad `oldfd` ⇒ `-EBADF`; `newfd` out of range ⇒ `-EBADF`; `oldfd == newfd` ⇒ return newfd
+ *   (no change).
+ *   `newfd` occupied ⇒ equivalent to `close(newfd)` first: if the displaced handle has no other
+ *   reference it is handed back via `displaced` (nullable) for the caller to `br_file_close`,
+ *   otherwise nothing is handed back.
+ *   Returns `newfd` ≥ 0, or a negative errno.
+ * ★ `displaced` is written on **every** return path (failure / nothing to hand back ⇒
+ *   `BR_NULL`) — so the caller never reads an uninitialized value; distinguishing "nobody was
+ *   displaced" from "the displaced handle has other references" is unnecessary: both cases mean
+ *   "do nothing".
  */
 int br_ft_dup2(int oldfd, int newfd, br_file_t **displaced);
 

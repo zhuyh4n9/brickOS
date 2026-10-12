@@ -1,32 +1,36 @@
 /*
- * brickOS prototype v0.2.0 — service/trace **插件私有**内部契约(不导出, 不在 include/)
+ * brickOS prototype v0.2.0 — service/trace **plugin-private** internal contract (not exported, not in include/)
  *
- * 给谁看: 本插件自己的 `src/trace_selftest.c`。放在 `src/`(而不是 `include/`)是刻意的 ——
- * `include/` 下的一切都是**插件对外面**(会被 `brickie check` 的接口域治理, 也进
- * `descriptor_include` 的选用范围); 而这里的两条**只有自检**需要。
+ * Audience: this plugin's own `src/trace_selftest.c`. Living in `src/` (rather than `include/`) is
+ * deliberate — everything under `include/` is **plugin-outward surface** (governed by `brickie check`'s
+ * interface domain, and part of `descriptor_include` selection); the two entries here are needed **only by
+ * the selftest**.
  *
- * ## 为什么自检要读内部
- *   TC-DBG-001 有两条判据的**被测对象就是内部机制本身**, 用公开 API 表达不出来:
- *     - "两个 tag 的初始槽位相同"是"线性探测真的被走到"这条断言**成立的前提**, 用例要
- *       用 `trc_slot_of` 复核它(否则哪天 hash 一改, 这条断言会悄悄退化成空转);
- *     - 名字解码要比对**逐字节**内容(公开的 `br_trace_svc_name` 只回 `const char *`)。
- *   为了这两条把它们做成公开 API 会更糟: hash 槽位布局进了 golden 接口面, 以后动
- *   实现就是接口变更(而它明明是内部机制)。
+ * ## Why the selftest reads internals
+ *   Two TC-DBG-001 criteria have **the internal mechanism itself** as their subject, which the public API
+ *   cannot express:
+ *     - "the two tags start in the same slot" is the **premise** of the assertion "linear probing is really
+ *       exercised"; the case must re-check it with `trc_slot_of` (otherwise a future hash change would
+ *       silently turn that assertion into a no-op);
+ *     - name decoding must compare **byte by byte** (public `br_trace_svc_name` returns only `const char *`).
+ *   Making these two public API would be worse: the hash slot layout would enter the golden interface
+ *   surface, so any later implementation change becomes an interface change (though it is plainly internal).
  *
- * ## 边界纪律(与 framework/vfs-core 的 `src/vfs_internal.h` 同源)
- *   只暴露自检真用到的两条, 且一律**转调生产实现**(不复制逻辑): 用例必须跑真算法,
- *   否则验证的是副本。生产代码(`trace.c`)的其余部分仍然是 `static`。
+ * ## Boundary discipline (same lineage as framework/vfs-core's `src/vfs_internal.h`)
+ *   Expose only the two the selftest really uses, and always **forward to the production implementation**
+ *   (never copy logic): the case must run the real algorithm, otherwise it verifies a copy. The rest of the
+ *   production code (`trace.c`) stays `static`.
  */
 #ifndef BR_DEBUG_BR_TRACE_INTERNAL_H
 #define BR_DEBUG_BR_TRACE_INTERNAL_H
 
 #include <br/core/br_types.h>
 
-/* 槽位下标(生产实现是 static trc_slot_of: FNV-1a hash 后对槽位数取模)。
- * 用途: 用例断言两个 tag 的**初始**槽位相同 —— 撞槽前提不成立时先报出来。 */
+/* Slot index (production impl is static trc_slot_of: FNV-1a hash then modulo slot count).
+ * Use: the case asserts the two tags' **initial** slots match — report early if the collision premise fails. */
 br_u32 br_trace_internal_slot_of(const char *name);
 
-/* 字符串比较(生产实现是 static trc_streq): 用例用它逐字节核对解码出的名字 == 注册 tag。 */
+/* String compare (production impl is static trc_streq): the case uses it to check byte-for-byte that the decoded name == the registered tag. */
 br_bool br_trace_internal_streq(const char *a, const char *b);
 
 #endif /* BR_DEBUG_BR_TRACE_INTERNAL_H */

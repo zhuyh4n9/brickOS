@@ -1,31 +1,35 @@
 /*
- * tests/host/ft_test.c — 文件表(framework/file-table)的**宿主**门禁
+ * tests/host/ft_test.c — **host** gate for the file table (framework/file-table)
  *
- * 为什么文件表值得一条宿主用例:
- *   它是**纯算法**(契约头明写"表从头到尾不解引用 br_file_t"), 于是"最小可用 fd /
- *   表满 / dup2 顶替 / 最后一个引用"这些只有真实负载才碰得到的边界可以在这里全跑到,
- *   而不必开 QEMU —— 与 mem-test / sync-test / sched-test 的分工同型(算法性质 → 宿主,
- *   端到端 → 目标)。
+ * Why the file table deserves a host case:
+ *   it is a **pure algorithm** (the contract header states "the table never dereferences
+ *   br_file_t"), so the boundaries only real workload would hit — smallest usable fd / table
+ *   full / dup2 replacement / last reference — can all be exercised here without booting QEMU;
+ *   same split as mem-test / sync-test / sched-test (algorithmic properties → host,
+ *   end-to-end → target).
  *
- * 本用例干三件事:
- *   ① **errno 与内核逐码对拍** —— `core/include/br/core/br_error.h` 的每一个 `BR_E*`
- *      都拿宿主 `<errno.h>` 的同名宏比一次。这是"errno 值与 Linux kernel 保持一致"这条
- *      要求的**可执行判据**: 抄错一个数字, 这里立刻红, 而不是等到用户态 errno 对不上。
- *      (宿主是 x86-64, 目标是 aarch64; 两者共用内核的 `asm-generic` 编号 ⇒ 这条对拍
- *      对目标同样成立。)
- *   ② **重跑 in-image 自检套件** `file_table_selftest()`(TC-FT-001..011, 同一份源码、
- *      同一批 tag)⇒ 目标与宿主两条腿的判据**同源**, 少一份会漂的副本。
- *   ③ 宿主独有的边界(表满后的越界访问 / 空参健壮性)。
+ * This case does three things:
+ *   ① **errno compared code by code with the kernel** — every `BR_E*` in
+ *      `core/include/br/core/br_error.h` is compared against the host `<errno.h>` macro of the
+ *      same name. This is the **executable criterion** for "errno values stay consistent with
+ *      the Linux kernel": copy one number wrong and this goes red at once, instead of waiting
+ *      until userspace errno mismatches. (The host is x86-64 and the target aarch64; both
+ *      share the kernel's `asm-generic` numbering ⇒ the comparison holds on the target too.)
+ *   ② **re-run the in-image self-test suite** `file_table_selftest()` (TC-FT-001..011, same
+ *      source, same tag set) ⇒ the target and host legs share one criterion source, one less
+ *      copy that can drift.
+ *   ③ host-only boundaries (out-of-range access after table full / null-argument robustness).
  *
- * 判据 = 退出码(0 = 全绿), 与其它 [[hosttest]] 一致。
+ * Criterion = exit code (0 = all green), same as other [[hosttest]].
  */
-#include <errno.h>          /* ★ 必须在**我们自己的** errno 头之前: 见下面的捕获 */
+#include <errno.h>          /* ★ must come **before our own** errno header: see the capture below */
 
 /*
- * ★ errno 对拍的**顺序要求**(ADR-0027): 本仓的 errno 名字现在就是 POSIX 原名
- *   (`EPERM`/`EIO`/…, 无 `BR_` 前缀)⇒ 若先包含我们的头, `X(EPERM, EPERM)` 就成了
- *   "自己跟自己比"(恒真, 静默丢掉覆盖)。所以这里**先**把宿主 <errno.h> 的真值抓进
- *   数组, 之后再让我们的头参与比较 —— 比的是"我们的名字"vs"宿主的值"。
+ * ★ **Ordering requirement** for the errno comparison (ADR-0027): this repo's errno names are
+ *   now the POSIX originals (`EPERM`/`EIO`/…, no `BR_` prefix) ⇒ if our header were included
+ *   first, `X(EPERM, EPERM)` would compare "itself with itself" (always true, silently losing
+ *   coverage). So the host <errno.h> values are captured into the array **first**, and only
+ *   then does our header take part in the comparison — comparing "our names" vs "host values".
  */
 #define BR_ERRNO_NAMES(X)     \
     X(EPERM) \
@@ -85,7 +89,8 @@ static const int s_host_errno[] = {
 #undef BR_HOST_CAP
 };
 
-/* 撤掉宿主的同名宏: 真值已在上面捕获, 下面要让我们自己的定义生效。 */
+/* Undefine the host macros of the same names: the values were captured above, and now our own
+ * definitions must take effect. */
 #undef EPERM
 #undef ENOENT
 #undef ESRCH
@@ -147,14 +152,16 @@ static const int s_host_errno[] = {
 #include <stdarg.h>
 #include <stdio.h>
 
-/* in-image 自检套件(定义在 `framework/file-table/src/ft_selftest.c`; 同一个编译单元集
- * 里一起编, 所以宿主跑的是**同一份**用例, 不是改写过的副本)。 */
+/* in-image self-test suite (defined in `framework/file-table/src/ft_selftest.c`; compiled
+ * together in the same translation-unit set, so the host runs the **same** cases, not a
+ * rewritten copy). */
 int file_table_selftest(void);
 
-/* ==================================================================== 宿主替身 */
+/* ==================================================================== host stand-ins */
 
-/* 为什么替身只这几行: `file_table.c` 对外的依赖只有"日志"与"关中断"两条。
- * 宿主上没有中断 ⇒ 关中断退化成恒等; 日志落到 vprintf(用例允许 libc)。 */
+/* Why the stand-ins are only these lines: `file_table.c` depends externally on just two
+ * things, "log" and "disable interrupts". The host has no interrupts ⇒ disabling degrades to
+ * identity; logging goes to vprintf (cases may use libc). */
 static br_log_level_t s_level = BR_LOG_INFO;
 
 void br_log_write(br_log_level_t level, const char *fmt, ...)
@@ -175,7 +182,7 @@ void br_log_write(br_log_level_t level, const char *fmt, ...)
 
 br_irq_state_t br_irq_lock(void)
 {
-    return 0u;                      /* 宿主单线程: 临界区是恒等映射 */
+    return 0u;                      /* host is single-threaded: the critical section is the identity */
 }
 
 void br_irq_unlock(br_irq_state_t st)
@@ -183,7 +190,7 @@ void br_irq_unlock(br_irq_state_t st)
     (void)st;
 }
 
-/* ==================================================================== 报告 */
+/* ==================================================================== report */
 
 static int s_pass;
 static int s_fail;
@@ -199,7 +206,7 @@ static void rep(int cond, const char *tag, const char *desc)
     }
 }
 
-/* ==================================================================== 假句柄 */
+/* ==================================================================== fake handles */
 
 #define FAKE_N 16u
 static br_u8 s_fake[FAKE_N][16];
@@ -216,9 +223,10 @@ static void fill_all(void)
     }
 }
 
-/* ==================================================================== ① errno 对拍 */
+/* ==================================================================== ① errno comparison */
 
-/* 一张"本仓名 ↔ 内核名"的表; 每个 `BR_E*` 都必须在这里出现一次(漏了就是漏了对拍)。 */
+/* A "repo name ↔ kernel name" table; every `BR_E*` must appear here once (a miss is lost
+ * coverage). */
 static int s_errno_bad;
 static int s_errno_checked;
 
@@ -228,17 +236,18 @@ static int s_errno_i;
         s_errno_checked++;                                           \
         if ((int)(n) != s_host_errno[s_errno_i]) {                   \
             s_errno_bad++;                                           \
-            printf("[FTTEST] MISMATCH %s = %d, 宿主 = %d\n",          \
+            printf("[FTTEST] MISMATCH %s = %d, host = %d\n",          \
                    #n, (int)(n), s_host_errno[s_errno_i]);           \
         }                                                            \
         s_errno_i++;                                                 \
     } while (0);
 
-/* ==================================================================== ③ 宿主独有边界 */
+/* ==================================================================== ③ host-only boundaries */
 
 static void host_only_cases(void)
 {
-    /* ---- TC-FT-H01: 表满之后**越界与空槽仍然只是 -EBADF**, 不越界读内存 ---- */
+    /* ---- TC-FT-H01: after table full, **out-of-range and empty slots are still just
+     * -EBADF**, with no out-of-bounds memory read ---- */
     {
         (void)br_ft_reset();
         fill_all();
@@ -250,33 +259,35 @@ static void host_only_cases(void)
         rep((over == BR_ERR(EMFILE)) && (neg == BR_ERR(EBADF)) &&
             (high == BR_ERR(EBADF)) && (far == BR_ERR(EBADF)) &&
             (br_ft_get((int)BR_FT_MAX) == BR_NULL),
-            "TC-FT-H01", "表满 ⇒ -EMFILE; 越界/极端 fd(含 INT_MAX)一律 -EBADF");
+            "TC-FT-H01", "table full ⇒ -EMFILE; out-of-range/extreme fds (incl. INT_MAX) always -EBADF");
     }
 
-    /* ---- TC-FT-H02: dup 表满时**不动 oldfd**(POSIX: 失败不留副作用) ---- */
+    /* ---- TC-FT-H02: on dup table full, **oldfd is untouched** (POSIX: failure leaves no
+     * side effect) ---- */
     {
         (void)br_ft_reset();
         fill_all();
         const int d = br_ft_dup(0);
         rep((d == BR_ERR(EMFILE)) && (br_ft_count() == BR_FT_MAX) &&
             (br_ft_get(0) == fake(0)),
-            "TC-FT-H02", "dup 表满 ⇒ -EMFILE 且已有 fd 不被改动");
+            "TC-FT-H02", "dup table full ⇒ -EMFILE and existing fds unchanged");
     }
 
-    /* ---- TC-FT-H03: 空参健壮性(NULL out / cap=0) ---- */
+    /* ---- TC-FT-H03: null-argument robustness (NULL out / cap=0) ---- */
     {
         (void)br_ft_reset();
-        const int r_null_cap = br_ft_release_all(BR_NULL, 1u);     /* out 空而 cap 非 0 */
-        const int r_empty    = br_ft_release_all(BR_NULL, 0u);     /* 空表 + cap 0: 什么都不报 */
+        const int r_null_cap = br_ft_release_all(BR_NULL, 1u);     /* out null, cap non-zero */
+        const int r_empty    = br_ft_release_all(BR_NULL, 0u);     /* empty table + cap 0: report nothing */
         (void)br_ft_alloc(fake(0), 0u);
         br_file_t *one = BR_NULL;
-        const int r_cap0 = br_ft_release_all(&one, 0u);            /* 有 1 条要报却 cap=0 */
+        const int r_cap0 = br_ft_release_all(&one, 0u);            /* 1 entry to report but cap=0 */
         rep((r_null_cap == BR_ERR(EINVAL)) && (r_empty == 0) &&
             (r_cap0 == BR_ERR(ENOSPC)) && (br_ft_count() == 1u),
-            "TC-FT-H03", "release_all: out=NULL+cap!=0 ⇒ -EINVAL; cap 不足 ⇒ -ENOSPC 且表不变");
+            "TC-FT-H03", "release_all: out=NULL+cap!=0 ⇒ -EINVAL; cap too small ⇒ -ENOSPC and table unchanged");
     }
 
-    /* ---- TC-FT-H04: 计数不变量(在场槽位个数 = count), 反复操作后仍成立 ---- */
+    /* ---- TC-FT-H04: count invariant (number of live slots = count) holds after repeated
+     * operations ---- */
     {
         (void)br_ft_reset();
         br_u32 expect = 0u;
@@ -290,13 +301,13 @@ static void host_only_cases(void)
                 expect--;
             }
         }
-        /* 真实在场数 = 槽位非空数(fd_at 遍历一遍自己数) */
+        /* real live count = non-empty slots (count them by walking fd_at) */
         br_u32 counted = 0u;
         while (br_ft_fd_at(counted) != BR_FT_NONE) {
             counted++;
         }
         rep((br_ft_count() == expect) && (counted == expect),
-            "TC-FT-H04", "反复 alloc/dup/release 后 count == 非空槽位数 == fd_at 遍历数");
+            "TC-FT-H04", "after repeated alloc/dup/release, count == non-empty slots == fd_at walk count");
     }
 }
 
@@ -304,21 +315,21 @@ static void host_only_cases(void)
 
 int main(void)
 {
-    printf("=== ft-test: framework/file-table(宿主) ===\n");
+    printf("=== ft-test: framework/file-table (host) ===\n");
 
-    /* ① errno 与内核逐码对拍 */
+    /* ① errno compared code by code with the kernel */
     BR_ERRNO_NAMES(BR_ERRNO_CMP);
-    rep(s_errno_bad == 0, "TC-FT-H05", "errno 编号与 Linux <errno.h> 逐码一致");
-    printf("[FTTEST] errno 对拍: %d 码, 不一致 %d 个\n", s_errno_checked, s_errno_bad);
+    rep(s_errno_bad == 0, "TC-FT-H05", "errno numbers match Linux <errno.h> code by code");
+    printf("[FTTEST] errno comparison: %d codes, %d mismatches\n", s_errno_checked, s_errno_bad);
 
-    /* ② 重跑 in-image 套件(同一份源码) */
+    /* ② re-run the in-image suite (same source) */
     const int suite_fails = file_table_selftest();
-    rep(suite_fails == 0, "TC-FT-H06", "in-image 套件 TC-FT-001..011 在宿主上全绿");
+    rep(suite_fails == 0, "TC-FT-H06", "in-image suite TC-FT-001..011 all green on the host");
     if (suite_fails != 0) {
-        printf("[FTTEST] in-image 套件失败项: %d\n", suite_fails);
+        printf("[FTTEST] in-image suite failures: %d\n", suite_fails);
     }
 
-    /* ③ 宿主独有边界 */
+    /* ③ host-only boundaries */
     host_only_cases();
 
     printf("[FTTEST] SUMMARY pass=%d fail=%d total=%d\n", s_pass, s_fail, s_pass + s_fail);

@@ -45,7 +45,7 @@ int close(int fd) {
 }
 ```
 
-## 声明面(`plugin.toml` 是唯一真值)
+## 声明面(`brick.toml` 是唯一真值)
 
 | 项 | 值 | 依据 |
 |---|---|---|
@@ -53,7 +53,7 @@ int close(int fd) {
 | `phase` | `core` | ability 且 subkind ≠ service ⇒ ② 完成点 = CORE |
 | 依赖(init/type/runtime) | **无 `[[dep]]`** | 只持指针不解引用(前向声明)⇒ 与 vfs-core 同型的零依赖 |
 | 导出面 | 单元 `filetable`(`unfrozen`/`experimental`): **2 宏 + 11 函数** | `br-filetable.txt` 的候选面 |
-| `[selftest]` | `cases = 11`; 钩子 `file_table_selftest()` 由 core 在全部 `start()` 之后驱动 | `plugin.toml` `[selftest]`; ADR-0010 |
+| `[selftest]` | `cases = 11`; 钩子 `file_table_selftest()` 由 core 在全部 `start()` 之后驱动 | `brick.toml` `[selftest]`; ADR-0010 |
 | 资源 | `ram` 1 KiB: 32 槽 × 16 B = 512 B(纯静态, **无堆分配**) | `[[res]]` |
 | `sched_class` | `SAFE_PREEMPT` | 无睡眠 + 临界区全覆盖(见下) |
 
@@ -97,7 +97,7 @@ errno 取值 / 边界与观测面。
 ## 目录
 
 ```
-plugin.toml                    人写   ← 插件级唯一真值(本目录不改它)
+brick.toml                    人写   ← 插件级唯一真值(本目录不改它)
 include/br/ft/br_ft.h          人写   ← 文件表契约(本件的对外面)
 src/file_table.c               人写   ← 表 + 语义(只留机制)
 src/ft_selftest.c              人写   ← 一致性用例 [FTCONF](由 core 驱动)

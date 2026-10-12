@@ -1,27 +1,27 @@
-/* {{name}} — 实现骨架
+/* {{name}} — implementation skeleton
  *
- * 人写文件: 由 `brickie new` 生成一次, 之后由人维护(brickie 不覆盖)。
- * **描述符实例不在这里** —— 它在生成物 build/gen/{{name}}/plugin_desc.c(§8.4)。
+ * Human-written file: generated once by `brickie new`, then maintained by hand (brickie never overwrites).
+ * **The descriptor instance is not here** — it lives in the generated build/gen/{{name}}/plugin_desc.c (§8.4).
  *
- * Interface 插件是严格叶子: 只被 APP 依赖; 可再导出 POSIX 运行时的符号
- * (本树里 = `runtime/posix`, ADR-0015; `1-01` §7.3 的 `iface-posix` 就是这个形态)。
- * 再导出单元须声明 form="skin" + reexport_of(§3.5 不变量 3)。
+ * Interface plugins are strict leaves: depended on only by the APP; they may re-export POSIX runtime
+ * symbols (in this tree = `runtime/posix`, ADR-0015; `1-01` §7.3's `iface-posix` is this shape).
+ * A re-export unit must declare form="skin" + reexport_of (§3.5 invariant 3).
  */
 #include "{{short}}/{{short}}.h"
 
-/* EARLY 相: 不使用堆 / 无线程 / 关中断(`1-01` §6.2) */
+/* EARLY phase: no heap / no threads / interrupts off (`1-01` §6.2) */
 int {{symbol_prefix}}early_init(void)
 {
     return 0;
 }
 
-/* CORE / LATE 相: 堆可用, 调度器已锁定, 中断仍关 */
+/* CORE / LATE phase: heap available, scheduler locked, interrupts still off */
 int {{symbol_prefix}}init(void)
 {
     return 0;
 }
 
-/* 全局开中断后: 中断可用, 可创建线程 */
+/* After global interrupt enable: interrupts available, threads can be created */
 int {{symbol_prefix}}start(void)
 {
     return 0;

@@ -1,21 +1,24 @@
 /*
- * brickOS prototype v0.1.0 — panic: 独立通道的最小格式化输出 + 停机
+ * brickOS prototype v0.1.0 — panic: minimal formatted output on a standalone channel + halt
  *
- * 权威设计: `docs/3-os-core/3-02-int.md` §8.3.1(panic 的 ISR 契约)与 §10.6。
+ * Authoritative design: `docs/3-os-core/3-02-int.md` §8.3.1 (panic ISR contract) and §10.6.
  *
- * ★ 两种入口的分工(§8.3.1):
- *   br_panic_bare()  —— **任何上下文**(ISR / fault / double fault); 只轮询 console
- *                       打一行最小信息然后停机。**无锁 / 无堆 / 无调度器 / 不写 trace 环**,
- *                       与 5-01 §2「panic 通道独立」同一原则。
- *   br_panic()       —— thread-only 便利入口; v0.1 与 bare 的差别只有门口那句提示
- *                       (完整路径要等 trace/tamdump 服务落地)。
- *   两者都是**终止性**的: "停机"就是语义, 因此不受"ISR 内不得阻塞"约束, 但**仍不得
- *   在停机前取锁**(会把锁留给已经不存在的世界, 且让 panic 依赖锁状态)。
+ * ★ Division of the two entries (§8.3.1):
+ *   br_panic_bare()  —— **any context** (ISR / fault / double fault); only polls the console
+ *                       for one minimal line then halts. **No lock / no heap / no scheduler /
+ *                       no trace ring writes**, same principle as 5-01 §2 "panic channel is
+ *                       standalone".
+ *   br_panic()       —— thread-only convenience entry; in v0.1 it differs from bare only in
+ *                       that one banner line (the full path waits for trace/tamdump services).
+ *   Both are **terminal**: "halt" is the semantics, so they are not bound by "no blocking in
+ *   an ISR", but they **still must not take locks before halting** (that would leave locks to
+ *   a world that no longer exists, and make panic depend on lock state).
  *
- * 为什么自带格式化器: -ffreestanding -nostdlib 下没有 printf; 而为了 panic 去链一个
- * 完整 printf 与"panic 不依赖任何插件栈"相冲突(设计 §8.3.1)。这里只实现必需子集:
- *   %% %c %s %d %i %u %x %X %p, 支持 '0' 零填充与最小宽度、l/ll/z 长度修饰。
- * 输出收口 = core 拥有的轮询 console 契约(br_console_putc / br_console_puts)。
+ * Why a private formatter: no printf under -ffreestanding -nostdlib; and linking a full printf
+ * for panic conflicts with "panic depends on no plugin stack" (design §8.3.1). Only the
+ * required subset is implemented here:
+ *   %% %c %s %d %i %u %x %X %p, with '0' zero padding, minimum width, l/ll/z length modifiers.
+ * Output sink = the polling console contract owned by core (br_console_putc / br_console_puts).
  */
 #include <br/core/br_console.h>
 #include <br/core/br_fault.h>
@@ -25,9 +28,9 @@
 #include <stdarg.h>
 
 /*
- * panic 重入护栏的状态(§10.6 与 ADR-0003 §5)。
- * v0.1 单核 ⇒ 一个文件内静态量足够(v2 的 per-CPU 化随 TPIDR_EL1 的 per-CPU 一起做);
- * 它是 **volatile** 的: fault 可能在编译器看不见的地方重入。
+ * State of the panic re-entrancy guard (§10.6 and ADR-0003 §5).
+ * v0.1 is single-core ⇒ a file-static is enough (v2 per-CPU comes with TPIDR_EL1 per-CPU);
+ * it is **volatile**: a fault may re-enter where the compiler cannot see it.
  */
 static volatile br_u32 s_panic_depth;
 
@@ -38,15 +41,15 @@ br_bool br_panic_in_progress(void)
 
 BR_NORETURN void br_panic_halt(void)
 {
-    /* 不打印、不取锁、不碰任何可能已损坏的设施 —— 只停住。
-     * wfe 而非 wfi: 事件型等待, 不承诺被"被屏蔽的 pending 中断"唤醒(§11.1)。 */
+    /* No printing, no locking, no touching anything possibly corrupted — just stop.
+     * wfe not wfi: an event-type wait, not promising to wake on "masked pending interrupts" (§11.1). */
     for (;;) {
         __asm__ volatile("wfe" ::: "memory");
     }
 }
 
-/* 无符号数按 base 输出: buf 逆序生成, 再按 width(零/空格填充)补齐后正序打出。
- * buf 24 字节足够: 64 位十进制最长 20 位, 十六进制 16 位。 */
+/* Emit an unsigned value in base: buf is built in reverse, padded to width (zero/space), then
+ * printed forward. buf of 24 bytes suffices: 64-bit decimal is at most 20 digits, hex 16. */
 static void panic_emit_uint(br_u64 value, br_u32 base, br_u32 width,
                             br_bool zero_pad, br_bool upper)
 {
@@ -73,7 +76,7 @@ static void panic_emit_uint(br_u64 value, br_u32 base, br_u32 width,
     }
 }
 
-/* 解析 "<flags><width><length><conversion>"; *pp 停在已消费的转换符上。 */
+/* Parse "<flags><width><length><conversion>"; *pp stops on the consumed conversion char. */
 static void panic_emit_field(const char **pp, va_list *ap)
 {
     const char *p = *pp;
@@ -143,12 +146,13 @@ static void panic_emit_field(const char **pp, va_list *ap)
         br_console_putc('%');
         break;
     case '\0':
-        /* 尾随 '%': 原样收回, 不越过字符串结尾 */
+        /* trailing '%': take it back verbatim, do not pass the end of the string */
         br_console_putc('%');
         *pp = p - 1;
         return;
     default:
-        /* 未支持的转换符: 打出来而不是吞掉, 免得"少了一段"这类诡异现象 */
+        /* unsupported conversion: print it rather than swallow it, avoiding odd "a chunk is
+         * missing" symptoms */
         br_console_putc('%');
         br_console_putc(*p);
         break;
@@ -157,13 +161,14 @@ static void panic_emit_field(const char **pp, va_list *ap)
     *pp = p;
 }
 
-/* 行格式: "\n" + tag + " " + <message> + "\n"; 全部直写轮询 console。 */
+/* Line format: "\n" + tag + " " + <message> + "\n"; all written straight to the polling console. */
 static void panic_vprint(const char *tag, const char *fmt, va_list ap)
 {
     /*
-     * 停机前把四个异常屏蔽位全部置上(与 §10.2 "fault 桩一律显式全屏蔽"同源):
-     * 防止 panic 输出期间被新 IRQ/SError/debug 异常重入而搅乱最后的信息。
-     * 只写 PSTATE —— 不取锁、不调插件、不碰堆/时钟/trace。
+     * Before halting, set all four exception mask bits (same origin as §10.2 "fault stubs
+     * always mask everything explicitly"): prevent re-entry by a new IRQ/SError/debug
+     * exception during panic output from garbling the final message.
+     * PSTATE only — no locks, no plugin calls, no heap/clock/trace.
      */
     __asm__ volatile("msr daifset, #0xf" ::: "memory");
 
@@ -189,8 +194,9 @@ BR_NORETURN void br_panic_bare(const char *fmt, ...)
 {
     va_list ap;
 
-    /* ★ 先置重入标志再打印: 打印路径若再 fault, fault 路径会看到它并静默停机,
-     *   而不是继续递归(见 panic_internal.h 的背景说明)。 */
+    /* ★ set the re-entrancy flag before printing: if the print path faults again, the fault
+     *   path sees it and halts silently instead of recursing (see the background note in
+     *   panic_internal.h). */
     s_panic_depth++;
 
     va_start(ap, fmt);

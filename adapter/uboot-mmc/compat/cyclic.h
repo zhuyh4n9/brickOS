@@ -1,24 +1,30 @@
-/* adapter/uboot-mmc — `<cyclic.h>` 的适配壳(u-boot 头名的**忠实最小**形态)。
+/* adapter/uboot-mmc — adaptation shell for `<cyclic.h>` (a **faithful minimal** form of
+ * the u-boot header name).
  *
- * ★ 为什么**不** vendor 上游 `include/cyclic.h`: 它 `#include <u-boot/schedule.h>`,
- *   而后者 `#include <uthread.h>` —— 整族线程调度设施。本件不启用 `CONFIG_CYCLIC`
- *   (矩阵里有意关闭), 上游那份头在关闭时**本来**就退化成"空结构 + 三个 static inline
- *   空函数"; 本文件就是那个形态的逐条重述(不是发明)。
+ * ★ Why **not** vendor upstream `include/cyclic.h`: it `#include <u-boot/schedule.h>`,
+ *   which in turn `#include <uthread.h>` — a whole family of thread scheduling
+ *   facilities. This file does not enable `CONFIG_CYCLIC` (deliberately off in the
+ *   matrix); with it off, the upstream header **already** degrades to "empty struct +
+ *   three empty static inline functions"; this file is a line-by-line restatement of
+ *   that shape (not an invention).
  *
- * 语义(与上游 `#else` 分支一字对应):
- *   - `struct cyclic_info` 是**空结构** —— 但 `struct mmc` 里**有它一个字段**
- *     (`cyclic`), 所以类型必须存在(大小 0 的成员在 GCC 里让结构体偏移不变);
- *   - `cyclic_register()`/`cyclic_unregister()` 是 no-op: 上游 `mmc.c` 的调用点在
- *     `if (CONFIG_IS_ENABLED(CYCLIC, (!mmc->cyclic.func), (NULL)))` 里, 该条件恒为
- *     假(展开成 `if (NULL)`), 于是"卡检测轮询"这条上游功能在本件**不参与**。
- *     它们必须是 `static inline`, 否则"恒假的调用点"仍会在链接期要符号。
+ * Semantics (matching the upstream `#else` branch word for word):
+ *   - `struct cyclic_info` is an **empty struct** — but `struct mmc` **has a field of
+ *     it** (`cyclic`), so the type must exist (a zero-size member leaves struct offsets
+ *     unchanged in GCC);
+ *   - `cyclic_register()`/`cyclic_unregister()` are no-ops: the call site in upstream
+ *     `mmc.c` sits inside
+ *     `if (CONFIG_IS_ENABLED(CYCLIC, (!mmc->cyclic.func), (NULL)))`, and that condition
+ *     is always false (expands to `if (NULL)`), so the upstream "card-detect polling"
+ *     feature does **not participate** here. They must be `static inline`, otherwise the
+ *     "always-false call site" would still demand the symbols at link time.
  */
 #ifndef BR_ADAPTER_UBOOT_MMC_SHIM_CYCLIC_H
 #define BR_ADAPTER_UBOOT_MMC_SHIM_CYCLIC_H
 
 #include "mmc_env.h"
 
-/* 与上游 `include/cyclic.h` 的 `!CONFIG_CYCLIC` 形态一致 */
+/* Consistent with the `!CONFIG_CYCLIC` shape of upstream `include/cyclic.h` */
 struct cyclic_info {
 };
 

@@ -1,33 +1,34 @@
-// brickie — `render`: 模板渲染(契约 §2 信封 / §6 命令面)
+// brickie — `render`: template rendering (contract §2 envelope / §6 command surface)
 //
-// **本命令不做任何判定**: 名字契约 / subkind 推导 / 相位 / 路径布局 / 版本分段
-// 一律由 `brickie-core`(Rust, L0/L1)算好后, 通过 `args.artifacts[].vars` 传进来;
-// 这里只做 "读模板 → 替换 {{key}} → 回 files[]"。
+// **This command makes no decisions**: the name contract / subkind derivation / phase / path
+// layout / version segmentation are all computed by `brickie-core` (Rust, L0/L1) and passed in
+// via `args.artifacts[].vars`; here we only "read template → substitute {{key}} → return files[]".
 //
-// 请求(信封见 contract §2; 本命令的 args 见 §6):
+// Request (envelope: contract §2; this command's args: §6):
 //   {
 //     "protocol": 1, "command": "render",
 //     "args": {
 //       "templates_root": "/abs/path/tools/brickie/templates",
 //       "artifacts": [
-//         {"path": "service/crypto/plugin.toml",
-//          "template": "native/ability/c/plugin.toml.tmpl",
+//         {"path": "service/crypto/brick.toml",
+//          "template": "native/ability/c/brick.toml.tmpl",
 //          "vars": {"name": "service/crypto", "short": "crypto", …}}
 //       ]
 //     }
 //   }
 //
-// 响应 files[](契约 §4):
-//   [{"path": "service/crypto/plugin.toml", "kind": "rendered",
+// Response files[] (contract §4):
+//   [{"path": "service/crypto/brick.toml", "kind": "rendered",
 //     "content": "…", "mode": "0644"}]
 //
-// 规则:
-//   * `kind` 恒为 `"rendered"`(§4: 生成物只由 brickie-gen 产出, L5 只落盘);
-//   * `mode` 缺省 `"0644"`, 可显式给 3–4 位八进制; 落盘由 L5 负责;
-//   * `path` / `template` 必须是安全的仓库相对路径(拒绝绝对路径与 `..`);
-//   * **没有条件语法**: 该分化的地方用 `templates/<api_type>/<plugin_type>/<lang>/`
-//     目录分化; 缺变量 ⇒ 用法错(exit 2, 无码诊断, 见 cxx/README.md);
-//   * 任一 artifact 出错 ⇒ **不产出任何 files**(避免半生成状态), 诊断全量回报。
+// Rules:
+//   * `kind` is always `"rendered"` (§4: generated files come only from brickie-gen; L5 only writes);
+//   * `mode` defaults to `"0644"`, may be given explicitly as 3–4 octal digits; L5 does the writing;
+//   * `path` / `template` must be safe repo-relative paths (absolute paths and `..` are rejected);
+//   * **no conditionals**: where differentiation is needed, use
+//     `templates/<api_type>/<plugin_type>/<lang>/` directories; a missing variable ⇒ usage error
+//     (exit 2, codeless diagnostic, see cxx/README.md);
+//   * any artifact failing ⇒ **no files produced** (avoid partial generation), all diags reported.
 #pragma once
 
 #include <string>
@@ -50,8 +51,8 @@ struct RenderResult {
     std::vector<File> files;
 };
 
-// `templatesRoot` 可来自 `args.templates_root`, 也可来自顶层 `templates_root`
-// (main.cpp 统一解析后传入; 两者都空 ⇒ 用法错)。
+// `templatesRoot` may come from `args.templates_root` or from top-level `templates_root`
+// (main.cpp resolves both and passes it in; both empty ⇒ usage error).
 RenderResult runRender(const J &args, const std::string &templatesRoot);
 
 }  // namespace brickie

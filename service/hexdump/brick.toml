@@ -1,0 +1,70 @@
+schema = 1
+
+[plugin]
+name        = "service/hexdump"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "service"
+lang        = "c"
+phase       = "late"
+version     = "0.1.0.0"
+summary     = "hexdump 原语: 16 字节/行(地址 + hex + ASCII), 缓冲与 console 两条路径, snprintf 式截断语义"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "无状态(只用一个行缓冲); 预留 1 KiB 给 br_hexdump_to 的调用方共享测试缓冲"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u32       = "uint32_t"
+br_u64       = "uint64_t"
+br_size_t    = "size_t"
+br_uintptr_t = "uintptr_t"
+
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "hexdump"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:6e59c5b3d90b43dd84a031fcfad231e8586397cb72bfbe81b75570f481fbe6fc"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_hexdump_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_hexdump_to"
+sig  = "br_size_t (char*, br_size_t, const void*, br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_hexdump"
+sig  = "br_size_t (const void*, br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_hexdump_line_bytes"
+sig  = "br_size_t (void)"
+[[export.entries]]
+kind = "macro"
+name = "BR_HEXDUMP_WIDTH"
+value = "16"
+
+[selftest]
+
+cases = 0
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

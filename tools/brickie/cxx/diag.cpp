@@ -71,7 +71,7 @@ bool Diags::hasError() const {
     return false;
 }
 
-// 用法/环境错 = 无码诊断(见 README「诊断与退出码」)
+// usage/env errors = code-less diagnostics (see README "Diagnostics and exit codes")
 bool Diags::hasUsage() const {
     for (const auto &d : items_)
         if (d.code.empty()) return true;
@@ -86,8 +86,8 @@ J Diags::toJson() const {
 
 int Diags::exitCode() const {
     if (exitOverride_ != 0) return exitOverride_;
-    if (hasUsage()) return 2;   // BRV-D9: 用法或环境错
-    if (hasError()) return 1;   // BRV-D9: 校验红
+    if (hasUsage()) return 2;   // BRV-D9: usage or env error
+    if (hasError()) return 1;   // BRV-D9: validation failure
     return 0;
 }
 

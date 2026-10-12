@@ -1,0 +1,78 @@
+schema = 1
+
+[plugin]
+name        = "io/uart-pl011"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "io"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "QEMU virt PL011 作为 cdev 注册: /dev/uart0 的会话式读写 + 3 个 ioctl; v1 轮询无中断"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "每会话 cdev_file_t + session 约 32 B(core 堆); 静态部分只有 ops 表与器件记录"
+
+[[dep]]
+name  = "framework/cdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/dev-core"
+range = ">=0.1.0"
+kind  = "type"
+
+[[dep]]
+name   = "framework/vfs-core"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_open_err"
+
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "uart-pl011"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:b948dff0255343ade247c86ff2133951feef5cde5e8158ffb597a65e44a5b2d9"
+status       = "experimental"
+
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_PL011_DEV_NAME"
+value = "\"uart0\""
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_IOC_MAGIC"
+value = "'u'"
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_IOC_GET_INFO"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_IOC_FLUSH_RX"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_UART_IOC_SET_BAUD"
+value = "2u"
+
+[[export.entries]]
+kind = "type"
+name = "br_uart_pl011_info_t"
+layout = "# {base, refclk_hz, baud, rx_available, rx_dropped}"
+
+[selftest]
+
+cases = 12
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

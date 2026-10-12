@@ -1,15 +1,18 @@
 /*
- * brickOS prototype v0.2.0 — 信号量(semaphore.h; runtime/posix 插件提供)
+ * brickOS prototype v0.2.0 — semaphores (semaphore.h; provided by the runtime/posix plugin)
  *
- * 底座 = core 的 `br_sem_t`(零分配等待链, `3-01` §7)。`sem_post` 可以直接在 ISR 里调
- * (core 的 `br_sem_give` 是 ISR-safe 的, `3-02` §11.3)—— 这是本服务少数几条"从
- * 中断到线程"的合法通道之一。
+ * Base = core's `br_sem_t` (allocation-free wait chain, `3-01` §7). `sem_post` may be called
+ * directly from an ISR (core's `br_sem_give` is ISR-safe, `3-02` §11.3) — one of this
+ * service's few legal interrupt-to-thread channels.
  *
- * ★ `sem_t` 直接**就是** `br_sem_t`: 布局公开 + 有静态初始化器(`BR_SEM_INIT_VALUE`),
- *   所以 `sem_init` 与静态初始化都能用, 不存在"懒初始化"的歧义。
- * ★ `sem_getvalue` 是**观测**(core 的 `br_sem_count`), 不改变语义。
- * ★ `sem_open`/`sem_close`/`sem_unlink`(具名信号量)**不在本代**: 它们需要一个
- *   内核对象命名空间, 那是 v2 的话题 —— 不声明 = 编译期暴露。
+ * ★ `sem_t` **is** `br_sem_t`: the layout is public + there is a static initializer
+ *   (`BR_SEM_INIT_VALUE`), so both `sem_init` and static initialization work; there is no
+ *   lazy-initialization ambiguity.
+ * ★ `sem_getvalue` is an **observation** (core's `br_sem_count`) and does not change
+ *   semantics.
+ * ★ `sem_open`/`sem_close`/`sem_unlink` (named semaphores) are **not in this generation**:
+ *   they need a kernel object namespace, which is a v2 topic — not declaring them = exposed
+ *   at compile time.
  */
 #ifndef BR_POSIX_SEMAPHORE_H
 #define BR_POSIX_SEMAPHORE_H
@@ -23,7 +26,7 @@ typedef br_sem_t sem_t;
 #define BR_POSIX_SEM_VALUE_MAX  0x7fffffffu
 
 int sem_init(sem_t *s, int pshared, unsigned value);
-int sem_destroy(sem_t *s);          /* 空操作 ⇒ 0(理由同 pthread_*_destroy) */
+int sem_destroy(sem_t *s);          /* no-op ⇒ 0 (same reason as pthread_*_destroy) */
 int sem_wait(sem_t *s);
 int sem_trywait(sem_t *s);
 int sem_timedwait(sem_t *s, const struct timespec *abstime);

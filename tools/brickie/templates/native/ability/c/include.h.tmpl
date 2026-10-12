@@ -1,17 +1,17 @@
-/* {{name}} — 对外声明面(人写)
+/* {{name}} — public declaration surface (hand-written)
  *
- * 本文件被同插件的 src/ 与生成物 plugin_desc.c 共同包含。
- * v0.1 只声明生命周期回调; 真正的对外 API 按 §3.5 的 api_type 规则补到这里,
- * 并由 `brickie iface publish` 收进接口面快照(api/iface/<provider>/<unit>.toml)。
+ * Included by both this plugin's src/ and the generated plugin_desc.c.
+ * v0.1 declares only lifecycle callbacks; add the real public API here per the api_type rules of §3.5,
+ * and let `brickie iface publish` collect it into the interface snapshot (api/iface/<provider>/<unit>.toml).
  */
 #ifndef {{header_guard}}
 #define {{header_guard}}
 
-/* 生命周期回调: 由描述符 br_plugin_t 按阶段调用(`1-01` §6.2) */
+/* Lifecycle callbacks: invoked per phase by the br_plugin_t descriptor (`1-01` §6.2) */
 int {{symbol_prefix}}early_init(void);
 int {{symbol_prefix}}init(void);
 int {{symbol_prefix}}start(void);
 
-/* TODO: 能力面声明; 若走注册表发布, 这里放注册用的 ops 表类型 */
+/* TODO: ability-surface declaration; if publishing via the registry, put the registration ops table type here */
 
 #endif /* {{header_guard}} */

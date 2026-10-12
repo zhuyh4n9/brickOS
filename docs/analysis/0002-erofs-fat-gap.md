@@ -37,7 +37,7 @@
 |---|---|---|---|
 | `fs/fat/fat.c` | 33900 B | `src/fat_core.c` | 保留引导扇区/BPB 解析、FAT 表项读取、簇链、目录迭代(`fat_itr`)、读文件、`fat_size`/`fat_exists`/`fat_opendir`/`fat_readdir`; 裁掉命令层、`part.h` 分区表遍历 |
 | `fs/fat/fat_write.c` | 49038 B | `src/fat_write.c` | 保留 `set_fatent_value`/`set_cluster`/`set_contents`/`flush_dir`/`new_dir_table`/`find_empty_cluster`/`fat_unlink`/`fat_mkdir`/`fat_rename`; **自补 `truncate`**(上游没有) |
-| `fs/fat/Kconfig`/`Makefile` | — | — | 不搬(构建由 `plugin.toml` 声明) |
+| `fs/fat/Kconfig`/`Makefile` | — | — | 不搬(构建由 `brick.toml` 声明) |
 
 ### 2.2 EROFS
 

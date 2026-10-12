@@ -1,22 +1,27 @@
 /*
- * brickOS prototype v0.2.0 — 时间(time.h; runtime/posix 插件提供)
+ * brickOS prototype v0.2.0 — time (time.h; provided by the runtime/posix plugin)
  *
- * ★★ **没有墙钟**: 原型只有单调计数器(`br_clock_now()`, 自启动以来的微秒数)与平台
- *    arch timer, **没有 RTC/纪元源**(设计侧 P-1 缺口)。于是:
- *     - `CLOCK_MONOTONIC` **可用且语义正确**(单调不减, 见 `3-01` INV-2);
- *     - `CLOCK_REALTIME` **声明了但返回 -ENOTSUP** —— 与其返回一个假装是"1970 年至今"
- *       的数字, 不如让调用方在运行期就看见"这个台上没有墙钟"(子集诚实义务)。
- *   这条口径与 `11-02` §2.4 的 TR-C 判定一致; `gettimeofday`/`time` **不在本头里**。
+ * ★★ **No wall clock**: the prototype has only a monotonic counter (`br_clock_now()`,
+ *    microseconds since boot) and the platform arch timer, **no RTC/epoch source**
+ *    (design gap P-1). Hence:
+ *     - `CLOCK_MONOTONIC` is **available and semantically correct** (monotonic
+ *       non-decreasing, see `3-01` INV-2);
+ *     - `CLOCK_REALTIME` is **declared but returns -ENOTSUP** — rather than return a
+ *       number pretending to be "since 1970", let callers see at runtime that this
+ *       target has no wall clock (honest-subset duty).
+ *   This matches the TR-C ruling in `11-02` §2.4; `gettimeofday`/`time` are **not in
+ *   this header**.
  *
- * ★ 分辨率 = **一拍**(`1/HZ`): 平台 timer 是周期 tick(节拍 `HZ` 来自
- *   `product.toml [kernel].hz`, 缺省 200 ⇒ 5 ms; ADR-0017), tickless 还没做(P-2)。
- *   所以 `nanosleep` 的**语义**是"不早醒", 而**实际晚到**可达一个 tick ——
- *   `clock_getres` 如实报这个粒度。这是本代最容易被误用的地方, 故写在这里。
+ * ★ Resolution = **one tick** (`1/HZ`): the platform timer is a periodic tick (the rate
+ *   `HZ` comes from `product.toml [kernel].hz`, default 200 ⇒ 5 ms; ADR-0017); tickless
+ *   is not done yet (P-2). So `nanosleep`'s **semantics** are "never wake early", while
+ *   the **actual overshoot** can reach one tick — `clock_getres` reports this granularity
+ *   honestly. This is the most easily misused spot of this generation, hence noted here.
  */
 #ifndef BR_POSIX_TIME_H
 #define BR_POSIX_TIME_H
 
-#include <br/core/br_time.h>   /* BR_CFG_TICK_HZ: 分辨率只有一处真值(ADR-0017) */
+#include <br/core/br_time.h>   /* BR_CFG_TICK_HZ: the resolution has a single truth source (ADR-0017) */
 #include <sys/types.h>
 
 struct timespec {
@@ -29,7 +34,8 @@ typedef int clockid_t;
 #define CLOCK_REALTIME   0
 #define CLOCK_MONOTONIC  1
 
-/* tickless 未落地 ⇒ 这是**真实**粒度, 不是"设计值"(= 一拍 = 1/HZ; 见上头说明) */
+/* tickless is not in place ⇒ this is the **real** granularity, not a "design value"
+ * (= one tick = 1/HZ; see the note above) */
 #define BR_POSIX_CLOCK_RES_NS  (1000000000L / (long)BR_CFG_TICK_HZ)
 
 int clock_gettime(clockid_t id, struct timespec *ts);

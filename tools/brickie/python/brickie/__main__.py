@@ -1,4 +1,4 @@
-"""``python -m brickie`` 入口。"""
+"""``python -m brickie`` entry point."""
 
 import sys
 

@@ -1,17 +1,21 @@
 /*
- * brickOS — POSIX errno 名字的**转发头**(历史入口; 真值已归 `br_error.h`)
+ * brickOS — **forwarding header** for POSIX errno names (legacy entry point; the truth now
+ * lives in `br_error.h`)
  *
- * ============================== 本文件为什么还在 ==============================
- * ADR-0023 曾把"POSIX 名字"单独放在这里(`#define EPERM BR_EPERM` 一张别名表),
- * 而**数值**在 `br_error.h`。ADR-0027 把两者合并了:
+ * ============================== Why this file still exists ==============================
+ * ADR-0023 once kept the "POSIX names" here (an alias table of `#define EPERM BR_EPERM`),
+ * with the **values** in `br_error.h`. ADR-0027 merged the two:
  *
- *   - 名字与数值现在**同在 `br_error.h`**, 且名字就是 **POSIX 原名**(`EPERM`/`EIO`/…),
- *     **没有 `BR_` 前缀** —— 于是:
- *       ① 三方移植件里的裸 `-EIO`/`-EFSCORRUPTED` **原样成立**(不必再写映射表);
- *       ② "errno 的名字"与本项目自己的符号前缀不再混在一起(设计 §11 的口径);
- *   - 本文件保留为**兼容入口**: 既有 `#include <br/core/br_errno.h>` 的代码不用改。
+ *   - Names and values now live **together in `br_error.h`**, and the names are the
+ *     **original POSIX names** (`EPERM`/`EIO`/…), **without a `BR_` prefix** — therefore:
+ *       1) bare `-EIO`/`-EFSCORRUPTED` in third-party ports **hold as-is** (no mapping table
+ *          needed);
+ *       2) "errno names" no longer mix with this project's own symbol prefixes (design §11).
+ *   - This file is kept as a **compatibility entry point**: existing code that includes
+ *     `<br/core/br_errno.h>` needs no change.
  *
- * ★ 单一真值: 本文件**不定义任何名字**(转发而已)。判据见 `tools/check-errno.sh`。
+ * ★ Single source of truth: this file **defines no names** (forwarding only). Criterion in
+ *   `tools/check-errno.sh`.
  */
 #ifndef BR_CORE_BR_ERRNO_H
 #define BR_CORE_BR_ERRNO_H

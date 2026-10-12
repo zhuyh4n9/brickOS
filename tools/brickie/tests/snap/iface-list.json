@@ -6,7 +6,7 @@
       {
         "api_iface": "native",
         "compat_gen": 0,
-        "file": "app/hsm/plugin.toml",
+        "file": "app/hsm/brick.toml",
         "form": "api",
         "freeze_state": "unfrozen",
         "hash": "sha256:90f0dcc23b73ae1374bcb34631ce1392ec700f27422d1bca9958adc862c09c2d",
@@ -21,7 +21,7 @@
       {
         "api_iface": "native",
         "compat_gen": 0,
-        "file": "iface/hsm-api/plugin.toml",
+        "file": "iface/hsm-api/brick.toml",
         "form": "api",
         "freeze_state": "unfrozen",
         "hash": "sha256:af9aa66ec1e703ebe7add9fb9c90d92e2073d6746d21e611486349f103da0794",
@@ -36,7 +36,7 @@
       {
         "api_iface": "native",
         "compat_gen": 0,
-        "file": "platform/qemu-aarch64/plugin.toml",
+        "file": "platform/qemu-aarch64/brick.toml",
         "form": "api",
         "freeze_state": "unfrozen",
         "hash": "sha256:ac26b2f92dbb17ee8445570ef4dc5d94cee816b0e700d12e65f5deaee656c284",
@@ -51,7 +51,7 @@
       {
         "api_iface": "native",
         "compat_gen": 0,
-        "file": "sched/coop/plugin.toml",
+        "file": "sched/coop/brick.toml",
         "form": "api",
         "freeze_state": "unfrozen",
         "hash": "sha256:fa976aa0d190e6b88ce749db0d042ba3df016ceacc07c677a7cb60280482503a",
@@ -66,7 +66,7 @@
       {
         "api_iface": "native",
         "compat_gen": 0,
-        "file": "service/crypto/plugin.toml",
+        "file": "service/crypto/brick.toml",
         "form": "api",
         "freeze_state": "frozen",
         "hash": "sha256:4876b2696f65ffb2d478602c4222d689c8d39201618fb7810ab92208956c2e85",

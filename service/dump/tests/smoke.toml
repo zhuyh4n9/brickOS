@@ -48,7 +48,7 @@ platform = ["qemu-aarch64"]
 # 名字 = `symbol_prefix(short)` + 相 ⇒ `dump_early_init` / `dump_init` / `dump_start`
 # (生成物 `build/gen/service/dump/plugin_desc.c` 引用)。钩子是组合期契约, 不进 [[export]]。
 #
-# ★ `dump_init` 的位置 = **LATE 相**, 而且 plugin.toml 对 trace/backtrace/hexdump/memleak
+# ★ `dump_init` 的位置 = **LATE 相**, 而且 brick.toml 对 trace/backtrace/hexdump/memleak
 #   各有一条 `kind = "init"` 的边(phase = "late")⇒ plugin_manager 的拓扑序保证它们的
 #   init 先返回(没有这四条边, LATE 相顺序会退化成字典序, dump 会排到最前)。
 # ★ 调试域一致性用例**不在** `dump_init()` 里跑(ADR-0010): 用例搬到 `src/dump_selftest.c`,

@@ -1,28 +1,29 @@
 /*
- * brickOS prototype v0.2.0 — 延迟工作(下半部 / workqueue)的**自检套件**(core/selftest/)
+ * brickOS prototype v0.2.0 — **self-test suite** for deferred work (bottom half / workqueue) (core/selftest/)
  *
- * 设计依据与逐条裁定: `docs/decisions/0011-round-robin-bh-workqueue.md`;
- * 设计出处: `3-01-core-api-list.md` §5(延迟工作 = bottom half)、
- *           `3-02-int.md` §11.1(路径一: ISR → 延迟工作)/§11.4.1(BH 形态下 disable 的语义)/
- *           §12.4(执行时机与优先级)/IR-10(提交失败必须回滚)。
+ * Design basis and per-item rulings: `docs/decisions/0011-round-robin-bh-workqueue.md`;
+ * design sources: `3-01-core-api-list.md` §5 (deferred work = bottom half),
+ *           `3-02-int.md` §11.1 (path one: ISR → deferred work)/§11.4.1 (semantics of disable under BH form)/
+ *           §12.4 (execution timing and priority)/IR-10 (a failed submit must roll back).
  *
- * ## 为什么这些用例在 core 的自检目录里
- *   与 `sched_selftest.c` 同源(ADR-0010): 用例不是插件的对外能力, 不该进 `br_work.h`
- *   的 golden 面; 而"关掉自检 ⇒ 整目录不参与编译"这条对 core 侧同样适用。
+ * ## Why these cases live in core's self-test directory
+ *   Same origin as `sched_selftest.c` (ADR-0010): cases are not a plugin's exported capability, so they
+ *   should not enter `br_work.h`'s golden surface; and "disable self-test ⇒ the whole directory is not
+ *   compiled" applies to the core side too.
  *
- * ## 用例清单(与 `tests/host/work_test.c` 的宿主腿一一对应)
- *   TC-WQ-001  队列有界: 填满 DEPTH 条成功, 第 DEPTH+1 条 ⇒ -EAGAIN(不静默丢弃)
- *   TC-WQ-002  FIFO: drain 顺序 == 提交顺序; drain(max) 严格遵守预算
- *   TC-WQ-003  非重入: 工作项里再调 drain ⇒ 0(栈不随队列长度增长)
- *   TC-WQ-004  bh 上下文: 体内 `br_work_in_bh()` 为真、`br_irq_in_atomic()` 为真,
- *              而 `br_irq_in_isr()` 为假(这就是"下半部"的定义)
- *   TC-WQ-005  bh 禁令: 阻塞 ⇒ -EPERM; 让出 ⇒ 被拒 + 留痕 BH_CTX_VIOLATION
- *   TC-WQ-006  统计面自洽(submitted/ran/pending/max_pending 与动作对得上)
- *   TC-WQ-007  在 **IRQ 出口**被真正消费: 目标上由 `br_irq_enter` 的出口 drain 驱动,
- *              这里用"提交 + 显式 drain"表达同一条链路的可判定部分
+ * ## Case list (one-to-one with the host leg of `tests/host/work_test.c`)
+ *   TC-WQ-001  bounded queue: filling DEPTH entries succeeds, entry DEPTH+1 ⇒ -EAGAIN (no silent drop)
+ *   TC-WQ-002  FIFO: drain order == submit order; drain(max) strictly respects the budget
+ *   TC-WQ-003  non-reentrant: calling drain again inside a work item ⇒ 0 (stack does not grow with queue length)
+ *   TC-WQ-004  bh context: inside the body `br_work_in_bh()` is true and `br_irq_in_atomic()` is true,
+ *              while `br_irq_in_isr()` is false (that is the definition of "bottom half")
+ *   TC-WQ-005  bh prohibitions: blocking ⇒ -EPERM; yielding ⇒ rejected + BH_CTX_VIOLATION logged
+ *   TC-WQ-006  statistics self-consistent (submitted/ran/pending/max_pending match the actions)
+ *   TC-WQ-007  actually consumed at the **IRQ exit**: on target driven by `br_irq_enter`'s exit drain,
+ *              here expressed as "submit + explicit drain", the decidable part of the same chain
  *
- * ## 返回值
- *   `int` = **失败项数**(ADR-0010 §2.4)。任何失败都**不停机**。
+ * ## Return value
+ *   `int` = **number of failures** (ADR-0010 §2.4). Any failure **does not halt**.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -32,12 +33,12 @@
 #include <br/core/br_types.h>
 #include <br/core/br_work.h>
 
-/* TCB 公共头(就绪/阻塞/状态字段)与"注册表只读观测"是 core 私有面(与
- * sched_selftest.c 同源: 跨目录相对包含在本仓有先例)。 */
+/* The TCB common header (ready/blocked/state fields) and "read-only registry observation" are core-private
+ * surfaces (same origin as sched_selftest.c: cross-directory relative includes have precedent in this repo). */
 #include "../src/sched/sched_internal.h"
 
-/* 入口的可见声明集中在 `core/selftest/core_selftest.c`(唯一聚合器); 这里再声明一次
- * 是为了满足"每个函数使用前都有原型"的纪律(-Wmissing-prototypes)。 */
+/* Visible declarations of the entry are centralized in `core/selftest/core_selftest.c` (the sole aggregator);
+ * declaring it again here satisfies the "every function has a prototype before use" discipline (-Wmissing-prototypes). */
 int br_work_selftest(void);
 
 static int s_wq_pass;
@@ -54,7 +55,7 @@ static void wq_result(br_bool ok, const char *id, const char *what)
     }
 }
 
-/* ------------------------------------------------------------------ 工作项体 */
+/* ------------------------------------------------------------------ work item bodies */
 
 static volatile br_u32 s_wq_order[BR_WORKQ_DEPTH + 4u];
 static volatile br_u32 s_wq_order_n;
@@ -108,19 +109,19 @@ static void wq_item_context(void *arg)
 
     br_thread_t *me = br_task_self();
     if (me != BR_NULL) {
-        me->wait_status = BR_ERR(ETIMEDOUT);    /* ICB 契约: 开窗前先置"未唤醒" */
+        me->wait_status = BR_ERR(ETIMEDOUT);    /* ICB contract: set "not woken" before opening the window */
     }
     s_wq_block_rc = br_sched_block_current(BR_TIMEOUT_INF);   /* TC-WQ-005 */
 
     s_wq_self_before = br_task_self();
-    br_task_yield();                               /* TC-WQ-005: 应被拒 */
+    br_task_yield();                               /* TC-WQ-005: should be rejected */
     s_wq_self_after = br_task_self();
     s_wq_bh_after_yield = (br_work_in_bh() != BR_FALSE) ? 1 : 0;
 
     wq_item_note((void *)(br_uintptr_t)0xE0u);
 }
 
-/* ------------------------------------------------------------------ 用例 */
+/* ------------------------------------------------------------------ cases */
 
 static void case_wq_001_bound(void)
 {
@@ -131,9 +132,9 @@ static void case_wq_001_bound(void)
     br_work_stats_get(&st);
     const br_u32 base_drop = st.dropped_full;
 
-    /* 队列可能不是空的(前面用例的余项) ⇒ 先算清剩多少, 再把它填满。 */
+    /* The queue may not be empty (leftovers from earlier cases) ⇒ first fill it up completely. */
     while (br_work_submit(wq_item_note, (void *)(br_uintptr_t)1u) == 0) {
-        /* 填到满 */
+        /* fill until full */
     }
     full_rc = br_work_submit(wq_item_note, (void *)(br_uintptr_t)2u);
     br_work_stats_get(&st);
@@ -145,9 +146,9 @@ static void case_wq_001_bound(void)
     (void)first_rc;
 
     wq_result(ok, "TC-WQ-001",
-              "队列有界: 填满 DEPTH 后 -EAGAIN, 且 dropped_full/max_pending 如实增长");
+              "bounded queue: -EAGAIN after filling DEPTH, and dropped_full/max_pending grow honestly");
 
-    /* 清空(收尾: 后面的用例需要干净队列) */
+    /* Empty it (cleanup: later cases need a clean queue) */
     (void)br_work_drain((br_u32)BR_WORKQ_DEPTH);
 }
 
@@ -160,12 +161,12 @@ static void case_wq_002_fifo_budget(void)
     for (br_u32 i = 0u; i < 6u; i++) {
         const int r = br_work_submit(wq_item_note, (void *)(br_uintptr_t)(100u + i));
         if (r != 0) {
-            wq_result(BR_FALSE, "TC-WQ-002", "提交失败(队列被前面的用例占着?)");
+            wq_result(BR_FALSE, "TC-WQ-002", "submit failed (queue still occupied by earlier cases?)");
             return;
         }
     }
 
-    const br_u32 a = br_work_drain(2u);          /* 预算 2 */
+    const br_u32 a = br_work_drain(2u);          /* budget 2 */
     br_work_stats_get(&st);
     const br_u32 pending_mid = st.pending;
     const br_u32 b = br_work_drain(8u);
@@ -180,7 +181,7 @@ static void case_wq_002_fifo_budget(void)
 
     wq_result(fifo && (a == 2u) && (pending_mid == 4u) && (b == 4u) && (st.pending == 0u),
               "TC-WQ-002",
-              "FIFO 顺序 + drain(max) 严格遵守预算(2 条走后剩 4 条, 再由下一轮取完)");
+              "FIFO order + drain(max) strictly respects the budget (2 drained leaves 4, taken by the next round)");
 }
 
 static void case_wq_003_006_context(void)
@@ -208,32 +209,32 @@ static void case_wq_003_006_context(void)
     wq_result((r == 0) && (ran == 1u) && (s_wq_bh_flag == 1) && (s_wq_atomic_flag == 1) &&
               (s_wq_isr_flag == 0),
               "TC-WQ-004",
-              "bh 上下文: in_bh=真 / in_atomic=真 / in_isr=假(这就是下半部的定义)");
+              "bh context: in_bh=true / in_atomic=true / in_isr=false (that is the definition of bottom half)");
 
     wq_result(s_wq_nested == 0, "TC-WQ-003",
-              "非重入: 工作项里再调 drain ⇒ 0(栈不随队列长度增长)");
+              "non-reentrant: calling drain again inside a work item ⇒ 0 (stack does not grow with queue length)");
 
     wq_result(s_wq_block_rc == BR_ERR(EPERM), "TC-WQ-005",
-              "bh 内 br_sched_block_current ⇒ -EPERM(没有可回退的调度上下文)");
+              "br_sched_block_current inside bh ⇒ -EPERM (no schedulable context to fall back to)");
 
     wq_result((s_wq_self_before == s_wq_self_after) && (s_wq_bh_after_yield == 1) &&
               (s_wq_violation_after > s_wq_violation_before),
               "TC-WQ-005",
-              "bh 内 br_task_yield 被拒(线程未变、仍在 bh)+ 留痕 BH_CTX_VIOLATION");
+              "br_task_yield inside bh is rejected (thread unchanged, still in bh) + BH_CTX_VIOLATION logged");
 
     wq_result((st1.submitted == st0.submitted + 1u) && (st1.ran == st0.ran + 1u) &&
               (st1.pending == 0u) && (st1.max_pending >= st0.max_pending),
               "TC-WQ-006",
-              "统计面自洽: submitted/ran 各 +1, pending 归零, max_pending 单调不减");
+              "statistics self-consistent: submitted/ran each +1, pending back to zero, max_pending monotonic");
 }
 
 static void case_wq_007_irq_exit(void)
 {
     /*
-     * IRQ 出口的消费链在目标上由 `br_irq_enter` 的出口调 `br_work_drain(BR_WORK_BH_BUDGET)`
-     * 完成(那条路径由 QEMU 的 TC-IRQ-015/017 覆盖)。这里验证它在 core 侧的**可判定前提**:
-     * 预算参数本身是正的、且 drain 一次最多吃 BUDGET 条 —— 否则"IRQ 出口有上界"这句话
-     * 就是空的。
+     * On target the IRQ-exit consumption chain is performed by `br_irq_enter`'s exit calling
+     * `br_work_drain(BR_WORK_BH_BUDGET)` (that path is covered by QEMU's TC-IRQ-015/017). Here we verify its
+     * **decidable preconditions** on the core side: the budget parameter itself is positive, and one drain
+     * consumes at most BUDGET entries — otherwise "the IRQ exit is bounded" is an empty statement.
      */
     s_wq_order_n = 0u;
 
@@ -247,11 +248,11 @@ static void case_wq_007_irq_exit(void)
     const br_bool ok = (BR_WORK_BH_BUDGET > 0u) && (ran == (br_u32)BR_WORK_BH_BUDGET) &&
                        (st.pending == 2u);
 
-    /* 收尾 */
+    /* cleanup */
     (void)br_work_drain(8u);
 
     wq_result(ok, "TC-WQ-007",
-              "IRQ 出口的单次执行有上界(BR_WORK_BH_BUDGET); 余项留给下一次中断出口");
+              "a single IRQ-exit run is bounded (BR_WORK_BH_BUDGET); leftovers wait for the next interrupt exit");
 }
 
 int br_work_selftest(void)
@@ -272,7 +273,7 @@ int br_work_selftest(void)
                 s_wq_pass, s_wq_fail, s_wq_pass + s_wq_fail);
 
     if (s_wq_fail != 0) {
-        br_log_error("[WQCONF] 有失败项 —— 下半部/工作队列未达 conformance");
+        br_log_error("[WQCONF] failures present — bottom half / workqueue not conformance-clean");
     }
 
     return s_wq_fail;

@@ -1,43 +1,51 @@
 /*
- * brickOS prototype v0.2.0 — POSIX 运行时(runtime/posix 插件)
+ * brickOS prototype v0.2.0 — POSIX runtime (runtime/posix plugin)
  *
- * 设计依据(设计仓库 `brickOS-Design`):
- *   - `1-01-architecture.md` §7(v0.5/D18: **POSIX 双角色拆分** —— `runtime/posix` 是实现
- *     (普通服务), `iface/posix` 是薄皮肤; §7.6 三方移植双模式);
- *   - `11-01-service.md` §1/§2(POSIX 运行时服务: fd 表主人 / `errno = -ret` 零转换);
- *   - `docs/decisions/0015-runtime-posix-rename.md`(**本插件为何叫 runtime/posix**);
- *   - `11-02-svc-posix-subset.md`(**本件的覆盖清单**: TR-A/TR-B 是实现范围, TR-C/TR-D
- *     明确不做 —— "子集诚实义务"的落地; 该篇仍用设计侧的名字 `runtime/posix`);
- *   - `7-01-vfs.md` §1/§4.1(fd 表项 = `br_file_t*`; `br_open` 是 fd 表的底层原语);
- *   - `3-01-core-api-list.md` §2/§3/§4/§7(线程 / 同步 / 时间 / 内存 —— 本件只做映射)。
- * 裁定与偏离: `docs/decisions/0014-svc-posix-posix-runtime.md`。
+ * Design basis (design repo `brickOS-Design`):
+ *   - `1-01-architecture.md` §7 (v0.5/D18: **POSIX dual-role split** — `runtime/posix` is the
+ *     implementation (an ordinary service), `iface/posix` is the thin skin; §7.6 three-way
+ *     port dual mode);
+ *   - `11-01-service.md` §1/§2 (POSIX runtime service: fd table owner / `errno = -ret`
+ *     zero conversion);
+ *   - `docs/decisions/0015-runtime-posix-rename.md` (**why this plugin is called runtime/posix**);
+ *   - `11-02-svc-posix-subset.md` (**this file's coverage list**: TR-A/TR-B are in scope,
+ *     TR-C/TR-D explicitly not — the "honest subset duty"; that doc still uses the design-side
+ *     name `runtime/posix`);
+ *   - `7-01-vfs.md` §1/§4.1 (fd table entry = `br_file_t*`; `br_open` is the fd table's
+ *     underlying primitive);
+ *   - `3-01-core-api-list.md` §2/§3/§4/§7 (threads / sync / time / memory — this file only maps).
+ * Rulings and deviations: `docs/decisions/0014-svc-posix-posix-runtime.md`.
  *
- * ============================== 本件是什么 ==============================
- * 一层**翻译**, 不是第二个内核。每个 POSIX 函数都只有三种形状之一:
+ * ============================== What this file is ==============================
+ * A **translation** layer, not a second kernel. Every POSIX function has one of three shapes:
  *
- *   ① **零转换委托**   `read()` → `br_ft_get` + `br_file_read`, `errno = -ret`
- *   ② **形状转换**     `struct stat` ← `br_stat_t`; `struct dirent` ← `br_dirent_t`
- *   ③ **本服务自己的状态**  fd 表(主人在 framework/file-table)、**cwd**、errno、
- *                          `FILE*` 池、pthread 的 retval/栈表、记录锁表
+ *   ① **Zero-conversion delegation**  `read()` → `br_ft_get` + `br_file_read`, `errno = -ret`
+ *   ② **Shape conversion**     `struct stat` ← `br_stat_t`; `struct dirent` ← `br_dirent_t`
+ *   ③ **This service's own state**  fd table (owner: framework/file-table), **cwd**, errno,
+ *                          `FILE*` pool, pthread retval/stack table, record lock table
  *
- * 第 ③ 类的每一样都在 `11-02` 的 TR-B 行里 —— 它们是设计已明确归 POSIX 运行时的职责
- * (cwd/相对路径、fd 层访问模式执法), 不是本实现顺手多做的。
+ * Everything in class ③ is in the TR-B rows of `11-02` — responsibilities the design already
+ * assigns to the POSIX runtime (cwd/relative paths, fd-level access-mode enforcement), not
+ * extras this implementation added on the side.
  *
- * ============================== 三条承重口径 ==============================
- * 1. **`errno = -ret`(零转换)**: core 与 vfs 的错误码**就是**内核编号(ADR-0012 逐码
- *    对拍), 所以本文件里没有 errno 换算表 —— 只有 `-rc`。SD-10 与 D18 的红利。
- * 2. **fd 表不在这里**: 唯一主人在 `framework/file-table`(ADR-0012)。本件只消费它 ⇒
- *    "共享状态单一主人"可以被 grep 出来(`br_ft_alloc` 只出现在本文件里)。
- * 3. **访问模式执法归本件**: vfs **刻意不执法**(ADR-0009 §5 遗留项 5), 所以"只读 fd 上
- *    write ⇒ EBADF"必须在这里有, 否则整个 POSIX 面就没有权限语义。
+ * ============================== Three load-bearing rules ==============================
+ * 1. **`errno = -ret` (zero conversion)**: core and vfs error codes **are** the kernel numbers
+ *    (ADR-0012, checked code by code), so this file has no errno conversion table — only `-rc`.
+ *    A dividend of SD-10 and D18.
+ * 2. **The fd table is not here**: its sole owner is `framework/file-table` (ADR-0012). This
+ *    file only consumes it ⇒ "single owner of shared state" is greppable (`br_ft_alloc` appears
+ *    only in this file).
+ * 3. **Access-mode enforcement belongs here**: vfs **deliberately does not enforce** it
+ *    (ADR-0009 §5 leftover item 5), so "write on a read-only fd ⇒ EBADF" must live here, else
+ *    the whole POSIX surface has no permission semantics.
  *
- * ============================== 已知欠账(诚实清单) ==============================
- * 全部条目见 `docs/decisions/0014-…` 与 `0019-…` §4。最要紧的四条:
- *   - `errno` 已改为**每线程**(本层线程记录里的槽位, `__br_posix_errno()`);
- *   - `struct stat` 的 `st_ino/st_uid/st_gid/st_*time` **恒 0**(vfs 没有这些面);
- *   - `printf` 家族**不在本代**(TR-C: libc 选型未拍, `11-01` §3);
- *   - `pthread_detach` = **惰性回收**(下一次 pthread 调用时 join 掉已退出的 detached
- *     线程; core 只有 join 一条回收路径, ADR-0019)。
+ * ============================== Known debt (honest list) ==============================
+ * All items are in `docs/decisions/0014-…` and `0019-…` §4. The four most important:
+ *   - `errno` is now **per-thread** (a slot in this layer's thread record, `__br_posix_errno()`);
+ *   - `struct stat`'s `st_ino/st_uid/st_gid/st_*time` are **always 0** (vfs has no such surfaces);
+ *   - the `printf` family is **not in this generation** (TR-C: libc choice not settled, `11-01` §3);
+ *   - `pthread_detach` = **lazy reclamation** (the next pthread call joins already-exited
+ *     detached threads; core has only join as a reclamation path, ADR-0019).
  */
 #include <dirent.h>
 #include <errno.h>
@@ -67,29 +75,29 @@
 #include <br/ft/br_ft.h>
 #include <br/vfs/br_vfs.h>
 
-/* 生命周期钩子(名字 = symbol_prefix(short = "posix") + 相; 由 build/gen 的描述符引用)。 */
+/* Lifecycle hooks (name = symbol_prefix(short = "posix") + phase; referenced by the build/gen descriptor). */
 int posix_early_init(void);
 int posix_init(void);
 int posix_start(void);
 
-/* ==================================================================== 静态上界 */
+/* ==================================================================== Static bounds */
 
-#define SVC_PATH_MAX        128u   /* 与 vfs 的路径缓冲同量级; 超 ⇒ -ENAMETOOLONG */
-#define SVC_FILE_MAX        8u     /* 同时打开的 FILE* 上界 */
-#define SVC_THREAD_MAX      8u     /* 与 core 的 BR_TASK_MAX 对齐(core 是 TCB 池的真实上界) */
-#define SVC_LOCK_MAX        16u    /* 记录锁条目上界 */
-#define SVC_SELECT_MAX      16u    /* select 一次能管的 fd 数(nfds 上界) */
-#define SVC_KEY_MAX         PTHREAD_KEYS_MAX   /* TLS key 槽位数(与 pthread.h 一致) */
+#define SVC_PATH_MAX        128u   /* same order as the vfs path buffer; overflow ⇒ -ENAMETOOLONG */
+#define SVC_FILE_MAX        8u     /* bound on simultaneously open FILE* */
+#define SVC_THREAD_MAX      8u     /* aligned with core's BR_TASK_MAX (core is the real TCB pool bound) */
+#define SVC_LOCK_MAX        16u    /* record lock entry bound */
+#define SVC_SELECT_MAX      16u    /* max fds one select can manage (nfds bound) */
+#define SVC_KEY_MAX         PTHREAD_KEYS_MAX   /* TLS key slots (matches pthread.h) */
 
-/* `errno` 现在**不是**一个全局 int: 它是 `errno.h` 里的宏, 指向每线程槽位
- * (`__br_posix_errno()`, 实现见下面的 pthread 层)。定义全局 int 会让"线程 A 的失败
- * 被线程 B 读走"复活, 而且与 POSIX"errno 是宏"的规定冲突。 */
+/* `errno` is now **not** a global int: it is a macro in `errno.h` pointing at a per-thread
+ * slot (`__br_posix_errno()`, implemented in the pthread layer below). A global int would
+ * revive "thread A's failure read by thread B" and conflicts with POSIX making errno a macro. */
 
-/* cwd: POSIX 概念, 归本服务(vfs 只认绝对路径, `7-01` §2)。始终以 '/' 开头。 */
+/* cwd: a POSIX concept owned by this service (vfs knows only absolute paths, `7-01` §2). Always starts with '/'. */
 static char s_cwd[SVC_PATH_MAX] = "/";
-static mode_t s_umask = 0u;                 /* 只记录(不执法), 见 umask() */
+static mode_t s_umask = 0u;                 /* recorded only (not enforced), see umask() */
 
-/* ==================================================================== 小工具 */
+/* ==================================================================== Helpers */
 
 static size_t svc_strlen(const char *s)
 {
@@ -115,7 +123,7 @@ static void svc_copy(char *dst, const char *src, size_t cap)
     dst[i] = '\0';
 }
 
-/* 失败统一走这里: `rc` 是 core/vfs 的**负 errno**, 直接取负即 errno(零转换)。 */
+/* Single failure path: `rc` is core/vfs's **negative errno**; negating it is errno (zero conversion). */
 static int svc_fail(int rc)
 {
     errno = (rc < 0) ? -rc : rc;
@@ -123,24 +131,24 @@ static int svc_fail(int rc)
 }
 
 /*
- * ★ 两个错误通道, 别混(POSIX 自己就不一致, 必须照抄):
- *   - **系统调用族**(open/read/write/…)失败返回 `-1` 并设 `errno`  ⇒ `svc_fail`
- *   - **pthread_* 族**直接把**错误号当返回值**(不碰 errno)          ⇒ `svc_rc`
- *   用错通道的症状很隐蔽: 调用方写 `if (pthread_mutex_lock(m) != 0)`, 若我们返回 -1,
- *   它会把 -1 当成"错误号 -1"去查表 —— 永远查不到, 且 errno 那条路也没人读。
+ * ★ Two error channels, do not mix (POSIX is inconsistent with itself; copy it):
+ *   - **syscall family** (open/read/write/…) returns `-1` and sets `errno`  ⇒ `svc_fail`
+ *   - **pthread_* family** returns the **error number directly** (never touches errno) ⇒ `svc_rc`
+ *   The wrong channel is subtly broken: for `if (pthread_mutex_lock(m) != 0)`, returning -1
+ *   makes the caller look up error number -1 — never found — and nobody reads errno either.
  */
 static int svc_rc(int rc)
 {
     return (rc < 0) ? -rc : rc;
 }
 
-/* ==================================================================== 路径处理
+/* ==================================================================== Path handling
  *
- * 两条路:
- *   - `svc_abs()`: 相对 → 绝对(**不**解析 "."/".."; 那是 FS 的 lookup 语义, 见
- *     br_vfs.c 的 path_norm 说明)。给 vfs 用。
- *   - `svc_clean()`: 只给 `chdir` 用 —— 把 "."/".." 在**字符串层面**折掉, 于是
- *     `getcwd` 报出来的是干净路径(否则会出现 "/a/../.." 这种"合法但难看"的 cwd)。
+ * Two paths:
+ *   - `svc_abs()`: relative → absolute (**without** resolving "."/".."; that is FS lookup
+ *     semantics, see the path_norm note in br_vfs.c). Used for vfs.
+ *   - `svc_clean()`: for `chdir` only — folds "."/".." at the **string level**, so `getcwd`
+ *     reports a clean path (else you get "legal but ugly" cwds like "/a/../..").
  */
 
 static int svc_abs(const char *path, char *out, size_t cap)
@@ -176,7 +184,7 @@ static int svc_abs(const char *path, char *out, size_t cap)
     return BR_OK;
 }
 
-/* "." / ".." 的字符串折叠(`chdir` 专用; 根的上层仍是根)。 */
+/* String-level fold of "." / ".." (for `chdir`; above root stays root). */
 static void svc_clean(const char *in, char *out, size_t cap)
 {
     size_t n = 0u;
@@ -200,7 +208,7 @@ static void svc_clean(const char *in, char *out, size_t cap)
         }
         if (len == 2u && in[start] == '.' && in[start + 1u] == '.') {
             if (n > 1u) {
-                n--;                        /* 吃掉分隔 '/' */
+                n--;                        /* drop the separating '/' */
                 while (n > 1u && out[n - 1u] != '/') {
                     n--;
                 }
@@ -211,7 +219,7 @@ static void svc_clean(const char *in, char *out, size_t cap)
             out[n++] = in[start + k];
         }
         if ((n + 1u) < cap) {
-            out[n++] = '/';                 /* 分隔符; 结尾多余的会在下面去掉 */
+            out[n++] = '/';                 /* separator; a trailing one is trimmed below */
         }
     }
     while (n > 1u && out[n - 1u] == '/') {
@@ -220,11 +228,11 @@ static void svc_clean(const char *in, char *out, size_t cap)
     out[n] = '\0';
 }
 
-/* ==================================================================== 标志翻译
+/* ==================================================================== Flag translation
  *
- * POSIX 的 `O_*`(Linux 数值) → native 的 `BR_O_*`。**两侧数值不同**, 所以这一层
- * 翻译是必需的(见 fcntl.h 的说明)。未知位置位**不报错**: POSIX 允许忽略
- * (`O_NOCTTY`/`O_LARGEFILE`/`O_CLOEXEC` 在本代没有语义)。
+ * POSIX `O_*` (Linux values) → native `BR_O_*`. The **values differ**, so this layer is
+ * required (see the fcntl.h note). Unknown bits set are **not an error**: POSIX allows
+ * ignoring them (`O_NOCTTY`/`O_LARGEFILE`/`O_CLOEXEC` have no semantics in this generation).
  */
 static br_u32 svc_to_br_flags(int oflags)
 {
@@ -244,9 +252,9 @@ static br_u32 svc_to_br_flags(int oflags)
     return bf;
 }
 
-/* ==================================================================== fd 断言
+/* ==================================================================== fd assertions
  *
- * ★ 访问模式执法(**本件的职责**, vfs 刻意不做 —— ADR-0009 §5 遗留项 5)。
+ * ★ Access-mode enforcement (**this file's job**; vfs deliberately does not — ADR-0009 §5 leftover 5).
  */
 static br_file_t *svc_fd_file(int fd)
 {
@@ -271,7 +279,7 @@ static int svc_fd_writable(int fd)
     return ((fl & (br_u32)O_ACCMODE) != (br_u32)O_RDONLY) ? 1 : 0;
 }
 
-/* ==================================================================== 层: 文件 I/O */
+/* ==================================================================== Layer: file I/O */
 
 int open(const char *path, int flags, ...)
 {
@@ -284,10 +292,10 @@ int open(const char *path, int flags, ...)
     int        err = 0;
     br_file_t *f = br_open_err(abs, svc_to_br_flags(flags), &err);
     if (f == BR_NULL) {
-        return svc_fail(err);                       /* err 已是负 errno */
+        return svc_fail(err);                       /* err is already a negative errno */
     }
 
-    /* `O_DIRECTORY`: 打开了但不是目录 ⇒ 关掉再报 -ENOTDIR(照 Linux)。 */
+    /* `O_DIRECTORY`: opened but not a directory ⇒ close and report -ENOTDIR (as Linux). */
     if (((flags & O_DIRECTORY) != 0) &&
         (br_file_inode(f) != BR_NULL) && (br_file_inode(f)->type != BR_INODE_DIR)) {
         (void)br_file_close(f);
@@ -296,7 +304,7 @@ int open(const char *path, int flags, ...)
 
     const int fd = br_ft_alloc(f, (br_u32)flags);
     if (fd < 0) {
-        (void)br_file_close(f);                     /* 分配失败要**回滚**已打开的文件 */
+        (void)br_file_close(f);                     /* on allocation failure **roll back** the opened file */
         return svc_fail(fd);
     }
     return fd;
@@ -304,8 +312,9 @@ int open(const char *path, int flags, ...)
 
 int openat(int dirfd, const char *path, int flags, ...)
 {
-    /* 只支持 `AT_FDCWD`: 相对某个**目录 fd** 的解析需要"由 fd 反查目录路径", 而 vfs
-     * 的句柄不携带路径(它可能已被 rename/unlink)。如实返回 -ENOTSUP, 不假装支持。 */
+    /* Only `AT_FDCWD` is supported: resolving relative to a **directory fd** needs an fd→path
+     * reverse lookup, and vfs handles carry no path (they may have been renamed/unlinked).
+     * Report -ENOTSUP honestly rather than pretending support. */
     if (dirfd != AT_FDCWD) {
         return svc_fail(BR_ERR(ENOTSUP));
     }
@@ -314,7 +323,7 @@ int openat(int dirfd, const char *path, int flags, ...)
 
 int creat(const char *path, mode_t mode)
 {
-    (void)mode;                                     /* 没有权限模型(见 chmod) */
+    (void)mode;                                     /* no permission model (see chmod) */
     return open(path, O_WRONLY | O_CREAT | O_TRUNC);
 }
 
@@ -332,11 +341,11 @@ ssize_t read(int fd, void *buf, size_t n)
 }
 
 /*
- * `write` 的两个额外动作(都属"fd 层的职责"):
- *   ① 访问模式执法(只读 fd ⇒ EBADF);
- *   ② **`O_APPEND` 的兜底**: `F_SETFL` 之后才置上的 O_APPEND 到不了 `br_file_t` 的
- *      flags(那是打开时固定的), 所以本层在写前自己定位到末尾。普通文件才做 ——
- *      设备(如 uart)不可定位, 对它们 O_APPEND 本无语义。
+ * `write`'s two extra duties (both belong to the fd layer):
+ *   ① access-mode enforcement (read-only fd ⇒ EBADF);
+ *   ② **`O_APPEND` fallback**: O_APPEND set after `F_SETFL` never reaches `br_file_t` flags
+ *      (those are fixed at open), so this layer seeks to the end before writing. Regular files
+ *      only — devices (e.g. uart) are not seekable and O_APPEND is meaningless for them.
  */
 static ssize_t svc_write_common(int fd, const void *buf, size_t n, off_t off, int have_off)
 {
@@ -366,7 +375,7 @@ static ssize_t svc_write_common(int fd, const void *buf, size_t n, off_t off, in
     const br_s64 r = br_file_write(f, buf, n);
 
     if (moved != 0) {
-        br_file_set_offset(f, saved);               /* pread/pwrite 不动偏移 */
+        br_file_set_offset(f, saved);               /* pread/pwrite do not move the offset */
     }
     if (r < 0) {
         return (ssize_t)svc_fail((int)r);
@@ -380,9 +389,10 @@ ssize_t write(int fd, const void *buf, size_t n)
 }
 
 /*
- * `pread`/`pwrite`: vfs 没有这两个槽位(`11-02` 的 Q-6), 本代用"保存偏移 + lseek +
- * 读写 + 恢复偏移"模拟。★ **非原子**: 两个线程同时 pread 同一 fd 会互相踩偏移。
- * 单 APP 下可接受, 但它是一条**已知语义边界**, 写在 ADR-0014 §4。
+ * `pread`/`pwrite`: vfs has no such slots (`11-02` Q-6); this generation emulates them with
+ * "save offset + lseek + read/write + restore offset". ★ **Not atomic**: two threads calling
+ * pread on the same fd clobber each other's offset. Acceptable with a single APP, but it is a
+ * **known semantic boundary** recorded in ADR-0014 §4.
  */
 ssize_t pread(int fd, void *buf, size_t n, off_t off)
 {
@@ -414,8 +424,8 @@ int close(int fd)
     if (rc != 0) {
         return svc_fail(rc);                        /* -EBADF */
     }
-    /* ★ 只有**最后一个引用**消失时才真关文件 —— 这是 `dup` 语义的落脚点
-     *   (两个 fd 指向同一个 open file description; 关一个不影响另一个)。 */
+    /* ★ The file is really closed only when the **last reference** goes away — the anchor of
+     *   `dup` semantics (two fds share one open file description; closing one spares the other). */
     if (last != BR_NULL) {
         const int r2 = br_file_close(last);
         if (r2 != 0) {
@@ -431,7 +441,7 @@ off_t lseek(int fd, off_t off, int whence)
     if (f == BR_NULL) {
         return (off_t)svc_fail(BR_ERR(EBADF));
     }
-    /* BR_SEEK_SET/CUR/END 与 POSIX SEEK_SET/CUR/END 同值(0/1/2) —— 直接传。 */
+    /* BR_SEEK_SET/CUR/END share POSIX SEEK_SET/CUR/END values (0/1/2) — pass through. */
     const br_s64 r = br_file_lseek(f, (br_s64)off, (int)whence);
     if (r < 0) {
         return (off_t)svc_fail((int)r);
@@ -452,7 +462,8 @@ int dup2(int oldfd, int newfd)
     if (r < 0) {
         return svc_fail(r);
     }
-    /* 被顶掉的句柄若已无其它引用, 必须在这里关掉 —— 表按契约把决定权交给调用方。 */
+    /* A displaced handle with no other reference must be closed here — by contract the table
+     * leaves that decision to the caller. */
     if (displaced != BR_NULL) {
         (void)br_file_close(displaced);
     }
@@ -466,9 +477,9 @@ int fsync(int fd)
         return svc_fail(BR_ERR(EBADF));
     }
     const int r = br_file_fsync(f);
-    /* vfs 的 fsync 槽位对 tmpfs 是 BR_NULL ⇒ -ENOTSUP。POSIX 允许 fsync 对不支持它的
-     * 对象返回 EINVAL/ENOTSUP —— 如实上传, **不**假装成功(假装成功会让"数据落盘了"
-     * 这个判断失去依据)。 */
+    /* vfs's fsync slot is BR_NULL for tmpfs ⇒ -ENOTSUP. POSIX allows fsync to return
+     * EINVAL/ENOTSUP for objects that do not support it — pass it up honestly, **never** fake
+     * success (faking removes any basis for judging "the data is on disk"). */
     return (r != 0) ? svc_fail(r) : 0;
 }
 
@@ -487,7 +498,7 @@ int ftruncate(int fd, off_t len)
         return svc_fail(BR_ERR(EBADF));
     }
     if (svc_fd_writable(fd) == 0) {
-        return svc_fail(BR_ERR(EINVAL));         /* Linux: 只读 fd 上 ftruncate ⇒ EINVAL */
+        return svc_fail(BR_ERR(EINVAL));         /* Linux: ftruncate on a read-only fd ⇒ EINVAL */
     }
     br_inode_t *ino = br_file_inode(f);
     if (ino == BR_NULL || ino->iops == BR_NULL || ino->iops->setattr == BR_NULL) {
@@ -513,18 +524,18 @@ int truncate(const char *path, off_t len)
     return (rc != 0) ? svc_fail(rc) : 0;
 }
 
-/* 本代没有 tty 层(`br-wa-io-001`)⇒ 如实回"不是终端", 并按 POSIX 置 ENOTTY。 */
+/* No tty layer in this generation (`br-wa-io-001`) ⇒ honestly answer "not a tty" and set ENOTTY per POSIX. */
 int isatty(int fd)
 {
     if (svc_fd_file(fd) == BR_NULL) {
         (void)svc_fail(BR_ERR(EBADF));
-        return 0;                                   /* errno = EBADF, 保持不动 */
+        return 0;                                   /* errno = EBADF, left as set */
     }
-    errno = ENOTTY;                                 /* 有效 fd 但不是终端(无 tty 层) */
+    errno = ENOTTY;                                 /* valid fd but not a tty (no tty layer) */
     return 0;
 }
 
-/* ---- 分散/聚集(TR-B: 循环调 read/write, 部分完成语义照 POSIX) ---- */
+/* ---- Scatter/gather (TR-B: loop over read/write; partial-completion semantics per POSIX) ---- */
 ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
 {
     if (iov == BR_NULL || iovcnt <= 0) {
@@ -537,11 +548,11 @@ ssize_t readv(int fd, const struct iovec *iov, int iovcnt)
         }
         const ssize_t r = read(fd, iov[i].iov_base, iov[i].iov_len);
         if (r < 0) {
-            return (total > 0) ? total : r;         /* 已读到一些 ⇒ 短读返回 */
+            return (total > 0) ? total : r;         /* some bytes read ⇒ return the short count */
         }
         total += r;
         if ((size_t)r < iov[i].iov_len) {
-            break;                                  /* 短读: 不再继续(语义与 read 一致) */
+            break;                                  /* short read: stop (same semantics as read) */
         }
     }
     return total;
@@ -569,20 +580,21 @@ ssize_t writev(int fd, const struct iovec *iov, int iovcnt)
     return total;
 }
 
-/* ==================================================================== 层: 记录锁
+/* ==================================================================== Layer: record locks
  *
- * `fcntl(F_SETLK/F_GETLK)`。设计已裁定: **单 APP 下退化为进程内互斥**(`1-01` §7.6)。
- * 语义边界(写在 ADR-0014 §4):
- *   - 锁按 `br_file_t*`(即 open file description)区分 —— `dup` 出来的 fd 共享同一把锁;
- *   - `F_SETLKW`(阻塞获取)**不实现** ⇒ -ENOTSUP。阻塞需要等待队列 + 唤醒, 而"给谁唤醒"
- *     在进程内锁里没有答案(没有锁管理器线程); 假装它能阻塞会让调用方死等。
+ * `fcntl(F_SETLK/F_GETLK)`. The design ruled: **with a single APP this degenerates to
+ * in-process mutual exclusion** (`1-01` §7.6). Semantic boundaries (recorded in ADR-0014 §4):
+ *   - locks are keyed by `br_file_t*` (the open file description) — fds from `dup` share a lock;
+ *   - `F_SETLKW` (blocking acquire) is **not implemented** ⇒ -ENOTSUP. Blocking needs a wait
+ *     queue plus wakeups, and in-process locks have no answer for "whom to wake" (no lock
+ *     manager thread); pretending to block would hang the caller.
  */
 typedef struct {
     br_u32     used;
     br_file_t *f;
     int        type;      /* F_RDLCK / F_WRLCK */
     off_t      start;
-    off_t      len;       /* 0 = 到文件末尾 */
+    off_t      len;       /* 0 = to end of file */
     pid_t      pid;
 } svc_lock_t;
 
@@ -622,7 +634,8 @@ static int svc_lock_set(int fd, struct flock *fl)
         return 0;
     }
 
-    /* 冲突检查: **别的** open file description 持有重叠的写锁(或本请求是写锁) */
+    /* Conflict check: **another** open file description holds an overlapping write lock
+     * (or this request is a write lock) */
     for (br_u32 i = 0u; i < SVC_LOCK_MAX; i++) {
         if (s_locks[i].used == 0u || s_locks[i].f == f) {
             continue;
@@ -632,11 +645,11 @@ static int svc_lock_set(int fd, struct flock *fl)
                                                : (s_locks[i].start + s_locks[i].len);
         if (svc_overlap(s, e, os, oe) != 0 &&
             (s_locks[i].type == F_WRLCK || fl->l_type == F_WRLCK)) {
-            return svc_fail(BR_ERR(EAGAIN));     /* POSIX 允许 EACCES/EAGAIN */
+            return svc_fail(BR_ERR(EAGAIN));     /* POSIX allows EACCES/EAGAIN */
         }
     }
 
-    /* 记一条(先找同 f 同区间的旧条目替换, 否则找空位) */
+    /* Record an entry (replace an old entry with the same f and range, else take a free slot) */
     br_u32 slot = (br_u32)SVC_LOCK_MAX;
     for (br_u32 i = 0u; i < SVC_LOCK_MAX; i++) {
         if (s_locks[i].used == 1u && s_locks[i].f == f &&
@@ -651,7 +664,7 @@ static int svc_lock_set(int fd, struct flock *fl)
         }
     }
     if (slot == (br_u32)SVC_LOCK_MAX) {
-        return svc_fail(BR_ERR(ENOLCK));         /* 锁表满 */
+        return svc_fail(BR_ERR(ENOLCK));         /* lock table full */
     }
     s_locks[slot].used  = 1u;
     s_locks[slot].f     = f;
@@ -687,7 +700,7 @@ static int svc_lock_get(int fd, struct flock *fl)
             return 0;
         }
     }
-    fl->l_type = F_UNLCK;                           /* "没有冲突" */
+    fl->l_type = F_UNLCK;                           /* "no conflict" */
     return 0;
 }
 
@@ -695,8 +708,8 @@ int fcntl(int fd, int cmd, ...)
 {
     void *arg = BR_NULL;
 
-    /* ★ 只为**需要参数**的 cmd 取 vararg: 对 F_GETFD 之类的无参命令读 vararg 是 UB
-     *   (调用方没压栈, 读到的可能是寄存器残留)。 */
+    /* ★ Fetch the vararg only for cmds that **need an argument**: reading it for no-arg
+     *   commands like F_GETFD is UB (the caller pushed none; you may read register garbage). */
     switch (cmd) {
         case F_SETFL:
         case F_DUPFD:
@@ -720,7 +733,7 @@ int fcntl(int fd, int cmd, ...)
 
     switch (cmd) {
         case F_GETFD:
-            return 0;                               /* 没有 FD_CLOEXEC 的载体(无 exec) */
+            return 0;                               /* no carrier for FD_CLOEXEC (no exec) */
         case F_SETFD:
             return 0;
         case F_GETFL: {
@@ -731,7 +744,7 @@ int fcntl(int fd, int cmd, ...)
             return (int)fl;
         }
         case F_SETFL: {
-            /* 只接受"状态位"的改动; 访问模式不可改(POSIX 亦然)。 */
+            /* accept "status bit" changes only; the access mode cannot change (same in POSIX). */
             br_u32 fl = 0u;
             if (br_ft_get_flags(fd, &fl) != 0) {
                 return svc_fail(BR_ERR(EBADF));
@@ -743,7 +756,7 @@ int fcntl(int fd, int cmd, ...)
             return (rc != 0) ? svc_fail(rc) : 0;
         }
         case F_DUPFD: {
-            /* 复制到 **≥ arg** 的最小可用 fd(POSIX F_DUPFD 的语义) */
+            /* duplicate to the lowest free fd **≥ arg** (POSIX F_DUPFD semantics) */
             const int lo = (int)(br_intptr_t)arg;
             if (lo < 0) {
                 return svc_fail(BR_ERR(EINVAL));
@@ -756,7 +769,7 @@ int fcntl(int fd, int cmd, ...)
                         return svc_fail(r);
                     }
                     if (disp != BR_NULL) {
-                        (void)br_file_close(disp);  /* 该位本来是空的 ⇒ 理论到不了 */
+                        (void)br_file_close(disp);  /* the slot was free ⇒ unreachable in theory */
                     }
                     return cand;
                 }
@@ -768,14 +781,14 @@ int fcntl(int fd, int cmd, ...)
         case F_GETLK:
             return svc_lock_get(fd, (struct flock *)arg);
         case F_SETLKW:
-            /* 见文件头的说明: 阻塞式记录锁要等待队列, 本代不做。 */
+            /* see the file header: blocking record locks need a wait queue; not in this generation. */
             return svc_fail(BR_ERR(ENOTSUP));
         default:
             return svc_fail(BR_ERR(EINVAL));
     }
 }
 
-/* ==================================================================== 层: 元数据 */
+/* ==================================================================== Layer: metadata */
 
 static void svc_fill_stat(const br_stat_t *b, struct stat *st)
 {
@@ -791,7 +804,7 @@ static void svc_fill_stat(const br_stat_t *b, struct stat *st)
     }
     st->st_blksize = 512;
     st->st_blocks  = (blkcnt_t)((b->size + 511u) / 512u);
-    /* st_dev/st_ino/st_uid/st_gid/st_rdev/st_*time 恒 0 —— vfs 没有这些面(ADR-0014 §4)。 */
+    /* st_dev/st_ino/st_uid/st_gid/st_rdev/st_*time are always 0 — vfs has no such surfaces (ADR-0014 §4). */
 }
 
 static int svc_stat_common(const char *path, struct stat *st, int nofollow)
@@ -833,7 +846,7 @@ int fstat(int fd, struct stat *st)
         return svc_fail(BR_ERR(EBADF));
     }
     br_stat_t b;
-    const int rc = br_fstat(f, &b);                 /* vfs 的句柄级原语(ADR-0013) */
+    const int rc = br_fstat(f, &b);                 /* vfs handle-level primitive (ADR-0013) */
     if (rc != 0) {
         return svc_fail(rc);
     }
@@ -843,7 +856,7 @@ int fstat(int fd, struct stat *st)
 
 int mkdir(const char *path, mode_t mode)
 {
-    (void)mode;                                     /* 无权限模型(见 ADR-0014) */
+    (void)mode;                                     /* no permission model (see ADR-0014) */
     char abs[SVC_PATH_MAX];
     int  rc = svc_abs(path, abs, (size_t)sizeof(abs));
     if (rc != BR_OK) {
@@ -853,11 +866,13 @@ int mkdir(const char *path, mode_t mode)
     return (rc != 0) ? svc_fail(rc) : 0;
 }
 
-/* ---- 权限面: 按用户裁定 = **空操作返回 0**(见 ADR-0014 §2)----
- * 为什么"空操作"是诚实而不是偷懒: 本原型**没有**权限模型(vfs 没有 mode/uid/gid 存储面,
- * 也没有"当前用户"), 所以"接受并忽略"与"返回 -ENOTSUP"相比, 前者让按 POSIX 写的代码
- * 能跑完(chmod 0644 后功能不受影响), 后者会让它在无关的地方失败。真正的风险是
- * "调用方以为权限生效了" —— 这一点靠文档与 ADR 显式声明来兜, 不靠返回码兜。 */
+/* ---- Permission surface: per the user ruling = **no-op returning 0** (see ADR-0014 §2) ----
+ * Why a no-op is honest rather than lazy: this prototype has **no** permission model (vfs
+ * stores no mode/uid/gid and there is no "current user"), so "accept and ignore" lets
+ * POSIX-written code run to completion (a chmod 0644 leaves behaviour unaffected), whereas
+ * -ENOTSUP would make it fail somewhere unrelated. The real risk is "the caller thinks the
+ * permissions took effect" — covered by documentation and explicit ADR statements, not by
+ * return codes. */
 int chmod(const char *path, mode_t mode)
 {
     (void)path;
@@ -892,13 +907,13 @@ mode_t umask(mode_t mask)
 {
     const mode_t old = s_umask;
     s_umask = (mode_t)(mask & 0777u);
-    return old;                                     /* 记录 + 返回旧值; 不执法 */
+    return old;                                     /* record and return the old value; no enforcement */
 }
 
 /*
- * `access`: 权限位**一律放行**(用户裁定), 但**存在性检查照做** ——
- * 一个"文件不存在却回答可读"的 access 会让调用方的分支逻辑彻底失真, 那不是"空操作",
- * 那是撒谎。所以语义 = "F_OK 照查; R/W/X 恒真"。
+ * `access`: permission bits **always allowed** (user ruling), but the **existence check stays** —
+ * an access that answers "readable" for a missing file would distort the caller's branching
+ * completely; that is not a no-op, that is lying. So semantics = "F_OK checked; R/W/X always true".
  */
 int access(const char *path, int mode)
 {
@@ -916,7 +931,7 @@ int access(const char *path, int mode)
     return 0;
 }
 
-/* ==================================================================== 层: 目录 */
+/* ==================================================================== Layer: directories */
 
 int unlink(const char *path)
 {
@@ -940,7 +955,7 @@ int rmdir(const char *path)
     return (rc != 0) ? svc_fail(rc) : 0;
 }
 
-/* POSIX 的 remove(): 文件走 unlink, 空目录走 rmdir。 */
+/* POSIX remove(): files go through unlink, empty directories through rmdir. */
 int remove(const char *path)
 {
     char abs[SVC_PATH_MAX];
@@ -997,8 +1012,9 @@ int symlink(const char *target, const char *linkpath)
     if (rc != BR_OK) {
         return svc_fail(rc);
     }
-    /* 目标串**不**做绝对化: 符号链接的语义就是"按链接所在目录解释"(`7-01` 与 vfs 的
-     * resolve_norm 都靠这条), 提前拼成绝对路径会把链接钉死在当前 cwd 上。 */
+    /* The target string is **not** made absolute: a symlink is interpreted relative to the
+     * directory holding it (`7-01` and vfs resolve_norm rely on this); pre-joining an absolute
+     * path would pin the link to the current cwd. */
     rc = br_symlink(target, abs);
     return (rc != 0) ? svc_fail(rc) : 0;
 }
@@ -1014,7 +1030,7 @@ ssize_t readlink(const char *path, char *buf, size_t cap)
     if (rc < 0) {
         return (ssize_t)svc_fail(rc);
     }
-    return (ssize_t)rc;                             /* 全长(可能 > cap, 照 POSIX) */
+    return (ssize_t)rc;                             /* full length (may exceed cap, per POSIX) */
 }
 
 /* ---- DIR ---- */
@@ -1022,7 +1038,7 @@ ssize_t readlink(const char *path, char *buf, size_t cap)
 struct br_posix_dir {
     br_dir_t      *d;
     struct dirent  ent;
-    char           path[SVC_PATH_MAX];   /* rewinddir 要"关掉再开" ⇒ 必须记得开的是谁 */
+    char           path[SVC_PATH_MAX];   /* rewinddir closes and reopens ⇒ must remember what was opened */
 };
 
 static br_u32 svc_dtype(br_u32 br_type)
@@ -1045,7 +1061,7 @@ DIR *opendir(const char *path)
     }
     br_dir_t *d = br_opendir(abs);
     if (d == BR_NULL) {
-        errno = ENOTDIR;                            /* vfs 的 opendir 不设 errno; 见下 */
+        errno = ENOTDIR;                            /* vfs opendir sets no errno; see below */
         return BR_NULL;
     }
     DIR *out = (DIR *)br_malloc((br_size_t)sizeof(DIR));
@@ -1068,13 +1084,13 @@ struct dirent *readdir(DIR *d)
     br_dirent_t de;
     const int   rc = br_readdir(d->d, &de);
     if (rc < 0) {
-        errno = -rc;                                /* 真错误: 让调用方看见 */
+        errno = -rc;                                /* real error: let the caller see it */
         return BR_NULL;
     }
     if (rc == 0) {
-        return BR_NULL;                             /* 目录穷尽(POSIX: 返回 NULL, 不置 errno) */
+        return BR_NULL;                             /* directory exhausted (POSIX: NULL, errno untouched) */
     }
-    d->ent.d_ino    = 0;                            /* vfs 没有 inode 号 */
+    d->ent.d_ino    = 0;                            /* vfs has no inode number */
     d->ent.d_off    = 0;
     d->ent.d_reclen = (unsigned short)sizeof(struct dirent);
     d->ent.d_type   = (unsigned char)svc_dtype(de.type);
@@ -1097,8 +1113,9 @@ void rewinddir(DIR *d)
     if (d == BR_NULL || d->d == BR_NULL) {
         return;
     }
-    /* vfs 的目录迭代器没有"重置"槽位 ⇒ 关掉再开一次(语义等价, 代价一次 open)。
-     * 这正是"seekdir/telldir 属 TR-C"的另一面(见 dirent.h)。记住路径就是为了这里。 */
+    /* vfs's directory iterator has no "reset" slot ⇒ close and reopen (equivalent, costs one
+     * open). This is the other side of "seekdir/telldir are TR-C" (see dirent.h); that is why
+     * the path is remembered. */
     (void)br_closedir(d->d);
     d->d = br_opendir(d->path);
 }
@@ -1138,7 +1155,7 @@ char *getcwd(char *buf, size_t size)
     return buf;
 }
 
-/* ==================================================================== 层: time */
+/* ==================================================================== Layer: time */
 
 static void svc_us_to_ts(br_u64 us, struct timespec *ts)
 {
@@ -1151,8 +1168,9 @@ int clock_gettime(clockid_t id, struct timespec *ts)
     if (ts == BR_NULL) {
         return svc_fail(BR_ERR(EINVAL));
     }
-    /* ★ 只有 MONOTONIC: 没有墙钟源(P-1), 所以 REALTIME **如实**返回 -ENOTSUP,
-     *   而不是编一个假装是"1970 年至今"的数字(那会让排序/超时逻辑静默错)。 */
+    /* ★ MONOTONIC only: there is no wall-clock source (P-1), so REALTIME **honestly** returns
+     *   -ENOTSUP instead of inventing a fake "seconds since 1970" (which would silently break
+     *   ordering/timeout logic). */
     if (id != CLOCK_MONOTONIC) {
         return svc_fail(BR_ERR(ENOTSUP));
     }
@@ -1169,7 +1187,7 @@ int clock_getres(clockid_t id, struct timespec *ts)
         return svc_fail(BR_ERR(ENOTSUP));
     }
     ts->tv_sec  = 0;
-    ts->tv_nsec = BR_POSIX_CLOCK_RES_NS;            /* 如实报一拍 = 1/HZ(周期 tick) */
+    ts->tv_nsec = BR_POSIX_CLOCK_RES_NS;            /* honestly report one tick = 1/HZ (periodic tick) */
     return 0;
 }
 
@@ -1179,18 +1197,18 @@ int nanosleep(const struct timespec *req, struct timespec *rem)
         return svc_fail(BR_ERR(EINVAL));
     }
     if (rem != BR_NULL) {
-        rem->tv_sec  = 0;                           /* 本代不会被信号打断 ⇒ 没有剩余 */
+        rem->tv_sec  = 0;                           /* no signal interruption here ⇒ no remainder */
         rem->tv_nsec = 0;
     }
     const br_u64 us = ((br_u64)req->tv_sec * 1000000u) + ((br_u64)req->tv_nsec / 1000u);
-    const int rc = br_task_sleep((br_time_t)us);    /* 保证**不早醒**(INV-2) */
+    const int rc = br_task_sleep((br_time_t)us);    /* guarantees **no early wakeup** (INV-2) */
     return (rc != 0) ? svc_fail(rc) : 0;
 }
 
 unsigned int sleep(unsigned int seconds)
 {
     (void)br_task_sleep((br_time_t)((br_u64)seconds * 1000000u));
-    return 0u;                                      /* 不早醒 ⇒ 睡满, 无剩余 */
+    return 0u;                                      /* no early wakeup ⇒ slept fully, no remainder */
 }
 
 int usleep(useconds_t usec)
@@ -1199,12 +1217,12 @@ int usleep(useconds_t usec)
     return (rc != 0) ? svc_fail(rc) : 0;
 }
 
-/* ==================================================================== 层: poll/select
+/* ==================================================================== Layer: poll/select
  *
- * v1 语义 = 设计 SD-7 的"轮询 + 粗粒度 sleep"(见 poll.h 的说明)。
+ * v1 semantics = design SD-7's "polling + coarse sleep" (see the poll.h note).
  */
 
-/* 一轮查询: 写 revents, 返回就绪个数。 */
+/* One query round: write revents, return the number ready. */
 static int svc_poll_once(struct pollfd *fds, nfds_t n, int *bad)
 {
     int ready = 0;
@@ -1212,11 +1230,11 @@ static int svc_poll_once(struct pollfd *fds, nfds_t n, int *bad)
     for (nfds_t i = 0u; i < n; i++) {
         fds[i].revents = 0;
         if (fds[i].fd < 0) {
-            continue;                               /* POSIX: 负 fd **被忽略**(revents = 0) */
+            continue;                               /* POSIX: a negative fd is **ignored** (revents = 0) */
         }
         br_file_t *f = svc_fd_file(fds[i].fd);
         if (f == BR_NULL) {
-            fds[i].revents = POLLNVAL;              /* POSIX: 无效 fd 会让 poll 立刻返回 */
+            fds[i].revents = POLLNVAL;              /* POSIX: an invalid fd makes poll return at once */
             (*bad)++;
             ready++;
             continue;
@@ -1229,8 +1247,8 @@ static int svc_poll_once(struct pollfd *fds, nfds_t n, int *bad)
             if ((ev & BR_POLLOUT) != 0u) { re = (short)(re | POLLOUT); }
             if ((ev & BR_POLLERR) != 0u) { re = (short)(re | POLLERR); }
         } else if (rc == BR_ERR(ENOTSUP)) {
-            /* 没有 poll 槽位(如 tmpfs 的内存文件): POSIX 的答复是"恒就绪" ——
-             * 内存文件永远可读写, 这比返回错误更接近事实。 */
+            /* No poll slot (e.g. tmpfs in-memory files): POSIX's answer is "always ready" —
+             * memory files are always readable/writable, closer to the truth than an error. */
             re = (short)(fds[i].events & (POLLIN | POLLOUT));
         } else {
             re = POLLERR;
@@ -1249,7 +1267,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms)
         return svc_fail(BR_ERR(EINVAL));
     }
     if (nfds == 0u) {
-        /* 纯延时: 照 POSIX 睡满 timeout 再返回 0 */
+        /* Pure delay: per POSIX sleep the full timeout, then return 0 */
         if (timeout_ms > 0) {
             (void)br_task_sleep((br_time_t)((br_u64)timeout_ms * 1000u));
         }
@@ -1264,7 +1282,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms)
         int bad = 0;
         const int ready = svc_poll_once(fds, nfds, &bad);
         if (ready > 0) {
-            /* 无效 fd 优先(POSIX 要求它立刻返回, 不等待) */
+            /* invalid fd takes priority (POSIX requires an immediate return, no waiting) */
             return ready;
         }
         if (timeout_ms == 0) {
@@ -1273,8 +1291,9 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms)
         if (deadline != BR_TIMEOUT_INF && br_clock_now() >= deadline) {
             return 0;
         }
-        /* 一小片再查。★ tickless 未落地 ⇒ 实际睡眠 ≈ 一个 tick(`1/HZ`, 缺省 5 ms),
-         *   所以"轮询间隔"取 10 ms 是**声明意图**, 不是承诺(P-2)。 */
+        /* Check again after a slice. ★ tickless is not implemented ⇒ real sleep ≈ one tick
+         *   (`1/HZ`, 5 ms default), so taking 10 ms as the "poll interval" is a **stated
+         *   intent**, not a promise (P-2). */
         (void)br_task_sleep((br_time_t)10000u);
         if (deadline != BR_TIMEOUT_INF && br_clock_now() >= deadline) {
             return 0;
@@ -1285,7 +1304,7 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout_ms)
 int select(int nfds, fd_set *rd, fd_set *wr, fd_set *ex, struct timeval *timeout)
 {
     if (nfds < 0 || nfds > (int)SVC_SELECT_MAX) {
-        return svc_fail(BR_ERR(EINVAL));         /* 超界**报错**而不是静默截断 */
+        return svc_fail(BR_ERR(EINVAL));         /* out of range **errors** rather than silently truncating */
     }
     struct pollfd fds[SVC_SELECT_MAX];
     int           map[SVC_SELECT_MAX];
@@ -1313,7 +1332,7 @@ int select(int nfds, fd_set *rd, fd_set *wr, fd_set *ex, struct timeval *timeout
         return -1;
     }
 
-    /* poll → select 的回写(三个集合都要按结果重写, POSIX 语义) */
+    /* poll → select writeback (all three sets rewritten per the result, POSIX semantics) */
     fd_set r_out;
     fd_set w_out;
     fd_set e_out;
@@ -1336,20 +1355,20 @@ int select(int nfds, fd_set *rd, fd_set *wr, fd_set *ex, struct timeval *timeout
     return (count > 0) ? count : ready;
 }
 
-/* ==================================================================== 层: stdio
+/* ==================================================================== Layer: stdio
  *
- * 只有**流层**(FILE* + 写缓冲 + 定位), 没有格式化层(见 stdio.h 的说明)。
+ * Stream layer only (FILE* + write buffering + positioning); no formatting layer (see stdio.h).
  */
 
 struct br_posix_file {
     br_u32         magic;
     int            fd;
-    int            owned;       /* fclose 是否 close(fd) */
+    int            owned;       /* whether fclose() closes fd */
     int            eof;
     int            err;
     int            readable;
     int            writable;
-    int            append;      /* O_APPEND ⇒ 不做写缓冲(交错写会错序) */
+    int            append;      /* O_APPEND ⇒ no write buffering (interleaved writes would misorder) */
     long           bufmode;     /* _IOFBF / _IOLBF / _IONBF */
     unsigned char *wbuf;
     size_t         wcap;
@@ -1360,7 +1379,7 @@ struct br_posix_file {
 
 static FILE *s_files[SVC_FILE_MAX];
 
-/* 找空槽; 顺手回收"已被 fclose 但没清零"的僵尸槽(它们 magic 已失效) */
+/* Find a free slot; also reclaim zombie slots left by fclose without clearing (their magic is dead) */
 static FILE *svc_file_slot(void)
 {
     for (br_u32 i = 0u; i < (br_u32)SVC_FILE_MAX; i++) {
@@ -1426,7 +1445,7 @@ static int svc_mode_parse(const char *mode, int *flags, int *rd, int *wr, int *a
                 *ap = 1;
             }
         } else if (mode[i] == 'b' || mode[i] == 'e' || mode[i] == 'x') {
-            /* 'b' = 二进制(无区分); 'e'/'x' 不在本代 ⇒ 忽略 */
+            /* 'b' = binary (no distinction); 'e'/'x' not in this generation ⇒ ignore */
         } else {
             return BR_ERR(EINVAL);
         }
@@ -1451,7 +1470,7 @@ FILE *fopen(const char *path, const char *mode)
 
     const int fd = open(path, flags);
     if (fd < 0) {
-        return BR_NULL;                             /* errno 已由 open 设好 */
+        return BR_NULL;                             /* errno already set by open */
     }
     FILE *f = fdopen(fd, mode);
     if (f == BR_NULL) {
@@ -1559,7 +1578,7 @@ size_t fwrite(const void *buf, size_t size, size_t n, FILE *f)
         return 0u;
     }
     if (size == 0u || n == 0u) {
-        return 0u;                                  /* 零长度写: **不碰** errno(照 POSIX) */
+        return 0u;                                  /* zero-length write: **leaves** errno alone (per POSIX) */
     }
     const size_t total = size * n;
     const size_t done  = svc_file_push(f, (const unsigned char *)buf, total);
@@ -1599,7 +1618,7 @@ int fseek(FILE *f, long off, int whence)
     if (r < 0) {
         return -1;
     }
-    f->eof = 0;                                     /* POSIX: 定位清除 EOF 标志 */
+    f->eof = 0;                                     /* POSIX: seeking clears the EOF flag */
     return 0;
 }
 
@@ -1613,7 +1632,7 @@ long ftell(FILE *f)
     if (pos < 0) {
         return -1;
     }
-    /* ★ 逻辑位置 = 文件位置 + 还没落盘的字节数(写缓冲让它落后于内核位置) */
+    /* ★ Logical position = file position + bytes not yet flushed (the write buffer lags the kernel position) */
     return (long)(pos + (off_t)f->wlen);
 }
 
@@ -1676,8 +1695,9 @@ int setvbuf(FILE *f, char *buf, int mode, size_t size)
         return svc_fail(BR_ERR(EBADF));
     }
     (void)size;
-    /* 调用方给的 `buf` **不接管**: 它的生命周期由调用方管, 而本实现要能自己释放
-     * 自己的缓冲。POSIX 允许实现忽略这个参数(它只是"建议")。 */
+    /* The caller's `buf` is **not adopted**: the caller owns its lifetime, while this
+     * implementation must be able to free its own buffer. POSIX lets an implementation ignore
+     * this argument (it is only a hint). */
     (void)buf;
     if (mode == _IONBF) {
         if (fflush(f) != 0) {
@@ -1766,15 +1786,15 @@ char *fgets(char *buf, int n, FILE *f)
     return (i > 0) ? buf : BR_NULL;
 }
 
-/* 标准流符号: 默认 NULL(POSIX 的 0/1/2 属进程模型, 本代没有)。
- * `posix_init` 会把它们接到 fd 0/1/2 上 —— 那时它们才是真的流。 */
+/* Standard stream symbols: NULL by default (POSIX's 0/1/2 belong to a process model, absent
+ * here). `posix_init` would attach them to fd 0/1/2 — only then are they real streams. */
 FILE *stdin  = BR_NULL;
 FILE *stdout = BR_NULL;
 FILE *stderr = BR_NULL;
 
-/* ==================================================================== 层: string
+/* ==================================================================== Layer: string
  *
- * `mem*` **不在这里**(它们是 core 的符号, 见 string.h 的说明); `str*` 是本件定义的。
+ * `mem*` is **not here** (those are core symbols, see the string.h note); `str*` is defined here.
  */
 
 size_t strlen(const char *s)
@@ -1807,7 +1827,7 @@ char *strncpy(char *dst, const char *src, size_t n)
         dst[i] = src[i];
     }
     for (; i < n; i++) {
-        dst[i] = '\0';                              /* POSIX: 补满 n 个 '\0' */
+        dst[i] = '\0';                              /* POSIX: pad with '\0' up to n */
     }
     return dst;
 }
@@ -1888,7 +1908,7 @@ void *memchr(const void *s, int c, size_t n)
     return BR_NULL;
 }
 
-/* errno → 短名。返回的是**静态串**, 调用方不得释放(POSIX 同此)。 */
+/* errno → short name. Returns a **static string**; the caller must not free it (as in POSIX). */
 char *strerror(int err)
 {
     static char buf[BR_POSIX_STRERROR_MAX];
@@ -1932,7 +1952,7 @@ char *strerror(int err)
     return buf;
 }
 
-/* ==================================================================== 层: stdlib */
+/* ==================================================================== Layer: stdlib */
 
 void *malloc(size_t n)
 {
@@ -1964,8 +1984,9 @@ long labs(long v)
     return (v < 0) ? -v : v;
 }
 
-/* 极简整数解析(TR-C 里"自写"的那条路的最划算入口; 完整 strtol 仍待做)。
- * 语义照 POSIX 的退化版: 跳过空白、可选符号、连续数字, 无数字 ⇒ 0, 溢出**不报**(饱和)。 */
+/* Minimal integer parsing (the cheapest entry into TR-C's "write it yourself" path; a full
+ * strtol is still pending). Degraded POSIX semantics: skip whitespace, optional sign, digits;
+ * no digits ⇒ 0; overflow is **not reported** (saturates). */
 static long svc_str_to_long(const char *s)
 {
     long v = 0;
@@ -1985,7 +2006,7 @@ static long svc_str_to_long(const char *s)
     }
     while (*s >= '0' && *s <= '9') {
         if (v > (0x7fffffffffffffffL / 10L)) {
-            break;                                  /* 饱和, 不绕回 */
+            break;                                  /* saturate, do not wrap */
         }
         v = (v * 10L) + (long)(*s - '0');
         s++;
@@ -2011,20 +2032,23 @@ void abort(void)
 char *getenv(const char *name)
 {
     (void)name;
-    return BR_NULL;                                 /* 本代没有环境变量模型(如实回答) */
+    return BR_NULL;                                 /* no environment model in this generation (answer honestly) */
 }
 
-/* ==================================================================== 层: pthread */
+/* ==================================================================== Layer: pthread */
 
 /*
- * 每线程记录。一条记录同时承载四件事(它们都是 POSIX 要求"每线程一份"的东西):
- *   - **生命周期**: 与 core TCB 的对应 + `join` 的 retval + 自切栈的归属(文件头 ①②);
- *   - **detach 标记**: 惰性回收的判据(文件头 ③);
- *   - **errno 槽位**: `errno` 宏指向这里(文件头 ④);
- *   - **TLS key 槽位**: `pthread_setspecific/getspecific` 落在这里(文件头 ⑤)。
+ * Per-thread record. One record carries four things at once (all of which POSIX requires to be
+ * per-thread):
+ *   - **lifetime**: the core TCB mapping + `join`'s retval + ownership of the self-cut stack
+ *     (file header ①②);
+ *   - **detach flag**: the criterion for lazy reclamation (file header ③);
+ *   - **errno slot**: the `errno` macro points here (file header ④);
+ *   - **TLS key slots**: `pthread_setspecific/getspecific` land here (file header ⑤).
  *
- * 主线程(以及任何不是 `pthread_create` 创建的线程)在**第一次需要时**惰性登记一条
- * 记录 —— 于是"每线程 errno/TLS"对 APP 主线程同样成立, 不需要 core 的通用槽位。
+ * The main thread (and any thread not created by `pthread_create`) lazily registers a record
+ * on **first need** — so per-thread errno/TLS also holds for the APP main thread without a
+ * generic core slot.
  */
 typedef struct {
     br_u32        used;
@@ -2032,21 +2056,21 @@ typedef struct {
     void        *(*fn)(void *);
     void         *arg;
     void         *retval;
-    void         *stack;        /* 本服务切的栈(join/reap 时归还) */
+    void         *stack;        /* stack cut by this service (returned at join/reap) */
     int           owns_stack;
     int           detached;     /* PTHREAD_CREATE_DETACHED / pthread_detach() */
-    int           err_val;      /* 每线程 errno */
+    int           err_val;      /* per-thread errno */
     char          name[BR_PTHREAD_NAME_MAX];
     void         *key_values[SVC_KEY_MAX];
 } svc_thread_t;
 
 static svc_thread_t s_threads[SVC_THREAD_MAX];
 
-/* key 注册表: 是否已用(位图)+ 析构函数。key 本身在进程内唯一(不随线程)。 */
+/* key registry: used bitmap + destructors. Keys are process-unique (not per-thread). */
 static br_u32 s_key_used;
 static void (*s_key_dtor[SVC_KEY_MAX])(void *);
 
-/* 极端情形(errno 在内核线程之外/记录表满)的兜底槽位: 保证 `errno` 永远是可写的左值。 */
+/* Fallback slot for extreme cases (errno outside a kernel thread / record table full): keeps `errno` always a writable lvalue. */
 static int s_errno_fallback;
 
 static svc_thread_t *svc_thread_find(br_thread_t *t)
@@ -2069,8 +2093,9 @@ static void svc_thread_clear(svc_thread_t *rec)
     }
 }
 
-/* 当前线程的记录: 找不到就**惰性登记**一条(主线程/非 pthread 线程走这条路)。
- * `br_task_self()` 还不可用(极早期)⇒ 返回 NULL, 调用方退化到兜底槽位。 */
+/* The current thread's record: if not found, **lazily register** one (main and non-pthread
+ * threads take this path). `br_task_self()` is unavailable very early ⇒ return NULL and the
+ * caller falls back to the fallback slot. */
 static svc_thread_t *svc_thread_self_rec(void)
 {
     br_thread_t *self = br_task_self();
@@ -2094,8 +2119,9 @@ static svc_thread_t *svc_thread_self_rec(void)
     return BR_NULL;
 }
 
-/* 惰性回收: 把"已退出(ZOMBIE)且 detached"的线程 join 掉, 并还栈/清记录。
- * 在**每一次进入 pthread 层**时调用(见 pthread.h 文件头 ③)。跳过当前线程自己。 */
+/* Lazy reclamation: join threads that exited (ZOMBIE) and are detached, then return their
+ * stacks and clear records. Called on **every entry into the pthread layer** (see pthread.h
+ * header ③). Skips the current thread. */
 static void svc_reap_detached(void)
 {
     br_thread_t *self = br_task_self();
@@ -2105,7 +2131,7 @@ static void svc_reap_detached(void)
             continue;
         }
         if (br_task_state(rec->t) != BR_TASK_ZOMBIE) {
-            continue;                               /* 还在跑 ⇒ 下次再说 */
+            continue;                               /* still running ⇒ next time */
         }
         int code = 0;
         if (br_task_join(rec->t, &code) == 0) {
@@ -2117,8 +2143,8 @@ static void svc_reap_detached(void)
     }
 }
 
-/* 线程退出时按 POSIX 语义跑 TLS 析构函数(最多 PTHREAD_DESTRUCTOR_ITERATIONS 轮,
- * 因为析构函数可以再 setspecific)。 */
+/* On thread exit, run TLS destructors per POSIX (at most PTHREAD_DESTRUCTOR_ITERATIONS
+ * rounds, since a destructor may call setspecific again). */
 static void svc_thread_run_key_dtors(void)
 {
     svc_thread_t *rec = svc_thread_find(br_task_self());
@@ -2141,17 +2167,18 @@ static void svc_thread_run_key_dtors(void)
     }
 }
 
-/* 入口跳板: core 的 `br_task_create` 只传一个 `void*`, 于是"函数 + 参数 + 返回值的落点"
- * 都挂在记录上。返回值的搬运是 pthread 与 core 的**唯一**形状差异(见 pthread.h ②)。 */
+/* Entry trampoline: core's `br_task_create` passes only one `void*`, so function + argument +
+ * retval landing spot all hang off the record. Moving the retval is the **only** shape
+ * difference between pthread and core (see pthread.h ②). */
 static void svc_thread_tramp(void *arg)
 {
     svc_thread_t *rec = (svc_thread_t *)arg;
     rec->retval = rec->fn(rec->arg);
-    svc_thread_run_key_dtors();                     /* POSIX: 线程退出跑 TLS 析构 */
+    svc_thread_run_key_dtors();                     /* POSIX: run TLS destructors on thread exit */
     br_task_exit(0);
 }
 
-/* timespec(绝对时刻, MONOTONIC) → 相对微秒。过去时刻 ⇒ ZERO(trylock 语义)。 */
+/* timespec (absolute, MONOTONIC) → relative microseconds. A past time ⇒ ZERO (trylock semantics). */
 static br_time_t svc_abstime_to_rel(const struct timespec *abstime)
 {
     const br_u64 abs_us = ((br_u64)abstime->tv_sec * 1000000u) +
@@ -2168,7 +2195,7 @@ int *br_posix_errno(void)
     return (rec != BR_NULL) ? &rec->err_val : &s_errno_fallback;
 }
 
-/* ==================================================================== 生命周期 */
+/* ==================================================================== Lifecycle */
 
 int pthread_attr_init(pthread_attr_t *a)
 {
@@ -2250,8 +2277,9 @@ int pthread_attr_setguardsize(pthread_attr_t *a, size_t size)
     if (a == BR_NULL) {
         return svc_rc(BR_ERR(EINVAL));
     }
-    /* core 没有 guard 页(栈是调用方给的连续内存)⇒ 只记录, 不改行为。如实返回成功
-     * 会让 get 读回自己设的值; 想让调用方知道"没生效"就靠文档与这里的一句注释。 */
+    /* core has no guard pages (stacks are caller-provided contiguous memory) ⇒ record only,
+     * no behaviour change. Honestly returning success lets get read back what was set; making
+     * the caller know it "has no effect" is left to the docs and this comment. */
     a->guard_size = size;
     return 0;
 }
@@ -2281,7 +2309,7 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
         }
     }
     if (rec == BR_NULL) {
-        return svc_rc(BR_ERR(EAGAIN));         /* 线程表满(与 core 的 TCB 池同量级) */
+        return svc_rc(BR_ERR(EAGAIN));         /* thread table full (same order as core's TCB pool) */
     }
 
     size_t      ssize = BR_POSIX_STACK_DEFAULT;
@@ -2299,7 +2327,7 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
         }
     }
     if (stack == BR_NULL) {
-        /* ★ 栈从 core 堆上切(POSIX 的签名里没有栈; 见 pthread.h ①) */
+        /* ★ cut the stack from the core heap (POSIX's signature has no stack; see pthread.h ①) */
         stack = br_malloc((br_size_t)ssize);
         if (stack == BR_NULL) {
             return svc_rc(BR_ERR(EAGAIN));
@@ -2309,7 +2337,7 @@ int pthread_create(pthread_t *out, const pthread_attr_t *attr,
 
     br_task_attr_t ta;
     ta.name       = "pthread";
-    ta.stack      = (void *)((unsigned char *)stack + ssize);   /* 栈顶 = 高地址端 */
+    ta.stack      = (void *)((unsigned char *)stack + ssize);   /* stack top = high address end */
     ta.stack_size = ssize;
     ta.prio       = 0u;
     ta.flags      = 0u;
@@ -2349,10 +2377,10 @@ int pthread_join(pthread_t t, void **retval)
     }
     svc_thread_t *rec = svc_thread_find(t);
     if (rec == BR_NULL) {
-        return svc_rc(BR_ERR(ESRCH));          /* 从未创建 / 已被 join 过 */
+        return svc_rc(BR_ERR(ESRCH));          /* never created / already joined */
     }
     if (rec->detached != 0) {
-        return svc_rc(BR_ERR(EINVAL));         /* join detached 线程 = 未定义(glibc EINVAL) */
+        return svc_rc(BR_ERR(EINVAL));         /* joining a detached thread is undefined (glibc: EINVAL) */
     }
     int       code = 0;
     const int rc   = br_task_join(t, &code);
@@ -2360,10 +2388,10 @@ int pthread_join(pthread_t t, void **retval)
         return svc_rc(rc);
     }
     if (retval != BR_NULL) {
-        *retval = rec->retval;                      /* core 只回 int, retval 在记录里 */
+        *retval = rec->retval;                      /* core returns only int; retval lives in the record */
     }
     if (rec->owns_stack != 0 && rec->stack != BR_NULL) {
-        br_free(rec->stack);                        /* 栈归谁切谁还 */
+        br_free(rec->stack);                        /* whoever cut the stack returns it */
     }
     svc_thread_clear(rec);
     return 0;
@@ -2373,7 +2401,7 @@ void pthread_exit(void *retval)
 {
     svc_thread_t *rec = svc_thread_find(br_task_self());
     if (rec != BR_NULL) {
-        rec->retval = retval;                       /* 让 join 还能取到 */
+        rec->retval = retval;                       /* so join can still retrieve it */
     }
     svc_thread_run_key_dtors();
     br_task_exit(0);
@@ -2393,7 +2421,7 @@ int pthread_detach(pthread_t t)
         return svc_rc(BR_ERR(EINVAL));
     }
     rec->detached = 1;
-    return 0;                                       /* 回收是惰性的(见文件头 ③) */
+    return 0;                                       /* reclamation is lazy (see file header ③) */
 }
 
 pthread_t pthread_self(void)
@@ -2455,14 +2483,14 @@ int pthread_once(pthread_once_t *once, void (*init)(void))
         return svc_rc(BR_ERR(EINVAL));
     }
     if (once->done != 0) {
-        return 0;                                   /* 无锁快路径(已完成后只读) */
+        return 0;                                   /* lock-free fast path (read-only once done) */
     }
     const int rc = br_mutex_lock(&once->m);
     if (rc != 0) {
         return svc_rc(rc);
     }
     if (once->done == 0) {
-        init();                                     /* POSIX: init 不得递归同一 once */
+        init();                                     /* POSIX: init must not recurse into the same once */
         once->done = 1;
     }
     (void)br_mutex_unlock(&once->m);
@@ -2485,7 +2513,7 @@ int pthread_key_create(pthread_key_t *key, void (*destructor)(void *))
             return 0;
         }
     }
-    return svc_rc(BR_ERR(EAGAIN));               /* key 用尽 */
+    return svc_rc(BR_ERR(EAGAIN));               /* keys exhausted */
 }
 
 int pthread_key_delete(pthread_key_t key)
@@ -2567,7 +2595,7 @@ int pthread_mutexattr_setpshared(pthread_mutexattr_t *a, int pshared)
         (pshared != PTHREAD_PROCESS_PRIVATE && pshared != PTHREAD_PROCESS_SHARED)) {
         return svc_rc(BR_ERR(EINVAL));
     }
-    /* 单地址空间: PROCESS_SHARED 可记录但没有跨进程语义(如实)。 */
+    /* Single address space: PROCESS_SHARED is recorded but has no cross-process semantics (honest). */
     a->pshared = pshared;
     return 0;
 }
@@ -2584,7 +2612,7 @@ int pthread_mutexattr_getpshared(const pthread_mutexattr_t *a, int *pshared)
 int pthread_mutexattr_setprotocol(pthread_mutexattr_t *a, int protocol)
 {
     if (a == BR_NULL || protocol != PTHREAD_PRIO_NONE) {
-        return svc_rc(BR_ERR(ENOTSUP));          /* PI 属 v2(无优先级) */
+        return svc_rc(BR_ERR(ENOTSUP));          /* PI is v2 (no priorities) */
     }
     a->protocol = protocol;
     return 0;
@@ -2618,7 +2646,7 @@ int pthread_mutex_init(pthread_mutex_t *m, const pthread_mutexattr_t *attr)
 int pthread_mutex_destroy(pthread_mutex_t *m)
 {
     (void)m;
-    return 0;                                       /* 空操作 ⇒ 0(见 pthread.h 的说明) */
+    return 0;                                       /* no-op ⇒ 0 (see the pthread.h note) */
 }
 
 int pthread_mutex_lock(pthread_mutex_t *m)
@@ -2629,7 +2657,7 @@ int pthread_mutex_lock(pthread_mutex_t *m)
     }
     br_thread_t *self = br_task_self();
 
-    /* RECURSIVE: 已持有 ⇒ 只加计数(core 的 mutex 是普通互斥量, 直接再锁会自死锁)。 */
+    /* RECURSIVE: already held ⇒ just bump the count (core's mutex is a plain mutex; relocking it would self-deadlock). */
     if (m->owner == self && m->count > 0u) {
         if (m->type == PTHREAD_MUTEX_RECURSIVE) {
             m->count++;
@@ -2638,7 +2666,7 @@ int pthread_mutex_lock(pthread_mutex_t *m)
         if (m->type == PTHREAD_MUTEX_ERRORCHECK) {
             return svc_rc(BR_ERR(EDEADLK));
         }
-        /* NORMAL: POSIX 说自锁是未定义 ⇒ 落到 core(core 会自死锁, 与 Linux NORMAL 同型) */
+        /* NORMAL: POSIX says self-lock is undefined ⇒ fall through to core (which self-deadlocks, as Linux NORMAL) */
     }
     const int rc = br_mutex_lock(&m->m);
     if (rc != 0) {
@@ -2661,11 +2689,11 @@ int pthread_mutex_trylock(pthread_mutex_t *m)
             m->count++;
             return 0;
         }
-        return svc_rc(BR_ERR(EBUSY));            /* NORMAL/ERRORCHECK: 自持 ⇒ EBUSY */
+        return svc_rc(BR_ERR(EBUSY));            /* NORMAL/ERRORCHECK: self-held ⇒ EBUSY */
     }
-    /* core 的 `lock_to(ZERO)` = trylock: 忙 ⇒ **-ETIMEDOUT**(INV-1 的统一超时码)。
-     * POSIX 的 trylock 要 EBUSY —— 这一处**必须**翻译, 否则调用方按 EBUSY 写的分支
-     * 永远不进(这是本文件里极少数的"非零转换"点)。 */
+    /* core's `lock_to(ZERO)` = trylock: busy ⇒ **-ETIMEDOUT** (INV-1's unified timeout code).
+     * POSIX trylock wants EBUSY — this **must** be translated, else a caller's EBUSY branch
+     * never runs (one of the very few "non-zero conversion" points in this file). */
     const int rc = br_mutex_lock_to(&m->m, BR_TIMEOUT_ZERO);
     if (rc == BR_ERR(ETIMEDOUT)) {
         return svc_rc(BR_ERR(EBUSY));
@@ -2715,7 +2743,7 @@ int pthread_mutex_unlock(pthread_mutex_t *m)
     br_thread_t *self = br_task_self();
     if (m->type != PTHREAD_MUTEX_NORMAL) {
         if (m->owner != self) {
-            return svc_rc(BR_ERR(EPERM));        /* ERRORCHECK/RECURSIVE: 非属主解锁 */
+            return svc_rc(BR_ERR(EPERM));        /* ERRORCHECK/RECURSIVE: unlock by a non-owner */
         }
     }
     if (m->type == PTHREAD_MUTEX_RECURSIVE && m->count > 1u) {
@@ -2751,7 +2779,7 @@ int pthread_condattr_setclock(pthread_condattr_t *a, int clock)
     if (a == BR_NULL) {
         return svc_rc(BR_ERR(EINVAL));
     }
-    /* 本代只有单调钟(P-1: 无墙钟)⇒ REALTIME 明确拒绝, 不假装支持。 */
+    /* This generation has only the monotonic clock (P-1: no wall clock) ⇒ REALTIME is explicitly rejected, not faked. */
     if (clock != CLOCK_MONOTONIC) {
         return svc_rc(BR_ERR(EINVAL));
     }
@@ -2824,13 +2852,14 @@ int pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m,
     if (c == BR_NULL || m == BR_NULL || abstime == BR_NULL) {
         return svc_rc(BR_ERR(EINVAL));
     }
-    /* ★ 绝对时刻按 **MONOTONIC** 解释: 本代没有墙钟(P-1), 于是"绝对时间"的唯一可用
-     *   时基就是单调钟。POSIX 默认是 CLOCK_REALTIME ⇒ 这是一条**语义偏离**, 与
-     *   `clock_gettime(CLOCK_REALTIME) = -ENOTSUP` 是同一条事实的两面; 用
-     *   `pthread_condattr_setclock(CLOCK_MONOTONIC)` 可把意图写进声明。 */
+    /* ★ Absolute times are interpreted as **MONOTONIC**: this generation has no wall clock
+     *   (P-1), so the monotonic clock is the only usable base for "absolute time". POSIX
+     *   defaults to CLOCK_REALTIME ⇒ a **semantic deviation**, the other face of
+     *   `clock_gettime(CLOCK_REALTIME) = -ENOTSUP`; `pthread_condattr_setclock(CLOCK_MONOTONIC)`
+     *   writes the intent into the declaration. */
     const int rc = br_cond_wait(&c->c, &m->m, svc_abstime_to_rel(abstime));
     if (rc == BR_ERR(ETIMEDOUT)) {
-        return svc_rc(BR_ERR(ETIMEDOUT));      /* POSIX 的 ETIMEDOUT */
+        return svc_rc(BR_ERR(ETIMEDOUT));      /* POSIX's ETIMEDOUT */
     }
     return (rc != 0) ? svc_rc(rc) : 0;
 }
@@ -2935,10 +2964,10 @@ int pthread_rwlock_init(pthread_rwlock_t *rw, const pthread_rwlockattr_t *attr)
 int pthread_rwlock_destroy(pthread_rwlock_t *rw)
 {
     (void)rw;
-    return 0;                                       /* 空操作(同 mutex/cond 的理由) */
+    return 0;                                       /* no-op (same reason as mutex/cond) */
 }
 
-/* 读锁的公共实现: `timeout` 为 BR_TIMEOUT_ZERO 时是 trylock。 */
+/* Shared read-lock implementation: `timeout` == BR_TIMEOUT_ZERO makes it a trylock. */
 static int svc_rwlock_rdlock_to(pthread_rwlock_t *rw, br_time_t timeout)
 {
     const int lk = br_mutex_lock(&rw->m);
@@ -2947,8 +2976,9 @@ static int svc_rwlock_rdlock_to(pthread_rwlock_t *rw, br_time_t timeout)
     }
     for (;;) {
         const br_bool writer = (rw->writer != BR_NULL);
-        /* writer-preference: 有写者等待时新的读者让路(避免写者饿死)。
-         * ★ 不支持的边界: **同一线程递归读**在有写者等待时会自阻(如实登记, 见 pthread.h)。 */
+        /* writer-preference: new readers yield while a writer waits (avoids writer starvation).
+         * ★ Unsupported boundary: **recursive reads from one thread** self-block while a writer
+         *   waits (recorded honestly, see pthread.h). */
         const br_bool blocked =
             writer || (rw->kind == PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP &&
                        rw->writers_waiting > 0u);
@@ -2999,7 +3029,7 @@ static int svc_rwlock_wrlock_to(pthread_rwlock_t *rw, br_time_t timeout)
         const int w = br_cond_wait(&rw->c, &rw->m, timeout);
         if (w == BR_ERR(ETIMEDOUT)) {
             rw->writers_waiting--;
-            (void)br_cond_broadcast(&rw->c);        /* 可能空出了一个读名额 */
+            (void)br_cond_broadcast(&rw->c);        /* may have freed a reader slot */
             (void)br_mutex_unlock(&rw->m);
             return svc_rc(BR_ERR(ETIMEDOUT));
         }
@@ -3081,11 +3111,11 @@ int pthread_rwlock_unlock(pthread_rwlock_t *rw)
     } else if (rw->readers > 0u) {
         rw->readers--;
         if (rw->readers == 0u) {
-            (void)br_cond_broadcast(&rw->c);        /* 最后一个读者 ⇒ 唤醒写者 */
+            (void)br_cond_broadcast(&rw->c);        /* last reader ⇒ wake writers */
         }
     } else {
         (void)br_mutex_unlock(&rw->m);
-        return svc_rc(BR_ERR(EPERM));            /* 没持锁就解锁 */
+        return svc_rc(BR_ERR(EPERM));            /* unlocking without holding the lock */
     }
     (void)br_mutex_unlock(&rw->m);
     return 0;
@@ -3172,7 +3202,7 @@ int pthread_barrier_wait(pthread_barrier_t *b)
         b->generation++;
         (void)br_cond_broadcast(&b->c);
         (void)br_mutex_unlock(&b->m);
-        return PTHREAD_BARRIER_SERIAL_THREAD;       /* 恰好一个线程拿到 */
+        return PTHREAD_BARRIER_SERIAL_THREAD;       /* exactly one thread gets it */
     }
     while (b->generation == gen) {
         const int w = br_cond_wait(&b->c, &b->m, BR_TIMEOUT_INF);
@@ -3185,14 +3215,14 @@ int pthread_barrier_wait(pthread_barrier_t *b)
     return 0;
 }
 
-/* ==================================================================== 层: semaphore */
+/* ==================================================================== Layer: semaphore */
 
 int sem_init(sem_t *s, int pshared, unsigned value)
 {
     if (s == BR_NULL || value > BR_POSIX_SEM_VALUE_MAX) {
         return svc_rc(BR_ERR(EINVAL));
     }
-    (void)pshared;                                  /* 单地址空间 ⇒ pshared 无意义 */
+    (void)pshared;                                  /* single address space ⇒ pshared is meaningless */
     const int rc = br_sem_init(s, value);
     return (rc != 0) ? svc_rc(rc) : 0;
 }
@@ -3217,7 +3247,7 @@ int sem_trywait(sem_t *s)
     if (s == BR_NULL) {
         return svc_rc(BR_ERR(EINVAL));
     }
-    /* core 的 `take(ZERO)` 忙 ⇒ -ETIMEDOUT(INV-1); POSIX 要 EAGAIN ⇒ 翻译一次。 */
+    /* core's `take(ZERO)` busy ⇒ -ETIMEDOUT (INV-1); POSIX wants EAGAIN ⇒ translate once. */
     const int rc = br_sem_take(s, BR_TIMEOUT_ZERO);
     if (rc == BR_ERR(ETIMEDOUT)) {
         return svc_rc(BR_ERR(EAGAIN));
@@ -3243,7 +3273,7 @@ int sem_post(sem_t *s)
     if (s == BR_NULL) {
         return svc_rc(BR_ERR(EINVAL));
     }
-    const int rc = br_sem_give(s);                  /* ISR-safe(core 的契约) */
+    const int rc = br_sem_give(s);                  /* ISR-safe (core's contract) */
     return (rc != 0) ? svc_rc(rc) : 0;
 }
 
@@ -3256,21 +3286,21 @@ int sem_getvalue(sem_t *s, int *out)
     return 0;
 }
 
-/* ==================================================================== 层: 进程身份 */
+/* ==================================================================== Layer: process identity */
 
-pid_t getpid(void)  { return 1; }                   /* 单 APP ⇒ 常量 */
+pid_t getpid(void)  { return 1; }                   /* single APP ⇒ constant */
 pid_t getppid(void) { return 0; }
 uid_t getuid(void)  { return 0; }
 uid_t geteuid(void) { return 0; }
 gid_t getgid(void)  { return 0; }
 gid_t getegid(void) { return 0; }
 
-/* ==================================================================== 生命周期钩子 */
+/* ==================================================================== Lifecycle hooks */
 
 int posix_early_init(void)
 {
-    /* EARLY: 只做"静态量归零"。fd 表在 framework/file-table 里(它自己的 EARLY 负责),
-     * 本件不碰它 —— 那是单一主人的纪律。 */
+    /* EARLY: zero the static state only. The fd table lives in framework/file-table (its own
+     * EARLY handles it); this file does not touch it — single-owner discipline. */
     errno   = 0;
     s_umask = 0u;
     (void)svc_copy(s_cwd, "/", (size_t)sizeof(s_cwd));
@@ -3286,31 +3316,32 @@ int posix_early_init(void)
 
 int posix_init(void)
 {
-    /* LATE(service 的相位): 此时 core 的堆/调度/服务注册表都已就绪。
-     * v1 **不**自动打开 fd 0/1/2: 那是"进程模型"的一部分, 而本代没有进程模型
-     * (stdio.h 的说明)。标准流符号保持 NULL, 直到有人显式 fdopen 它们。 */
+    /* LATE (the service phase): core's heap/scheduler/service registry are all ready by now.
+     * v1 does **not** auto-open fd 0/1/2: that belongs to a "process model", absent here (see
+     * stdio.h). The standard stream symbols stay NULL until someone fdopens them explicitly. */
     return 0;
 }
 
-/* ==================================================================== 层: 挂载
+/* ==================================================================== Layer: mounts
  *
- * ★ 为什么在**这里**(而不是在 FS 插件的 start 相): ADR-0029 —— 挂载计划归**消费者**
- *   (APP)。FS 插件只登记驱动(`br_fs_driver_register`), APP 用 POSIX `mount()` 决定
- *   "把哪个 FS 挂到哪"。
- * ★ 本层是**纯转发 + 参数整形**: 挂载语义(路径规范化/父挂载/自动 mkdir/表满)全在
- *   `framework/vfs-core`, 这里不重复实现一份(那会是第二处真值)。
+ * ★ Why **here** (not in the FS plugin's start phase): ADR-0029 — mount plans belong to the
+ *   **consumer** (the APP). The FS plugin only registers drivers (`br_fs_driver_register`);
+ *   the APP uses POSIX `mount()` to decide which FS goes where.
+ * ★ This layer is **pure forwarding + argument shaping**: mount semantics (path normalization,
+ *   parent mounts, auto mkdir, table full) all live in `framework/vfs-core`; they are not
+ *   reimplemented here (that would be a second source of truth).
  */
 int mount(const char *source, const char *target, const char *filesystemtype,
           unsigned long mountflags, const void *data)
 {
-    /* v1 保留位: 显式拒绝比"收下不用"诚实 —— 否则 APP 会以为 flags/data 生效了。 */
+    /* v1 reserved bits: explicit rejection is more honest than "accepted but unused" — else the APP thinks flags/data took effect. */
     if (mountflags != 0ul || data != NULL) {
         errno = EINVAL;
         return -1;
     }
     const int rc = br_vfs_mount(source, target, filesystemtype, mountflags, data);
     if (rc != BR_OK) {
-        errno = -rc;                 /* vfs 返回负 errno ⇒ 零转换映到 errno(11-01 §2) */
+        errno = -rc;                 /* vfs returns a negative errno ⇒ zero-conversion into errno (11-01 §2) */
         return -1;
     }
     return 0;
@@ -3319,15 +3350,16 @@ int mount(const char *source, const char *target, const char *filesystemtype,
 int umount(const char *target)
 {
     (void)target;
-    /* 运行期卸载 = 设计 O-S3(不早于 v3): 它要先把该挂载点下的打开句柄与瞬态 inode 收回,
-     * 而挂载表持有的根 inode 与静态组合期布局都假设"挂上就不再卸"。显式 -ENOTSUP。 */
+    /* Runtime unmount = design O-S3 (not before v3): it must first reclaim open handles and
+     * transient inodes under the mount point, while the mount table's root inode and the static
+     * composition-time layout assume "mounted once, never unmounted". Explicit -ENOTSUP. */
     errno = ENOTSUP;
     return -1;
 }
 
 int posix_start(void)
 {
-    br_log_info("runtime/posix: POSIX 运行时就绪 (fd 表由 framework/file-table 持有, cwd=%s)", s_cwd);
-    br_log_info("runtime/posix: 覆盖 TR-A/TR-B; 未做项见 docs/11-service/11-02-svc-posix-subset.md");
+    br_log_info("runtime/posix: POSIX runtime ready (fd table owned by framework/file-table, cwd=%s)", s_cwd);
+    br_log_info("runtime/posix: covers TR-A/TR-B; not-done items in docs/11-service/11-02-svc-posix-subset.md");
     return 0;
 }

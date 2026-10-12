@@ -125,7 +125,7 @@ start.S(reset/BSS) → br_irq_cpu_init → br_plugin_manager_run()
    `product.toml` 写的是 `core/src/*.c`, 新增顶层 `.c` 无需改声明面(实测 `core` 单元由
    18 → 19 个源)。**不改** `product.toml` 的构建段。
 6. **`br_plat_mmu_init` 改名的代价**: 它不在任何 `[[export]]` 里(是 platform 的内部启动
-   入口), 所以改声明面/接口 hash 都不受影响(核对过 `plugin.toml`/`plat.toml`)。
+   入口), 所以改声明面/接口 hash 都不受影响(核对过 `brick.toml`/`plat.toml`)。
 
 ## 4. 被否决的替代方案
 

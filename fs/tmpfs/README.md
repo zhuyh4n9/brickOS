@@ -13,7 +13,7 @@ RAM rootfs: 挂 `/` 的管理类 FS —— 节点与文件数据全部出自 cor
 > 逐条裁定与偏离: `docs/decisions/0009-vfs-storage-stack.md`(§2.2 挂载点自动 mkdir 与非空目录
 > `-ENOTEMPTY` / §3 裁定 9 配额常量与生成链路 / §5 遗留项)。
 
-## 声明面(`plugin.toml` 是唯一真值)
+## 声明面(`brick.toml` 是唯一真值)
 
 | 项 | 值 | 依据 |
 |---|---|---|
@@ -88,7 +88,7 @@ RAM rootfs: 挂 `/` 的管理类 FS —— 节点与文件数据全部出自 cor
 ## 目录
 
 ```
-plugin.toml        人写   ← 插件级唯一真值(本目录不改它)
+brick.toml        人写   ← 插件级唯一真值(本目录不改它)
 src/tmpfs.c        人写   ← 节点模型 / 完整文件语义 / 配额 / 挂载与生命周期钩子
 README.md          ← 本文件
 tests/smoke.toml   ← 声明面用例骨架(借 vfs-core 的 TC-VFS-* id, 见上)
@@ -96,7 +96,7 @@ tests/smoke.toml   ← 声明面用例骨架(借 vfs-core 的 TC-VFS-* id, 见�
 
 ## 已知欠账(不在本插件目录可修)
 
-- `br-wa-fs-001`: **挂载点是代码常量** —— `src/tmpfs.c` 的 `TMPFS_MOUNT_PATH` 与 `plugin.toml`
+- `br-wa-fs-001`: **挂载点是代码常量** —— `src/tmpfs.c` 的 `TMPFS_MOUNT_PATH` 与 `brick.toml`
   的 `[[mount]]` 是**两处真值**, 工具侧既不消费 `[[mount]]` 也不校验两者一致(与 `br-wa-mem-001`
   的 budget→region 同源: 声明面有了, 生成链路还没有)。退出条件 = 组合器按 `[[mount]]` 产出挂载
   计划(或把挂载点变成描述符字段由 FS 读回), 届时 `TMPFS_MOUNT_PATH` 随之消失。

@@ -1,46 +1,54 @@
 /*
- * adapter/uboot-fat — 块层 shim + 卷表 + BPB 观测 + 环境的"我们实现的那几个"(本项目代码)
+ * adapter/uboot-fat — block-layer shim + volume table + BPB observation + the few environment
+ * functions we implement (project code)
  *
- * ============================== 本文件在分层里的位置 ==============================
- * 上游 `fs/fat/fat_write.c`(它 include 了 `fat.c`)是**一个编译单元**, 它对环境的全部要求
- * 都在 `compat/fat_env.h` 里兑现; 本文件补上三件**环境侧必须有实体**的东西:
- *   ① `blk_dread/blk_dwrite`: 上游 `disk_read/disk_write` 的落地 —— 接到
- *      `br_bdev_ops_t.read/write`, 并按设备几何切块(max_rw)+ 越界拒绝;
- *   ② 卷表与绑定: 上游的"当前设备"是 `static struct blk_desc *cur_dev`, 本件把它变成
- *      "当前卷"(`s_cur_vol`), 绑定动作走**上游自己的** `fat_set_blk_dev()`
- *      (整设备一个分区 ⇒ `start = 0`, `size = n_sectors`) —— 于是上游一行都不用改;
- *   ③ 环境头里声明、但**只能由本插件实现**的小工具: `uboot_fat_strdup`/`uboot_fat_sprintf`/
- *      `uboot_fat_rand`, 以及截断的公开 API 拼装 `uboot_fat_truncate`。
+ * ============================== where this file sits in the layering ==============================
+ * Upstream `fs/fat/fat_write.c` (which includes `fat.c`) is **one compilation unit**; all its demands
+ * on the environment are satisfied in `compat/fat_env.h`; this file adds the three things that must
+ * have a concrete entity on the environment side:
+ *   1 `blk_dread/blk_dwrite`: the landing of upstream `disk_read/disk_write` — wired to
+ *      `br_bdev_ops_t.read/write`, with chunking by device geometry (max_rw) + out-of-range rejection;
+ *   2 volume table and binding: upstream's "current device" is `static struct blk_desc *cur_dev`; this
+ *      file turns it into a "current volume" (`s_cur_vol`), and the bind action goes through **upstream's
+ *      own** `fat_set_blk_dev()` (whole device as one partition => `start = 0`, `size = n_sectors`) —
+ *      so not a single upstream line changes;
+ *   3 small utilities declared in the environment header but **implementable only by this plugin**:
+ *      `uboot_fat_strdup`/`uboot_fat_sprintf`/`uboot_fat_rand`, plus the truncation public API assembly
+ *      `uboot_fat_truncate`.
  *
- * ============================== 为什么 glue 也要解析 BPB ==============================
- * 上游的 `get_fs_info()`/`determine_legacy_fat_bits()` 是 **static**(单编译单元的私有
- * 实现), 没有任何对外观测点。而本插件的挂载判据(TC-FAT-001 + mount 的几何校验)要回答
- * "这个卷是 FAT12/16/32、簇数落在定义区间、数据区在卷内吗"。于是 glue 用 vendored
- * `include/fat.h` 的 `struct boot_sector`(**布局的唯一真值**还是 vendor 那份)**只读地**
- * 解析一遍 —— 它只喂判据与日志, **不参与任何 I/O 决策**(I/O 全部在上游手里, 上游每次
- * API 调用都会自己重解析一遍 BPB)。这是"观测"而不是"第二套实现":
- *   · 判定算法与上游 `determine_legacy_fat_bits` 同形(逐行对照过), 出处写在函数头;
- *   · 若观测结论与上游不一致, 表现是**挂载期判据红**(而不是"读写错了"), 因为读写不信它。
+ * ============================== why glue also parses the BPB ==============================
+ * Upstream's `get_fs_info()`/`determine_legacy_fat_bits()` are **static** (private to the single
+ * compilation unit) with no external observation point. But this plugin's mount criteria (TC-FAT-001 +
+ * mount geometry checks) must answer "is this volume FAT12/16/32, do the cluster counts fall in the
+ * defined ranges, is the data area inside the volume". So glue uses the vendored `include/fat.h`
+ * `struct boot_sector` (**still the single source of truth** for layout) to parse **read-only** once —
+ * it only feeds criteria and logs and **takes no part in any I/O decision** (all I/O is upstream's, and
+ * upstream re-parses the BPB on every API call). This is "observation", not "a second implementation":
+ *   - the decision algorithm is the same shape as upstream `determine_legacy_fat_bits` (compared line by
+ *     line); the provenance is noted in the function header;
+ *   - if the observation disagrees with upstream, the symptom is a **red mount-time criterion** (not
+ *     "wrong reads/writes"), because reads and writes do not trust it.
  * ==========================================================================
  */
 #include "fat_glue.h"
 
-/* 盘上结构(boot_sector/dir_entry/MAX_LFN_SLOT/…): compat 的 `<fat.h>` 转发壳 ⇒
- * 内容来自 vendor 的 `include/fat.h`, 我们这边一个字段都不抄。 */
+/* On-disk structures (boot_sector/dir_entry/MAX_LFN_SLOT/...): compat's `<fat.h>` forwarding shell
+ * => content comes from the vendor `include/fat.h`; we copy not one field. */
 #include <fat.h>
 
-/* ==================================================================== 卷表与当前卷
+/* ==================================================================== volume table and current volume
  *
- * 上游是"全局当前设备 + 当前分区"(`cur_dev`/`cur_part_info`)。本件保留**同一形状**:
- * "当前卷"指针 + 由它构造出来的 `struct blk_desc`/`disk_partition`。挂载期是本插件单线程
- * 的一次性动作(start 相), 自检也跑在同一线程 ⇒ 不做锁(与 cdev/bdev 同款的 v1 静态假设;
- * 并发的真正缺口登记在 WORKAROUNDS.md 的 br-wa-boot-002)。
+ * Upstream is "global current device + current partition" (`cur_dev`/`cur_part_info`). This file keeps
+ * the **same shape**: a "current volume" pointer plus the `struct blk_desc`/`disk_partition` built from
+ * it. Mounting is a one-shot single-threaded action of this plugin (start phase), and selftest runs on
+ * the same thread => no locking (the same v1 static assumption as cdev/bdev; the real concurrency gap
+ * is registered in WORKAROUNDS.md as br-wa-boot-002).
  */
 
 static uboot_fat_vol_t  s_vols[UB_FAT_VOL_MAX];
 static uboot_fat_vol_t *s_cur_vol;
 
-/* "整设备一个分区"的描述符 + 分区表项(每次绑定按卷几何刷新) */
+/* "whole device is one partition" descriptor + partition entry (refreshed from volume geometry per bind) */
 static struct blk_desc       s_desc;
 static struct disk_partition s_part;
 
@@ -53,20 +61,22 @@ uboot_fat_vol_t *uboot_fat_vol_get(br_u32 id)
 }
 
 /*
- * 卷内扇区号 → 设备 lba。整设备一个分区(start = 0)⇒ **恒等**, 但保留这层是为了让
- * "分区偏移"这件事在代码里仍然显式可见(上游写的是 `cur_part_info.start + block`)。
+ * Volume sector number -> device lba. Whole device as one partition (start = 0) => **identity**, but
+ * this layer is kept so that "partition offset" stays explicitly visible in the code (upstream writes
+ * `cur_part_info.start + block`).
  */
 static br_u64 uboot_fat_lba_of(br_u32 block)
 {
     return ((br_u64)s_part.start) + (br_u64)block;
 }
 
-/* ==================================================================== 块层(shim)
+/* ==================================================================== block layer (shim)
  *
- * 上游判据: 成功 = 传输的扇区数(== 请求数), 失败 < 0。本件在这里多两件事:
- *   ① 按 `geometry.max_rw` 切块(单次 I/O 不超过 bdev 上限; 上游没有这条约束);
- *   ② 越界拒绝(整卷一个分区 ⇒ 合法 lba 区间是 [start, start + size))。
- * 任一块失败即返回负 errno ⇒ 上游的 `ret != nr_blocks` 判据仍然成立。
+ * Upstream criterion: success = number of sectors transferred (== requested), failure < 0. This file
+ * adds two things here:
+ *   1 chunk by `geometry.max_rw` (a single I/O never exceeds the bdev limit; upstream has no such rule);
+ *   2 out-of-range rejection (whole volume is one partition => the legal lba range is [start, start + size)).
+ * Any chunk failing returns a negative errno => upstream's `ret != nr_blocks` criterion still holds.
  */
 static unsigned long uboot_fat_blk_rw(lbaint_t start, lbaint_t blkcnt, void *buf, int write)
 {
@@ -114,8 +124,9 @@ static unsigned long uboot_fat_blk_rw(lbaint_t start, lbaint_t blkcnt, void *buf
         } else {
             rc = vol->ops->read(vol->priv, lba, p, (br_size_t)n);
         }
-        /* bdev 契约: 成功 = 传输扇区数(**允许短读**)。短了按设备错误处理 ——
-         * 上游用 `ret != nr_blocks` 判定, 本件在切块层面就把它收敛掉。 */
+        /* bdev contract: success = number of sectors transferred (**short reads allowed**). A short one
+         * is treated as a device error — upstream decides via `ret != nr_blocks`; this file collapses
+         * that at the chunking level. */
         if (rc != (int)n) {
             br_log_error("uboot-fat: %s lba %llu n=%u rc=%d",
                          (write != 0) ? "write" : "read", (unsigned long long)lba, n, rc);
@@ -130,7 +141,7 @@ static unsigned long uboot_fat_blk_rw(lbaint_t start, lbaint_t blkcnt, void *buf
 
 unsigned long blk_dread(struct blk_desc *desc, lbaint_t start, lbaint_t blkcnt, void *buf)
 {
-    (void)desc;                     /* 本件只有一个"当前卷", 描述符只是形状 */
+    (void)desc;                     /* this file has only one "current volume"; the descriptor is just shape */
     return uboot_fat_blk_rw(start, blkcnt, buf, 0);
 }
 
@@ -140,17 +151,18 @@ unsigned long blk_dwrite(struct blk_desc *desc, lbaint_t start, lbaint_t blkcnt,
     return uboot_fat_blk_rw(start, blkcnt, (void *)(br_uintptr_t)buf, 1);
 }
 
-/* ==================================================================== BPB 观测 */
+/* ==================================================================== BPB observation */
 
 /*
- * FAT 类型判定。**与上游 `fs/fat/fat.c` 的 `determine_legacy_fat_bits()` 同形**
- * (上游那份是 static: 基于 Linux `fat_fill_super()` 的算法; 这里逐行对照重写一遍是为了
- * 让**挂载判据**能拿到类型 —— 见文件头"为什么 glue 也要解析 BPB")。
- * 32 位那一支另按上游 `read_bootsectandvi()` 的判据: `fat_length == 0 && fat32_length != 0`。
+ * FAT type detection. **Same shape as upstream `fs/fat/fat.c`'s `determine_legacy_fat_bits()`**
+ * (upstream's is static: based on the Linux `fat_fill_super()` algorithm; reimplementing it line by line
+ * here is what lets the **mount criteria** obtain the type — see "why glue also parses the BPB" in the
+ * file header).
+ * The 32-bit branch additionally follows upstream `read_bootsectandvi()`: `fat_length == 0 && fat32_length != 0`.
  */
 static int uboot_fat_detect_bits(const boot_sector *bs)
 {
-    const u32 fat_start = bs->reserved;              /* 已由调用方 FAT2CPU 过 */
+    const u32 fat_start = bs->reserved;              /* already FAT2CPU'd by the caller */
     const u32 dir_start = fat_start + ((u32)bs->fats * bs->fat_length);
     const u32 rootdir_sectors = get_unaligned_le16(bs->dir_entries) *
                                 sizeof(dir_entry) /
@@ -165,7 +177,7 @@ static int uboot_fat_detect_bits(const boot_sector *bs)
         return 32;
     }
     if (bs->cluster_size == 0u) {
-        return 0;                       /* 畸形: 交给挂载判据拒挂 */
+        return 0;                       /* malformed: let the mount criteria refuse it */
     }
     if (total_sectors <= data_start) {
         return 0;
@@ -175,7 +187,8 @@ static int uboot_fat_detect_bits(const boot_sector *bs)
     return (total_clusters > UB_FAT_MAX_FAT12) ? 16 : 12;
 }
 
-/* 读引导扇区(第 0 扇区)并按 vendored `boot_sector` 的字段填观测值。返回 0 / 负 errno。 */
+/* Read the boot sector (sector 0) and fill observation values from the vendored `boot_sector` fields.
+ * Returns 0 / negative errno. */
 static int uboot_fat_vol_probe(uboot_fat_vol_t *vol)
 {
     unsigned char sec[UB_FAT_SECTOR_SIZE];
@@ -190,28 +203,29 @@ static int uboot_fat_vol_probe(uboot_fat_vol_t *vol)
     }
     rc = vol->ops->read(vol->priv, 0u, sec, 1u);
     if (rc != 1) {
-        br_log_error("uboot-fat: %s: 读引导扇区失败 rc=%d", vol->dev, rc);
+        br_log_error("uboot-fat: %s: failed to read boot sector rc=%d", vol->dev, rc);
         return (rc < 0) ? rc : BR_ERR(EIO);
     }
 
     memset(&bs, 0, sizeof(bs));
     memcpy(&bs, sec, sizeof(bs));
 
-    /* 与上游 `read_bootsectandvi()` 同款: 结构体里是**盘上原字节**, __u16/__u32 字段要过一遍
-     * FAT2CPU(小端目标上是恒等, 见 compat/fat_env.h 的 #error); __u8[2] 的字段(扇区大小/
-     * 目录项数/扇区数)按 LE 取, 与上游一样用 get_unaligned_le16。 */
+    /* Same as upstream `read_bootsectandvi()`: the struct holds **raw on-disk bytes**, so __u16/__u32
+     * fields need a FAT2CPU pass (identity on little-endian targets, see compat/fat_env.h's #error);
+     * __u8[2] fields (sector size / dir entries / sector count) are read as LE, using
+     * get_unaligned_le16 as upstream does. */
     bs.reserved    = FAT2CPU16(bs.reserved);
     bs.fat_length  = FAT2CPU16(bs.fat_length);
     bs.total_sect  = FAT2CPU32(bs.total_sect);
 
     sect_size = FAT2CPU16(get_unaligned_le16(bs.sector_size));
     if (sect_size != vol->geom.sector_size) {
-        br_log_error("uboot-fat: %s: BPB 扇区大小 %u != 设备 %u",
+        br_log_error("uboot-fat: %s: BPB sector size %u != device %u",
                      vol->dev, (unsigned)sect_size, (unsigned)vol->geom.sector_size);
         return BR_ERR(EINVAL);
     }
     if (bs.cluster_size == 0u) {
-        br_log_error("uboot-fat: %s: BPB 簇大小未设置", vol->dev);
+        br_log_error("uboot-fat: %s: BPB cluster size not set", vol->dev);
         return BR_ERR(EINVAL);
     }
 
@@ -221,7 +235,7 @@ static int uboot_fat_vol_probe(uboot_fat_vol_t *vol)
     vol->fat_sect = bs.reserved;
     vol->fatsize = uboot_fat_detect_bits(&bs);
     if (vol->fatsize == 0) {
-        br_log_error("uboot-fat: %s: BPB 自相矛盾(无法判定 FAT 类型)", vol->dev);
+        br_log_error("uboot-fat: %s: BPB self-contradictory (cannot determine FAT type)", vol->dev);
         return BR_ERR(EINVAL);
     }
 
@@ -241,33 +255,35 @@ static int uboot_fat_vol_probe(uboot_fat_vol_t *vol)
                              (u32)sizeof(dir_entry)) / sect_size;
     }
     if (total_sect == 0u) {
-        total_sect = (u32)vol->geom.n_sectors;   /* 上游同款兜底 */
+        total_sect = (u32)vol->geom.n_sectors;   /* same fallback as upstream */
     }
     vol->fatlength = fatlength;
     vol->total_sect = total_sect;
     vol->rootdir_sect = vol->fat_sect + (fatlength * vol->fats);
 
     if (vol->fatsize == 32) {
-        /* 上游: data_begin = rootdir_sect - clust_size*2(簇 2 起算) */
+        /* upstream: data_begin = rootdir_sect - clust_size*2 (clusters start at 2) */
         vol->data_begin = vol->rootdir_sect - (vol->clust_size * 2u);
     } else {
-        /* 非 FAT32 的根目录不在簇链上, 可能落在"负簇"(上游注释明说) */
+        /* the non-FAT32 root directory is not on a cluster chain, so it may land in a "negative cluster"
+         * (upstream's comment says so explicitly) */
         vol->data_begin = vol->rootdir_sect + vol->rootdir_size -
                           (vol->clust_size * 2u);
     }
     return 0;
 }
 
-/* ==================================================================== 卷绑定(fat_set_blk_dev 的位置) */
+/* ==================================================================== volume bind (where fat_set_blk_dev lives) */
 
 /*
- * 上游 `fat_set_blk_dev(dev_desc, info)`: 记下当前设备 + 校验引导扇区魔数 0x55AA 与
- * 文件系统签名。本件 `uboot_fat_vol_bind(vol)`:
- *   ① 取 bdev 几何并校验(512 B 扇区 + 扇区数非 0);
- *   ② 按几何装填 shim 的 `struct blk_desc`/`disk_partition`(整设备一个分区);
- *   ③ 调**上游自己的** `fat_set_blk_dev()` —— 挂载期的引导扇区校验归上游(我们不改它的判据);
- *   ④ 再读一遍 BPB 填观测值(判据/日志用, 见文件头)。
- * 返回 0 或负 errno; 失败时不留半绑定状态。
+ * Upstream `fat_set_blk_dev(dev_desc, info)`: records the current device + verifies the boot sector
+ * magic 0x55AA and the filesystem signature. This file's `uboot_fat_vol_bind(vol)`:
+ *   1 fetch bdev geometry and verify (512 B sectors + non-zero sector count);
+ *   2 fill the shim's `struct blk_desc`/`disk_partition` from the geometry (whole device as one partition);
+ *   3 call **upstream's own** `fat_set_blk_dev()` — boot-sector verification at mount time belongs to
+ *     upstream (we do not change its criteria);
+ *   4 read the BPB again to fill observation values (for criteria/logs, see the file header).
+ * Returns 0 or a negative errno; on failure no half-bound state remains.
  */
 int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
 {
@@ -277,21 +293,23 @@ int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
         return BR_ERR(EINVAL);
     }
     if (vol->bound == BR_TRUE) {
-        /* 已绑定: 只把它切成当前卷(等价于上游 fat_set_blk_dev 的"换设备"语义)。
-         * ★ 多卷挂载的关键: 上游只认"当前卷"(fat.c 的 static cur_dev), 所以 glue 在
-         *   **每个入口**都要先 bind 一次, 否则会拿上一个卷的 FAT 参数去读这一个卷。 */
+        /* Already bound: just make it the current volume (equivalent to upstream fat_set_blk_dev's
+         * "switch device" semantics).
+         * * Key to multi-volume mounting: upstream only knows the "current volume" (fat.c's static
+         *   cur_dev), so glue must bind once at **every entry**, otherwise it would read this volume
+         *   with the previous volume's FAT parameters. */
         s_cur_vol = vol;
         s_desc.lba     = (lbaint_t)vol->geom.n_sectors;
         s_desc.blksz   = (unsigned long)vol->geom.sector_size;
         s_part.start   = 0u;
         s_part.size    = (lbaint_t)vol->geom.n_sectors;
         s_part.blksz   = (ulong)vol->geom.sector_size;
-        /* ★ 即使已经绑定过, 也**仍然**过一遍上游的 `fat_set_blk_dev()`: 它刷新上游那两个
-         *   static 全局(`cur_dev`/`cur_part_info`, 本件只有这一个消费者)并重新校验引导扇区
-         *   魔数 —— 代价是每个入口一次 512 B 读, 换来的是"卷被换掉/介质变了"这种情况不会被
-         *   静默吃掉。失败 ⇒ 不留半绑定状态。 */
+        /* * Even if already bound, **still** run upstream's `fat_set_blk_dev()`: it refreshes upstream's
+         *   two statics (`cur_dev`/`cur_part_info`, this file being their only consumer) and re-verifies
+         *   the boot sector magic — the cost is one 512 B read per entry, in exchange for not silently
+         *   swallowing "the volume was swapped / media changed". Failure => no half-bound state. */
         if (fat_set_blk_dev(&s_desc, &s_part) != 0) {
-            br_log_error("uboot-fat: %s: 重新绑定失败(引导扇区无效)", vol->dev);
+            br_log_error("uboot-fat: %s: rebind failed (invalid boot sector)", vol->dev);
             s_cur_vol = BR_NULL;
             return BR_ERR(EIO);
         }
@@ -310,13 +328,13 @@ int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
         return rc;
     }
     if ((vol->geom.sector_size != UB_FAT_SECTOR_SIZE) || (vol->geom.n_sectors == 0u)) {
-        br_log_error("uboot-fat: %s sector_size=%u n_sectors=%llu (需要 512 B 扇区)",
+        br_log_error("uboot-fat: %s sector_size=%u n_sectors=%llu (512 B sectors required)",
                      vol->dev, (unsigned)vol->geom.sector_size,
                      (unsigned long long)vol->geom.n_sectors);
         return BR_ERR(EINVAL);
     }
 
-    /* 整设备一个分区: start = 0, size = 设备扇区数(u-boot 的 part 0 无分区表时同形) */
+    /* whole device as one partition: start = 0, size = device sector count (same shape as u-boot's part 0 with no partition table) */
     memset(&s_desc, 0, sizeof(s_desc));
     memset(&s_part, 0, sizeof(s_part));
     s_desc.uclass_id = 0;
@@ -327,9 +345,9 @@ int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
     s_part.size      = (lbaint_t)vol->geom.n_sectors;
     s_part.blksz     = (ulong)vol->geom.sector_size;
 
-    s_cur_vol = vol;                    /* 后续所有 I/O 都落在这个卷上 */
+    s_cur_vol = vol;                    /* all subsequent I/O lands on this volume */
     if (fat_set_blk_dev(&s_desc, &s_part) != 0) {
-        br_log_error("uboot-fat: %s: 不是有效的 FAT 引导扇区", vol->dev);
+        br_log_error("uboot-fat: %s: not a valid FAT boot sector", vol->dev);
         s_cur_vol = BR_NULL;
         return BR_ERR(EINVAL);
     }
@@ -342,7 +360,7 @@ int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
     return 0;
 }
 
-/* 解绑当前卷(幂等)。挂载失败的回滚路径也走它。 */
+/* Unbind the current volume (idempotent). The mount-failure rollback path also uses it. */
 void uboot_fat_vol_unbind(void)
 {
     if (s_cur_vol != BR_NULL) {
@@ -352,22 +370,24 @@ void uboot_fat_vol_unbind(void)
 }
 
 /*
- * (源设备, 挂载点) → 卷 id  —— **认领一个卷槽**。
+ * (source device, mount point) -> volume id  — **claim a volume slot**.
  *
- * ★ ADR-0030: 对应关系不再写死在插件的表里, 而由 **APP 的挂载计划**给出:
- *   APP 调 `mount("emmc0", "/fat12", "fat", 0, NULL)`, 于是 (emmc0, /fat12) 成为一对。
- *   同一个 (dev, mnt) 重复认领 ⇒ 复用同一个槽(幂等; 也挡住"同一卷挂两次");
- *   槽用完 ⇒ -ENOSPC(本件的并发挂载卷数上界 = UB_FAT_VOL_MAX)。
+ * * ADR-0030: the correspondence is no longer hard-coded in the plugin's table, but given by the **APP's
+ *   mount plan**: the APP calls `mount("emmc0", "/fat12", "fat", 0, NULL)`, making (emmc0, /fat12) a pair.
+ *   Claiming the same (dev, mnt) twice => reuse the same slot (idempotent; also blocks "mounting the same
+ *   volume twice"); out of slots => -ENOSPC (this file's upper bound on concurrently mounted volumes =
+ *   UB_FAT_VOL_MAX).
  *
- * ★ 这条改动消灭了一处**两处真值**: 从前"挂载点 ↔ 设备"既写在插件的表里、又写在
- *   manifest 的 [[mount]] 里, 改一处不报错、只会静默挂错设备(该欠债已由 ADR-0030 还清)。
+ * * This change eliminates a **two-sources-of-truth** spot: "mount point <-> device" used to be written
+ *   both in the plugin's table and in the manifest's [[mount]]; changing one did not error, it only
+ *   silently mounted the wrong device (that debt is settled by ADR-0030).
  */
 int uboot_fat_vol_claim(const char *dev, const char *mnt, br_u32 *id)
 {
     if ((dev == BR_NULL) || (mnt == BR_NULL) || (id == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
-    /* ① 已经认领过同一对 ⇒ 复用(幂等) */
+    /* 1 same pair already claimed => reuse (idempotent) */
     for (br_u32 i = 0u; i < (br_u32)UB_FAT_VOL_MAX; i++) {
         if ((s_vols[i].dev != BR_NULL) && (s_vols[i].mnt != BR_NULL) &&
             (uboot_fat_strcmp(s_vols[i].dev, dev) == 0) &&
@@ -376,7 +396,7 @@ int uboot_fat_vol_claim(const char *dev, const char *mnt, br_u32 *id)
             return 0;
         }
     }
-    /* ② 否则占一个空槽 */
+    /* 2 otherwise take a free slot */
     for (br_u32 i = 0u; i < (br_u32)UB_FAT_VOL_MAX; i++) {
         if (s_vols[i].dev == BR_NULL) {
             s_vols[i].dev = dev;
@@ -388,7 +408,7 @@ int uboot_fat_vol_claim(const char *dev, const char *mnt, br_u32 *id)
     return BR_ERR(ENOSPC);
 }
 
-/* 卷的事实观测(挂载判据 + 自检 TC-FAT-001 用): 只读, 不改任何状态。 */
+/* Factual observation of a volume (for mount criteria + selftest TC-FAT-001): read-only, changes no state. */
 int uboot_fat_vol_info(br_u32 id, uboot_fat_vol_info_t *out)
 {
     uboot_fat_vol_t *v = uboot_fat_vol_get(id);
@@ -409,12 +429,12 @@ int uboot_fat_vol_info(br_u32 id, uboot_fat_vol_info_t *out)
     return 0;
 }
 
-/* ==================================================================== 环境的"我们实现的那几个" */
+/* ==================================================================== the environment functions we implement */
 
 /*
- * `strdup`(上游写路径用它复制路径; 无 libc)。上界见 compat/fat_env.h: 本插件的 VFS 面
- * 把路径限在 `UB_FAT_PATH_MAX` 内。超长/无内存都返回 NULL —— 上游调用点对 NULL 的答复是
- * `-ENOMEM`(逐条查过), 于是失败面与 libc 口径一致。
+ * `strdup` (the upstream write path uses it to copy paths; no libc). Bound see compat/fat_env.h: this
+ * plugin's VFS surface limits paths to `UB_FAT_PATH_MAX`. Too long / out of memory both return NULL —
+ * upstream's call sites answer NULL with `-ENOMEM` (each checked), so the failure surface matches libc.
  */
 char *uboot_fat_strdup(const char *s)
 {
@@ -426,7 +446,7 @@ char *uboot_fat_strdup(const char *s)
     }
     n = uboot_fat_strlen(s);
     if (n >= UB_FAT_STRDUP_CAP) {
-        br_log_error("uboot-fat: 路径超过 %u 字节, 拒绝复制", (unsigned)(UB_FAT_STRDUP_CAP - 1u));
+        br_log_error("uboot-fat: path over %u bytes, refusing to copy", (unsigned)(UB_FAT_STRDUP_CAP - 1u));
         return BR_NULL;
     }
     p = (char *)br_malloc(n + 1u);
@@ -438,10 +458,12 @@ char *uboot_fat_strdup(const char *s)
 }
 
 /*
- * 有界 `sprintf`(无 libc; 上游四处调用点的转换符逐个覆盖: `%.*s` / `%.3s` / `%d` / `%02X` /
- * `%%`)。逆序生成数字、超界丢弃; 返回"应写入的字符数"(sprintf 口径), 结尾恒有 '\0'。
- * ★ 为什么不是 `__builtin_sprintf`: 裸机没有它, 而 core 的 `br_log_write` 只输出不回填
- *   缓冲 ⇒ 这里必须自带一个极小格式化器(与 adapter/uboot-erofs 的判据面同款取舍)。
+ * Bounded `sprintf` (no libc; every conversion specifier at upstream's four call sites is covered:
+ * `%.*s` / `%.3s` / `%d` / `%02X` / `%%`). Digits are generated in reverse order, overflow discarded;
+ * returns "number of chars that should have been written" (sprintf convention), always NUL-terminated.
+ * * Why not `__builtin_sprintf`: bare metal has none, and core's `br_log_write` only outputs without
+ *   writing back into the buffer => a tiny formatter must live here (the same trade-off as
+ *   adapter/uboot-erofs's criterion surface).
  */
 int uboot_fat_sprintf(char *dst, const char *fmt, ...)
 {
@@ -466,8 +488,8 @@ int uboot_fat_sprintf(char *dst, const char *fmt, ...)
             i++;
             continue;
         }
-        i++;                                        /* 跳过 '%' */
-        if (fmt[i] == '0') {                        /* 只为 `%02X` 支持 '0' 标志 */
+        i++;                                        /* skip '%' */
+        if (fmt[i] == '0') {                        /* '0' flag supported only for `%02X` */
             zero_pad = 1;
             i++;
         }
@@ -477,7 +499,7 @@ int uboot_fat_sprintf(char *dst, const char *fmt, ...)
         }
         if (fmt[i] == '.') {
             i++;
-            if (fmt[i] == '*') {                    /* `%.*s`(上游两处) */
+            if (fmt[i] == '*') {                    /* `%.*s` (two upstream sites) */
                 prec = __builtin_va_arg(ap, int);
                 i++;
             } else {
@@ -521,7 +543,7 @@ int uboot_fat_sprintf(char *dst, const char *fmt, ...)
                 }
                 n++;
             }
-            /* 逆序生成, 再按 width(仅 '0'/空格填充)补齐后正序吐出 */
+            /* generate in reverse, then emit forward after padding to width (only '0'/space fill) */
             {
                 unsigned long long v = (as_signed && ((long long)uv < 0))
                                      ? (~uv + 1ull) : uv;
@@ -554,7 +576,8 @@ int uboot_fat_sprintf(char *dst, const char *fmt, ...)
             n++;
             i++;
         } else {
-            /* 不认的转换符: 原样吐出(不静默吞掉, 免得"日志/名字少了一段"这种诡异现象) */
+            /* unknown conversion specifier: emit it as-is (do not swallow silently, lest "a log/name lost
+             * a piece" become a weird symptom) */
             if ((n + 1u) < UB_FAT_SPRINTF_MAX) {
                 dst[n] = '%';
             }
@@ -574,10 +597,12 @@ int uboot_fat_sprintf(char *dst, const char *fmt, ...)
 }
 
 /*
- * `rand()`(上游 `set_name()` 用它挑"~N"短名后缀的搜索起点)。u-boot 的 `rand()` 没有对应的
- * vendored 原件(见 NOTICE), 而**确定性**在这里是优点: 候选空间本来就是"从 1 逐个试到不
- * 冲突", 起点不影响"找到的那个名字"这个契约(只影响搜索顺序), 却让同样的盘上状态给出同样
- * 的结果 ⇒ 自检可复现。LCG 常数取自 Numerical Recipes(与具体实现无关, 只需良好散布)。
+ * `rand()` (upstream `set_name()` uses it to pick the search start for the "~N" short-name suffix).
+ * u-boot's `rand()` has no corresponding vendored original (see NOTICE), and **determinism** is an
+ * advantage here: the candidate space is inherently "try 1 upward until no conflict", so the start does
+ * not affect the contract of "which name is found" (only the search order), yet it makes the same
+ * on-disk state give the same result => selftest is reproducible. The LCG constants come from Numerical
+ * Recipes (implementation-independent; only good dispersion is needed).
  */
 static unsigned int s_rand_state = 0x12345678u;
 
@@ -587,25 +612,29 @@ int uboot_fat_rand(void)
     return (int)(s_rand_state >> 1);
 }
 
-/* ==================================================================== 截断(只用上游公开 API) */
+/* ==================================================================== truncate (upstream public API only) */
 
 /*
- * 截断/扩展到 `newsize`。上游**没有** truncate 入口, 但它自己有一套公开的写语义可以拼出
- * 三种情形(逐条对着上游源码核过, 见 ADR-0026 §5 的实测结论):
+ * Truncate/extend to `newsize`. Upstream has **no** truncate entry, but its own public write semantics
+ * can be assembled into three cases (each checked against the upstream source; see the measured
+ * conclusions in ADR-0026 §5):
  *
- *   ① **变短**: `file_fat_write_at(path, newsize, NULL, 0, &act)` —— 上游先把目录项 size
- *      改成 `pos + size`(= newsize), 然后 `set_contents()` 走到 "truncate the rest" 分支:
- *      `clear_fatent()` 把尾部簇链还回去, 并给末簇打 EOC。`get_set_cluster(size == 0)` 立刻
- *      返回 ⇒ **NULL buffer 不会被解引用**(这一条是"传 NULL 安全"的全部理由)。
- *   ② **变 0**: 同一调用(`newsize == 0`)走上游 `filesize == 0` 的专门分支: 清整条簇链 +
- *      把首簇置 0 + size = 0。
- *   ③ **变长**: 上游没有"扩洞"语义(`set_contents` 的 `assert(!pos)`/`assert(pos == cur_pos)`
- *      是死代码, 而它按簇走查的路径在"pos 落在链尾之外"时会报 "something wrong") ⇒ 扩展
- *      只能**显式写零字节**: 从当前长度起追加 `newsize - cur` 个 0(分块, 512 B/次)。
- *      TC-FAT-008 要求的正是"新区域读回 0"(而不是上一个文件的残留), 所以这条实现与判据
- *      同义 —— 我们**没有**放宽判据, 只是把"扩展"这一支写成上游真能接受的形式。
+ *   1 **shrink**: `file_fat_write_at(path, newsize, NULL, 0, &act)` — upstream first sets the directory
+ *      entry size to `pos + size` (= newsize), then `set_contents()` takes the "truncate the rest"
+ *      branch: `clear_fatent()` returns the tail cluster chain and marks the last cluster EOC.
+ *      `get_set_cluster(size == 0)` returns immediately => **the NULL buffer is never dereferenced**
+ *      (this is the whole reason "passing NULL is safe").
+ *   2 **to zero**: the same call (`newsize == 0`) takes upstream's dedicated `filesize == 0` branch:
+ *      clear the whole cluster chain + set the first cluster to 0 + size = 0.
+ *   3 **grow**: upstream has no "hole extension" semantics (`set_contents`'s `assert(!pos)`/
+ *      `assert(pos == cur_pos)` are dead code, and its cluster-walking path reports "something wrong"
+ *      when "pos falls beyond the end of the chain") => extension can only **write zero bytes
+ *      explicitly**: append `newsize - cur` zeros from the current length (chunked, 512 B each).
+ *      What TC-FAT-008 requires is exactly "the new region reads back as 0" (not leftovers of a previous
+ *      file), so this implementation is synonymous with the criterion — we did **not** relax the
+ *      criterion, we merely wrote the "grow" branch in a form upstream actually accepts.
  *
- * 返回值: 0 / 负 errno。
+ * Return value: 0 / negative errno.
  */
 int uboot_fat_truncate(const char *path, br_u64 newsize)
 {
@@ -624,16 +653,16 @@ int uboot_fat_truncate(const char *path, br_u64 newsize)
         return BR_ERR(EIO);
     }
     if ((br_u64)cur == newsize) {
-        return 0;                        /* 幂等: 长度没变就不碰介质 */
+        return 0;                        /* idempotent: length unchanged, do not touch the medium */
     }
 
     if (newsize < (br_u64)cur) {
-        /* ①/② 变短或变 0 —— 上游自己的截断分支 */
+        /* 1/2 shrink or to zero — upstream's own truncate branch */
         rc = file_fat_write_at(path, (loff_t)newsize, BR_NULL, 0, &act);
         return (rc < 0) ? rc : 0;
     }
 
-    /* ③ 变长 —— 显式零填充(见函数头) */
+    /* 3 grow — explicit zero fill (see function header) */
     {
         unsigned char zero[UB_FAT_ZERO_CHUNK];
         loff_t pos = cur;
@@ -650,7 +679,7 @@ int uboot_fat_truncate(const char *path, br_u64 newsize)
                 return rc;
             }
             if (act <= 0) {
-                return BR_ERR(EIO);      /* 没写进去: 不许假装成功 */
+                return BR_ERR(EIO);      /* nothing was written: do not pretend success */
             }
             pos += act;
         }

@@ -1,33 +1,41 @@
 /*
- * brickOS prototype v0.2.0 — 块设备子分类(framework/bdev-core)
+ * brickOS prototype v0.2.0 — block device subcategory (framework/bdev-core)
  *
- * 设计依据: `docs/7-storage/7-02-bdev.md`
- *   §1(块设备类: 几何 + 扇区 read/write/flush + `br_bdev_register`/`br_bdev_get`;
- *     "bdev-core API: 块设备注册进 dev-core 的命名空间" —— 依赖 dev-core 的由来)
- *   §2(SD-9 分区映射器 = v1.x → 本刀只留设计)
- *   §3(SD-8 page cache 是**堆叠插件**, 本件只提供"上层看到同一 `br_bdev_ops`"的地基)
- *   §4(DMA/对齐/cache 约定: `align` 非零时调用方负责对齐, 否则驱动内部 bounce)
- * 逐条裁定与偏离(含 `BR_BDEV_F_DMA/PIO` 两位的来历)见 `docs/decisions/0021-bdev-pci-emmc.md`。
+ * Design basis: `docs/7-storage/7-02-bdev.md`
+ *   §1 (block device class: geometry + sector read/write/flush + `br_bdev_register`/`br_bdev_get`;
+ *     "bdev-core API: block devices register into the dev-core namespace" — the origin of the
+ *     dev-core dependency)
+ *   §2 (SD-9 partition mapper = v1.x → this cut keeps only the design)
+ *   §3 (SD-8 page cache is a **stacking plugin**; this file only supplies the ground for "upper
+ *     layers see the same `br_bdev_ops`")
+ *   §4 (DMA/alignment/cache contract: when `align` is non-zero the caller aligns, otherwise the
+ *     driver bounces internally)
+ * Per-item rulings and deviations (including the origin of the `BR_BDEV_F_DMA/PIO` bits) are in
+ * `docs/decisions/0021-bdev-pci-emmc.md`.
  *
- * ## 本文件的三件职责(别的都不做)
- *   ① `br_bdev_register`: 校验(名字/ops 必填槽位/几何自洽)→ 在 dev-core 登记一条
- *      `BR_CLASS_BDEV` 条目(`open_file = BR_NULL` —— D21: raw 块访问属 v2);
- *   ② `br_bdev_get`: 按名取回 `{ops, priv}`(FS/堆叠插件的绑定口);
- *   ③ 静态池与簿记(原型口径: 无动态分配, 与 dev-core/cdev-core 同款)。
+ * ## This file's three duties (nothing else)
+ *   ① `br_bdev_register`: validate (name / mandatory ops slots / geometry consistency) → add a
+ *      `BR_CLASS_BDEV` entry in dev-core (`open_file = BR_NULL` — D21: raw block access is v2);
+ *   ② `br_bdev_get`: retrieve `{ops, priv}` by name (the binding point for FS/stacking plugins);
+ *   ③ static pool and bookkeeping (prototype stance: no dynamic allocation, same as
+ *      dev-core/cdev-core).
  *
- * ## 为什么"注册期调一次 geometry"
- *   块设备的必填槽位里 `flush` 是**语义前提**(page cache 依赖它落介质, SD-8), 而"是否是
- *   只读介质"这种自洽性只有几何答得出来。与其把一堆半成品放进来等第一次 I/O 才炸, 不如
- *   在注册期把驱动叫一次: 几何自洽是**注册的前置条件**(与 cdev 的 flash 子型校验几何同型,
- *   只是它的几何是形参、这里是个 op)。
- *   代价: 驱动的 `geometry` 必须能在 CORE 相(注册时)回答 —— 这对"设备先初始化、再注册"
- *   的时序是自然的, 也是 v1 唯一允许的时序。
+ * ## Why geometry is called once at registration
+ *   Among the mandatory slots of a block device, `flush` is a **semantic precondition** (page
+ *   cache relies on it to reach the medium, SD-8), and self-consistency questions like "is this
+ *   read-only media" can only be answered by geometry. Rather than admit a pile of half-finished
+ *   devices and blow up at the first I/O, call the driver once at registration: geometry
+ *   consistency is a **precondition of registration** (same shape as the cdev flash subtype's
+ *   geometry validation, except there geometry is a parameter and here it is an op).
+ *   Cost: the driver's `geometry` must answer in the CORE phase (at registration) — natural for
+ *   the "init device first, register second" order, and the only order v1 allows.
  *
- * ## 为什么 dmA/PIO 是**几何**里的位而不是 ops 里的字段
- *   主控要求"数据传输需要指出 DMA/PIO"(ADR-0021 D-4)。几何是**每次调用都可重新回答**的
- *   观测面 ⇒ 运行期切换 DMA/PIO 之后, 消费者下一次 `geometry` 就能看到新值; 若做成 ops 的
- *   常量字段, 切换就得改 ops 表(而 ops 是 const、布局入 golden)。这也让"当前实际通路"
- *   与"几何"在同一处被读到, 不会出现两个真值。
+ * ## Why DMA/PIO are bits in **geometry** rather than fields in ops
+ *   The maintainer requires "data transfers must state DMA/PIO" (ADR-0021 D-4). Geometry is an
+ *   observation surface **answerable again on every call** ⇒ after a runtime DMA/PIO switch the
+ *   consumer sees the new value on its next `geometry`; as constant ops fields, switching would
+ *   mean rewriting the ops table (while ops is const and its layout is in golden). This also
+ *   lets "the currently active path" and "geometry" be read at one place, with no two truths.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -36,21 +44,23 @@
 #include <br/dev/br_bdev.h>
 #include <br/dev/br_dev.h>
 
-#include "bdev_internal.h"     /* 自检用的内部视图(见该头; 生产路径不用它) */
+#include "bdev_internal.h"     /* internal view for self-test (see that header; unused in production) */
 
-/* 生命周期钩子原型(名 = symbol_prefix + 相; 生成物 `plugin_desc.c` 引用; 不进 [[export]]) */
+/* Lifecycle hook prototypes (name = symbol_prefix + phase; referenced by generated
+ * `plugin_desc.c`; not in [[export]]) */
 int bdev_core_early_init(void);
 int bdev_core_init(void);
 int bdev_core_start(void);
 
-/* ==================================================================== 静态池 */
+/* ==================================================================== static pool */
 
-#define BR_BDEV_MAX   8u   /* 块设备上界(原型: 静态上界, 与 BR_CDEV_MAX 同款"够用即停") */
+#define BR_BDEV_MAX   8u   /* block device upper bound (prototype: static bound, same "enough is enough" as BR_CDEV_MAX) */
 
 /*
- * 一条 bdev 的注册记录。交给 dev-core 的 `dev_priv` 是**槽位指针**(不是驱动私有本身)——
- * 这样"条目属于本件"这件事有指针同一性的判据(与 cdev-core 同款), 且将来给 bdev 加
- * open_file 钩子时钩子也能同时看到 ops 与驱动私有。
+ * One bdev registration record. The `dev_priv` handed to dev-core is the **slot pointer** (not
+ * the driver private itself) — so "this entry belongs to this file" has pointer-identity proof
+ * (same as cdev-core), and when bdev later gains an open_file hook, the hook can see both ops and
+ * driver private.
  */
 typedef struct bdev_slot {
     br_bool             used;
@@ -61,7 +71,7 @@ typedef struct bdev_slot {
 static bdev_slot_t s_bdevs[BR_BDEV_MAX];
 static br_u32      s_bdev_n;
 
-/* ==================================================================== 几何校验 */
+/* ==================================================================== geometry validation */
 
 static br_bool bdev_is_pow2(br_u32 v)
 {
@@ -69,12 +79,14 @@ static br_bool bdev_is_pow2(br_u32 v)
 }
 
 /*
- * 几何自洽的判据(注册期执法; 每一条都对应一种"看起来能算、其实算错"的表):
- *   - sector_size 是 2 的幂(非 2 的幂几乎必然是单位写错) —— 且非 0;
- *   - n_sectors > 0(0 容量没有可读的 LBA);
- *   - 0 < max_rw <= n_sectors(上限大于介质长度 = 有一条永远失败的路径);
- *   - align 为 0 或 2 的幂(0 = 任意, 设计 `7-02` §4);
- *   - DMA/PIO 两位**不可同置**(自相矛盾); 都不置 = "未声明通路", 放行。
+ * Geometry consistency criteria (enforced at registration; each corresponds to a table that
+ * "looks computable but computes wrong"):
+ *   - sector_size is a power of two (a non-power-of-two is almost certainly a unit mistake) and non-zero;
+ *   - n_sectors > 0 (zero capacity has no readable LBA);
+ *   - 0 < max_rw <= n_sectors (a bound above the medium length = a path that always fails);
+ *   - align is 0 or a power of two (0 = any, design `7-02` §4);
+ *   - the DMA/PIO bits **cannot both be set** (self-contradictory); neither set = "path
+ *     undeclared", allowed.
  */
 static br_bool bdev_geom_ok(const br_bdev_geom_t *g)
 {
@@ -96,7 +108,7 @@ static br_bool bdev_geom_ok(const br_bdev_geom_t *g)
     return BR_TRUE;
 }
 
-/* ==================================================================== 槽位查找 */
+/* ==================================================================== slot lookup */
 
 static bdev_slot_t *bdev_find(const char *name)
 {
@@ -106,8 +118,9 @@ static bdev_slot_t *bdev_find(const char *name)
         return BR_NULL;
     }
 
-    /* 同一个 class_id 下将来可能有子型(如分区映射器)⇒ 用"槽位是否落在本件池里"区分,
-     * 而不是拿 class_priv 比较(两个驱动的 ops 恰好同址的理论可能)。 */
+    /* The same class_id may later hold subtypes (e.g. a partition mapper) ⇒ distinguish by "does
+     * the slot fall in this file's pool", not by comparing class_priv (the theoretical case where
+     * two drivers' ops happen to share an address). */
     bdev_slot_t *slot = (bdev_slot_t *)e->dev_priv;
     for (br_u32 i = 0u; i < s_bdev_n; i++) {
         if (&s_bdevs[i] == slot && s_bdevs[i].used == BR_TRUE) {
@@ -117,23 +130,24 @@ static bdev_slot_t *bdev_find(const char *name)
     return BR_NULL;
 }
 
-/* ==================================================================== 注册与取回 */
+/* ==================================================================== register and retrieve */
 
 int br_bdev_register(const char *name, const br_bdev_ops_t *ops, void *priv)
 {
     if (ops == BR_NULL) {
         return BR_ERR(EINVAL);
     }
-    /* 必填槽位(设计 `7-02` §1 的四个动作; ioctl/suspend/resume 可空 ⇒ -ENOTSUP) */
+    /* Mandatory slots (the four actions of design `7-02` §1; ioctl/suspend/resume optional ⇒ -ENOTSUP) */
     if (ops->read == BR_NULL || ops->write == BR_NULL ||
         ops->flush == BR_NULL || ops->geometry == BR_NULL) {
         return BR_ERR(EINVAL);
     }
     if (br_dev_name_valid(name) == BR_FALSE) {
-        return BR_ERR(EINVAL);   /* 含 name == BR_NULL / 空 / 大写 / 含斜杠 */
+        return BR_ERR(EINVAL);   /* covers name == BR_NULL / empty / uppercase / containing slash */
     }
 
-    /* 几何是注册的前置条件(见文件头): 驱动自己的错误原样上传, 自洽性由本件判。 */
+    /* Geometry is a precondition of registration (see file header): the driver's own error is
+     * passed through unchanged, consistency is judged by this file. */
     br_bdev_geom_t geom;
     const int grc = ops->geometry(priv, &geom);
     if (grc != BR_OK) {
@@ -154,15 +168,15 @@ int br_bdev_register(const char *name, const br_bdev_ops_t *ops, void *priv)
 
     const br_dev_class_entry_t e = {
         .class_id   = (br_u16)BR_CLASS_BDEV,
-        .class_priv = (void *)ops,     /* 形状解释权在本件; dev-core 只透传 */
-        .open_file  = BR_NULL,         /* ★ D21: v1 的 raw 块访问属 v2(看得见打不开) */
+        .class_priv = (void *)ops,     /* shape interpretation belongs to this file; dev-core only passes through */
+        .open_file  = BR_NULL,         /* ★ D21: raw block access in v1 is v2 (visible but not openable) */
         .dev_priv   = slot,
     };
 
     const int rc = br_dev_add(name, &e);
     if (rc != BR_OK) {
-        slot->used = BR_FALSE;         /* 回滚: 失败不留"半注册"的槽位 */
-        return rc;                     /* -EINVAL / -EEXIST / -ENOSPC 原样上传 */
+        slot->used = BR_FALSE;         /* rollback: a failure leaves no half-registered slot */
+        return rc;                     /* -EINVAL / -EEXIST / -ENOSPC passed through unchanged */
     }
 
     s_bdev_n++;
@@ -178,7 +192,7 @@ const br_bdev_ops_t *br_bdev_get(const char *name, void **priv)
 {
     bdev_slot_t *slot = bdev_find(name);
     if (slot == BR_NULL) {
-        return BR_NULL;                /* 未注册: 不改写 *priv(与 cdev-core 同契约) */
+        return BR_NULL;                /* not registered: does not write *priv (same contract as cdev-core) */
     }
     if (priv != BR_NULL) {
         *priv = slot->priv;
@@ -186,24 +200,26 @@ const br_bdev_ops_t *br_bdev_get(const char *name, void **priv)
     return slot->ops;
 }
 
-/* ==================================================================== 生命周期 */
+/* ==================================================================== lifecycle */
 
-/* EARLY: 无动作(静态池是 BSS; 此刻无堆无线程)。设备注册发生在各驱动的 CORE init。 */
+/* EARLY: no action (the static pool is BSS; no heap or threads yet). Device registration happens
+ * in each driver's CORE init. */
 int bdev_core_early_init(void)
 {
     return 0;
 }
 
-/* CORE: 无动作。bdev-core 自己没有要初始化的状态 —— 它的"上场"是驱动调 `br_bdev_register`。
- * 刻意不造空 API(R-S4: 框架件往里的每一行都要有消费者)。 */
+/* CORE: no action. bdev-core has no state of its own to initialize — it "enters the stage" when a
+ * driver calls `br_bdev_register`. Deliberately no empty API (R-S4: every line added to a framework
+ * file must have a consumer). */
 int bdev_core_init(void)
 {
     return 0;
 }
 
-/* START 相: 本件的一致性用例**不在这里跑** —— ADR-0010 之后由 core 的
- * `br_plugin_manager_selftest()` 经描述符的 `.selftest` 钩子统一驱动(见 src/bdev_selftest.c)。
- * 这里只留一行注册表摘要作启动证据。 */
+/* START phase: this file's conformance cases do **not** run here — after ADR-0010 they are driven
+ * uniformly by core's `br_plugin_manager_selftest()` through the descriptor's `.selftest` hook
+ * (see src/bdev_selftest.c). Here only a one-line registry summary is kept as boot evidence. */
 int bdev_core_start(void)
 {
     br_u32 n = 0u;
@@ -217,11 +233,13 @@ int bdev_core_start(void)
     return 0;
 }
 
-/* ==================================================================== 自检用的内部视图
+/* ==================================================================== internal view for self-test
  *
- * 见 `src/bdev_internal.h` 的边界纪律。这里**只**暴露自检真的用到的两样:
- * 容量与槽位占用数(用来断言"表不溢出"的结构性不变量)。
- * 一律**转调**生产实现的同一份状态, 不复制常量 —— 否则用例比的是副本。
+ * See the boundary rules in `src/bdev_internal.h`. Here **only** the two things the self-test
+ * really uses are exposed: capacity and occupied slot count (to assert the structural invariant
+ * "table does not overflow").
+ * Both **forward** to the same production state instead of copying constants — otherwise the case
+ * compares against a copy.
  */
 
 br_u32 bdev_internal_capacity(void)

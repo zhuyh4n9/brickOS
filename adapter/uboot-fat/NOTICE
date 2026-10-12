@@ -84,7 +84,7 @@ adapter/uboot-fat — 第三方来源与许可说明
  10. **BPB 观测**: 上游的 `get_fs_info()`/`determine_legacy_fat_bits()` 是 static(没有对外
      观测点)⇒ `glue/fat_blk.c` 用 vendored `struct boot_sector` **只读地**再解析一遍, 供
      挂载判据(TC-FAT-001 + 几何校验)使用; 判定算法与上游同形并注明出处。它不参与 I/O 决策。
- 11. **`-Wno-*` 的口径**: 本插件按**上游自己的告警集合**编译(见 plugin.toml 的
+ 11. **`-Wno-*` 的口径**: 本插件按**上游自己的告警集合**编译(见 brick.toml 的
      `[build].cflags`)。上游的形参故意遮蔽类型名/外层变量、对 `void *` 做算术、单编译单元
      风格的前置声明缺失 —— 这些都**不能**靠改上游来消除(那正是本刀要消灭的"就地改三方件")。
 
@@ -105,3 +105,5 @@ adapter/uboot-fat — 第三方来源与许可说明
   ⚠ 本目录与 `adapter/uboot-mmc`、`adapter/uboot-erofs` 一样, 是 brickOS 原型树内的 GPL
   代码区; `framework/**`、`core/**`、`platform/**` 保持 WTFPL。残余风险(静态链接后整镜像
   构成 GPL 组合作品)登记在 `../../WORKAROUNDS.md` 的 `br-wa-tp-001`。
+
+WORKAROUND(br-wa-tp-001): residual GPL combined-work risk of statically linking this port into the image (registered in WORKAROUNDS.md).

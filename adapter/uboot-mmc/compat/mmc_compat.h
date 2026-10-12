@@ -1,33 +1,35 @@
 /*
- * adapter/uboot-mmc — **适配层入口头**(brickOS 侧)
+ * adapter/uboot-mmc — **adapter-layer entry header** (brickOS side)
  *
- * ============================== 本文件是什么 ==============================
- * 上游 `drivers/mmc/` 是 u-boot 风格的 C: 它的"运行环境"由 u-boot 自己提供 ——
- * `linux/types.h` 的 `u8/u32/bool`、`malloc.h`、`log.h` 的 `log_err/pr_debug`、
- * `cpu_func.h` 的 `flush_dcache_range`、`udelay()`/`get_timer()`、`WARN_ON`、
- * 以及 DM(`udevice`)与中断注册。本插件是**裸机 unikernel**, 这些都不存在。
+ * ============================== What this file is ==============================
+ * Upstream `drivers/mmc/` is u-boot-style C: its "runtime environment" is provided by u-boot itself —
+ * `linux/types.h`'s `u8/u32/bool`, `malloc.h`, `log.h`'s `log_err/pr_debug`, `cpu_func.h`'s
+ * `flush_dcache_range`, `udelay()`/`get_timer()`, `WARN_ON`, plus DM (`udevice`) and interrupt
+ * registration. This plugin is a **bare-metal unikernel**, where none of these exist.
  *
- * 本文件就是那份环境在 brickOS 上的**唯一落点**。`src/` 下的上游派生件
- * (`mmc_core.c` / `sdhci_host.c` / `mmc_regs.h` / `emmc_internal.h`)**只** include
- * 本头, 不直接 include 任何 `<br/...>` —— 于是"三方代码↔brickOS 代码"的边界是
- * **一个文件**, 而不是散在四个文件里的十来条 include。
+ * This file is the **single landing point** for that environment on brickOS. The upstream-derived
+ * units under `src/` (`mmc_core.c` / `sdhci_host.c` / `mmc_regs.h` / `emmc_internal.h`) include
+ * **only** this header, never any `<br/...>` directly — so the "third-party code ↔ brickOS code"
+ * boundary is **one file**, not a dozen includes scattered across four files.
  *
- *   u-boot 侧                  →  brickOS 侧(本头兑现)
+ *   u-boot side                →  brickOS side (fulfilled by this header)
  *   ---------------------------------------------------------------------------
  *   u8/u16/u32/u64/bool        →  br_u8/… / br_bool   (br/core/br_types.h)
  *   log_err/log_warning/info   →  br_log_error/warn/info
  *   udelay()/get_timer()       →  br_delay_us() / br_clock_now() / br_deadline_from_now()
  *   flush/invalidate_dcache_*  →  br_mm_cache_flush/invalidate
- *   memalign()(DMA 对齐)       →  br_dma_alloc(…, BR_DMA_F_ALIGN4K, …)
+ *   memalign() (DMA-aligned)   →  br_dma_alloc(…, BR_DMA_F_ALIGN4K, …)
  *   irq_register/enable        →  br_irq_register/enable/lock/unlock/stats_get
- *   信号量(u-boot 无对应物)     →  br_sem_init/take/give
- *   errno(-EIO/…)              →  BR_ERR(EIO/…)
+ *   semaphore (no u-boot equiv)→  br_sem_init/take/give
+ *   errno (-EIO/…)             →  BR_ERR(EIO/…)
  *
- * ★ 依赖方向: `src/` → `adapter/`(**单向**)。`adapter/` 里的东西反过来 include
- *   `src/` 的头是允许的(那是"适配层认识被适配的代码"); 但 `src/` 只许经本头拿环境。
+ * ★ Dependency direction: `src/` → `adapter/` (**one-way**). It is allowed for things in `adapter/`
+ *   to include headers from `src/` (that is "the adapter layer knowing the adapted code"); but `src/`
+ *   may only get its environment through this header.
  *
- * ★ 本头**不**声明 `mmc_regs.h` / `emmc_internal.h` 的任何东西 —— 那些是插件内部
- *   契约, 由各自的 .c 显式 include。本头只管"运行环境"。
+ * ★ This header declares **nothing** from `mmc_regs.h` / `emmc_internal.h` — those are plugin-internal
+ *   contracts, included explicitly by their respective .c files. This header only covers the "runtime
+ *   environment".
  * ==========================================================================
  */
 #ifndef BR_THIRD_PARTY_UBOOT_MMC_COMPAT_H

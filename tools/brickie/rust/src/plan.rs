@@ -1,16 +1,16 @@
-//! 生成计划: `plan-new` / `plan-init` / `gen-plan`(contract §5.2)。
+//! Plan generation: `plan-new` / `plan-init` / `gen-plan` (contract §5.2).
 //!
-//! **只给计划, 不给内容**: 返回 `data.artifacts: [{path, kind, template, vars}]`,
-//! 内容由 L2 `brickie-gen render` 渲染(两段式: plan → 扫盘 → render)。
+//! **Plan only, no content**: returns `data.artifacts: [{path, kind, template, vars}]`;
+//! content is rendered by L2 `brickie-gen render` (two-phase: plan → scan → render).
 //!
-//! 纪律:
-//! - **不覆盖人写文件**: 已存在的 `human` 路径 ⇒ `BRV-GEN-0002`(error, 退出码 1)。
-//! - `--force` **只对生成物目录**生效, 且只在"路径上放的不是我们的生成物"时才需要。
-//! - 生成物靠首行标记 `brickie:generated` 识别(`first_line` 由 L5 扫描后回传)。
+//! Discipline:
+//! - **Never overwrite human-written files**: an existing `human` path ⇒ `BRV-GEN-0002` (error, exit 1).
+//! - `--force` applies **only to generated directories**, and only when the path holds something that is not our generated artifact.
+//! - Generated files are identified by the first-line marker `brickie:generated` (`first_line` is scanned by L5 and passed back).
 //!
-//! 变量命名: 同时提供**两套**占位符名 —— 现行模板用小写(`{{name}}` / `{{phase}}`),
-//! cxx 首刀用大写(`{{PLUGIN_NAME}}`)。多给变量对渲染无副作用(渲染器按名查找),
-//! 这样模板侧无论取哪套都能渲染。
+//! Variable naming: provide **both** placeholder sets — current templates use lowercase (`{{name}}` / `{{phase}}`),
+//! the cxx first cut uses uppercase (`{{PLUGIN_NAME}}`). Extra variables are harmless to rendering (the renderer looks up by name),
+//! so templates can use either set.
 
 use std::collections::BTreeMap;
 
@@ -21,17 +21,17 @@ use crate::model::Plugin;
 use crate::rules;
 use crate::version;
 
-/// 生成物首行标记 —— **单一来源**在 [`crate::emit::GENERATED_MARKER`]。
+/// Generated-file first-line marker — **single source** is [`crate::emit::GENERATED_MARKER`].
 pub use crate::emit::GENERATED_MARKER;
 
-/// 一条生成计划。
+/// A generation plan.
 #[derive(Clone, Debug)]
 pub struct Artifact {
-    /// 相对 `root`。
+    /// Relative to `root`.
     pub path: String,
-    /// `human` | `generated` | `machine`。
+    /// `human` | `generated` | `machine`.
     pub kind: String,
-    /// 模板 id(相对 `templates/`); `machine` 文件由 core 自己写, 为空。
+    /// Template id (relative to `templates/`); empty for `machine` files written by core.
     pub template: String,
     pub vars: BTreeMap<String, String>,
 }
@@ -47,7 +47,7 @@ impl Artifact {
     }
 }
 
-/// 一条 `[[dep]]` 的展开事实(描述符里的 `br_dep_t` 一条)。
+/// Expansion of one `[[dep]]` (one `br_dep_t` in the descriptor).
 #[derive(Clone, Debug)]
 pub struct DepFact {
     pub name: String,
@@ -55,7 +55,7 @@ pub struct DepFact {
     pub phase: Option<String>,
 }
 
-/// 一个插件的"事实"(供变量展开), 与 model::Plugin 解耦以便 plan-new 用在建模之前。
+/// "Facts" of one plugin (for variable expansion), decoupled from model::Plugin so plan-new can use it before modelling.
 #[derive(Clone, Debug)]
 pub struct PluginFacts<'a> {
     pub name: &'a str,
@@ -65,35 +65,35 @@ pub struct PluginFacts<'a> {
     pub lang: &'a str,
     pub phase: &'a str,
     pub sched_class: &'a str,
-    /// 钩子/描述符符号前缀覆盖(见 `model::Plugin::symbol_prefix`); `None` = 按 short 推导。
+    /// Hook/descriptor symbol prefix override (see `model::Plugin::symbol_prefix`); `None` = derive from short.
     pub symbol_prefix: Option<String>,
     pub version: &'a str,
-    /// `[compat].api_rev`(缺省 1)。
+    /// `[compat].api_rev` (default 1).
     pub api_rev: i64,
-    /// `[compat].abi_id`(缺省空串)。
+    /// `[compat].abi_id` (default empty).
     pub abi_id: String,
-    /// `[[res]]` 求和: RAM / 栈(KiB)。
+    /// Sum over `[[res]]`: RAM / stack (KiB).
     pub res_ram_kib: i64,
     pub res_stack_kib: i64,
-    /// 结构依赖逐条(描述符的 `.deps` 数组)。
+    /// One entry per structural dependency (the descriptor's `.deps` array).
     pub deps: Vec<DepFact>,
-    /// 生成物数量(弱符号 `br_plugin_gen_total` 的值; 见 ADR-0005 §2.4)。
+    /// Number of generated artifacts (value of weak symbol `br_plugin_gen_total`; see ADR-0005 §2.4).
     pub gen_total: u32,
-    /// 描述符的声明面锚头(相对插件 `include/` 根的路径)。
+    /// Declaration-surface anchor header of the descriptor (path relative to the plugin's `include/` root).
     pub decl_include: String,
-    /// 有 `init` 钩子吗(由 `phase != "early"` 推导, 见 rules::derive_phase)。
+    /// Has an `init` hook (derived from `phase != "early"`, see rules::derive_phase).
     pub has_init: bool,
-    /// 这次生成要不要发 `selftest` 钩子(ADR-0010)。
+    /// Whether this generation emits the `selftest` hook (ADR-0010).
     ///
-    /// = 插件声明了 `[selftest]` **且** 产品开关(含名单)放行。为假时生成物写
-    /// `BR_PLUGIN_NO_HOOK` ⇒ 测试代码无人引用 ⇒ `--gc-sections` 把它整段裁出镜像。
+    /// = plugin declares `[selftest]` **and** the product switch (incl. allowlist) permits it. When false the
+    /// generated file writes `BR_PLUGIN_NO_HOOK` ⇒ nothing references the test code ⇒ `--gc-sections` drops it from the image.
     pub emit_selftest: bool,
-    /// `[[mount]]` 逐条(ADR-0030: **本插件**(APP)的挂载计划)。
-    /// 生成物把它发射成一张表, APP 的 start 相逐条调 POSIX `mount()` 执行。
+    /// One entry per `[[mount]]` (ADR-0030: mount plan of **this plugin** (APP)).
+    /// The generated file emits it as a table; the APP's start phase calls POSIX `mount()` per entry.
     pub mounts: Vec<MountFact>,
 }
 
-/// `[[mount]]` 一条(生成期事实; 见 `model::MountDecl`)。
+/// One `[[mount]]` entry (generation-time fact; see `model::MountDecl`).
 #[derive(Clone, Debug)]
 pub struct MountFact {
     pub source: Option<String>,
@@ -102,10 +102,10 @@ pub struct MountFact {
     pub order: i64,
 }
 
-/// `descriptor_include` 的回落值: 元契约头(任何组合里都存在)。
+/// Fallback value for `descriptor_include`: the meta-contract header (present in any composition).
 pub const FALLBACK_DECL_INCLUDE: &str = "br/core/br_plugin.h";
 
-// ------------------------------------------------------------------ 语法面 → C 常量
+// ------------------------------------------------------------------ syntax surface → C constants
 
 fn plugin_type_const(t: &str) -> &'static str {
     match t {
@@ -143,8 +143,8 @@ fn dep_kind_const(kind: &str) -> &'static str {
     }
 }
 
-/// `br_dep_t.phase`: 只有 `kind = "init"` 的断言有意义; 其余/缺省 = `BR_PHASE_NONE`
-/// (冻结头 `br_plugin.h`: "不约束完成点")。
+/// `br_dep_t.phase`: only meaningful when `kind = "init"`; otherwise/default = `BR_PHASE_NONE`
+/// (frozen header `br_plugin.h`: "does not constrain the completion point").
 fn dep_phase_const(kind: &str, phase: Option<&str>) -> &'static str {
     if kind != "init" {
         return "BR_PHASE_NONE";
@@ -158,35 +158,35 @@ fn dep_phase_const(kind: &str, phase: Option<&str>) -> &'static str {
     }
 }
 
-/// 依赖数组的 C 文本 + `.deps` 的取值表达式(无边 ⇒ `BR_NULL`)。
-/// 发射挂载计划表(ADR-0030)。空计划 ⇒ 两个空串(模板据此不发任何东西)。
+/// C text of the dependency array + the `.deps` value expression (no edges ⇒ `BR_NULL`).
+/// Emit the mount plan table (ADR-0030). Empty plan ⇒ two empty strings (template emits nothing).
 ///
-/// 表名 = `<symbol_prefix>mount_plan`(与描述符同前缀, 便于 APP 引用)。
-/// `source` 为空 ⇒ 发射 `BR_NULL`(无介质 FS)。
+/// Table name = `<symbol_prefix>mount_plan` (same prefix as the descriptor, easy for the APP to reference).
+/// Empty `source` ⇒ emit `BR_NULL` (media-less FS).
 fn mount_plan_decl(prefix: &str, mounts: &[MountFact]) -> (String, String) {
     if mounts.is_empty() {
         return (String::new(), String::new());
     }
     let mut sorted: Vec<&MountFact> = mounts.iter().collect();
-    sorted.sort_by_key(|m| m.order); // 稳定排序: 同 order 保持声明顺序
+    sorted.sort_by_key(|m| m.order); // stable sort: same order keeps declaration order
     let mut out = String::new();
     out.push_str(
-        "/*\n * 挂载计划(来自 plugin.toml 的 [[mount]]; ADR-0030) —— **由本 APP 执行**。\n"
+        "/*\n * Mount plan (from brick.toml [[mount]]; ADR-0030) -- **executed by this APP**.\n"
     );
     out.push_str(
-        " *\n * ★ 为什么发射成\"表 + 应用函数\"而不是让 APP 自己遍历:\n"
+        " *\n * Why emit a \"table + apply function\" instead of letting the APP iterate itself:\n"
     );
     out.push_str(
-        " *   APP 不许 include core 头(ADR-0020: APP 只依赖 Interface)⇒ `br_mount_plan_t`\n"
+        " *   the APP may not include core headers (ADR-0020: APP depends on Interface only) ⇒ `br_mount_plan_t`\n"
     );
     out.push_str(
-        " *   不能出现在 APP 源码里。所以表与遍历都放在本生成物里, APP 只调一个\n"
+        " *   cannot appear in APP source. So both the table and the iteration live in this generated file,\n"
     );
     out.push_str(
-        " *   `int <prefix>mount_plan_apply(void)`(原型在 APP 自己的对外头里)。\n"
+        " *   and the APP calls just `int <prefix>mount_plan_apply(void)` (prototype in the APP's own header).\n"
     );
     out.push_str(
-        " * `order` 只用于生成期排序(必须\"先 / 再子挂载点\"), 不进 mount() 调用。 */\n"
+        " * `order` is used only for generation-time sorting (\"parent before sub-mount points\"), not in mount() calls. */\n"
     );
     out.push_str("#include <sys/mount.h>   /* POSIX mount() */\n");
     out.push_str("#include <errno.h>\n");
@@ -207,7 +207,7 @@ fn mount_plan_decl(prefix: &str, mounts: &[MountFact]) -> (String, String) {
     }
     out.push_str("};\n\n");
     out.push_str(
-        "/* 逐条执行挂载计划。返回 0 或 -1(errno 已置, 首败即停机是刻意的:\n * 少一个卷就让 APP 在半残的命名空间里跑, 只会把\"挂载失败\"变成别处的\"文件不存在\")。 */\n",
+        "/* Execute the mount plan entry by entry. Returns 0 or -1 (errno set); stopping at the first\n * failure is deliberate: running the APP in a half-broken namespace with a missing volume only turns\n * \"mount failed\" into \"file not found\" elsewhere. */\n",
     );
     out.push_str(&format!("int {prefix}mount_plan_apply(void)\n{{\n"));
     out.push_str(&format!(
@@ -217,7 +217,7 @@ fn mount_plan_decl(prefix: &str, mounts: &[MountFact]) -> (String, String) {
     out.push_str(prefix);
     out.push_str("mount_plan[i];\n");
     out.push_str("        if (mount(m->source, m->target, m->fstype, 0ul, NULL) != 0) {\n");
-    out.push_str("            br_log_error(\"mount(%s, %s, %s) 失败 errno=%d(首败即停机)\",\n");
+    out.push_str("            br_log_error(\"mount(%s, %s, %s) failed errno=%d (halt on first failure)\",\n");
     out.push_str("                         (m->source != NULL) ? m->source : \"-\", m->target,\n");
     out.push_str("                         m->fstype, errno);\n");
     out.push_str("            return -1;\n");
@@ -250,12 +250,13 @@ fn deps_decl(tag: &str, deps: &[DepFact]) -> (String, String) {
     (out, sym)
 }
 
-/// 扫插件 `include/` 下的对外头, 选**声明面锚头**: 声明了该插件最多
-/// `[[export.entries]]` 符号的那个(同数 ⇒ 字典序第一个, 保证确定性); 一个头都没有
-/// (或读不到内容)⇒ 回落到元契约头。
+/// Scan the public headers under the plugin's `include/` and pick the **declaration-surface anchor header**:
+/// the one declaring the most of this plugin's `[[export.entries]]` symbols (ties ⇒ first in lexicographic
+/// order, for determinism); no headers (or unreadable) ⇒ fall back to the meta-contract header.
 ///
-/// 为什么不是"哪个头都行": 锚头进生成物, `gen --check` 会因它变化而报红 ——
-/// 规则必须确定性且与**声明面事实**挂钩, 而不是与目录遍历顺序挂钩。
+/// Why not "any header will do": the anchor header goes into the generated file and `gen --check` flags
+/// changes to it — the rule must be deterministic and tied to **declaration-surface facts**, not to
+/// directory traversal order.
 fn scan_decl_include(root: &std::path::Path, plugin: &str, symbols: &[String]) -> Option<String> {
     let base = root.join(plugin).join("include");
     let mut found: Vec<String> = Vec::new();
@@ -292,9 +293,9 @@ fn collect_headers(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<
     }
 }
 
-// ------------------------------------------------------------------ 名字形态工具
+// ------------------------------------------------------------------ name-shape helpers
 
-/// 符号前缀: 非 `[a-z0-9]` → `_`, 末尾补 `_`(与 cxx `rules.cpp` 同口径)。
+/// Symbol prefix: non-`[a-z0-9]` → `_`, trailing `_` appended (same convention as cxx `rules.cpp`).
 pub fn symbol_prefix(short: &str) -> String {
     let mut out = String::with_capacity(short.len() + 1);
     for c in short.chars() {
@@ -310,7 +311,7 @@ pub fn symbol_prefix(short: &str) -> String {
     out
 }
 
-/// 头文件保护宏。
+/// Header include guard macro.
 pub fn include_guard(ns: &str, short: &str) -> String {
     let base = if ns.is_empty() {
         short.to_string()
@@ -330,19 +331,19 @@ pub fn include_guard(ns: &str, short: &str) -> String {
     format!("{up}_H")
 }
 
-/// 描述符宏实参(符号前缀去掉尾下划线)。
+/// Descriptor macro argument (symbol prefix without the trailing underscore).
 pub fn descriptor_tag(short: &str) -> String {
     let mut p = symbol_prefix(short);
     p.pop();
     p
 }
 
-/// 描述符实例符号名。
+/// Descriptor instance symbol name.
 pub fn descriptor_symbol(short: &str) -> String {
     format!("_br_plugin_{}", descriptor_tag(short))
 }
 
-/// 展开一个插件的占位符表(**大小写两套**, 见模块注释)。
+/// Expand a plugin's placeholder table (**both lowercase and uppercase sets**, see module comment).
 pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     let ns = rules::name_namespace(f.name).to_string();
     let short = rules::name_short(f.name).to_string();
@@ -357,7 +358,7 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     let parsed = version::parse_version(f.version).ok();
 
     let mut v: BTreeMap<String, String> = BTreeMap::new();
-    // ---- 小写(现行模板) ----
+    // ---- lowercase (current templates) ----
     v.insert("name".into(), f.name.to_string());
     v.insert("schema".into(), "1".into());
     v.insert("plugin_type".into(), f.plugin_type.to_string());
@@ -367,18 +368,19 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v.insert("phase".into(), f.phase.to_string());
     v.insert("version".into(), f.version.to_string());
     v.insert("sched_class".into(), f.sched_class.to_string());
-    v.insert("summary".into(), "TODO: 一句话描述本插件的能力面(见 §8.1)".into());
+    v.insert("summary".into(), "TODO: one-line description of this plugin's capability surface (see §8.1)".into());
     v.insert("license".into(), "WTFPL".into());
     v.insert("short".into(), short.clone());
     v.insert("ns".into(), ns.clone());
     v.insert("header_guard".into(), guard.clone());
     v.insert("symbol_prefix".into(), sym.clone());
     v.insert("descriptor_symbol".into(), dsym.clone());
-    // 描述符里 `#include "{{descriptor_include}}"`: 声明面锚头。规则(ADR-0005 §2.4):
-    // 插件 `include/` 下**恰有一个**对外头 ⇒ 用它; 否则回落元契约头(多头插件如 platform
-    // 无法机器判定"主头")。旧规则 `{short}/{short}.h` 指向的是**不存在**的路径。
+    // `#include "{{descriptor_include}}"` in the descriptor: the declaration-surface anchor header. Rule (ADR-0005 §2.4):
+    // **exactly one** public header under the plugin's `include/` ⇒ use it; otherwise fall back to the meta-contract
+    // header (multi-header plugins like platform have no machine-decidable "main header"). The old rule
+    // `{short}/{short}.h` pointed at a path that does **not** exist.
     v.insert("descriptor_include".into(), f.decl_include.clone());
-    // ---- 描述符实例化所需的字段(语法面 → C 常量/表达式) ----
+    // ---- fields needed to instantiate the descriptor (syntax surface → C constants/expressions) ----
     v.insert("plugin_type_id".into(), plugin_type_const(f.plugin_type).into());
     v.insert("subkind_id".into(), subkind_const(f.subkind).into());
     v.insert("sched_class_id".into(), sched_class_const(f.sched_class).into());
@@ -387,8 +389,8 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v.insert("res_ram_kib".into(), f.res_ram_kib.max(0).to_string());
     v.insert("res_stack_kib".into(), f.res_stack_kib.max(0).to_string());
     v.insert("gen_total".into(), f.gen_total.to_string());
-    // 钩子发射规则(ADR-0005 §2.4): early_init/start 对全部插件(§6.2 的表);
-    // init 仅在有 init 钩子(phase != "early")时发射, 否则 BR_PLUGIN_NO_HOOK。
+    // Hook emission rules (ADR-0005 §2.4): early_init/start for all plugins (§6.2 table);
+    // init only when there is an init hook (phase != "early"), otherwise BR_PLUGIN_NO_HOOK.
     v.insert(
         "init_hook".into(),
         if f.has_init {
@@ -407,9 +409,9 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
         },
     );
     v.insert("start_proto".into(), format!("int {sym}start(void);"));
-    // selftest(ADR-0010): 钩子名同样按 symbol_prefix 推导; 生成的**原型**与 init 一样
-    // 只在本插件真的发钩子时给出(否则会引用一个不存在的符号 → -Wmissing-prototypes 与
-    // 链接错误都会来)。关掉自检 ⇒ proto 为空 + hook = NO_HOOK。
+    // selftest (ADR-0010): the hook name is also derived from symbol_prefix; the generated **prototype**, like
+    // init, is emitted only when this plugin really emits the hook (otherwise it would reference a nonexistent
+    // symbol → -Wmissing-prototypes and link errors). Selftest off ⇒ empty proto + hook = NO_HOOK.
     v.insert(
         "selftest_proto".into(),
         if f.emit_selftest {
@@ -429,17 +431,17 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     let (deps_array, deps_expr) = deps_decl(&dtag, &f.deps);
     v.insert("deps_array".into(), deps_array);
     v.insert("deps_expr".into(), deps_expr);
-    // 挂载计划(ADR-0030): 发一张表 + 长度。APP 的 start 相逐条执行 POSIX mount()。
-    // 按 order 稳定排序(同 order 保持声明顺序)⇒ "先挂 / 再挂 /dev" 这条前提可复现。
+    // Mount plan (ADR-0030): emit a table + length. The APP's start phase executes POSIX mount() per entry.
+    // Stable sort by order (same order keeps declaration order) ⇒ the "mount first, then /dev" premise is reproducible.
     let (mount_plan, mount_plan_n) = mount_plan_decl(&sym, &f.mounts);
     v.insert("mount_plan".into(), mount_plan);
     v.insert("mount_plan_n".into(), mount_plan_n);
     v.insert("export_api_iface".into(), f.api_type.to_string());
-    v.insert("export_form".into(), "api".into()); // §8.4 / 裁定 G-3
+    v.insert("export_form".into(), "api".into()); // §8.4 / ruling G-3
     v.insert("export_name".into(), short.clone());
     v.insert("app".into(), f.name.to_string());
 
-    // ---- 大写(cxx 首刀的变量名; 保留兼容) ----
+    // ---- uppercase (cxx first-cut variable names; kept for compatibility) ----
     v.insert("PLUGIN_NAME".into(), f.name.to_string());
     v.insert("NS".into(), ns);
     v.insert("SHORT".into(), short.clone());
@@ -478,16 +480,16 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v
 }
 
-/// 路径布局(§8.4 / contract §5.2)。返回 `(path, kind, template)` 六件。
+/// Path layout (§8.4 / contract §5.2). Returns the six `(path, kind, template)` triples.
 pub fn plugin_paths(f: &PluginFacts<'_>) -> Vec<(String, String, String)> {
     let short = rules::name_short(f.name);
     let skel = format!("{}/{}/{}/", f.api_type, f.plugin_type, f.lang);
     let desc = format!("descriptor/{}/{}/", f.api_type, f.lang);
     vec![
         (
-            format!("{}/plugin.toml", f.name),
+            format!("{}/brick.toml", f.name),
             "human".into(),
-            format!("{skel}plugin.toml.tmpl"),
+            format!("{skel}brick.toml.tmpl"),
         ),
         (
             format!("{}/src/{}.c", f.name, short),
@@ -517,7 +519,7 @@ pub fn plugin_paths(f: &PluginFacts<'_>) -> Vec<(String, String, String)> {
     ]
 }
 
-// ------------------------------------------------------------------ 冲突判定
+// ------------------------------------------------------------------ conflict detection
 
 fn existing_index(context: &serde_json::Map<String, Value>) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
@@ -538,8 +540,8 @@ fn looks_generated(first_line: &str) -> bool {
     first_line.contains(GENERATED_MARKER)
 }
 
-/// 冲突判定(§8.4): 人写文件一律不覆盖; 生成物仅在不是本工具生成物时冲突
-/// (`--force` 可越过, 且 `--force` **只对生成物目录生效**)。
+/// Conflict detection (§8.4): human-written files are never overwritten; a generated file conflicts only
+/// when it is not this tool's artifact (`--force` overrides, and `--force` **applies only to generated directories**).
 fn apply_conflicts(
     artifacts: &mut Vec<Artifact>,
     existing: &BTreeMap<String, String>,
@@ -559,15 +561,15 @@ fn apply_conflicts(
                         target,
                         &a.path,
                         "",
-                        format!("生成目标 `{}` 已存在且为人写文件, 不覆盖", a.path),
-                        "人写文件不由工具改写; 换插件名或先移走该文件(§8.4)",
+                        format!("generation target `{}` already exists and is a human-written file, not overwriting", a.path),
+                        "human-written files are not rewritten by the tool; rename the plugin or move the file away (§8.4)",
                     );
                     continue;
                 }
                 if looks_generated(first) {
-                    keep.push(a); // 已是生成物 ⇒ 正常重建
+                    keep.push(a); // already a generated file ⇒ normal rebuild
                 } else if force {
-                    keep.push(a); // --force 只对生成物目录生效
+                    keep.push(a); // --force applies only to generated directories
                 } else {
                     d.coded(
                         "BRV-GEN-0002",
@@ -575,8 +577,8 @@ fn apply_conflicts(
                         target,
                         &a.path,
                         "",
-                        format!("生成目标 `{}` 已存在且不是本工具的生成物", a.path),
-                        "确认可覆盖后加 --force(--force 只对生成物目录生效)(§8.4)",
+                        format!("generation target `{}` already exists and is not this tool's artifact", a.path),
+                        "add --force once overwriting is confirmed (--force applies only to generated directories) (§8.4)",
                     );
                 }
             }
@@ -587,7 +589,7 @@ fn apply_conflicts(
 
 // ------------------------------------------------------------------ plan-new
 
-/// `plan-new`: 校验入参 → 推导 → 冲突判定 → 计划。
+/// `plan-new`: validate args → derive → conflict detection → plan.
 pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map<String, Value>) -> (Diags, Vec<Artifact>) {
     let mut d = Diags::new();
     let get = |k: &str| args.get(k).and_then(|v| v.as_str()).map(str::to_string);
@@ -599,42 +601,42 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
     let explicit_subkind = get("subkind").filter(|s| !s.is_empty());
     let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    // ---- 1. 形状(contract §7 / §8.1) ----
+    // ---- 1. shape (contract §7 / §8.1) ----
     if plugin_type.is_empty() {
-        d.shape("BRV-MF-0001", &name, "", "args.plugin_type", "缺少必填参数 `plugin_type`", &format!("合法值: {}", rules::list_of(rules::PLUGIN_TYPES)));
+        d.shape("BRV-MF-0001", &name, "", "args.plugin_type", "missing required argument `plugin_type`", &format!("valid values: {}", rules::list_of(rules::PLUGIN_TYPES)));
         return (d, Vec::new());
     }
     if !rules::in_list(rules::PLUGIN_TYPES, &plugin_type) {
-        d.shape("BRV-MF-0001", &name, "", "args.plugin_type", format!("未知插件类别 `{plugin_type}`"), &format!("合法值: {}(§8.1)", rules::list_of(rules::PLUGIN_TYPES)));
+        d.shape("BRV-MF-0001", &name, "", "args.plugin_type", format!("unknown plugin type `{plugin_type}`"), &format!("valid values: {} (§8.1)", rules::list_of(rules::PLUGIN_TYPES)));
         return (d, Vec::new());
     }
     if !rules::in_list(rules::API_TYPES, &api_type) {
-        d.shape("BRV-MF-0001", &name, "", "args.api_type", format!("未知 api_type `{api_type}`"), &format!("合法值: {}(§3.1)", rules::list_of(rules::API_TYPES)));
+        d.shape("BRV-MF-0001", &name, "", "args.api_type", format!("unknown api_type `{api_type}`"), &format!("valid values: {} (§3.1)", rules::list_of(rules::API_TYPES)));
         return (d, Vec::new());
     }
     if name.is_empty() {
-        d.shape("BRV-MF-0001", "", "", "args.name", "缺少必填参数 `name`", "推荐 `<namespace>/<short>`(§8.3)");
+        d.shape("BRV-MF-0001", "", "", "args.name", "missing required argument `name`", "recommended `<namespace>/<short>` (§8.3)");
         return (d, Vec::new());
     }
     if !rules::valid_plugin_name(&name) {
-        d.shape("BRV-MF-0001", &name, "", "args.name", format!("插件名 `{name}` 不符名字契约"), "契约: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)");
+        d.shape("BRV-MF-0001", &name, "", "args.name", format!("plugin name `{name}` violates the name contract"), "contract: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)");
         return (d, Vec::new());
     }
     if !rules::in_list(rules::LANGS, &lang) {
-        d.shape("BRV-MF-0001", &name, "", "args.lang", format!("未知 lang `{lang}`"), &format!("合法值: {}(§8.1)", rules::list_of(rules::LANGS)));
+        d.shape("BRV-MF-0001", &name, "", "args.lang", format!("unknown lang `{lang}`"), &format!("valid values: {} (§8.1)", rules::list_of(rules::LANGS)));
         return (d, Vec::new());
     }
     if !rules::in_list(rules::TEMPLATE_LANGS, &lang) {
-        // v0.1 只交付 c 模板; rust 排 v2.0, cxx 待 BRV-Q8。
+        // v0.1 delivers only c templates; rust is scheduled for v2.0, cxx pending BRV-Q8.
         d.usage(
-            format!("v0.1 只交付 `c` 模板, 收到 `{lang}`"),
-            "`rust` 排 v2.0(1-03); `cxx` 待 BRV-Q8 拍板",
+            format!("v0.1 delivers only the `c` template, got `{lang}`"),
+            "`rust` is scheduled for v2.0 (1-03); `cxx` pending BRV-Q8",
         );
         return (d, Vec::new());
     }
 
-    // ---- 2. api_type 模板交付状态(§8.4) ----
-    // BRV-TAX-0014 的 severity = info, 但命令**无法完成** ⇒ 显式置退出码 2(G-1)。
+    // ---- 2. api_type template delivery status (§8.4) ----
+    // BRV-TAX-0014 severity = info, but the command **cannot complete** ⇒ explicitly set exit code 2 (G-1).
     if !rules::template_available(&api_type, &lang) {
         d.coded(
             "BRV-TAX-0014",
@@ -642,14 +644,14 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
             &name,
             "",
             "args.api_type",
-            format!("`{api_type}` 模板在 v0.1 未交付(目录已预留)"),
+            format!("`{api_type}` template not delivered in v0.1 (directory reserved)"),
             rules::template_unavailable_reason(&api_type, &lang),
         );
         d.set_exit_override(crate::diag::EXIT_USAGE);
         return (d, Vec::new());
     }
 
-    // ---- 3. subkind(§8.4) ----
+    // ---- 3. subkind (§8.4) ----
     let mut subkind = String::new();
     if plugin_type == "ability" {
         match (rules::derive_subkind(&name), &explicit_subkind) {
@@ -660,8 +662,8 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
                     &name,
                     "",
                     "args.subkind",
-                    format!("subkind 推导与显式声明冲突: 由名字推导 = `{der}`, 显式 = `{explicit}`"),
-                    "去掉 `--subkind`, 或改用与 namespace 相符的名字(§8.4)",
+                    format!("derived and explicit subkind conflict: derived from name = `{der}`, explicit = `{explicit}`"),
+                    "drop `--subkind`, or use a name consistent with the namespace (§8.4)",
                 );
                 return (d, Vec::new());
             }
@@ -672,14 +674,14 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
                     &name,
                     "",
                     "args.subkind",
-                    format!("ability 插件 `{name}` 必须显式给 `subkind`(裸名无从推导)"),
-                    &format!("合法值: {}; 或改用可推导的名字(service/ sched/ framework/ io/ fs/)(§8.4)", rules::list_of(rules::SUBKINDS)),
+                    format!("ability plugin `{name}` must give `subkind` explicitly (a bare name gives nothing to derive from)"),
+                    &format!("valid values: {}; or use a derivable name (service/ sched/ framework/ io/ fs/) (§8.4)", rules::list_of(rules::SUBKINDS)),
                 );
                 return (d, Vec::new());
             }
             (None, Some(explicit)) => {
                 if !rules::in_list(rules::SUBKINDS, explicit) {
-                    d.shape("BRV-MF-0001", &name, "", "args.subkind", format!("未知 subkind `{explicit}`"), &format!("合法值: {}", rules::list_of(rules::SUBKINDS)));
+                    d.shape("BRV-MF-0001", &name, "", "args.subkind", format!("unknown subkind `{explicit}`"), &format!("valid values: {}", rules::list_of(rules::SUBKINDS)));
                     return (d, Vec::new());
                 }
                 subkind = explicit.clone();
@@ -691,13 +693,13 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
             &name,
             "",
             "args.subkind",
-            format!("`subkind` 只对 ability 插件有意义, `{plugin_type}` 不接受"),
-            "§8.1: subkind 仅 ability 细分",
+            format!("`subkind` is meaningful only for ability plugins, `{plugin_type}` does not accept it"),
+            "§8.1: subkind subdivides ability only",
         );
         return (d, Vec::new());
     }
 
-    // ---- 4. 推荐形态 lint(§8.3; warning, 不阻断) ----
+    // ---- 4. recommended-form lint (§8.3; warning, non-blocking) ----
     if !rules::is_recommended_form(&name) {
         d.coded(
             "BRV-TAX-0013",
@@ -705,13 +707,13 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
             &name,
             "",
             "args.name",
-            "插件名不符推荐形态 `<namespace>/<short>`",
-            format!("推荐 namespace: {}(§8.3)", rules::list_of(rules::NAMESPACES)),
+            "plugin name does not match the recommended form `<namespace>/<short>`",
+            format!("recommended namespaces: {} (§8.3)", rules::list_of(rules::NAMESPACES)),
         );
     }
 
-    // ---- 5. 相位推导 + 计划 ----
-    // 说明: `new` 的骨架含 `init` 桩(§8.4 的 src.c: early_init/init/start) ⇒ has_init = true。
+    // ---- 5. phase derivation + plan ----
+    // Note: the `new` skeleton includes an `init` stub (§8.4 src.c: early_init/init/start) ⇒ has_init = true.
     let sub_for_phase = if plugin_type == "ability" {
         Some(subkind.as_str())
     } else {
@@ -733,9 +735,9 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         res_ram_kib: 0,
         res_stack_kib: 0,
         deps: Vec::new(),
-        // 骨架期: 生成物数量按"本插件一件"给; 入树后 `brickie gen` 会按插件树重算。
+        // Skeleton phase: generated-artifact count is "one for this plugin"; after it joins the tree, `brickie gen` recomputes it from the plugin tree.
         gen_total: 1,
-        // 骨架期: 计划自己会创建 `include/<short>/<short>.h`(要新建的工作区首个头)。
+        // Skeleton phase: the plan itself creates `include/<short>/<short>.h` (the first header in a fresh workspace).
         decl_include: format!(
             "{short}/{short}.h",
             short = rules::name_short(&name)
@@ -755,7 +757,7 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         })
         .collect();
 
-    // ---- 6. 冲突判定(两段式的第二段: L5 把扫到的 existing 回传) ----
+    // ---- 6. conflict detection (second phase of the two-phase flow: L5 passes back the scanned `existing`) ----
     let existing = existing_index(context);
     if context.contains_key("existing") {
         apply_conflicts(&mut artifacts, &existing, force, &name, &mut d);
@@ -768,11 +770,11 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
 
 // ------------------------------------------------------------------ plan-init
 
-/// `plan-init`: `product.toml` + `app/<name>/` 骨架 + `brickie.lock` 初版。
+/// `plan-init`: `product.toml` + `app/<name>/` skeleton + initial `brickie.lock`.
 ///
-/// `brickie.lock` 是**机器文件**(core 拥有内容, contract §4), 因此计划里给
-/// `kind = "machine"` 且 `template = ""`; 文本同时放在 `data.lock_content` 里
-/// (由 [`crate::emit::render_lock`] 确定性生成)。见 README 的「与 contract 的偏差」。
+/// `brickie.lock` is a **machine file** (core owns the content, contract §4), so the plan gives it
+/// `kind = "machine"` and `template = ""`; the text also goes into `data.lock_content`
+/// (generated deterministically by [`crate::emit::render_lock`]). See "deviations from contract" in the README.
 pub fn plan_init(
     args: &serde_json::Map<String, Value>,
     context: &serde_json::Map<String, Value>,
@@ -780,11 +782,11 @@ pub fn plan_init(
     let mut d = Diags::new();
     let name = args.get("name").and_then(|v| v.as_str()).unwrap_or("").to_string();
     if name.is_empty() {
-        d.shape("BRV-MF-0001", "", "", "args.name", "缺少必填参数 `name`", "产品名(§8.2)");
+        d.shape("BRV-MF-0001", "", "", "args.name", "missing required argument `name`", "product name (§8.2)");
         return (d, Vec::new(), None);
     }
     if !rules::valid_plugin_name(&name) {
-        d.shape("BRV-MF-0001", &name, "", "args.name", format!("产品名 `{name}` 不符名字契约"), "契约: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)");
+        d.shape("BRV-MF-0001", &name, "", "args.name", format!("product name `{name}` violates the name contract"), "contract: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)");
         return (d, Vec::new(), None);
     }
     let app = args
@@ -793,12 +795,12 @@ pub fn plan_init(
         .map(str::to_string)
         .unwrap_or_else(|| format!("app/{name}"));
     if !rules::valid_plugin_name(&app) {
-        d.shape("BRV-MF-0001", &name, "", "args.app", format!("app 名 `{app}` 不符名字契约"), "§8.3");
+        d.shape("BRV-MF-0001", &name, "", "args.app", format!("app name `{app}` violates the name contract"), "§8.3");
         return (d, Vec::new(), None);
     }
     let lang = args.get("lang").and_then(|v| v.as_str()).unwrap_or("c").to_string();
     if !rules::in_list(rules::TEMPLATE_LANGS, &lang) {
-        d.usage(format!("v0.1 只交付 `c` 模板, 收到 `{lang}`"), "product 模板在 `templates/product/<lang>/`");
+        d.usage(format!("v0.1 delivers only the `c` template, got `{lang}`"), "product templates live in `templates/product/<lang>/`");
         return (d, Vec::new(), None);
     }
 
@@ -820,7 +822,7 @@ pub fn plan_init(
         vars: pvars,
     }];
 
-    // app/<name>/ 骨架(plugin_type = app)
+    // app/<name>/ skeleton (plugin_type = app)
     let app_facts = PluginFacts {
         name: &app,
         plugin_type: "app",
@@ -852,7 +854,7 @@ pub fn plan_init(
         });
     }
 
-    // brickie.lock(机器文件; 内容由 core 给)。形状 = schema/lock.schema.json。
+    // brickie.lock (machine file; content comes from core). Shape = schema/lock.schema.json.
     let lock = crate::model::Lock {
         schema: 1,
         profile: "dev".into(),
@@ -887,10 +889,10 @@ pub fn plan_init(
 
 // ------------------------------------------------------------------ gen-plan
 
-/// `gen-plan`: 重建 `build/gen/**` 的计划(描述符)。
+/// `gen-plan`: plan for rebuilding `build/gen/**` (descriptors).
 ///
-/// v0.1 的 `include/<short>/<short>.h` 是**人写**文件(§8.4), 因此这里只出描述符;
-/// 把"头文件也生成"留给 v0.3(见 README 的偏差表)。
+/// In v0.1 `include/<short>/<short>.h` is a **human-written** file (§8.4), so this emits descriptors only;
+/// generating the header too is left to v0.3 (see the deviation table in the README).
 pub fn gen_plan(
     root: &std::path::Path,
     args: &serde_json::Map<String, Value>,
@@ -899,16 +901,16 @@ pub fn gen_plan(
     let tree = crate::model::load_tree(root);
     let mut d = tree.diags.clone();
     let mut out = Vec::new();
-    // 生成物数量 = **会被编进镜像的**描述符数。每个生成物都带同一个值, 于是弱符号
-    // `br_plugin_gen_total` 任取一条都一致(见 ADR-0005 §2.4)。
+    // Generated-artifact count = number of descriptors that **get compiled into the image**. Every artifact
+    // carries the same value, so the weak symbol `br_plugin_gen_total` agrees whichever one is taken (see ADR-0005 §2.4).
     //
-    // ★ 为什么是**闭包**而不是"插件树里的插件数": core 的 TC-PLUG-001 断言
-    //   "`.br_plugins` 段里的条数 == 本符号的值"。而 build 会**按闭包过滤生成物**
-    //   (见 build.rs 的 filter_gen_sources: 未选中的插件, 它的描述符不进镜像),
-    //   于是"树里的插件数"在有**未选中插件**的树里必然大于段条数 —— 那个断言会红。
-    //   生产里第一次撞上它是 sched/coop 与 sched/rr 共存、而产品只能选一个调度器
-    //   (ADR-0011)。⇒ 口径改为闭包大小: 它才是"镜像里有几条描述符"的真值。
-    //   没有 product.toml 的树(纯插件树校验, R-1)退回整棵树。
+    // Why **closure size** rather than "number of plugins in the tree": core's TC-PLUG-001 asserts
+    //   "entries in `.br_plugins` == value of this symbol". But the build **filters generated files by closure**
+    //   (see build.rs filter_gen_sources: an unselected plugin's descriptor does not enter the image),
+    //   so "plugins in the tree" necessarily exceeds the section count in a tree with **unselected plugins** — that assertion would fail.
+    //   The first production encounter was sched/coop and sched/rr coexisting while the product can pick only one
+    //   scheduler (ADR-0011). ⇒ switch to closure size: that is the truth of "how many descriptors are in the image".
+    //   A tree without product.toml (pure plugin-tree check, R-1) falls back to the whole tree.
     let gen_total = match &tree.product {
         Some(prod) => {
             let sol = crate::solver::solve(&tree, &prod.stage, false);
@@ -924,9 +926,9 @@ pub fn gen_plan(
         }
         let mut facts = facts_of(p);
         facts.gen_total = gen_total;
-        // 自检开关(ADR-0010 §2.3): 生成期裁决 —— 关掉时描述符写 BR_PLUGIN_NO_HOOK,
-        // 于是"关掉自检"= 测试代码**不进镜像**, 而不只是"不跑"。
-        // 没有 product.toml 的树(纯插件树校验/R-1)按"不发"处理: 那是不完整的组合。
+        // Selftest switch (ADR-0010 §2.3): decided at generation time — when off, the descriptor writes
+        // BR_PLUGIN_NO_HOOK, so "selftest off" = test code does **not enter the image**, not merely "does not run".
+        // A tree without product.toml (pure plugin-tree check / R-1) is treated as "no emission": it is an incomplete composition.
         facts.emit_selftest = p.has_selftest
             && tree
                 .product
@@ -949,16 +951,16 @@ pub fn gen_plan(
     }
     if let Some(name) = &only {
         if !tree.plugins.iter().any(|p| &p.name == name) {
-            d.usage(format!("插件树里找不到插件 `{name}`"), "`gen-plan` 的 `plugin` 参数可选");
+            d.usage(format!("no plugin `{name}` found in the plugin tree"), "`gen-plan`'s `plugin` argument is optional");
         }
     }
     (d, out)
 }
 
-/// 从模型插件构造 [`PluginFacts`]。
+/// Build [`PluginFacts`] from a model plugin.
 ///
-/// `gen_total` / `decl_include` 是**计划级**事实(要扫盘/数插件树), 由调用方填:
-/// `gen_plan` 用真值, `plan_new` / `plan_init` 用骨架期的预测值。
+/// `gen_total` / `decl_include` are **plan-level** facts (they need disk scans / plugin-tree counts), filled by the caller:
+/// `gen_plan` uses real values, `plan_new` / `plan_init` use skeleton-phase predictions.
 pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
     let (ram, stack) = p.res_totals();
     PluginFacts {
@@ -987,10 +989,10 @@ pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
         gen_total: 0,
         decl_include: String::new(),
         has_init: p.phase != "early",
-        // 缺省**不发**: 只有 gen_plan(知道产品开关)会把它打开。
-        // 这样 plan_new/plan_init 的骨架期预测也自然是"不带自检"。
+        // Default is **no emission**: only gen_plan (which knows the product switch) turns it on.
+        // This way plan_new/plan_init skeleton-phase predictions are naturally "no selftest".
         emit_selftest: false,
-        // 挂载计划(ADR-0030): 从 plugin.toml 的 [[mount]] 逐条带过来。
+        // Mount plan (ADR-0030): carried over entry by entry from brick.toml's [[mount]].
         mounts: p
             .mounts
             .iter()
@@ -1004,7 +1006,7 @@ pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
     }
 }
 
-/// 把计划渲染成 `data` 载荷。
+/// Render a plan into the `data` payload.
 pub fn artifacts_data(artifacts: &[Artifact]) -> Value {
     let arr: Vec<Value> = artifacts.iter().map(|a| a.to_json()).collect();
     let planned: Vec<Value> = artifacts

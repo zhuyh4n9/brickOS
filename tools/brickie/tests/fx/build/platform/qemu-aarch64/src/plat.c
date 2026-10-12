@@ -1,3 +1,3 @@
-/* fx/build 的 platform 桩。 */
+/* fx/build platform stub. */
 int fx_plat(void);
 int fx_plat(void) { return 0; }

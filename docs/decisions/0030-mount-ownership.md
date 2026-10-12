@@ -13,7 +13,7 @@
 ## 1. 背景: "谁挂载"错位导致的三个问题
 
 上一版的形态是: **每个 FS 插件在自己的 init/start 相调 `br_mount_register("/挂载点", …)`**,
-同时在 `plugin.toml` 里声明一份 `[[mount]] path = "/挂载点"`。于是:
+同时在 `brick.toml` 里声明一份 `[[mount]] path = "/挂载点"`。于是:
 
 1. **挂载计划有两个真值** —— 码里的常量一份、manifest 一份, 改一处不报错, 只会静默挂错
    地方(`br-wa-fs-001` 记的正是这条)。工具侧既不消费 `[[mount]]`, 也不校验两者一致。
@@ -60,7 +60,7 @@ vfs-core 的 `br_vfs_mount()`; 位置在 `runtime/posix`(与其它 POSIX 面同�
 
 ### D-3 挂载计划写在**APP 的**声明面(A+C)
 
-APP 在自己的 `plugin.toml` 里声明:
+APP 在自己的 `brick.toml` 里声明:
 
 ```toml
 [[mount]]
@@ -131,7 +131,7 @@ vfs: mount /assets (dev=emmc3)  mounted /assets (fstype=erofs)
 
 1. **FS 插件不许自挂载**: `fs/**` 与 `adapter/**` 的源码里不许出现 `br_mount_register`
    (唯一豁免: vfs-core 自己的实现与它的一致性套件);
-2. **`[[mount]]` 只归 APP**: 除 `app/**` 外的 `plugin.toml` 里不许有 `[[mount]]`。
+2. **`[[mount]]` 只归 APP**: 除 `app/**` 外的 `brick.toml` 里不许有 `[[mount]]`。
 
 > 为什么要有这条门禁: 这两件事都是"改了也不报错、只是行为悄悄变了"的类型 ——
 > 谁再往 FS 插件里写一行 `br_mount_register`, 挂载就又变成 FS 自己的决定, 而这在

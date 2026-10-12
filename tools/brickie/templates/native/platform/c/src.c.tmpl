@@ -1,26 +1,26 @@
-/* {{name}} — 实现骨架
+/* {{name}} — implementation skeleton
  *
- * 人写文件: 由 `brickie new` 生成一次, 之后由人维护(brickie 不覆盖)。
- * **描述符实例不在这里** —— 它在生成物 build/gen/{{name}}/plugin_desc.c(§8.4)。
+ * Human-written file: generated once by `brickie new`, then maintained by hand (brickie never overwrites).
+ * **The descriptor instance is not here** — it lives in the generated build/gen/{{name}}/plugin_desc.c (§8.4).
  *
- * Platform 插件在 EARLY 相声明内存 region 表(`br_mm_region_add`, `3-01` §7),
- * 因此 early_init 是它最重要的回调。
+ * Platform plugins declare the memory region table in the EARLY phase (`br_mm_region_add`, `3-01` §7),
+ * so early_init is their most important callback.
  */
 #include "{{short}}/{{short}}.h"
 
-/* EARLY 相: 不使用堆 / 无线程 / 关中断(`1-01` §6.2) */
+/* EARLY phase: no heap / no threads / interrupts off (`1-01` §6.2) */
 int {{symbol_prefix}}early_init(void)
 {
     return 0;
 }
 
-/* CORE / LATE 相: 堆可用, 调度器已锁定, 中断仍关 */
+/* CORE / LATE phase: heap available, scheduler locked, interrupts still off */
 int {{symbol_prefix}}init(void)
 {
     return 0;
 }
 
-/* 全局开中断后: 中断可用, 可创建线程 */
+/* After global interrupt enable: interrupts available, threads can be created */
 int {{symbol_prefix}}start(void)
 {
     return 0;

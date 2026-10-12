@@ -96,3 +96,5 @@ adapter/uboot-mmc — 第三方来源与许可说明(ADR-0026 形态)
   `framework/**`、`platform/**`、`core/**` 等保持 WTFPL。**残余风险**(静态链接进同一镜像后,
   整镜像在分发时仍构成 GPL 组合作品 —— "目录隔离"解决的是代码归属清晰, 不是许可传染)登记在
   `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。
+
+WORKAROUND(br-wa-tp-001): residual GPL combined-work risk of statically linking this port into the image (registered in WORKAROUNDS.md).

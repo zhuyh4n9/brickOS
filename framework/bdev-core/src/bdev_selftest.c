@@ -1,26 +1,27 @@
 /*
- * brickOS prototype v0.2.0 — framework/bdev-core 的**自检套件**(src/bdev_selftest.c)
+ * brickOS prototype v0.2.0 — **self-test suite** of framework/bdev-core (src/bdev_selftest.c)
  *
- * 设计依据与裁定: `docs/decisions/0010-plugin-selftest.md`(自检与核心代码分离)、
- * `docs/decisions/0021-bdev-pci-emmc.md`(bdev 形状与 raw 面 = v2)。
+ * Design basis and rulings: `docs/decisions/0010-plugin-selftest.md` (self-test separated from core code),
+ * `docs/decisions/0021-bdev-pci-emmc.md` (bdev shape and raw surface = v2).
  *
- * ## 它测什么, 与生产代码的边界在哪
- *   块设备子分类的**机制**(自编号 `TC-BDEV-*`): 名字/ops/几何的注册期校验、取回语义、
- *   注册表簿记、以及"bdev 条目没有文件面"(D21 ⇒ `/dev/<bdev>` 看得见打不开)。
- *   **不**测任何具体介质 —— 真实块的往返在驱动自己的套件里(如 `adapter/uboot-mmc`
- *   的 `TC-EMMC-*`), 那是"设备"的证据, 不是"子分类框架"的证据。
+ * ## What it tests, and where the boundary with production code lies
+ *   The block device subclass's **mechanism** (own numbering `TC-BDEV-*`): register-time validation of
+ *   name/ops/geometry, retrieval semantics, registry bookkeeping, and "a bdev entry has no file surface"
+ *   (D21 ⇒ `/dev/<bdev>` is visible but not openable).
+ *   It does **not** test any concrete medium — real block round-trips live in the driver's own suite
+ *   (e.g. `adapter/uboot-mmc`'s `TC-EMMC-*`); that is evidence about a "device", not about the "subclass framework".
  *
- * ## 为什么大量用例走"合法名字 + 非法输入"这一手
- *   `br_bdev_register` 的校验在**入表之前**, 所以用"合法的、当前空闲的名字"配上非法
- *   ops/几何, 可以既覆盖每条拒绝分支、又**不真的登记**任何东西(注册表不被污染, 用例之间
- *   也就没有顺序耦合)。这是 cdev-core 的 `br_cdev_register('cdevx', <只有 open 的 ops>)`
- *   同一手法。
+ * ## Why many cases use "legal name + illegal input"
+ *   `br_bdev_register` validates **before entering the table**, so pairing a "legal, currently free name"
+ *   with illegal ops/geometry covers every rejection branch while **registering nothing** (the registry is
+ *   not polluted, so cases have no ordering coupling). Same trick as cdev-core's
+ *   `br_cdev_register('cdevx', <ops with only open>)`.
  *
- * ## 与 br_plugin_manager_selftest() 的契约
- *   返回**失败项数**(0 = 全绿); 日志自己打(`[BDEVCONF] PASS/FAIL ...` + `SUMMARY`)。
- *   失败不停机 —— 红绿由门禁判(`tests/gates.toml` 的 forbid 里有 `[BDEVCONF] FAIL`)。
+ * ## Contract with br_plugin_manager_selftest()
+ *   Returns the **number of failures** (0 = all green); logs itself (`[BDEVCONF] PASS/FAIL ...` + `SUMMARY`).
+ *   Failure does not halt — red/green is judged by the gate (`[BDEVCONF] FAIL` is in tests/gates.toml's forbid).
  */
-#include <br/dev/br_bdev.h>     /* 对外契约(br_bdev_ops_t / br_bdev_geom_t) */
+#include <br/dev/br_bdev.h>     /* public contract (br_bdev_ops_t / br_bdev_geom_t) */
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -29,14 +30,14 @@
 
 #include "bdev_internal.h"
 
-/* 自检入口原型(定义在本文件末尾; 生成物 `plugin_desc.c` 的 `.selftest` 钩子引用它)。 */
+/* Self-test entry prototype (defined at the end of this file; the generated `plugin_desc.c` `.selftest` hook calls it). */
 int bdev_core_selftest(void);
 
 /* =====================================================================
- * 探针设备(只服务本文件, 不登记)
+ * Probe device (serves only this file, not registered)
  *
- * geometry 由 priv 指向的 `br_bdev_geom_t` 原样回答 ⇒ 同一张 ops 表可以扮演"几何合法"
- * 与"几何各种非法"两种角色, 不需要为每个非法值写一张 ops 表。
+ * geometry is answered verbatim from the `br_bdev_geom_t` that priv points at ⇒ one ops table can play
+ * both "legal geometry" and "various illegal geometry" roles, without an ops table per illegal value.
  * ===================================================================== */
 
 static int probe_geometry(void *priv, br_bdev_geom_t *g)
@@ -51,7 +52,7 @@ static int probe_geometry(void *priv, br_bdev_geom_t *g)
 static int probe_read(void *priv, br_u64 lba, void *buf, br_size_t n_lba)
 {
     (void)priv; (void)lba; (void)buf; (void)n_lba;
-    return 0;                       /* 从不被本套件调用: 校验路径不含 I/O */
+    return 0;                       /* never called by this suite: the validation path has no I/O */
 }
 
 static int probe_write(void *priv, br_u64 lba, const void *buf, br_size_t n_lba)
@@ -66,7 +67,7 @@ static int probe_flush(void *priv)
     return 0;
 }
 
-/* 四个必填槽位齐全的"好 ops"(唯一可变的部分是 geometry 经由 priv 注入) */
+/* "good ops" with all four required slots present (the only variable part is geometry injected via priv) */
 static const br_bdev_ops_t s_good_ops = {
     .read     = probe_read,
     .write    = probe_write,
@@ -77,7 +78,7 @@ static const br_bdev_ops_t s_good_ops = {
     .resume   = BR_NULL,
 };
 
-/* 缺槽位的坏 ops(每张只缺一个, 用来钉"必填"逐条成立) */
+/* bad ops with a missing slot (each table lacks exactly one, pinning each "required" slot individually) */
 static const br_bdev_ops_t s_no_read_ops = {
     .read = BR_NULL, .write = probe_write, .flush = probe_flush, .geometry = probe_geometry,
 };
@@ -91,13 +92,13 @@ static const br_bdev_ops_t s_no_geom_ops = {
     .read = probe_read, .write = probe_write, .flush = probe_flush, .geometry = BR_NULL,
 };
 
-/* 合法的"几何基线"(512 B 扇区 / 8 扇区 / 上限 4 / 无对齐要求 / PIO) */
+/* legal "geometry baseline" (512 B sectors / 8 sectors / max_rw 4 / no alignment requirement / PIO) */
 #define PROBE_GEOM_SECTOR   512u
 #define PROBE_GEOM_SECTORS  8u
 #define PROBE_GEOM_MAXRW    4u
 
 /* =====================================================================
- * 一致性用例(自编号 TC-BDEV-*; 登记在 br-wa-test-001)
+ * Conformance cases (own numbering TC-BDEV-*; registered in br-wa-test-001)
  * ===================================================================== */
 
 static br_u32 s_bd_pass;
@@ -114,7 +115,7 @@ static void bd_conf(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* 遍历注册表数 BR_CLASS_BDEV 条目(公开 API) */
+/* count BR_CLASS_BDEV entries by walking the registry (public API) */
 static br_u32 bd_registry_count(void)
 {
     br_u32 n = 0u;
@@ -145,7 +146,7 @@ int bdev_core_selftest(void)
 
     br_log_info("[BDEVCONF] bdev-core conformance (register/get/geometry/raw-face)");
 
-    /* ---- TC-BDEV-001: 名字规则(合法 ops; 拒绝发生在入表之前) ---- */
+    /* ---- TC-BDEV-001: name rules (legal ops; rejection happens before table entry) ---- */
     {
         br_bdev_geom_t g = { PROBE_GEOM_SECTOR, PROBE_GEOM_SECTORS, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
         const br_u32   n0 = br_dev_count();
@@ -162,10 +163,10 @@ int bdev_core_selftest(void)
                            (r_under == BR_ERR(EINVAL)) &&
                            (br_dev_count() == n0);
         bd_conf(ok, "TC-BDEV-001",
-                "NULL/空/大写/斜杠/下划线名 ⇒ -EINVAL 且注册表不变");
+                "NULL/empty/uppercase/slash/underscore name ⇒ -EINVAL and registry unchanged");
     }
 
-    /* ---- TC-BDEV-002: ops 必填槽位(合法空闲名 + 缺槽位 ⇒ -EINVAL, 不入表) ---- */
+    /* ---- TC-BDEV-002: required ops slots (legal free name + missing slot ⇒ -EINVAL, no table entry) ---- */
     {
         br_bdev_geom_t g = { PROBE_GEOM_SECTOR, PROBE_GEOM_SECTORS, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
         const br_u32   n0 = br_dev_count();
@@ -183,13 +184,13 @@ int bdev_core_selftest(void)
                            (br_dev_count() == n0) &&
                            (br_bdev_get("bdevtest0", BR_NULL) == BR_NULL);
         bd_conf(ok, "TC-BDEV-002",
-                "ops 空 / 缺 read|write|flush|geometry ⇒ -EINVAL 且名字仍空闲");
+                "null ops / missing read|write|flush|geometry ⇒ -EINVAL and the name stays free");
     }
 
-    /* ---- TC-BDEV-003: 几何自洽(注册期调用 geometry 并逐条拒绝) ---- */
+    /* ---- TC-BDEV-003: geometry self-consistency (geometry called at register time and rejected item by item) ---- */
     {
         const br_u32 n0 = br_dev_count();
-        /* 每项: {几何, 说明} —— geometry 由 priv 注入 */
+        /* per item: {geometry, description} — geometry injected via priv */
         br_bdev_geom_t g_zero_sec = { 0u, PROBE_GEOM_SECTORS, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
         br_bdev_geom_t g_not_pow2 = { 500u, PROBE_GEOM_SECTORS, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
         br_bdev_geom_t g_zero_n   = { PROBE_GEOM_SECTOR, 0u, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
@@ -217,12 +218,12 @@ int bdev_core_selftest(void)
                            (r_both == BR_ERR(EINVAL)) &&
                            (br_dev_count() == n0);
         bd_conf(ok, "TC-BDEV-003",
-                "sector=0/非 2 幂, n_sectors=0, max_rw=0/>n, align 非 2 幂, DMA|PIO 同置 ⇒ -EINVAL");
+                "sector=0/not a power of 2, n_sectors=0, max_rw=0/>n, align not a power of 2, DMA|PIO both set ⇒ -EINVAL");
     }
 
-    /* ---- TC-BDEV-004: 取回语义(未注册是 NULL, 且不改写出参) ---- */
+    /* ---- TC-BDEV-004: retrieval semantics (unregistered is NULL and does not write the out-param) ---- */
     {
-        void *sentinel = (void *)&s_bd_pass;      /* 任意非 NULL 哨兵 */
+        void *sentinel = (void *)&s_bd_pass;      /* any non-NULL sentinel */
         void *priv = sentinel;
 
         const br_bdev_ops_t *ops = br_bdev_get("nosuchbdev", &priv);
@@ -230,11 +231,12 @@ int bdev_core_selftest(void)
 
         const br_bool ok = (ops == BR_NULL) && (priv == sentinel) && (ops_null == BR_NULL);
         bd_conf(ok, "TC-BDEV-004",
-                "未注册 ⇒ NULL 且 *priv 不变; br_bdev_get(NULL,NULL) ⇒ NULL");
+                "unregistered ⇒ NULL and *priv unchanged; br_bdev_get(NULL,NULL) ⇒ NULL");
     }
 
-    /* ---- TC-BDEV-005: raw 文件面 = v2(遍历注册表: bdev 条目 open_file 恒 NULL) ----
-     * 机械判据: 谁给 bdev 接上文件面(或让注册路径漏了 NULL), 这条就红(与 TC-CDEV-008 同型)。 */
+    /* ---- TC-BDEV-005: raw file surface = v2 (walk registry: bdev entries always have open_file NULL) ----
+     * Mechanical criterion: whoever wires a file surface onto bdev (or lets the register path miss the NULL)
+     * turns this red (same shape as TC-CDEV-008). */
     {
         br_bool all_null = BR_TRUE;
         for (br_u32 i = 0u; i < br_dev_count(); i++) {
@@ -244,14 +246,14 @@ int bdev_core_selftest(void)
             }
         }
         bd_conf(all_null, "TC-BDEV-005",
-                "所有 BR_CLASS_BDEV 条目的 open_file == NULL(D21: raw 块访问属 v2)");
+                "all BR_CLASS_BDEV entries have open_file == NULL (D21: raw block access is v2)");
     }
 
-    /* ---- TC-BDEV-006: 活设备往返(组合含 bdev 时; 无 bdev 走"不适用") ---- */
+    /* ---- TC-BDEV-006: live device round-trip (when the composition includes a bdev; no bdev ⇒ "not applicable") ---- */
     {
         const char *name = bd_first_name();
         if (name == BR_NULL) {
-            bd_conf(BR_TRUE, "TC-BDEV-006", "组合内无 bdev ⇒ 不适用(平凡通过)");
+            bd_conf(BR_TRUE, "TC-BDEV-006", "no bdev in the composition ⇒ not applicable (trivially passes)");
         } else {
             const br_dev_class_entry_t *e = br_dev_lookup(name);
             void           *priv = BR_NULL;
@@ -266,11 +268,11 @@ int bdev_core_selftest(void)
                                (g.max_rw > 0u) && ((br_u64)g.max_rw <= g.n_sectors) &&
                                (dup == BR_ERR(EEXIST));
             bd_conf(ok, "TC-BDEV-006",
-                    "取回 ops==条目 class_priv; 几何自洽; 重名重注册 ⇒ -EEXIST");
+                    "retrieved ops==entry class_priv; geometry self-consistent; duplicate register ⇒ -EEXIST");
         }
     }
 
-    /* ---- TC-BDEV-007: 池簿记(占用数 <= 容量, 且与注册表条目数一致) ---- */
+    /* ---- TC-BDEV-007: pool bookkeeping (used <= capacity, and matches the registry entry count) ---- */
     {
         const br_u32 cap  = bdev_internal_capacity();
         const br_u32 used = bdev_internal_slot_count();
@@ -278,14 +280,14 @@ int bdev_core_selftest(void)
 
         const br_bool ok = (cap >= 1u) && (used <= cap) && (used == reg);
         bd_conf(ok, "TC-BDEV-007",
-                "slot_count <= capacity 且 slot_count == 注册表 bdev 条目数");
+                "slot_count <= capacity and slot_count == registry bdev entry count");
     }
 
-    /* ---- TC-BDEV-008: flags 位域(活设备; 不认识的位 ⇒ 红) ---- */
+    /* ---- TC-BDEV-008: flags bitfield (live device; unknown bit ⇒ red) ---- */
     {
         const char *name = bd_first_name();
         if (name == BR_NULL) {
-            bd_conf(BR_TRUE, "TC-BDEV-008", "组合内无 bdev ⇒ 不适用(平凡通过)");
+            bd_conf(BR_TRUE, "TC-BDEV-008", "no bdev in the composition ⇒ not applicable (trivially passes)");
         } else {
             void                *priv = BR_NULL;
             const br_bdev_ops_t *ops = br_bdev_get(name, &priv);
@@ -298,7 +300,7 @@ int bdev_core_selftest(void)
             const br_bool ok = (grc == 0) && ((g.flags & ~known) == 0u) &&
                                ((g.flags & both) != both);
             bd_conf(ok, "TC-BDEV-008",
-                    "geometry.flags 只含已知位且 DMA/PIO 不同置");
+                    "geometry.flags holds only known bits and not both DMA/PIO");
         }
     }
 

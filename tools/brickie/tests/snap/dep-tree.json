@@ -12,7 +12,7 @@
             "range": "*"
           }
         ],
-        "file": "app/hsm/plugin.toml",
+        "file": "app/hsm/brick.toml",
         "phase": "app"
       },
       "iface/hsm-api": {
@@ -24,12 +24,12 @@
             "range": "*"
           }
         ],
-        "file": "iface/hsm-api/plugin.toml",
+        "file": "iface/hsm-api/brick.toml",
         "phase": "late"
       },
       "platform/qemu-aarch64": {
         "deps": [],
-        "file": "platform/qemu-aarch64/plugin.toml",
+        "file": "platform/qemu-aarch64/brick.toml",
         "phase": "core"
       },
       "sched/coop": {
@@ -41,7 +41,7 @@
             "range": "*"
           }
         ],
-        "file": "sched/coop/plugin.toml",
+        "file": "sched/coop/brick.toml",
         "phase": "core"
       },
       "service/crypto": {
@@ -53,7 +53,7 @@
             "range": "*"
           }
         ],
-        "file": "service/crypto/plugin.toml",
+        "file": "service/crypto/brick.toml",
         "phase": "late"
       }
     },

@@ -1,32 +1,37 @@
 /*
- * tests/host/sync_test.c — 宿主侧同步原语语义用例(设计 6-01 §3.2/§3.3 的 TC-SYNC/TC-TIME)
+ * tests/host/sync_test.c — host-side sync primitive semantics cases (design 6-01 §3.2/§3.3, TC-SYNC/TC-TIME)
  *
- * ## 为什么宿主侧是主判据
+ * ## Why the host side is the primary check
  *
- * mutex/sem/cond 的**难点全在阻塞路径**: "挂等待链 → 让出 CPU → 被唤醒/超时 → 摘链 →
- * 重新加锁/交接所有权"。只测无锁快路径等于没测。宿主上我们用一个**假调度器**把
- * `br_sched_block_current()`/`br_sched_wake()`/超时扫描真的实现出来 —— 阻塞、唤醒、
- * 超时三态于是**真的跑一遍**, 而不是查数据结构。
+ * The hard part of mutex/sem/cond is entirely in the blocking path: "push the wait chain → yield
+ * the CPU → wakeup/timeout → unlink → re-lock/hand off ownership". Testing only the lock-free
+ * fast path is no test at all. On the host a fake scheduler really implements
+ * `br_sched_block_current()`/`br_sched_wake()`/timeout scanning — so blocking, wakeup and
+ * timeout really run once, instead of inspecting data structures.
  *
- * ## 测试装置的边界(与 ADR-0007 §2.7 对应)
+ * ## Test-harness boundary (matches ADR-0007 §2.7)
  *
- * - 宿主的上下文切换用 `ucontext.h` 的 `swapcontext()`。它是**测试装置**, 不是第二份
- *   目标实现 —— 目标侧切换是 `core/src/sched/` 的 asm, 宿主侧只需要"能阻塞/能被唤醒"
- *   这一件事; 在 x86 宿主上手写一遍 aarch64 切换汇编毫无意义。
- * - 被测文件 = `core/src/sync/sync.c`(同步原语)+ `core/src/time.c`(br_deadline_from_now)
- *   + `core/src/string.c`(编译器的支持例程)。**不**编 `core/src/sched/sched_core.c`
- *   (它含 `wfi` 内联汇编, 宿主编不过): 等待链四原语与 TCB 布局在宿主侧按
- *   `sched_internal.h` 的**冻结契约**原样重实现(它就是 30 行单链表, 不是算法)。
- * - 假调度器**严格遵守** sync.c 依赖的握手协议(见 sync.c 头注的 ICB 协议):
- *   `br_sched_wake()` 先写 `wait_status=0`; `br_sched_block_current()` 看到
- *   `wait_status==0` 就不切走; 超时只对 `state==BLOCKED` 的线程生效。
+ * - Host context switching uses `swapcontext()` from `ucontext.h`. It is a test harness, not a
+ *   second target implementation — the target switch is asm in `core/src/sched/`, and the host
+ *   side only needs "can block / can be woken". Hand-writing aarch64 switch asm on an x86 host
+ *   is pointless.
+ * - Files under test = `core/src/sync/sync.c` (sync primitives) + `core/src/time.c`
+ *   (br_deadline_from_now) + `core/src/string.c` (compiler support routines). It does NOT
+ *   compile `core/src/sched/sched_core.c` (it contains `wfi` inline asm, which the host cannot
+ *   build): the four wait-chain primitives and the TCB layout are reimplemented on the host
+ *   exactly per the frozen contract in `sched_internal.h` (it is a 30-line singly linked list,
+ *   not an algorithm).
+ * - The fake scheduler strictly follows the handshake protocol sync.c relies on (see the ICB
+ *   protocol in the sync.c header): `br_sched_wake()` writes `wait_status=0` first;
+ *   `br_sched_block_current()` sees `wait_status==0` and does not switch away; timeouts apply
+ *   only to threads with `state==BLOCKED`.
  *
- * ## 输出协议
+ * ## Output protocol
  *
- *   [SYNCCONF] PASS/FAIL/SKIP <tag> <desc>     (与 target 侧同一份 sync.c 打出)
+ *   [SYNCCONF] PASS/FAIL/SKIP <tag> <desc>     (printed by the same sync.c as on target)
  *   [HOSTTEST] PASS/FAIL <tag> <desc>
  *   [HOSTTEST] SUMMARY pass=N fail=0 total=N
- * 有失败 ⇒ 退出码非 0。
+ * Any failure ⇒ non-zero exit code.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -41,10 +46,12 @@
 #include "sched_internal.h"
 
 /*
- * 自检套件入口的前置声明。ADR-0010 之后它**不再**出现在 `br_sync.h` —— 自检入口不是
- * 插件的对外能力, 留在 golden 面会让"改一个用例"变成接口变更。声明集中在
- * `core/selftest/core_selftest.c`; 本文件是调用者, 于是自带一份(实现随套件在
- * `core/selftest/sync_selftest.c`, 由 gates.toml 的 sync-test sources 一起编)。
+ * Forward declaration of the self-test suite entry. After ADR-0010 it no longer appears in
+ * `br_sync.h` — the self-test entry is not a plugin's public capability, and keeping it on the
+ * golden surface would turn "change one case" into an interface change. Declarations are
+ * centralized in `core/selftest/core_selftest.c`; this file is a caller, so it carries its own
+ * (the implementation lives with the suite in `core/selftest/sync_selftest.c`, compiled together
+ * by the gates.toml sync-test sources).
  */
 int br_sync_selftest(void);
 
@@ -55,7 +62,7 @@ int br_sync_selftest(void);
 #include <ucontext.h>
 
 /* =====================================================================
- * 用例框架
+ * Case framework
  * ===================================================================== */
 
 static int s_pass;
@@ -78,7 +85,7 @@ static void section(const char *tag, const char *desc)
 }
 
 /* =====================================================================
- * 假平台时钟(time.c 的宿主替身): 1 MHz ⇒ 1 tick == 1 us(虚拟时钟, 便于精确判据)
+ * Fake platform clock (the host stand-in for time.c): 1 MHz ⇒ 1 tick == 1 us (virtual clock, for exact checks)
  * ===================================================================== */
 
 #define FAKE_TICKS_HZ 1000000u
@@ -95,7 +102,7 @@ br_u64 br_plat_ticks_now(void)
     return g_ticks;
 }
 
-/* panic 的宿主替身(只有"魔数被踩坏"的 spinlock 路径会走到这里)。 */
+/* host stand-in for panic (only the spinlock path with "magic stomped" reaches here). */
 BR_NORETURN void br_panic_bare(const char *fmt, ...)
 {
     va_list ap;
@@ -109,11 +116,12 @@ BR_NORETURN void br_panic_bare(const char *fmt, ...)
 }
 
 /* =====================================================================
- * 假 L2 中断锁(br_irq_lock/unlock 的宿主替身)
+ * Fake L2 interrupt lock (host stand-in for br_irq_lock/unlock)
  *
- * 宿主没有可屏蔽的中断; 但调度是**协作式**的(只有显式 block/yield 才切换), 所以
- * "关中断临界区里不切换"这一条在宿主上同样成立。状态编码与真实现同构(I 位 + depth),
- * 于是 spinlock 的配对用例在宿主上同样有意义。
+ * The host has no maskable interrupts; but scheduling is cooperative (only an explicit
+ * block/yield switches), so "no switch inside an interrupts-off critical section" holds on the
+ * host as well. The state encoding is isomorphic to the real implementation (I bit + depth), so
+ * the spinlock pairing cases are meaningful on the host too.
  * ===================================================================== */
 
 static br_u32 g_irq_depth;
@@ -123,7 +131,7 @@ br_irq_state_t br_irq_lock(void)
     br_irq_state_t st = (br_irq_state_t)(g_irq_depth << BR_IRQ_ST_DEPTH_SHIFT);
 
     if (g_irq_depth != 0u) {
-        st |= BR_IRQ_ST_I_MASK;      /* 已经关着了 ⇒ "进入前 I 位 = 1" */
+        st |= BR_IRQ_ST_I_MASK;      /* already off ⇒ "I bit before entry = 1" */
     }
     g_irq_depth++;
     return st;
@@ -133,13 +141,13 @@ void br_irq_unlock(br_irq_state_t st)
 {
     (void)st;
     if (g_irq_depth == 0u) {
-        return;                      /* 下溢护栏(与真实现同纪律) */
+        return;                      /* underflow guard (same discipline as the real implementation) */
     }
     g_irq_depth--;
 }
 
 /* =====================================================================
- * 等待链四原语(按 sched_internal.h 的冻结契约原样重实现; 见文件头注)
+ * The four wait-chain primitives (reimplemented exactly per the frozen contract in sched_internal.h; see the file header)
  * ===================================================================== */
 
 void br_waitq_push(void **head, br_thread_t *t)
@@ -212,7 +220,7 @@ void *br_thread_priv(br_thread_t *t)
 }
 
 /* =====================================================================
- * 假调度器(ucontext)
+ * Fake scheduler (ucontext)
  * ===================================================================== */
 
 #define FAKE_MAX          12u
@@ -246,7 +254,7 @@ static br_bool tcb_live(const struct br_thread *t)
 static void rq_push(br_thread_t *t)
 {
     if (g_rq_len >= FAKE_RQ_CAP) {
-        printf("[HOSTTEST] FAIL SCHED 就绪队列溢出\n");
+        printf("[HOSTTEST] FAIL SCHED ready queue overflow\n");
         exit(2);
     }
     g_rq[g_rq_tail % FAKE_RQ_CAP] = t;
@@ -276,9 +284,10 @@ static br_bool sched_all_done(void)
 }
 
 /*
- * 超时扫描: 没有就绪线程时, 把虚拟时钟推到"最近的期限", 并把所有到期的 BLOCKED
- * 线程置 -ETIMEDOUT + READY。**只对 BLOCKED 生效** —— 已 READY/已被唤醒的线程不再超时,
- * 这是"超时 vs 所有权交接"不出双赢家的关键(与真实现的 tick 扫描同一纪律)。
+ * Timeout scan: with no ready thread, push the virtual clock to the nearest deadline and mark
+ * every expired BLOCKED thread -ETIMEDOUT + READY. It applies ONLY to BLOCKED threads — a thread
+ * that is already READY/woken is not timed out again, which is the key to "timeout vs ownership
+ * handoff" never producing two winners (same discipline as the real tick scan).
  */
 static br_bool advance_timeouts(void)
 {
@@ -330,9 +339,9 @@ static void sched_loop(void)
             }
             if (sched_all_done() == BR_TRUE) {
                 (void)swapcontext(&g_sched_uc, &g_boot_uc);
-                return;                                 /* 不会到这里 */
+                return;                                 /* unreachable */
             }
-            printf("[HOSTTEST] FAIL SCHED 死锁: 无就绪线程且无任何期限\n");
+            printf("[HOSTTEST] FAIL SCHED deadlock: no ready thread and no deadline\n");
             exit(3);
         }
 
@@ -342,7 +351,7 @@ static void sched_loop(void)
     }
 }
 
-/* ---- 调度框架契约(与 br_sched.h/sched_internal.h 同签名) ---- */
+/* ---- Scheduler framework contract (same signatures as br_sched.h/sched_internal.h) ---- */
 
 br_bool br_sched_registered(void)
 {
@@ -364,7 +373,7 @@ int br_sched_block_current(br_time_t abs_deadline)
         return BR_ERR(ENOTSUP);
     }
     if (t->wait_status == 0) {
-        return 0;                    /* ICB: 挂链之后、切走之前已被唤醒 ⇒ 不切走 */
+        return 0;                    /* ICB: already woken after linking but before switching ⇒ do not switch */
     }
 
     t->wait_status = BR_ERR(ETIMEDOUT);
@@ -372,8 +381,9 @@ int br_sched_block_current(br_time_t abs_deadline)
     t->wake_at     = abs_deadline;
     (void)swapcontext(&g_uc[tcb_index(t)], &g_sched_uc);
 
-    /* 切回来时 g_current 已被调度器置回本线程; 重新取一次, 免得依赖"跨 setjmp 的局部量"
-     * (swapcontext 被 GCC 当 setjmp 同族, 跨它读局部量会触发 -Wclobbered 一类的假设)。 */
+    /* on return g_current has been set back to this thread by the scheduler; re-read it rather
+     * than depend on "locals across setjmp" (GCC treats swapcontext like setjmp, and reading a
+     * local across it trips -Wclobbered-style assumptions). */
     return g_current->wait_status;
 }
 
@@ -416,8 +426,9 @@ br_u32 br_thread_pool_used(void)
     return br_sched_task_count();
 }
 
-/* 找一个空 TCB 槽。单独成函数 + 禁止内联: `getcontext/makecontext` 被 GCC 当 setjmp 同族,
- * 内联进来后它会把循环变量算作"跨 setjmp 的局部量"并报 -Wclobbered(值其实不需要跨过它)。 */
+/* find an empty TCB slot. Separate function + no-inline: GCC treats `getcontext/makecontext`
+ * like setjmp, and once inlined it counts the loop variable as a "local across setjmp" and
+ * reports -Wclobbered (the value does not actually need to survive it). */
 #if defined(__GNUC__)
 #  define HOST_NOINLINE __attribute__((noinline))
 #else
@@ -497,15 +508,16 @@ int br_task_join(br_thread_t *t, int *exit_code)
 
     g_join_waiter[tcb_index(t)] = g_current;
     while (t->state != BR_TASK_ZOMBIE) {
-        /* ICB 协议: 让出 CPU 前必须把 wait_status 立成悲观默认(否则上一次唤醒留下的
-         * 0 会被 block_current 当成"已经又被唤醒", 于是根本不切走 —— 忙等死循环)。 */
+        /* ICB protocol: before yielding the CPU, wait_status must be set to the pessimistic
+         * default (otherwise the 0 left by a previous wake would be read by block_current as
+         * "already woken again", so it never switches away — a busy-wait deadlock). */
         g_current->wait_status = BR_ERR(ETIMEDOUT);
         (void)br_sched_block_current(BR_TIMEOUT_INF);
     }
     if (exit_code != NULL) {
         *exit_code = t->exit_code;
     }
-    t->magic = 0u;                   /* 回收 TCB */
+    t->magic = 0u;                   /* reclaim the TCB */
     return BR_OK;
 }
 
@@ -524,7 +536,7 @@ void br_task_yield(void)
 int br_task_sleep(br_time_t rel_us)
 {
     if (rel_us == BR_TIMEOUT_INF) {
-        return BR_ERR(EINVAL);    /* 裁定 G13 */
+        return BR_ERR(EINVAL);    /* ruling G13 */
     }
     if (rel_us == 0u) {
         return BR_OK;
@@ -556,7 +568,7 @@ br_u32 br_task_state(const br_thread_t *t)
 }
 
 /* =====================================================================
- * 宿主侧补充用例(一致性用例之外)
+ * Host-side supplementary cases (beyond the conformance cases)
  * ===================================================================== */
 
 static br_mutex_t    s_def_m  = BR_MUTEX_INIT_VALUE;
@@ -566,35 +578,35 @@ static br_spinlock_t s_def_sp = BR_SPINLOCK_INIT_VALUE;
 
 static void host_static_define(void)
 {
-    section("TC-SYNC-STATIC", "BR_*_DEFINE 静态对象 vs init 动态(CA-2 等价性)");
+    section("TC-SYNC-STATIC", "BR_*_DEFINE static objects vs dynamic init (CA-2 equivalence)");
 
-    CHECK(s_def_m.magic == BR_SYNC_MAGIC_MUTEX, "TC-SYNC-STATIC", "静态 mutex 魔数就位");
-    CHECK(br_mutex_lock(&s_def_m) == BR_OK, "TC-SYNC-STATIC", "静态 mutex 可加锁");
-    CHECK(br_mutex_is_locked(&s_def_m) == BR_TRUE, "TC-SYNC-STATIC", "静态 mutex 状态可变");
-    CHECK(br_mutex_unlock(&s_def_m) == BR_OK, "TC-SYNC-STATIC", "静态 mutex 可解锁");
+    CHECK(s_def_m.magic == BR_SYNC_MAGIC_MUTEX, "TC-SYNC-STATIC", "static mutex magic in place");
+    CHECK(br_mutex_lock(&s_def_m) == BR_OK, "TC-SYNC-STATIC", "static mutex can lock");
+    CHECK(br_mutex_is_locked(&s_def_m) == BR_TRUE, "TC-SYNC-STATIC", "static mutex state changes");
+    CHECK(br_mutex_unlock(&s_def_m) == BR_OK, "TC-SYNC-STATIC", "static mutex can unlock");
 
-    CHECK(br_sem_count(&s_def_s) == 3u, "TC-SYNC-STATIC", "静态 sem 初值 = 宏参数");
-    CHECK(br_sem_take(&s_def_s, BR_TIMEOUT_ZERO) == BR_OK, "TC-SYNC-STATIC", "静态 sem 可取");
-    CHECK(br_sem_give(&s_def_s) == BR_OK, "TC-SYNC-STATIC", "静态 sem 可给");
+    CHECK(br_sem_count(&s_def_s) == 3u, "TC-SYNC-STATIC", "static sem initial value = macro argument");
+    CHECK(br_sem_take(&s_def_s, BR_TIMEOUT_ZERO) == BR_OK, "TC-SYNC-STATIC", "static sem can take");
+    CHECK(br_sem_give(&s_def_s) == BR_OK, "TC-SYNC-STATIC", "static sem can give");
 
-    CHECK(br_cond_signal(&s_def_c) == BR_OK, "TC-SYNC-STATIC", "静态 cond signal 可用");
+    CHECK(br_cond_signal(&s_def_c) == BR_OK, "TC-SYNC-STATIC", "static cond signal works");
 
     CHECK(br_spinlock_trylock(&s_def_sp, &(br_irq_state_t){0u}) == BR_OK,
-          "TC-SYNC-STATIC", "静态 spinlock 可加锁");
-    CHECK(br_spinlock_is_locked(&s_def_sp) == BR_TRUE, "TC-SYNC-STATIC", "静态 spinlock 状态可变");
+          "TC-SYNC-STATIC", "static spinlock can lock");
+    CHECK(br_spinlock_is_locked(&s_def_sp) == BR_TRUE, "TC-SYNC-STATIC", "static spinlock state changes");
     br_spinlock_unlock(&s_def_sp, 0u);
 
     br_mutex_t dyn;
-    CHECK(br_mutex_init(&dyn) == BR_OK, "TC-SYNC-STATIC", "动态 mutex init");
-    CHECK(br_mutex_lock(&dyn) == BR_OK, "TC-SYNC-STATIC", "动态 mutex 加锁");
-    CHECK(br_mutex_unlock(&dyn) == BR_OK, "TC-SYNC-STATIC", "动态 mutex 解锁");
+    CHECK(br_mutex_init(&dyn) == BR_OK, "TC-SYNC-STATIC", "dynamic mutex init");
+    CHECK(br_mutex_lock(&dyn) == BR_OK, "TC-SYNC-STATIC", "dynamic mutex lock");
+    CHECK(br_mutex_unlock(&dyn) == BR_OK, "TC-SYNC-STATIC", "dynamic mutex unlock");
     CHECK(br_mutex_is_locked(&dyn) == br_mutex_is_locked(&s_def_m),
-          "TC-SYNC-STATIC", "静态/动态对象行为等价(解锁后都为未锁)");
+          "TC-SYNC-STATIC", "static/dynamic objects behave alike (both unlocked after unlock)");
 }
 
 static void host_magic_corrupt(void)
 {
-    section("SYNC-MAGIC", "魔数被踩坏(非零垃圾)也必须 -EINVAL, 不静默当'没锁'");
+    section("SYNC-MAGIC", "stomped magic (non-zero garbage) must still give -EINVAL, not silently 'unlocked'");
 
     br_mutex_t m;
     br_sem_t   s;
@@ -605,20 +617,20 @@ static void host_magic_corrupt(void)
     memset(&c, 0xAB, sizeof(c));
     memset(&sp, 0xAB, sizeof(sp));
 
-    CHECK(br_mutex_lock(&m) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 mutex ⇒ -EINVAL");
-    CHECK(br_mutex_unlock(&m) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 mutex unlock ⇒ -EINVAL");
-    CHECK(br_sem_take(&s, BR_TIMEOUT_ZERO) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 sem ⇒ -EINVAL");
-    CHECK(br_sem_give(&s) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 sem give ⇒ -EINVAL");
-    CHECK(br_cond_signal(&c) == BR_ERR(EINVAL), "SYNC-MAGIC", "垃圾 cond ⇒ -EINVAL");
+    CHECK(br_mutex_lock(&m) == BR_ERR(EINVAL), "SYNC-MAGIC", "garbage mutex ⇒ -EINVAL");
+    CHECK(br_mutex_unlock(&m) == BR_ERR(EINVAL), "SYNC-MAGIC", "garbage mutex unlock ⇒ -EINVAL");
+    CHECK(br_sem_take(&s, BR_TIMEOUT_ZERO) == BR_ERR(EINVAL), "SYNC-MAGIC", "garbage sem ⇒ -EINVAL");
+    CHECK(br_sem_give(&s) == BR_ERR(EINVAL), "SYNC-MAGIC", "garbage sem give ⇒ -EINVAL");
+    CHECK(br_cond_signal(&c) == BR_ERR(EINVAL), "SYNC-MAGIC", "garbage cond ⇒ -EINVAL");
     CHECK(br_spinlock_trylock(&sp, &(br_irq_state_t){0u}) == BR_ERR(EINVAL),
-          "SYNC-MAGIC", "垃圾 spinlock trylock ⇒ -EINVAL");
-    CHECK(br_mutex_is_locked(&m) == BR_FALSE, "SYNC-MAGIC", "垃圾 mutex 查询返回 FALSE");
-    CHECK(br_mutex_owner(&m) == NULL, "SYNC-MAGIC", "垃圾 mutex owner 返回 NULL");
+          "SYNC-MAGIC", "garbage spinlock trylock ⇒ -EINVAL");
+    CHECK(br_mutex_is_locked(&m) == BR_FALSE, "SYNC-MAGIC", "garbage mutex query returns FALSE");
+    CHECK(br_mutex_owner(&m) == NULL, "SYNC-MAGIC", "garbage mutex owner returns NULL");
 }
 
 static void host_sleep_resolution(void)
 {
-    section("TC-TIME-SLEEP", "宿主虚拟时钟下的 sleep 分辨率(1 us/tick)");
+    section("TC-TIME-SLEEP", "sleep resolution under the host virtual clock (1 us/tick)");
 
     const br_time_t t0 = br_clock_now();
     const int rc1 = br_task_sleep(1000u);
@@ -631,13 +643,13 @@ static void host_sleep_resolution(void)
     printf("[HOSTTEST] sleep(1000us) -> rc=%d measured=%lu us; sleep(0) -> rc=%d measured=%lu us\n",
            rc1, (unsigned long)d1, rc2, (unsigned long)d2);
 
-    CHECK(rc1 == BR_OK && d1 >= 1000u, "TC-TIME-SLEEP", "sleep(1000us) 不早醒");
-    CHECK(d1 <= 1100u, "TC-TIME-SLEEP", "虚拟时钟下晚到很小(分辨率 ~1 us)");
-    CHECK(rc2 == BR_OK && d2 == 0u, "TC-TIME-SLEEP", "sleep(0) 立即返回, 不推进时钟");
+    CHECK(rc1 == BR_OK && d1 >= 1000u, "TC-TIME-SLEEP", "sleep(1000us) does not wake early");
+    CHECK(d1 <= 1100u, "TC-TIME-SLEEP", "lateness is tiny under the virtual clock (resolution ~1 us)");
+    CHECK(rc2 == BR_OK && d2 == 0u, "TC-TIME-SLEEP", "sleep(0) returns immediately, does not advance the clock");
     CHECK(br_task_sleep(BR_TIMEOUT_INF) == BR_ERR(EINVAL), "TC-TIME-SLEEP", "sleep(INF) -EINVAL(G13)");
 }
 
-/* ---- 随机化压测(风格照 tests/host/mem_test.c 的 LCG) ---- */
+/* ---- Randomized stress (LCG styled after tests/host/mem_test.c) ---- */
 
 #define STRESS_WORKERS 3u
 #define STRESS_OPS     50000u
@@ -703,10 +715,10 @@ static void stress_worker(void *arg)
 
 static void host_stress(void)
 {
-    section("TC-SYNC-STRESS", "随机化压测: 3 线程 x 50k 次(mutex/sem/yield)");
+    section("TC-SYNC-STRESS", "randomized stress: 3 threads x 50k iterations (mutex/sem/yield)");
 
-    CHECK(br_mutex_init(&s_str_m) == BR_OK, "TC-SYNC-STRESS", "压测 mutex init");
-    CHECK(br_sem_init(&s_str_sem, STRESS_WORKERS) == BR_OK, "TC-SYNC-STRESS", "压测 sem init(3)");
+    CHECK(br_mutex_init(&s_str_m) == BR_OK, "TC-SYNC-STRESS", "stress mutex init");
+    CHECK(br_sem_init(&s_str_sem, STRESS_WORKERS) == BR_OK, "TC-SYNC-STRESS", "stress sem init(3)");
 
     s_str_guard = 0u;
     s_str_overlap = 0u;
@@ -746,26 +758,27 @@ static void host_stress(void)
            (unsigned long)s_str_overlap, (unsigned long)s_str_errs,
            (unsigned long)br_sem_count(&s_str_sem));
 
-    CHECK(joined == STRESS_WORKERS, "TC-SYNC-STRESS", "3 个压测线程都 join 成功");
-    CHECK(s_str_errs == 0u, "TC-SYNC-STRESS", "压测期间无原语错误返回");
-    CHECK(s_str_overlap == 0u, "TC-SYNC-STRESS", "压测期间临界区无重叠(互斥成立)");
-    CHECK(s_str_incs == expect, "TC-SYNC-STRESS", "压测计数精确(无丢失)");
-    CHECK(br_mutex_is_locked(&s_str_m) == BR_FALSE, "TC-SYNC-STRESS", "压测后 mutex 未持有");
-    CHECK(br_sem_count(&s_str_sem) == STRESS_WORKERS, "TC-SYNC-STRESS", "压测后 sem 计数回到初值");
+    CHECK(joined == STRESS_WORKERS, "TC-SYNC-STRESS", "all 3 stress threads joined successfully");
+    CHECK(s_str_errs == 0u, "TC-SYNC-STRESS", "no primitive error returns during stress");
+    CHECK(s_str_overlap == 0u, "TC-SYNC-STRESS", "no critical-section overlap during stress (mutual exclusion holds)");
+    CHECK(s_str_incs == expect, "TC-SYNC-STRESS", "stress counts are exact (nothing lost)");
+    CHECK(br_mutex_is_locked(&s_str_m) == BR_FALSE, "TC-SYNC-STRESS", "mutex not held after stress");
+    CHECK(br_sem_count(&s_str_sem) == STRESS_WORKERS, "TC-SYNC-STRESS", "sem count back to its initial value after stress");
     CHECK(br_waitq_len(s_str_m.head) == 0u && s_str_m.waiters == 0u,
-          "TC-SYNC-STRESS", "压测后 mutex 等待链为 0(无幽灵节点)");
+          "TC-SYNC-STRESS", "mutex wait chain empty after stress (no ghost nodes)");
     CHECK(br_waitq_len(s_str_sem.head) == 0u && s_str_sem.waiters == 0u,
-          "TC-SYNC-STRESS", "压测后 sem 等待链为 0(无幽灵节点)");
+          "TC-SYNC-STRESS", "sem wait chain empty after stress (no ghost nodes)");
 }
 
 /* =====================================================================
- * 主流程(跑在假调度器物化出来的"main 线程"里)
+ * Main flow (runs in the "main thread" materialized by the fake scheduler)
  * ===================================================================== */
 
 static void host_body(void)
 {
-    /* 与 target 侧**同一份**自检套件(`core/selftest/sync_selftest.c`): 真的建线程 +
-     * join, 阻塞路径真跑(返回值 = 失败项数, 红绿以日志与宿主汇总为准)。 */
+    /* the SAME self-test suite as on target (`core/selftest/sync_selftest.c`): it really creates
+     * threads + joins them, and the blocking path really runs (return value = failure count;
+     * red/green comes from the logs and the host summary). */
     br_sync_selftest();
 
     host_static_define();
@@ -773,7 +786,7 @@ static void host_body(void)
     host_sleep_resolution();
     host_stress();
 
-    /* 全局收尾: 任何用例都不该留下等待者 */
+    /* global wrap-up: no case should leave a waiter behind */
     printf("[HOSTTEST] final: task_count=%lu ready=%lu\n",
            (unsigned long)br_sched_task_count(), (unsigned long)br_sched_ready_count());
 }
@@ -786,8 +799,8 @@ static void host_main_trampoline(void)
 
 int main(void)
 {
-    (void)setvbuf(stdout, NULL, _IONBF, 0u);   /* 用例若挂, 也要能看到挂在哪一行 */
-    printf("[HOSTTEST] brickOS prototype — 宿主侧同步原语门禁(ucontext 假调度器, 阻塞路径真跑)\n");
+    (void)setvbuf(stdout, NULL, _IONBF, 0u);   /* if a case hangs, we must still see which line it hung on */
+    printf("[HOSTTEST] brickOS prototype — host-side sync primitive gate (ucontext fake scheduler, blocking path really runs)\n");
     (void)br_clock_init();
 
     (void)getcontext(&g_sched_uc);
@@ -809,7 +822,7 @@ int main(void)
     makecontext(&g_uc[0], host_main_trampoline, 0);
     rq_push(&g_tcb[0]);
 
-    /* 启动: 切到调度器, 由它跑 main 线程; 全部线程结束后调度器切回这里 */
+    /* startup: switch to the scheduler, which runs the main thread; when all threads are done it switches back here */
     (void)swapcontext(&g_boot_uc, &g_sched_uc);
 
     printf("[HOSTTEST] SUMMARY pass=%d fail=%d total=%d\n", s_pass, s_fail, s_pass + s_fail);

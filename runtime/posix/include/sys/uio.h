@@ -1,7 +1,6 @@
 /*
- * brickOS prototype v0.2.0 — 分散/聚集 I/O(sys/uio.h; runtime/posix 插件提供)
- */
-#ifndef BR_POSIX_SYS_UIO_H
+ * brickOS prototype v0.2.0 - scatter/gather I/O (sys/uio.h; provided by the runtime/posix plugin)
+ */#ifndef BR_POSIX_SYS_UIO_H
 #define BR_POSIX_SYS_UIO_H
 
 #include <sys/types.h>

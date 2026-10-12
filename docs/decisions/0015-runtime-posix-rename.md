@@ -96,7 +96,7 @@ golden include 可见性同属"组合器要补的一课")。
 
 | 面 | 落点 |
 |---|---|
-| 插件身份 | `runtime/posix/plugin.toml`(`name = "runtime/posix"`, 单元 `posix`) |
+| 插件身份 | `runtime/posix/brick.toml`(`name = "runtime/posix"`, 单元 `posix`) |
 | 源码 | `runtime/posix/src/posix.c`(原 `svc_posix.c`)+ `src/posix_selftest.c`; 钩子 `posix_*` |
 | 命名空间 | `tools/brickie/rust/src/rules.rs`(`NAMESPACES` + 两个映射)、`selftest.rs`(3 条判据) |
 | 声明面 | `product.toml` 的 `[select]`; `tests/gates.toml` 的 `posix-test`(require 里的启动行) |

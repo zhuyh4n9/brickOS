@@ -1,6 +1,6 @@
 # service/backtrace
 
-> 实现态(不再是骨架)。声明面以 `plugin.toml` 为唯一真值, **本目录不改它**。
+> 实现态(不再是骨架)。声明面以 `brick.toml` 为唯一真值, **本目录不改它**。
 
 栈回溯**捕获**服务: 沿 aarch64 的 `x29`(fp)链走查, 得到一列
 `{pc, fp, sp, depth}`;打印 `[BT]` 行;保留最近一次快照供 dump 复用同一份现场
@@ -77,10 +77,10 @@ fault 现场的捕获入口接收异常帧里的 `fp/pc`(由 platform 的 fault 
 
 ## `[[dep]]`(结构依赖)
 
-声明面在 `plugin.toml`, 本目录不改动它。当前:
+声明面在 `brick.toml`, 本目录不改动它。当前:
 
 - 入边: `service/dump → service/backtrace`(kind = runtime, symbol = `br_bt_print`),
-  声明在 `service/dump/plugin.toml`。
+  声明在 `service/dump/brick.toml`。
 - 出边: **无**。
 
 `br_bt_init` **不跨插件**调 `br_trace_svc_register`: 没有

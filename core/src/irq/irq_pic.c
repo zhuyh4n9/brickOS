@@ -1,15 +1,19 @@
 /*
- * brickOS prototype v0.1.0 — PIC 注册表 + 绑定表 + hwirq→virq 索引
+ * brickOS prototype v0.1.0 — PIC registry + binding table + hwirq→virq index
  *
- * 权威设计: `docs/3-os-core/3-02-int.md`
- *   §4.1 / §4.2  PIC ops 填表与能力位(IR-3); "每 CPU 恰一个 CPU 接口控制器"的推论
- *   §14.3        platform 侧契约与**初始化单向链**(1 注册 PIC → 2 caps → 3 绑定表 → 4-7 驱动)
- *   §14.2        热路径 hwirq→virq: **有序表 + 二分**(4 B/绑定), 不用 virq_of[nr_irq] 直接表
- *   §3.3/§3.4    绑定表条目(platform .rodata)与 attr.flags 语义
- *   §3.2         宽度不变量: 公共签名 br_u32, 内部字段 int8/uint16
+ * Authoritative design: `docs/3-os-core/3-02-int.md`
+ *   §4.1 / §4.2  PIC ops table filling and capability bits (IR-3); corollary
+ *                "exactly one CPU interface controller per CPU"
+ *   §14.3        platform-side contract and **one-way init chain** (1 register PIC →
+ *                2 caps → 3 binding table → 4-7 drivers)
+ *   §14.2        hot path hwirq→virq: **sorted table + binary search** (4 B/binding),
+ *                not a virq_of[nr_irq] direct table
+ *   §3.3/§3.4    binding table entries (platform .rodata) and attr.flags semantics
+ *   §3.2         width invariants: public signature br_u32, internal fields int8/uint16
  *
- * 本文件只做"注册 + 解析表"两件事, 不含任何控制器型号名(§1.3 铁律)。
- * 描述符池归 irq_core.c; 这里经 br_irq_desc_of()(irq_internal.h)访问它。
+ * This file only does "register + resolve table"; it names no controller model (§1.3 rule).
+ * The descriptor pool belongs to irq_core.c; here it is accessed via br_irq_desc_of()
+ * (irq_internal.h).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -19,7 +23,7 @@
 #include "irq_internal.h"
 
 /* =====================================================================
- * PIC 实例池(§4.1: core 只持指针, 实例存储归 platform)
+ * PIC instance pool (§4.1: core holds only pointers; instance storage belongs to platform)
  * ===================================================================== */
 
 static struct {
@@ -29,32 +33,35 @@ static struct {
 } s_pics[BR_PIC_MAX];
 
 static br_u32  s_pic_n;
-/* ★ IR-3 推论(§4.2): ack() 无参数 ⇒ 每个 CPU 恰一个"CPU 接口控制器"。
- * 第一个注册成功的 PIC 记为它, 此后**永不改变**(其余实例只能经级联域接入)。 */
+/* ★ IR-3 corollary (§4.2): ack() takes no argument ⇒ exactly one "CPU interface
+ * controller" per CPU. The first successfully registered PIC becomes it and **never
+ * changes** (other instances can only attach via cascade domains). */
 static br_u32  s_cpu_pic = BR_IRQ_INVALID;
 static br_bool s_bindings_set;
 
 /*
- * hwirq→virq 有序索引(§14.2 的"有序表 + 二分"形态)。
- * 排序键 = (pic_id, hwirq); pic_id 入键是因为多实例共存(§4.2 的多控制器接入规则)。
+ * hwirq→virq sorted index (§14.2 "sorted table + binary search" form).
+ * Sort key = (pic_id, hwirq); pic_id is in the key because multiple instances coexist
+ * (§4.2 multi-controller attach rules).
  *
- * P-IRQ-4(实现裁定): 表项 = 8 B 而不是设计 §14.2 写的 4 B —— 因为 v0.1 的表项
- * 把 pic_id 与 pad 一起放进来了(2+1+1+4 = 8)。设计那句 4 B 对应的是
- * "只存 (virq, hwirq)"的最小形态, 而它要求"每实例一张表"或 sort 键里不含 pic_id。
- * v0.1 选择单表 + (pic_id, hwirq) 复合键: 表项翻倍, 但绑定数 ≤ BR_IRQ_MAX 时
- * 最多 512 B, 且省掉"每个 PIC 一张表"的静态池管理。
+ * P-IRQ-4 (implementation decision): entry = 8 B, not the 4 B written in design §14.2 —
+ * because the v0.1 entry packs pic_id and pad together (2+1+1+4 = 8). That 4 B figure
+ * describes the minimal "store only (virq, hwirq)" form, which requires "one table per
+ * instance" or a sort key without pic_id. v0.1 chooses a single table with a composite
+ * (pic_id, hwirq) key: entries double, but at ≤ BR_IRQ_MAX bindings that is at most
+ * 512 B and it avoids per-PIC static table pool management.
  */
 static struct {
-    br_u16 virq;     /* 命中后写出的 virq */
-    br_u8  pic_id;   /* ★ 复合键第一段 */
-    br_u8  pad;      /* 显式对齐(消填充歧义) */
-    br_u32 hwirq;    /* ★ 复合键第二段 */
+    br_u16 virq;     /* virq written out on hit */
+    br_u8  pic_id;   /* ★ composite key part 1 */
+    br_u8  pad;      /* explicit alignment (no padding ambiguity) */
+    br_u32 hwirq;    /* ★ composite key part 2 */
 } s_index[BR_IRQ_MAX];
 
 static br_u32 s_index_n;
 
 /* =====================================================================
- * 小工具(无 libc: 自持字符串比较)
+ * Helpers (no libc: own string compare)
  * ===================================================================== */
 
 static br_bool str_eq(const char *a, const char *b)
@@ -69,7 +76,7 @@ static br_bool str_eq(const char *a, const char *b)
     return (*a == *b) ? BR_TRUE : BR_FALSE;
 }
 
-/* 按 (pic_id, hwirq) 升序插入(n 很小, 插入排序足够; §14.2 只说"有序"不说算法) */
+/* Insert in ascending (pic_id, hwirq) order (n is tiny, insertion sort suffices; §14.2 only says "sorted") */
 static void index_insert(br_u32 pic_id, br_u32 hwirq, br_u32 virq)
 {
     br_u32 pos = s_index_n;
@@ -92,7 +99,7 @@ static void index_insert(br_u32 pic_id, br_u32 hwirq, br_u32 virq)
 }
 
 /* =====================================================================
- * 池访问器(irq_internal.h; 越界/未注册一律 NULL)
+ * Pool accessors (irq_internal.h; out of range/unregistered ⇒ NULL)
  * ===================================================================== */
 
 br_pic_t *br_irq_pic(br_u32 pic_id)
@@ -121,12 +128,12 @@ br_u32 br_irq_cpu_pic_id(void)
 }
 
 /* =====================================================================
- * 注册(§14.3 初始化链第 1-2 步; EARLY 相, 全局关中断)
+ * Registration (§14.3 init chain steps 1-2; EARLY phase, interrupts globally disabled)
  * ===================================================================== */
 
 int br_pic_register(br_pic_t *pic, const br_pic_ops_t *ops)
 {
-    /* ---- 必填槽位(§4.1 的 ops 表): 缺一个都说明方言实现不完整, 必须大声失败 ---- */
+    /* ---- required slots (§4.1 ops table): any missing one means an incomplete dialect, must fail loudly ---- */
     if (pic == BR_NULL || ops == BR_NULL) {
         return BR_ERR(EINVAL);
     }
@@ -140,15 +147,15 @@ int br_pic_register(br_pic_t *pic, const br_pic_ops_t *ops)
         return BR_ERR(ENOSPC);
     }
 
-    /* 重复注册: 同一实例指针, 或同一方言名(§4.1: "每实例一次") */
+    /* Duplicate registration: same instance pointer, or same dialect name (§4.1: "once per instance") */
     for (br_u32 i = 0; i < s_pic_n; i++) {
         if (s_pics[i].pic == pic || str_eq(s_pics[i].ops->name, ops->name) == BR_TRUE) {
             return BR_ERR(EBUSY);
         }
     }
 
-    /* init/caps_get 可能失败 ⇒ EARLY 相失败 = 启动失败(§14.3 错误处理义务):
-     * 这里**传播**负 errno, 绝不"静默返回 0 但没配好"。 */
+    /* init/caps_get may fail ⇒ EARLY-phase failure = boot failure (§14.3 error handling duty):
+     * **propagate** the negative errno here, never "silently return 0 while unconfigured". */
     if (ops->init != BR_NULL) {
         const int r = ops->init(pic);
         if (r != BR_OK) {
@@ -166,14 +173,15 @@ int br_pic_register(br_pic_t *pic, const br_pic_ops_t *ops)
             return r;
         }
     }
-    /* nr_irq 的"合理"判据: 至少一根线。0 线的控制器注册进来只会让
-     * br_irq_bindings_set 的 hwirq < caps.nr_irq 校验变得不可满足 ⇒ 早报错。 */
+    /* "Reasonable" nr_irq criterion: at least one line. A 0-line controller would only make
+     * br_irq_bindings_set's hwirq < caps.nr_irq check unsatisfiable ⇒ report early. */
     if (caps.nr_irq == 0u) {
         return BR_ERR(EINVAL);
     }
 
-    /* mask/unmask 只在 CAP_MASK 会被置位时才必填(§4.2: 无硬件屏蔽能力 ⇒
-     * 退化为纯软件影子屏蔽, 那时这两个槽位没有意义)。⇒ 该校验必须在 caps_get 之后。 */
+    /* mask/unmask are required only when CAP_MASK may be set (§4.2: no hardware masking
+     * ⇒ degrade to pure software shadow masking, where these slots are meaningless).
+     * ⇒ This check must come after caps_get. */
     if ((caps.caps & BR_PIC_CAP_MASK) != 0u &&
         (ops->mask == BR_NULL || ops->unmask == BR_NULL)) {
         return BR_ERR(EINVAL);
@@ -185,7 +193,7 @@ int br_pic_register(br_pic_t *pic, const br_pic_ops_t *ops)
     s_pics[pic_id].caps = caps;
     s_pic_n++;
 
-    /* ★ 第一个成功注册的 PIC = CPU 接口(IR-3 推论); 之后不再改。 */
+    /* ★ First successfully registered PIC = CPU interface (IR-3 corollary); unchanged after. */
     if (s_cpu_pic == BR_IRQ_INVALID) {
         s_cpu_pic = pic_id;
     }
@@ -206,13 +214,13 @@ int br_pic_caps_of(br_u32 pic_id, br_pic_caps_t *out)
 }
 
 /* =====================================================================
- * 绑定表(§3.3; platform 一次性提交, EARLY 相恰一次)
+ * Binding table (§3.3; submitted once by platform, exactly once in EARLY phase)
  * ===================================================================== */
 
 int br_irq_bindings_set(const br_irq_binding_t *tbl, br_size_t n)
 {
     if (s_bindings_set == BR_TRUE) {
-        return BR_ERR(EBUSY);                    /* 恰一次(§14.3) */
+        return BR_ERR(EBUSY);                    /* exactly once (§14.3) */
     }
     if (tbl == BR_NULL || n == 0u || n > (br_size_t)BR_IRQ_MAX) {
         return BR_ERR(EINVAL);
@@ -220,32 +228,33 @@ int br_irq_bindings_set(const br_irq_binding_t *tbl, br_size_t n)
 
     const br_u32 cnt = (br_u32)n;
 
-    /* ---- 第一遍: 全量校验(全成功才写状态, 避免"半张表生效") ---- */
+    /* ---- pass 1: full validation (write state only if all pass, avoiding a "half-applied table") ---- */
     for (br_u32 i = 0u; i < cnt; i++) {
         const br_irq_binding_t *b = &tbl[i];
 
-        /* 公共签名是 br_u32, 内部 virq 是 br_u16 ⇒ 入口必须校验合法域(§3.2 宽度不变量) */
+        /* Public signature is br_u32, internal virq is br_u16 ⇒ the entry must validate the legal range (§3.2 width invariants) */
         if ((br_u32)b->virq >= BR_IRQ_MAX) {
             return BR_ERR(EINVAL);
         }
         /*
-         * P-IRQ-1(实现裁定): v0.1 的绑定表**只覆盖直连线**。域成员的描述符由
-         * br_irq_domain_create() 的窗口切片填充(§3.2: 子中断"不是物理线",
-         * 语义上是域的成员)⇒ 绑定条目带 dom_id >= 0 属 schema 误用, 必须拒绝。
+         * P-IRQ-1 (implementation decision): the v0.1 binding table **covers direct lines only**.
+         * Domain-member descriptors are filled by br_irq_domain_create() window slicing
+         * (§3.2: child interrupts are "not physical lines", semantically domain members)
+         * ⇒ a binding entry with dom_id >= 0 is schema misuse and must be rejected.
          */
         if (b->dom_id != (br_s8)-1) {
             return BR_ERR(EINVAL);
         }
-        /* §14.3: 初始化顺序违反要**大声失败**(PIC 未注册 ⇒ 引用的 pic_id 无意义),
-         * 绝不静默接受一个永远解析不到控制器的绑定。 */
+        /* §14.3: init-order violations must **fail loudly** (PIC unregistered ⇒ the referenced
+         * pic_id is meaningless); never silently accept a binding that can never resolve. */
         if ((br_u32)b->pic_id >= s_pic_n) {
             return BR_ERR(ENODEV);
         }
         if (b->hwirq >= s_pics[b->pic_id].caps.nr_irq) {
             return BR_ERR(EINVAL);
         }
-        /* 重复: 同一 virq(INV-E/INV-A), 或同一 (pic_id, hwirq) 被绑两次(INV-A:
-         * 每根物理线恰一属主) */
+        /* Duplicate: same virq (INV-E/INV-A), or same (pic_id, hwirq) bound twice (INV-A:
+         * exactly one owner per physical line) */
         for (br_u32 j = 0u; j < i; j++) {
             if (tbl[j].virq == b->virq) {
                 return BR_ERR(EINVAL);
@@ -256,41 +265,43 @@ int br_irq_bindings_set(const br_irq_binding_t *tbl, br_size_t n)
         }
     }
 
-    /* ---- 第二遍: 落实(填描述符 + 硬件默认屏蔽 + 建有序索引) ---- */
+    /* ---- pass 2: commit (fill descriptors + hardware default mask + build sorted index) ---- */
     for (br_u32 i = 0u; i < cnt; i++) {
         const br_irq_binding_t *b = &tbl[i];
         br_irq_desc_t *d = br_irq_desc_of((br_u32)b->virq);
         if (d == BR_NULL) {
-            return BR_ERR(EINVAL);               /* 第一遍已排除, 纯防御 */
+            return BR_ERR(EINVAL);               /* already excluded by pass 1; pure defense */
         }
 
-        /* 身份与绑定缓存(§3.3): isr/arg 留 NULL(未注册), depth/sub 留 0,
-         * dom_id 保持 -1(直连; 由 br_irq_cpu_init 初始化为 -1 —— 见 P-IRQ-5)。
+        /* Identity and binding cache (§3.3): isr/arg left NULL (unregistered), depth/sub left 0,
+         * dom_id stays -1 (direct; initialized to -1 by br_irq_cpu_init — see P-IRQ-5).
          *
-         * ★ flags 的特例(§3.4): PERCPU 的权威来源是**绑定表**(“通常不用手填”)。
-         *   描述符没有独立的"静态绑定属性"位域, 所以这里把静态 PERCPU 折进运行期
-         *   flags 的对应位; br_irq_register 再拿它与 attr 请求做一致性校验。
-         *   其余 flags 位仍留 0(等待 register 填)。 */
+         * ★ flags special case (§3.4): PERCPU is authoritative from the **binding table**
+         *   ("usually not filled by hand"). The descriptor has no separate "static binding
+         *   attribute" bitfield, so the static PERCPU is folded into the runtime flags bit here;
+         *   br_irq_register then cross-checks it against the attr request.
+         *   The remaining flags bits stay 0 (awaiting register). */
         d->hwirq  = b->hwirq;
         d->pic_id = (br_s8)b->pic_id;
         d->prio   = b->prio;
         d->trigger = b->trigger;
-        /* 绑定条目只允许直连线(上面的 P-IRQ-1 校验)⇒ 内部域索引归一化为 -1,
-         * 使 br_irq_register/desc 的"直连"判据不依赖 br_irq_cpu_init 是否先跑。 */
+        /* Binding entries allow direct lines only (P-IRQ-1 check above) ⇒ normalize the internal
+         * domain index to -1, so the br_irq_register/desc "direct" check does not depend on
+         * whether br_irq_cpu_init ran first. */
         d->dom_id = (br_s8)-1;
         d->flags  = ((b->flags & (br_u8)BR_IRQB_F_PERCPU) != 0u)
                         ? (br_u16)BR_IRQ_F_PERCPU : (br_u16)0u;
 
-        /* 安全默认(§14.3 第 7 步"7 之前的线一律收不到中断"): 绑定即硬件屏蔽。
-         * 无 CAP_MASK 的控制器由 br_irq_pgm_mask 自己跳过(§4.3 豁免)。 */
+        /* Safe default (§14.3 step 7, "lines before step 7 receive no interrupts"): mask on bind.
+         * Controllers without CAP_MASK are skipped by br_irq_pgm_mask itself (§4.3 exemption). */
         br_irq_pgm_mask(d);
 
         /*
-         * 分发形态(§12.2: 默认载体是**绑定表**(platform 数据, flash))。
-         *   INLINE ⇒ 常态(热路径直接调 ISR);
-         *   BH     ⇒ ★ ADR-0011: 折进运行期 flags 的 DISPATCH_BH 位当**真值**, 该线的
-         *            ISR 会被推迟到下半部执行(处理期间硬件线被 mask);
-         *   THREAD / 其它 ⇒ 仍未实现(线程化 IRQ 属 Stage 2)⇒ 接受但忽略 + 留痕(§3.4)。
+         * Dispatch form (§12.2: the default carrier is the **binding table**, platform data in flash).
+         *   INLINE ⇒ normal (hot path calls the ISR directly);
+         *   BH     ⇒ ★ ADR-0011: folds into the runtime flags DISPATCH_BH bit as the **truth**;
+         *            that line's ISR is deferred to the bottom half (hardware line masked while running);
+         *   THREAD / others ⇒ not implemented yet (threaded IRQ is Stage 2) ⇒ accept, ignore, trace (§3.4).
          */
         if (b->dispatch == (br_u8)BR_IRQ_DISPATCH_BH) {
             d->flags |= (br_u16)BR_IRQ_F_DISPATCH_BH;
@@ -307,7 +318,7 @@ int br_irq_bindings_set(const br_irq_binding_t *tbl, br_size_t n)
 }
 
 /* =====================================================================
- * 热路径: hwirq → virq(§5.2 入口桩的 lookup; 只读, ISR-safe)
+ * Hot path: hwirq → virq (§5.2 entry stub lookup; read-only, ISR-safe)
  * ===================================================================== */
 
 int br_irq_virq_of(br_u32 pic_id, br_u32 hwirq, br_u32 *out)
@@ -316,7 +327,7 @@ int br_irq_virq_of(br_u32 pic_id, br_u32 hwirq, br_u32 *out)
         return BR_ERR(EINVAL);
     }
 
-    /* 在按 (pic_id, hwirq) 升序的 s_index 上做下界二分(lower_bound) */
+    /* Lower-bound binary search (lower_bound) on s_index sorted by (pic_id, hwirq) */
     br_u32 lo = 0u;
     br_u32 hi = s_index_n;
     while (lo < hi) {
@@ -336,6 +347,6 @@ int br_irq_virq_of(br_u32 pic_id, br_u32 hwirq, br_u32 *out)
         return BR_OK;
     }
 
-    /* 未命中 ⇒ §5.2 的 spurious 分槽(有硬件屏蔽 ⇒ spurious_owned, 真 bug 信号) */
+    /* Miss ⇒ §5.2 spurious slot (with hardware masking ⇒ spurious_owned, a real bug signal) */
     return BR_ERR(ENODEV);
 }

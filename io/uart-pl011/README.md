@@ -13,7 +13,7 @@ QEMU virt 的 PL011 UART 作为 **cdev** 注册 ⇒ 设备出现在 `/dev/uart0`
 > 逐条裁定(尤其"v1 为什么是轮询 cdev 而不是中断 tty")见 `docs/decisions/0009-vfs-storage-stack.md`
 > §2.7 / §3 裁定 10, 并登记 `WORKAROUND(br-wa-io-001)`。
 
-## 声明面(`plugin.toml` 是唯一真值)
+## 声明面(`brick.toml` 是唯一真值)
 
 | 项 | 值 | 依据 |
 |---|---|---|
@@ -25,7 +25,7 @@ QEMU virt 的 PL011 UART 作为 **cdev** 注册 ⇒ 设备出现在 `/dev/uart0`
 | 依赖(type) | `framework/dev-core` `>=0.1.0` | 头文件用它的 ioctl 编码宏(`BR_IOR/IOW/IO`)与 `br_dev_name_valid`; 编码宏的归属是 dev-core(`8-01` §5) |
 | 依赖(runtime) | `framework/vfs-core`(symbol `br_open_err`) | 器件一致性用例与真实消费者都经 vfs 的公开文件面访问, 本件**不开后门** |
 | 导出面 | 单元 `uart-pl011`(`sha256:d893563c…`, `unfrozen`/`experimental`): **5 宏 + 1 类型布局**(自检入口已移出 `[[export]]`, 故无函数) | 器件契约: ioctl 编码 + info 结构 |
-| `[selftest]` | `cases = 12`; 钩子 `uart_pl011_selftest()` 在描述符里, 由 core 在全部 `start()` 之后驱动 | `plugin.toml` `[selftest]`; ADR-0010 |
+| `[selftest]` | `cases = 12`; 钩子 `uart_pl011_selftest()` 在描述符里, 由 core 在全部 `start()` 之后驱动 | `brick.toml` `[selftest]`; ADR-0010 |
 | 资源 | `ram` 1 KiB: 每会话 `cdev_file_t` + session ≈ 32 B(core 堆); 静态部分只有 ops 表与器件记录; **不声明 `stack`** | `[[res]]`; ADR-0009 §3 裁定 10: 平台的栈容量是给**插件自己的线程**的预算, 不开线程的驱动不该占 |
 | `sched_class` | `SAFE_PREEMPT` | 阻塞 read 会 `br_task_sleep` |
 
@@ -112,7 +112,7 @@ bug"。由描述符的 `.selftest` 钩子被 `br_plugin_manager_selftest()` 在*
 ## 目录
 
 ```
-plugin.toml                        人写   ← 插件级唯一真值(本目录不改它)
+brick.toml                        人写   ← 插件级唯一真值(本目录不改它)
 include/br/io/br_uart_pl011.h      人写   ← 器件契约(名字 / ioctl 编码 / info 结构)
 src/uart_pl011.c                   人写   ← ops 表 + 注册 + ioctl(只留驱动本体)
 src/uart_selftest.c                人写   ← [IOCONF] 用例(由 core 驱动, 只走公开 API)

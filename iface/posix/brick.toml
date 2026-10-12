@@ -1,0 +1,51 @@
+schema = 1
+
+[plugin]
+name          = "iface/posix"
+plugin_type   = "interface"
+api_type      = "runtime_adapter"
+lang          = "c"
+phase         = "late"
+version       = "0.1.0.0"
+
+symbol_prefix = "iface_posix_"
+summary       = "POSIX 薄皮肤: 再导出 runtime/posix#posix(APP 只依赖 Interface)"
+license       = "WTFPL"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "皮肤无状态: 三个空钩子 + 一张转出的头文件面"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[[dep]]
+name  = "runtime/posix"
+range = ">=0.1.0"
+kind  = "init"
+phase = "late"
+
+[iface.typedefs]
+
+[[export]]
+name         = "posix-skin"
+api_iface    = "runtime_adapter"
+form         = "skin"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+
+hash         = "sha256:7ccb8d3d4a6ef85aad5e08604d14102a635f19974fcad8f517a71537838ede2f"
+status       = "experimental"
+reexport_of  = ["runtime/posix#posix"]
+
+symbols      = ["usleep", "pthread", "sem"]
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

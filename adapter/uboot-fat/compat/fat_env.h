@@ -1,81 +1,89 @@
 /*
- * adapter/uboot-fat — **u-boot 运行环境**(适配层)
+ * adapter/uboot-fat — **u-boot runtime environment** (adapter layer)
  *
- * ============================== 本文件是什么 ==============================
- * 上游 FAT(`fs/fat/fat.c` + `fs/fat/fat_write.c`, 单编译单元)是**u-boot 风格**的 C:
- * 它假设自己有 `<blk.h>`/`<part.h>`(块设备: `struct blk_desc` + `disk_partition` +
- * `blk_dread/blk_dwrite`)、`<fat.h>`(盘上结构)、`<fs.h>`(目录项/目录流)、`<malloc.h>`
- * 的 `malloc_cache_aligned()`、`<rand.h>` 的 `rand()`、libc 的
- * `malloc/free/strdup/strchr/strrchr/strcasecmp/sprintf`、`printf`/`debug`/`log_err`、
- * `assert()`。本插件是**裸机 unikernel(无 libc)**, 所以这一层把那些假设**逐条落回本项目
- * 的真值** —— 上游 .c **一个字都不用改**(判据 = `tools/check-third-party-pristine.sh`
- * 的哈希锁; 适配 = 给上游环境, 不是改上游)。
+ * ============================== what this file is ==============================
+ * Upstream FAT (`fs/fat/fat.c` + `fs/fat/fat_write.c`, one translation unit) is **u-boot
+ * style** C: it assumes `<blk.h>`/`<part.h>` (block device: `struct blk_desc` +
+ * `disk_partition` + `blk_dread/blk_dwrite`), `<fat.h>` (on-disk structs), `<fs.h>`
+ * (dirents/dir streams), `<malloc.h>`'s `malloc_cache_aligned()`, `<rand.h>`'s `rand()`,
+ * libc's `malloc/free/strdup/strchr/strrchr/strcasecmp/sprintf`, `printf`/`debug`/
+ * `log_err`, `assert()`. This plugin is a **bare-metal unikernel (no libc)**, so this layer
+ * maps each assumption **back to this project's truth** — the upstream .c needs **not one
+ * character changed** (the criterion is the hash lock in
+ * `tools/check-third-party-pristine.sh`; adapting = giving upstream an environment, not
+ * editing upstream).
  *
- *   u-boot/Linux 侧                            →  brickOS 侧
+ *   u-boot/Linux side                          →  brickOS side
  *   ---------------------------------------------------------------------------------
  *   u8/u16/u32/u64/s64/loff_t/ulong/uint       →  br_u8/… / br_s64(long long)
  *   bool/true/false                            →  br_bool / BR_TRUE / BR_FALSE
- *   __u8…__le32 + le16_to_cpu/cpu_to_le32      →  恒等函数(aarch64 = 小端; 见下方 #error)
- *   get_unaligned_le16/32                      →  __builtin_memcpy 版本(本目标 -mstrict-align)
+ *   __u8…__le32 + le16_to_cpu/cpu_to_le32      →  identity (aarch64 = LE; see #error below)
+ *   get_unaligned_le16/32                      →  __builtin_memcpy version (target -mstrict-align)
  *   malloc/calloc/realloc/free                 →  br_malloc/br_calloc/br_realloc/br_free
- *   memcpy/memset/memcmp/memmove               →  core 提供(项目纪律: 这四个直接用)
- *   strdup/strcpy/strlen/strchr/strrchr/…      →  本文件的 `uboot_fat_*`(见下)
- *   sprintf                                    →  本文件声明的有界格式化器(无 libc)
- *   rand()                                     →  本文件的确定性 LCG(见下)
- *   printf/debug/log_err/log_debug             →  br_log_write(带 "uboot-fat: " 前缀)
- *   assert(x)                                  →  **空语句**(与上游 `_DEBUG=0` 的展开一致)
- *   malloc_cache_aligned/memalign/ALLOC_CACHE_ALIGN_BUFFER → br_malloc(对齐 ≥ 16 B)
- *   struct blk_desc + disk_partition           →  **极小的 shim**(整设备一个分区:
- *                                                 起始扇区 0, 扇区数 = geometry.n_sectors)
+ *   memcpy/memset/memcmp/memmove               →  from core (project rule: use these four directly)
+ *   strdup/strcpy/strlen/strchr/strrchr/…      →  this file's `uboot_fat_*` (see below)
+ *   sprintf                                    →  bounded formatter declared here (no libc)
+ *   rand()                                     →  this file's deterministic LCG (see below)
+ *   printf/debug/log_err/log_debug             →  br_log_write (with "uboot-fat: " prefix)
+ *   assert(x)                                  →  **empty statement** (as upstream `_DEBUG=0`)
+ *   malloc_cache_aligned/memalign/ALLOC_CACHE_ALIGN_BUFFER → br_malloc (align ≥ 16 B)
+ *   struct blk_desc + disk_partition           →  **minimal shim** (whole device = one partition:
+ *                                                 start sector 0, sectors = geometry.n_sectors)
  *   blk_dread/blk_dwrite                       →  `disk_read/disk_write` → br_bdev_ops_t.read/write
- *   part_get_info/blk_enabled/dev_print/…      →  环境桩(**只**被上游那些没人引用的函数
- *                                                 `fat_register_device`/`file_fat_detectfs`
- *                                                 调用, --gc-sections 会把它们整段裁掉)
+ *   part_get_info/blk_enabled/dev_print/…      →  environment stubs (**only** called by upstream's
+ *                                                 unreferenced `fat_register_device`/
+ *                                                 `file_fat_detectfs`, --gc-sections drops them)
  *
- * ## 为什么字符串要自己写
- *   硬约束(任务书): `strlen/strcmp/strncmp/strcpy/strchr/strrchr/tolower` **必须自己写小的**,
- *   不许依赖 runtime/posix。这里全是 `static inline` + `uboot_fat_` 前缀, 再用**宏**把上游的
- *   裸名字映射过来 —— 于是上游的调用点一个字都不用改, 而链接期绝不会去够一个不存在的
- *   libc 符号(整个编译单元是 `-fno-builtin`, 编译器不会把我们的定义当成内建再自调用)。
+ * ## why the strings are hand-written
+ *   Hard constraint (task spec): `strlen/strcmp/strncmp/strcpy/strchr/strrchr/tolower` **must be
+ *   written small here**, no dependency on runtime/posix. All are `static inline` +
+ *   `uboot_fat_` prefix, then **macros** map upstream's bare names onto them — so no upstream
+ *   call site changes, and the link never reaches for a missing libc symbol (the whole
+ *   translation unit is `-fno-builtin`, so the compiler cannot treat our definitions as
+ *   builtins and self-call).
  *
- * ## 有界性(环境事实, 不是"随便给个上界")
- *   · `strcpy(dst, src)`: 上游只有两个调用点, 目标都是 **256 字节**的缓冲
- *     (`fat_readdir` 的 `struct fs_dirent.name[256]`(经 vendored `include/fs.h`)与
- *     `normalize_longname` 的 `char l_filename[VFAT_MAXLEN_BYTES=256]`)⇒ 上界 256 是
- *     **上游自己的构造**, 不是我们拍的。
- *   · `strdup(path)`: 本插件的 VFS 面把路径限在 `UB_FAT_PATH_MAX`(256)内
- *     (见 `glue/fat_glue.h`), 超长直接返回 NULL —— 上游调用点对 NULL 的处理是 `-ENOMEM`。
- *   · `sprintf(buf, fmt, …)`: 无 libc 的 `sprintf` 没有"目标多大"这个参数, 本环境按
- *     `UB_FAT_SPRINTF_MAX`(256)封顶并在结尾补 '\0'; 上游四个调用点的目标分别是
- *     `char vol_label[12]`/`char *uuid_str`(契约 ≥10 B)/`char buf[13]`, 格式化结果
- *     都远小于 256 ⇒ 正常路径永不截断(逆序生成、超界丢弃, 见 `glue/fat_blk.c`)。
+ * ## boundedness (environment facts, not "some bound we picked")
+ *   · `strcpy(dst, src)`: upstream has only two call sites, both targeting **256-byte** buffers
+ *     (`fat_readdir`'s `struct fs_dirent.name[256]` (via vendored `include/fs.h`) and
+ *     `normalize_longname`'s `char l_filename[VFAT_MAXLEN_BYTES=256]`) ⇒ 256 is
+ *     **upstream's own construction**, not our guess.
+ *   · `strdup(path)`: this plugin's VFS surface caps paths at `UB_FAT_PATH_MAX` (256)
+ *     (see `glue/fat_glue.h`); longer returns NULL — upstream's call site answers NULL
+ *     with `-ENOMEM`.
+ *   · `sprintf(buf, fmt, …)`: libc-free `sprintf` has no "how big is the target" argument, so
+ *     this environment caps at `UB_FAT_SPRINTF_MAX` (256) and appends '\0'; upstream's four
+ *     call sites target `char vol_label[12]`/`char *uuid_str` (contract ≥10 B)/`char buf[13]`,
+ *     all far below 256 ⇒ the normal path never truncates (emitted in reverse, overflow
+ *     dropped, see `glue/fat_blk.c`).
  *
- * ## 有意偏离(相对上游的**行为**, 逐条可查)
- *   1. `assert(x)` 是空语句 —— **与上游 `include/log.h` 的展开一致**: 上游
- *      `#define assert(x) ({ if (!(x) && _DEBUG) __assert_fail(...); })`, 而两个 fat .c
- *      都没有 `#define DEBUG`、也没有 `CONFIG_LOG`/`LOG_DEBUG` ⇒ `_DEBUG == 0` ⇒
- *      上游这一次编译**本来就不做运行期断言**。本文件用 `if (0) (void)(x)` 保持"表达式
- *      仍被类型检查、运行期不求值"这两条性质。
- *   2. `debug(...)` 缺省**不输出**(同上: 上游 `debug` = `debug_cond(_DEBUG, …)`)。打开
- *      `UBOOT_FAT_VERBOSE_DBG` 可以让它落到 BR_LOG_DEBUG; 上游数据路径的诊断面是 `printf`/
- *      `log_err`, 那两条**始终**输出(它们映射到 BR_LOG_ERROR)。
- *   3. `printf` 与 `log_err` 落到 `br_log_write(BR_LOG_ERROR, ...)`: 上游的 `printf` 是
- *      "打印并继续", 本环境把它变成**一条错误日志**(内容逐字保留, 且格式串与实参仍然被
- *      编译器 `-Wformat` 校验)。控制流的"继续/返回"仍由上游自己的 `return -1` 决定 ——
- *      我们**没有**改上游的返回口径。
- *   4. `rand()` 是**确定性**的 32 位 LCG(u-boot 的 `rand()` 找不到上游定义, 见 NOTICE):
- *      它只被 `set_name()` 用来挑短名后缀的搜索起点, 而候选空间本来就是确定的(逐个试到
- *      不冲突为止)⇒ 契约不变, 顺带去掉一处不确定性。
- *   5. DM/RTC/partition 那一族是**环境桩**: `CONFIG_DM_RTC=0`/`CONFIG_EFI_LOADER=0`, 于是
- *      上游对应分支是死代码(编译期仍要类型正确), 而 `part_get_info` 等只被
- *      `fat_register_device`(本件的挂载走 `fat_set_blk_dev` + 我们自己的卷表)调用 ⇒
- *      `-ffunction-sections` + `-Wl,--gc-sections` 不会把它们放进镜像。
+ * ## intentional deviations (from upstream **behaviour**, each auditable)
+ *   1. `assert(x)` is an empty statement — **matching upstream `include/log.h`**: upstream has
+ *      `#define assert(x) ({ if (!(x) && _DEBUG) __assert_fail(...); })`, and neither fat .c
+ *      defines `DEBUG` nor `CONFIG_LOG`/`LOG_DEBUG` ⇒ `_DEBUG == 0` ⇒ this upstream build
+ *      **does no runtime assertions anyway**. This file uses `if (0) (void)(x)` to keep both
+ *      properties: the expression is still type-checked, never evaluated at run time.
+ *   2. `debug(...)` is **silent** by default (same as upstream `debug` = `debug_cond(_DEBUG, …)`).
+ *      Defining `UBOOT_FAT_VERBOSE_DBG` routes it to BR_LOG_DEBUG; upstream's data-path
+ *      diagnostics are `printf`/`log_err`, which **always** emit (they map to BR_LOG_ERROR).
+ *   3. `printf` and `log_err` go to `br_log_write(BR_LOG_ERROR, ...)`: upstream's `printf` is
+ *      "print and continue"; here it becomes **one error log** (text kept verbatim, and the
+ *      format string plus arguments are still `-Wformat` checked). Continue-vs-return is still
+ *      decided by upstream's own `return -1` — we did **not** change upstream's return contract.
+ *   4. `rand()` is a **deterministic** 32-bit LCG (u-boot's `rand()` has no upstream definition,
+ *      see NOTICE): only `set_name()` uses it to pick the search start for a short-name suffix,
+ *      and the candidate space is deterministic anyway (try until no collision) ⇒ contract
+ *      unchanged, minus one source of nondeterminism.
+ *   5. The DM/RTC/partition family are **environment stubs**: `CONFIG_DM_RTC=0` /
+ *      `CONFIG_EFI_LOADER=0`, so the upstream branches are dead code (still must type-check), and
+ *      `part_get_info` et al. are called only by `fat_register_device` (this port mounts via
+ *      `fat_set_blk_dev` + our own volume table) ⇒ `-ffunction-sections` + `-Wl,--gc-sections`
+ *      keep them out of the image.
  * ==========================================================================
  */
 #ifndef BR_ADAPTER_UBOOT_FAT_ENV_H
 #define BR_ADAPTER_UBOOT_FAT_ENV_H
 
-/* `NULL`/`size_t` 来自**编译器自带的** <stddef.h>(不是 libc); uintN_t 由 <stdint.h> */
+/* `NULL`/`size_t` come from the **compiler's own** <stddef.h> (not libc); uintN_t from <stdint.h> */
 #include <stddef.h>
 #include <stdint.h>
 
@@ -84,29 +92,29 @@
 #include <br/core/br_log.h>
 #include <br/core/br_mem.h>
 #include <br/core/br_types.h>
-/* 块设备契约: 上游从 `<blk.h>`/`<part.h>` 拿, 本件从这里拿。**只有本头**(适配层入口)
- * 可以 include `<br/...>` —— 上游 .c 与 glue 都经本头取运行环境。 */
+/* Block device contract: upstream takes it from `<blk.h>`/`<part.h>`, this file from here.
+ * **Only this header** (adapter entry) includes `<br/...>`; upstream .c and glue go via it. */
 #include <br/dev/br_bdev.h>
 
-/* ==================================================================== 小端前提 */
-/* 上游的 `FAT2CPU16/32`(vendored `include/fat.h` 的 `#if __LITTLE_ENDIAN`)与
- * `le16_to_cpu()` 在本件里是**恒等** ⇒ 只有当目标真的小端时才成立。aarch64 的 QEMU virt
- * 与绝大多数同类板子都是小端; 大端目标下这份环境是错的, 所以宁可在这里停住。 */
+/* ==================================================================== little-endian premise */
+/* Upstream's `FAT2CPU16/32` (the `#if __LITTLE_ENDIAN` in vendored `include/fat.h`) and
+ * `le16_to_cpu()` are **identity** here ⇒ valid only on a true little-endian target. aarch64
+ * QEMU virt and nearly all such boards are LE; a BE target makes this wrong, so stop here. */
 #if !defined(__BYTE_ORDER__) || (__BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
-#error "uboot-fat 的 FAT2CPU16/32 与 leN_to_cpu() 是恒等实现: 本移植只支持小端目标"
+#error "uboot-fat FAT2CPU16/32 and leN_to_cpu() are identity: this port supports little-endian only"
 #endif
-/* vendored `include/fat.h` 的 `FAT2CPU16/32` 走 `#if __LITTLE_ENDIAN` 这条分支 —— 给它
- * 一个真值(u-boot 的 `include/linux/byteorder/little_endian.h` 也是这么定义的)。 */
+/* vendored `include/fat.h`'s `FAT2CPU16/32` takes the `#if __LITTLE_ENDIAN` branch — give it
+ * a true value (u-boot's `include/linux/byteorder/little_endian.h` does the same). */
 #ifndef __LITTLE_ENDIAN
 #define __LITTLE_ENDIAN 1234
 #endif
 
-/* ==================================================================== 基础类型 */
-/* ★ 逐字按 **u-boot 的宽度**给, 不是"同宽的 br_*":
- *   u-boot 的 `u64`/`s64`/`loff_t` 都是 `unsigned long long`/`long long`, 而本仓库的
- *   `br_u64`/`br_s64` 是 `unsigned long`/`long`(LP64 同宽**不同型**)。这不是洁癖:
- *   上游满地的 `%llu`/`%lld` 与实参的**类型**绑定, 用 br_* 会得到 `-Werror=format=`
- *   (探针实测踩到, 与 ADR-0026 §3.1 记的 erofs 同一条坑)。 */
+/* ==================================================================== base types */
+/* ★ Follow **u-boot's widths** verbatim, not "equally wide br_*":
+ *   u-boot's `u64`/`s64`/`loff_t` are `unsigned long long`/`long long`, while this repo's
+ *   `br_u64`/`br_s64` are `unsigned long`/`long` (LP64: same width, **different type**). Not
+ *   pedantry: upstream is full of `%llu`/`%lld` bound to the argument **type**, and br_* gives
+ *   `-Werror=format=` (hit by the probe; same trap as erofs, ADR-0026 §3.1). */
 typedef unsigned char       u8;
 typedef signed char         s8;
 typedef unsigned short      u16;
@@ -128,14 +136,14 @@ typedef br_bool        bool;
 #define NULL BR_NULL
 #endif
 
-_Static_assert(sizeof(u64) == 8u, "u64 必须是 64 位");
-_Static_assert(sizeof(u8) == 1u, "u8 必须是 8 位");
-_Static_assert(sizeof(u64) == sizeof(unsigned long long), "u64 = u-boot 的 long long");
-_Static_assert(sizeof(loff_t) == 8u, "loff_t 必须是 64 位(上游 aarch64 口径)");
-_Static_assert(sizeof(u16) == 2u, "u16 必须是 16 位");
-_Static_assert(sizeof(u32) == 4u, "u32 必须是 32 位");
+_Static_assert(sizeof(u64) == 8u, "u64 must be 64-bit");
+_Static_assert(sizeof(u8) == 1u, "u8 must be 8-bit");
+_Static_assert(sizeof(u64) == sizeof(unsigned long long), "u64 = u-boot's long long");
+_Static_assert(sizeof(loff_t) == 8u, "loff_t must be 64-bit (upstream aarch64)");
+_Static_assert(sizeof(u16) == 2u, "u16 must be 16-bit");
+_Static_assert(sizeof(u32) == 4u, "u32 must be 32-bit");
 
-/* ---- on-disk 整数族(u-boot `include/linux/types.h` 的那一族) ---- */
+/* ---- on-disk integer family (the one in u-boot `include/linux/types.h`) ---- */
 typedef unsigned char      __u8;
 typedef unsigned short     __u16;
 typedef unsigned int       __u32;
@@ -144,9 +152,9 @@ typedef __u16 __le16;
 typedef __u32 __le32;
 typedef __u64 __le64;
 
-_Static_assert(sizeof(__u64) == 8u, "__u64 必须是 64 位");
+_Static_assert(sizeof(__u64) == 8u, "__u64 must be 64-bit");
 
-/* ==================================================================== 字节序(恒等) */
+/* ==================================================================== byte order (identity) */
 static inline u16 uboot_fat_le16_to_cpu(u16 v) { return v; }
 static inline u32 uboot_fat_le32_to_cpu(u32 v) { return v; }
 static inline u16 uboot_fat_cpu_to_le16(u16 v) { return v; }
@@ -156,8 +164,8 @@ static inline u32 uboot_fat_cpu_to_le32(u32 v) { return v; }
 #define cpu_to_le16(x) uboot_fat_cpu_to_le16(x)
 #define cpu_to_le32(x) uboot_fat_cpu_to_le32(x)
 
-/* 非对齐取小端(上游的 `get_unaligned_le16/32`): 目标开了 `-mstrict-align`, 所以一律走
- * __builtin_memcpy(GCC 在 aarch64 上把它降成单条 `ldr`/`str`, 不会真去调 libc 的 memcpy)。 */
+/* Unaligned little-endian loads (upstream `get_unaligned_le16/32`): the target uses
+ * `-mstrict-align`, so always via __builtin_memcpy (GCC lowers it to one `ldr`/`str` on aarch64). */
 static inline u16 uboot_fat_get_unaligned_le16(const void *p)
 {
     u16 v;
@@ -175,13 +183,14 @@ static inline u32 uboot_fat_get_unaligned_le32(const void *p)
 #define get_unaligned_le16(p) uboot_fat_get_unaligned_le16(p)
 #define get_unaligned_le32(p) uboot_fat_get_unaligned_le32(p)
 
-/* ==================================================================== 内存 */
-/* 分配器: 名字接过去(br_* 是 core 的真值; 没有 libc)。为什么用宏而不是声明一个
- * `void *malloc(size_t)`: 那样会变成**对运行期的链接依赖**(`runtime/posix` 目前提供
- * malloc, 而本插件是介质 FS, 不该依赖 POSIX 面)。宏没有这个歧义。
- * `malloc_cache_aligned`/`memalign`: core 堆的对齐 ≥ 16 B(BR_MALLOC_ALIGN), 覆盖本插件的
- * 全部对齐需求(最大自然对齐 8 B; 上游那句"FAT buffer 要 32 位对齐"同理成立) ⇒
- * 对齐这一层没有对象, 直接给 br_malloc。 */
+/* ==================================================================== memory */
+/* Allocator: names forwarded (br_* is core's truth; no libc). Why macros instead of declaring
+ * `void *malloc(size_t)`: that would become a **link-time dependency on the runtime**
+ * (`runtime/posix` currently provides malloc, but this plugin is a media FS and must not depend
+ * on the POSIX surface). Macros have no such ambiguity.
+ * `malloc_cache_aligned`/`memalign`: core's heap aligns ≥ 16 B (BR_MALLOC_ALIGN), covering all
+ * of this plugin's alignment needs (max natural alignment 8 B; upstream's "FAT buffer must be
+ * 32-bit aligned" holds likewise) ⇒ no alignment object needed, just br_malloc. */
 #define malloc(n)             br_malloc(n)
 #define calloc(n, s)          br_calloc((n), (s))
 #define realloc(p, n)         br_realloc((p), (n))
@@ -189,17 +198,19 @@ static inline u32 uboot_fat_get_unaligned_le32(const void *p)
 #define memalign(a, n)        ((void)(a), br_malloc(n))
 #define malloc_cache_aligned(n) br_malloc(n)
 
-/* `memcpy/memset/memcmp/memmove` **由 core 提供**(core/src/string.c, 随 core 链进镜像;
- * 项目纪律: 这四个直接用, 不自己写、也不依赖 runtime/posix)。core 的 string_internal.h 是
- * core 私有, 所以这里写下原型 —— 有原型才有类型检查(`-Wmissing-prototypes` 的另一面)。 */
+/* `memcpy/memset/memcmp/memmove` are **provided by core** (core/src/string.c, linked in with
+ * core; project rule: use these four directly, do not rewrite and do not depend on
+ * runtime/posix). core's string_internal.h is core-private, so prototypes go here — prototypes
+ * are what enables type checking (the flip side of `-Wmissing-prototypes`). */
 void *memcpy (void *dst, const void *src, size_t n);
 void *memmove(void *dst, const void *src, size_t n);
 void *memset (void *dst, int c, size_t n);
 int   memcmp (const void *a, const void *b, size_t n);
 
-/* u-boot 的 DMA 对齐宏(`include/asm/cache.h` + `include/memalign.h`)。本件没有 DMA 约束
- * (块层是裸 memcpy 到设备缓冲, 驱动自己有 DMA) ⇒ 值取 16(与 BR_MALLOC_ALIGN 同),
- * `ALLOC_CACHE_ALIGN_BUFFER` 给出**真实 16 B 对齐**的栈上指针形态(与上游同名同义)。 */
+/* u-boot's DMA alignment macros (`include/asm/cache.h` + `include/memalign.h`). Here there is
+ * no DMA constraint (the block layer memcpys into a device buffer; the driver owns DMA) ⇒ use
+ * 16 (same as BR_MALLOC_ALIGN), and `ALLOC_CACHE_ALIGN_BUFFER` yields a **truly 16 B aligned**
+ * on-stack pointer, same name and meaning as upstream. */
 #ifndef ARCH_DMA_MINALIGN
 #define ARCH_DMA_MINALIGN 16u
 #endif
@@ -215,9 +226,10 @@ int   memcmp (const void *a, const void *b, size_t n);
     unsigned char __##name##_raw[(size) * sizeof(type) + (align)];               \
     type *name = (type *)UBOOT_FAT_ALIGN_UP(__##name##_raw, align)
 
-/* u-boot `include/linux/compiler.h` / `include/linux/compiler_types.h` 里被本件**真正用到**
- * 的属性宏(`fat.c` 的 `static void __maybe_unused fat2rtc(...)`)。其余的编译期属性宏不提供
- * —— 环境只给上游用得上的名字, 不给一整套近似的 Linux 头(见 `compat/linux/compiler.h`)。 */
+/* The attribute macros from u-boot `include/linux/compiler.h` / `include/linux/compiler_types.h`
+ * that this file **actually uses** (`fat.c`'s `static void __maybe_unused fat2rtc(...)`). No
+ * other compile-time attribute macros — the environment supplies only the names upstream needs,
+ * not a whole approximate Linux header (see `compat/linux/compiler.h`). */
 #define __maybe_unused  __attribute__((__unused__))
 #define __packed        __attribute__((__packed__))
 #define __aligned(x)    __attribute__((__aligned__(x)))
@@ -226,7 +238,7 @@ int   memcmp (const void *a, const void *b, size_t n);
 #define __force
 #endif
 
-/* ==================================================================== 工具宏 */
+/* ==================================================================== utility macros */
 #define DIV_ROUND_UP(n, d)   (((n) + (d) - 1u) / (d))
 #define round_up(x, y)       ((((x) + ((y) - 1u)) / (y)) * (y))
 #define round_down(x, y)     (((x) / (y)) * (y))
@@ -241,7 +253,8 @@ int   memcmp (const void *a, const void *b, size_t n);
 #define likely(x)            (x)
 #define unlikely(x)          (x)
 
-/* `fls(i)`(上游 `set_name` 用它做"随机短名后缀"的位宽): 最高置位的位置, 1 起算, fls(0)=0。 */
+/* `fls(i)` (upstream `set_name` uses it for the "random short-name suffix" bit width): position
+ * of the highest set bit, 1-based, fls(0)=0. */
 static inline int uboot_fat_fls(unsigned int v)
 {
     int n = 0;
@@ -254,14 +267,15 @@ static inline int uboot_fat_fls(unsigned int v)
 }
 #define fls(v) uboot_fat_fls(v)
 
-/* `is_power_of_2()`(上游 `is_bootsector_valid` 用; u-boot `include/linux/log2.h` 的原义) */
+/* `is_power_of_2()` (used by upstream `is_bootsector_valid`; the meaning in u-boot
+ * `include/linux/log2.h`) */
 static inline bool is_power_of_2(unsigned long n)
 {
     return (bool)((n != 0ul) && ((n & (n - 1ul)) == 0ul));
 }
 
-/* `ilog2()`(u-boot `include/linux/log2.h`; 本件的 fat 源码没用到, 但环境头与上游同名同义,
- * 免得将来上游用到时又要"补一个近似的")。 */
+/* `ilog2()` (u-boot `include/linux/log2.h`; unused by this file's fat source, but kept at the
+ * same name and meaning as upstream, so a later upstream use needs no "approximate" filler). */
 static inline unsigned int uboot_fat_ilog2(unsigned long v)
 {
     unsigned int n = 0u;
@@ -274,8 +288,8 @@ static inline unsigned int uboot_fat_ilog2(unsigned long v)
 }
 #define ilog2(v) uboot_fat_ilog2(v)
 
-/* `do_div`/`lldiv`/`div_u64_rem`(上游 `include/div64.h` + `include/linux/math64.h`)。
- * 目标 BITS_PER_LONG == 64 ⇒ 与 u-boot 的 64 位分支逐字同义。 */
+/* `do_div`/`lldiv`/`div_u64_rem` (upstream `include/div64.h` + `include/linux/math64.h`).
+ * Target BITS_PER_LONG == 64 ⇒ verbatim the same as u-boot's 64-bit branch. */
 #define do_div(n, base) ({                          \
         u32 __base = (u32)(base);                   \
         u32 __rem  = (u32)(((u64)(n)) % __base);     \
@@ -296,9 +310,11 @@ static inline u64 uboot_fat_div_u64_rem(u64 dividend, u32 divisor, u32 *remainde
 }
 #define div_u64_rem(d, div, rem) uboot_fat_div_u64_rem((d), (div), (rem))
 
-/* `BUILD_BUG_ON` —— 按 u-boot 的机制(函数体内 `if` + `__compiletime_error`)兑现, 不用
- * `_Static_assert`: 上游 `include/linux/build_bug.h` 允许条件不是整型常量表达式。本件的
- * fat 源码没有调用点, 但 vendored 头转发进来时可能间接用到(环境完整比"恰好够用"更稳)。 */
+/* `BUILD_BUG_ON` — implemented with u-boot's mechanism (an `if` in a function body +
+ * `__compiletime_error`), not `_Static_assert`: upstream `include/linux/build_bug.h` allows a
+ * condition that is not an integer constant expression. This file's fat source has no call
+ * site, but vendored headers may reach it indirectly (a complete environment is safer than a
+ * minimal one). */
 #define UBOOT_FAT_CC_ERROR(msg) __attribute__((__error__(msg)))
 #define UBOOT_FAT_CC_ID(prefix, suffix) prefix ## suffix
 #define UBOOT_FAT_CC_ASSERT(cond, msg, prefix, suffix)                      \
@@ -317,19 +333,20 @@ static inline u64 uboot_fat_div_u64_rem(u64 dividend, u32 divisor, u32 *remainde
 #define BUILD_BUG_ON(condition) do { } while (0)
 #endif
 
-/* `assert()`: 见文件头"有意偏离(1)"—— 上游这一次编译的 `_DEBUG == 0`。表达式仍然被类型
- * 检查(`(void)(x)` 在 `if (0)` 里), 运行期不求值。 */
+/* `assert()`: see "intentional deviations (1)" in the file header — `_DEBUG == 0` for this
+ * upstream build. The expression is still type-checked (`(void)(x)` inside `if (0)`), never
+ * evaluated at run time. */
 #define assert(x) do { if (0) { (void)(x); } } while (0)
 
-/* ==================================================================== 编译期配置 */
-/* u-boot 用 Kconfig 的 `CONFIG_*` 开关裁代码。本件给它们**显式真值**, 于是上游的
- * `CONFIG_IS_ENABLED(...)` 分支逐字成立(不是我们把分支删掉):
- *   FAT_WRITE=1  ⇒ vendored fat.c 不编那份"只读 flush_dirty_fat_buffer 桩"
- *                  (真身在上游 fat_write.c 里 —— 同一个编译单元, 只有一份)
- *   EFI_LOADER=0 ⇒ fat_readdir 不填时间戳(本件 v1 无 RTC)
- *   DM_RTC=0     ⇒ 写路径不取 RTC 时间, 用上游自己的 2000-01-01 兜底常量
- *   FS_EXFAT=0   ⇒ 目录项名字段 = 256 字节(见 vendored include/fs.h)
- *   FS_FAT_MAX_CLUSTSIZE: u-boot 的缺省值(32 KiB), vendored fat.h 的 MAX_CLUSTSIZE 用它 */
+/* ==================================================================== compile-time config */
+/* u-boot uses Kconfig `CONFIG_*` switches to cut code. Here they get **explicit true values**,
+ * so upstream's `CONFIG_IS_ENABLED(...)` branches hold verbatim (we do not delete branches):
+ *   FAT_WRITE=1  ⇒ vendored fat.c does not compile the read-only flush_dirty_fat_buffer stub
+ *                  (the real one is in upstream fat_write.c — same translation unit, one copy)
+ *   EFI_LOADER=0 ⇒ fat_readdir fills no timestamps (this port has no RTC in v1)
+ *   DM_RTC=0     ⇒ the write path takes no RTC time, using upstream's own 2000-01-01 fallback
+ *   FS_EXFAT=0   ⇒ dirent name field = 256 bytes (see vendored include/fs.h)
+ *   FS_FAT_MAX_CLUSTSIZE: u-boot's default (32 KiB), used by vendored fat.h's MAX_CLUSTSIZE */
 #define CONFIG_FAT_WRITE           1
 #define CONFIG_EFI_LOADER          0
 #define CONFIG_DM_RTC              0
@@ -339,10 +356,10 @@ static inline u64 uboot_fat_div_u64_rem(u64 dividend, u32 divisor, u32 *remainde
 #define CONFIG_LOG                 0
 #define CONFIG_LOGF_FUNC           0
 
-/* `CONFIG_IS_ENABLED(opt, [case1], [case2])` / `IS_ENABLED(opt)`: 与 u-boot 同形的
- * 变参选择(1 参 ⇒ 0/1 常量; 3 参 ⇒ 选一支)。上游在本件里的四个用法都在作用域内:
- * `#if !CONFIG_IS_ENABLED(FAT_WRITE)`、`if (CONFIG_IS_ENABLED(EFI_LOADER))`、
- * `if (CONFIG_IS_ENABLED(DM_RTC))`、`CONFIG_IS_ENABLED(FS_EXFAT, (1024), (256))`。 */
+/* `CONFIG_IS_ENABLED(opt, [case1], [case2])` / `IS_ENABLED(opt)`: the same variadic choice as
+ * u-boot (1 arg ⇒ 0/1 constant; 3 args ⇒ pick one). Upstream's four uses here are all in scope:
+ * `#if !CONFIG_IS_ENABLED(FAT_WRITE)`, `if (CONFIG_IS_ENABLED(EFI_LOADER))`,
+ * `if (CONFIG_IS_ENABLED(DM_RTC))`, `CONFIG_IS_ENABLED(FS_EXFAT, (1024), (256))`. */
 #define UBOOT_FAT_CONF_(opt)        CONFIG_ ## opt
 #define UBOOT_FAT_CONF(opt)         UBOOT_FAT_CONF_(opt)
 #define UBOOT_FAT_PICK(_1, _2, _3, NAME, ...) NAME
@@ -355,17 +372,19 @@ static inline u64 uboot_fat_div_u64_rem(u64 dividend, u32 divisor, u32 *remainde
                    UBOOT_FAT_CE_1)(opt, ##__VA_ARGS__)
 #define IS_ENABLED(opt)             (opt)
 
-/* u-boot 的日志分类/等级: 上游两个 .c 都写 `#define LOG_CATEGORY LOGC_FS`, 而
- * `log_err`/`log_debug` 由本文件映射到 br_log_write(不用分类)⇒ 这里只需要让那个宏**有个
- * 被定义的名字**(否则 `-Wundef` 在它被展开时报未定义)。 */
+/* u-boot log categories/levels: both upstream .c files define `#define LOG_CATEGORY LOGC_FS`,
+ * while `log_err`/`log_debug` map to br_log_write here (no category) ⇒ all this needs is for that
+ * macro to have **a defined name** (otherwise `-Wundef` fires when it is expanded). */
 #define LOGC_FS 0
 
-/* ==================================================================== 日志 */
-/* 见文件头"有意偏离(2)(3)": printf/log_err 始终输出(ERROR 级), debug 缺省不输出。
- * ★ 为什么直接拼串而不是"先格式化再转发": 上游的格式串**全是字符串字面量**(逐个调用点
- *   查过), 于是 `"uboot-fat: " fmt` 是编译期拼接, 实参的类型检查仍由 br_log_write 的
- *   `format(printf, …)` 属性给出。零个可变参数时靠 GNU 的 `##__VA_ARGS__`(与
- *   adapter/uboot-erofs 的 pr_err 同一手法)。 */
+/* ==================================================================== logging */
+/* See "intentional deviations (2)(3)" in the header: printf/log_err always emit (ERROR level),
+ * debug is silent by default.
+ * ★ Why concatenate the string instead of "format then forward": upstream's format strings are
+ *   **all string literals** (checked call site by call site), so `"uboot-fat: " fmt` is a
+ *   compile-time concat, and argument type checking still comes from br_log_write's
+ *   `format(printf, …)` attribute. Zero variadic args relies on GNU `##__VA_ARGS__` (the same
+ *   trick as adapter/uboot-erofs's pr_err). */
 #ifndef UBOOT_FAT_VERBOSE_DBG
 #define UBOOT_FAT_VERBOSE_DBG 0
 #endif
@@ -380,15 +399,17 @@ static inline u64 uboot_fat_div_u64_rem(u64 dividend, u32 divisor, u32 *remainde
 #define log_warning(fmt, ...) br_log_write(BR_LOG_WARN, "uboot-fat: " fmt, ##__VA_ARGS__)
 #define printf(fmt, ...)    br_log_write(BR_LOG_ERROR, "uboot-fat: " fmt, ##__VA_ARGS__)
 
-/* ==================================================================== 字符串(自研) */
-/* 全部 `static inline` + `uboot_fat_` 前缀(硬约束: 不依赖 runtime/posix), 再用宏把上游的
- * 裸名字接过来。长度纪律: 一律只按调用方给的 `n`(或本文件给出的**上游构造**上界)走。 */
-#define UB_FAT_STRCPY_CAP   256u   /* 上游两个 strcpy 目标都是 256 B 的缓冲(见文件头) */
-/* `strdup` 的上界 = 本插件 VFS 面的路径上界(`UB_FAT_PATH_MAX` = 256, 见 glue/fat_glue.h)
- * + 上游调用点还会自带一个前导 '/' 与结尾 '\0' ⇒ 258。超长返回 NULL(上游对 NULL 的答复
- * 是 -ENOMEM), 于是"路径过长"与"没内存"在上游眼里是同一类失败, 不会静默截断。 */
+/* ==================================================================== strings (hand-rolled) */
+/* All `static inline` + `uboot_fat_` prefix (hard constraint: no dependency on runtime/posix),
+ * then macros forward upstream's bare names. Length discipline: always bounded by the caller's
+ * `n` (or an upper bound that is **upstream's own construction**). */
+#define UB_FAT_STRCPY_CAP   256u   /* upstream's two strcpy targets are 256 B buffers (see header) */
+/* `strdup`'s bound = this plugin's VFS path bound (`UB_FAT_PATH_MAX` = 256, see glue/fat_glue.h)
+ * + a leading '/' and a trailing '\0' from the upstream call site ⇒ 258. Longer returns NULL
+ * (upstream answers NULL with -ENOMEM), so "path too long" and "out of memory" are the same
+ * failure upstream, never a silent truncation. */
 #define UB_FAT_STRDUP_CAP   (256u + 2u)
-#define UB_FAT_SPRINTF_MAX  256u   /* 无 libc 的 sprintf 在环境侧的封顶(见文件头) */
+#define UB_FAT_SPRINTF_MAX  256u   /* environment-side cap for libc-free sprintf (see header) */
 
 static inline size_t uboot_fat_strlen(const char *s)
 {
@@ -435,7 +456,7 @@ static inline int uboot_fat_strncmp(const char *a, const char *b, size_t n)
     return 0;
 }
 
-/* 有界复制(cap 含结尾 '\0'; 上界见文件头: 上游两个目标都是 256 B 的缓冲) */
+/* Bounded copy (cap includes the trailing '\0'; see header: upstream's two targets are 256 B) */
 static inline char *uboot_fat_strcpy(char *dst, const char *src)
 {
     size_t i = 0u;
@@ -480,7 +501,8 @@ static inline char *uboot_fat_strrchr(const char *s, int c)
     }
 }
 
-/* ASCII 小写(上游 `tolower`, 只处理 'A'..'Z'; 非 ASCII 原样返回 —— 上游同样假设 8 位代码页) */
+/* ASCII lowercase (upstream `tolower`; handles 'A'..'Z' only, other bytes returned as-is —
+ * upstream likewise assumes an 8-bit codepage) */
 static inline int uboot_fat_tolower(int c)
 {
     if ((c >= 'A') && (c <= 'Z')) {
@@ -523,7 +545,8 @@ static inline int uboot_fat_strncasecmp(const char *a, const char *b, size_t n)
     return 0;
 }
 
-/* 认得出是移植: 上游的裸名字 → 我们的实现(整编译单元 -fno-builtin, 不会自撞) */
+/* The port is visible here: upstream's bare names → our implementations (the whole translation
+ * unit is -fno-builtin, so no self-collision) */
 #define strlen(s)            uboot_fat_strlen(s)
 #define strnlen(s, n)        uboot_fat_strnlen((s), (n))
 #define strcmp(a, b)         uboot_fat_strcmp((a), (b))
@@ -535,9 +558,9 @@ static inline int uboot_fat_strncasecmp(const char *a, const char *b, size_t n)
 #define strncasecmp(a, b, n) uboot_fat_strncasecmp((a), (b), (n))
 #define tolower(c)           uboot_fat_tolower(c)
 
-/* `strdup`/`sprintf`/`rand`: 由 `glue/fat_blk.c` 实现(有界/确定性; 见文件头)。
- * 声明 + 宏而不是"实现放头里": 它们是真正的跨模块符号, 有原型才有 -Wmissing-prototypes 的
- * 另一面, 也只在本插件里有一份真值。 */
+/* `strdup`/`sprintf`/`rand`: implemented in `glue/fat_blk.c` (bounded/deterministic; see header).
+ * Declarations + macros rather than in-header definitions: they are real cross-module symbols, so
+ * prototypes give the other side of -Wmissing-prototypes, and there is exactly one truth here. */
 char *uboot_fat_strdup(const char *s);
 int   uboot_fat_sprintf(char *dst, const char *fmt, ...)
       __attribute__((format(printf, 2, 3)));
@@ -547,31 +570,35 @@ int   uboot_fat_rand(void);
 #define sprintf     uboot_fat_sprintf
 #define rand()      uboot_fat_rand()
 
-/* ==================================================================== 块设备 shim */
-/* u-boot 里 `disk_read/disk_write`(上游 fat.c 内的 static)最终调
- * `blk_dread/blk_dwrite(desc, start, blkcnt, buf)`。本件给出一组**同形状的极小 shim**:
- *   · `struct blk_desc`/`disk_partition` 只有上游 fat.c 真正碰到的字段;
- *   · "整设备一个分区"(起始扇区 0) ⇒ 上游的 `cur_part_info.start + block` 恒等于 `block`;
- *   · `blk_dread/blk_dwrite` 的实现在 `glue/fat_blk.c`(按 geometry.max_rw 切块、越界拒绝)。
- * 返回值的上游口径: 成功 = 传输的扇区数, 失败 < 0(于是上游的 `ret != nr_blocks` 判据成立)。 */
+/* ==================================================================== block device shim */
+/* In u-boot, `disk_read/disk_write` (static inside upstream fat.c) ultimately call
+ * `blk_dread/blk_dwrite(desc, start, blkcnt, buf)`. This file provides a **minimal same-shape
+ * shim**:
+ *   · `struct blk_desc`/`disk_partition` carry only the fields upstream fat.c really touches;
+ *   · "whole device = one partition" (start sector 0) ⇒ upstream's `cur_part_info.start + block`
+ *     is always just `block`;
+ *   · `blk_dread/blk_dwrite` live in `glue/fat_blk.c` (split by geometry.max_rw, reject
+ *     out-of-range).
+ * Upstream's return contract: success = sectors transferred, failure < 0 (so upstream's
+ * `ret != nr_blocks` test holds). */
 typedef br_u64 lbaint_t;
 
 struct blk_desc {
     int           uclass_id;   /* u-boot: enum uclass_id */
-    int           devnum;      /* 设备号(本件恒 0) */
-    lbaint_t      lba;         /* 扇区总数 */
-    unsigned long blksz;       /* 扇区字节数 */
+    int           devnum;      /* device number (always 0 here) */
+    lbaint_t      lba;         /* total sectors */
+    unsigned long blksz;       /* bytes per sector */
     int           log2blksz;
-    char          vendor[9];   /* 只被 file_fat_detectfs → dev_print 用(死代码) */
+    char          vendor[9];   /* only used by file_fat_detectfs → dev_print (dead code) */
 };
 
 #define PART_NAME_LEN 36
 #define PART_TYPE_LEN 36
 
 struct disk_partition {
-    lbaint_t start;                  /* 分区首扇区(本件恒 0) */
-    lbaint_t size;                   /* 分区扇区数 = 设备扇区数 */
-    ulong    blksz;                  /* 扇区字节数 */
+    lbaint_t start;                  /* first sector of the partition (always 0 here) */
+    lbaint_t size;                   /* partition sectors = device sectors */
+    ulong    blksz;                  /* bytes per sector */
     uchar    name[PART_NAME_LEN];
     uchar    type[PART_TYPE_LEN];
     int      bootable;
@@ -580,13 +607,14 @@ struct disk_partition {
 unsigned long blk_dread (struct blk_desc *desc, lbaint_t start, lbaint_t blkcnt, void *buf);
 unsigned long blk_dwrite(struct blk_desc *desc, lbaint_t start, lbaint_t blkcnt, const void *buf);
 
-/* 只被上游**没人引用**的函数调用的环境桩(`fat_register_device`/`file_fat_detectfs`):
- * 声明在这里, 定义成 `static inline` ⇒ 连链接依赖都没有。`-ffunction-sections` +
- * `--gc-sections` 会把那些上游函数整段裁掉(本件的挂载走 `fat_set_blk_dev` + 卷表)。 */
+/* Environment stubs called only by upstream functions that **nobody references**
+ * (`fat_register_device`/`file_fat_detectfs`): declared here, defined `static inline` ⇒ not even a
+ * link dependency. `-ffunction-sections` + `--gc-sections` drop those upstream functions whole
+ * (this port mounts via `fat_set_blk_dev` + the volume table). */
 static inline int part_get_info(struct blk_desc *desc, int part, struct disk_partition *info)
 {
     (void)desc; (void)part; (void)info;
-    return -1;                    /* 本件没有分区表(整设备一个分区) */
+    return -1;                    /* no partition table here (whole device = one partition) */
 }
 
 static inline void disk_partition_clr_uuid(struct disk_partition *info)
@@ -610,9 +638,9 @@ static inline void dev_print(struct blk_desc *desc)
     (void)desc;
 }
 
-/* ==================================================================== DM/RTC 环境桩 */
-/* `CONFIG_DM_RTC=0` 时上游的 RTC 分支是死代码, 但仍要类型正确:
- * `struct udevice`/`struct rtc_time`(后者来自 vendored include/fs.h → rtc_def.h)。 */
+/* ==================================================================== DM/RTC stubs */
+/* With `CONFIG_DM_RTC=0` upstream's RTC branch is dead code but must still type-check:
+ * `struct udevice`/`struct rtc_time` (the latter from vendored include/fs.h → rtc_def.h). */
 struct udevice;
 
 #define UCLASS_RTC 0
@@ -626,19 +654,21 @@ static inline int uclass_first_device(int uclass_id, struct udevice **devp)
     return 0;
 }
 
-/* `tm` 故意写 `void *`(而不是 `struct rtc_time *`): 本头可能先于 vendored `include/fs.h`
- * 被展开, 而函数原型里的 struct 若在该处首次出现, 作用域只到原型为止 —— 那会让上游
- * `dm_rtc_get(dev, &tm)`(tm 是 fs.h 的 struct rtc_time)报"指针类型不兼容"。`void *` 没有
- * 这个歧义, 且这条分支是死代码(见文件头)。 */
+/* `tm` is deliberately `void *` (not `struct rtc_time *`): this header may be expanded before
+ * vendored `include/fs.h`, and a struct first seen in a prototype is scoped to that prototype
+ * only — which would make upstream `dm_rtc_get(dev, &tm)` (tm is fs.h's struct rtc_time) report
+ * an incompatible pointer type. `void *` has no such ambiguity, and this branch is dead code
+ * (see the header). */
 static inline int dm_rtc_get(struct udevice *dev, void *tm)
 {
     (void)dev; (void)tm;
     return -1;
 }
 
-/* `rtc_calc_weekday()`(u-boot `include/rtc.h`, 上游 `fat2rtc()` 用): 本件 v1 没有 RTC,
- * 而 `fat2rtc` 只被 `fat_readdir` 的 `CONFIG_EFI_LOADER` 分支调用(死代码, 会被
- * `--gc-sections` 裁掉)⇒ 这里是**环境桩**, 只为让那段上游原文类型正确。 */
+/* `rtc_calc_weekday()` (u-boot `include/rtc.h`, used by upstream `fat2rtc()`): v1 has no RTC,
+ * and `fat2rtc` is called only from `fat_readdir`'s `CONFIG_EFI_LOADER` branch (dead code, cut by
+ * `--gc-sections`) ⇒ this is an **environment stub**, present only to type-check that upstream
+ * text. */
 static inline void rtc_calc_weekday(void *tm)
 {
     (void)tm;

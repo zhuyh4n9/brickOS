@@ -22,7 +22,7 @@ prototype/
 └── adapter/
     ├── third-party-upstream.lock   ← vendor 的 sha256 只读锁
     └── uboot-erofs/
-        ├── plugin.toml   ← sources **直接指向** third_party 的上游 .c; cflags = vendor 告警口径
+        ├── brick.toml   ← sources **直接指向** third_party 的上游 .c; cflags = vendor 告警口径
         ├── compat/       ← u-boot 运行环境(我们写的适配层)
         └── glue/         ← 块层 + VFS 对接 + 自检(本项目代码)
 ```
@@ -40,7 +40,7 @@ prototype/
 
 ```
    third_party/uboot-imx/fs/erofs/*.c + lib/lz4.c     ← 上游原件(GPL-2.0+), 只读
-                  │  plugin.toml 的 sources 直接点名(无副本)
+                  │  brick.toml 的 sources 直接点名(无副本)
                   │  上游 #include "内部头"/<u-boot/lz4.h>/<linux/…>/<asm/…>
                   ▼
    adapter/uboot-erofs/compat/    ← 兑现上游假设的**环境**: erofs_env.h(类型/宏/日志/
@@ -63,14 +63,14 @@ prototype/
 2. **vendor 逐字节等于锁**(任一字节被改 ⇒ 红);
 3. 锁里每条都在磁盘上(静默丢失也红);
 4. vendor 里没有锁外的文件(塞东西也红);
-5. `third_party/` 下没有 `plugin.toml`(三方件不是 brickOS 插件);
+5. `third_party/` 下没有 `brick.toml`(三方件不是 brickOS 插件);
 6. `third_party/` 之外没有 `#include <third_party/...>` 这种**按 vendor 路径写死**的包含
    (vendor 的头只经 `-I` 的目录名 `<vendor>/fs/erofs`, 或 `compat/` 里的相对转发壳找到)。
 
 **vendor 代码按它的告警口径编译**(ADR-0026 D-4): 上游按 u-boot 自己的 `-W...` 集合写,
 那份**不含**本项目的 `-Wshadow`/`-Wpointer-arith`/`-Wmissing-prototypes`/`-Wsign-compare`/
 `-Wunused-parameter`。事实: 上游 `super.c` 的局部变量就叫 `sbi`(故意遮蔽全局)、`data.c`
-对 `void *` 做算术、`namei.c` 的 `erofs_namei` 没有前置原型。⇒ `plugin.toml` 的
+对 `void *` 做算术、`namei.c` 的 `erofs_namei` 没有前置原型。⇒ `brick.toml` 的
 `[build].cflags` 关掉这几条; **不能**为了过我们的告警去改上游 —— 那正是本刀要消灭的
 "就地改三方件"。
 

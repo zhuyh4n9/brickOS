@@ -2,7 +2,7 @@
 
 > **现场倾倒(呈现编排者)+ 自带自检套件**。dump 只编排**呈现**(regions → heap → leaks →
 > trace → backtrace), **不再**替别的插件跑自检 —— 自检由 core 统一驱动(ADR-0010)。
-> 本 README 由实现者维护(声明面 `plugin.toml` 是唯一真值, 不在这里复述)。
+> 本 README 由实现者维护(声明面 `brick.toml` 是唯一真值, 不在这里复述)。
 
 ## 能力面(声明面 `include/br/debug/br_dump.h` 的转述)
 
@@ -88,18 +88,18 @@ flags/常量: `BR_DUMP_F_STRICT`(缺省, 未声明地址 ⇒ `-EINVAL`)、`BR_DU
 
 - **plugin_manager**: `product.toml [select].plugins` 直接选中本插件; `dump_early_init()` /
   `dump_init()` / `dump_start()` 由 core 的插件管理器按相驱动(`dump_init()` 在 LATE 相,
-  并在其中打一份启动快照)。**APP 不再直调 dump** —— `app/hello/plugin.toml` 已没有
+  并在其中打一份启动快照)。**APP 不再直调 dump** —— `app/hello/brick.toml` 已没有
   `service/dump` 的 `[[dep]]`, `product.toml [lint].allow_edges` 里那条
   `["app/hello", "service/dump"]` M0 豁免也随 ADR-0010 删除。最后一条
   `app → platform` 随后由 ADR-0016 删掉(心跳收归 core、平台身份日志归 platform 自己打)
   ⇒ **`allow_edges` 现在是空表**。
-- **init 顺序**: `plugin.toml` 对 trace/backtrace/hexdump/memleak 各有一条 `kind = "init"`
+- **init 顺序**: `brick.toml` 对 trace/backtrace/hexdump/memleak 各有一条 `kind = "init"`
   的边 ⇒ plugin_manager 的拓扑序保证它们的 LATE init 在 `dump_init()` **之前**返回(没有
   这四条边, LATE 相顺序会退化成字典序, dump 会排到最前)。
 - **自检**: `dump_selftest()` 由 core 的 `br_plugin_manager_selftest()` 在全部 `start()`
   之后、`br_sched_run()` 之前驱动; 四家兄弟的钩子同样由 core 驱动, 且因 init 拓扑序排在
   `dump_selftest()` 之前。**dump 不代任何插件 init, 也不代任何插件跑自检。**
-- **依赖边**: plugin.toml 有四条 `kind = "runtime"` 边(trace / backtrace / hexdump /
+- **依赖边**: brick.toml 有四条 `kind = "runtime"` 边(trace / backtrace / hexdump /
   memleak; 每条 `symbol` 只登记一个呈现面的代表符号, 如 `br_hexdump_to`)+ 四条
   `kind = "init"` 边(同上四件, LATE 相顺序)。自检钩子**不**另立依赖 —— 它由描述符挂出、
   由 core 统一调, 与 `early_init`/`init`/`start` 同一条路。

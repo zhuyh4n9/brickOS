@@ -9,7 +9,7 @@
 > 影响面: `runtime/posix/include/pthread.h`(面补齐)、`runtime/posix/include/errno.h`
 > (**`errno` 改为宏 + `br_posix_errno()` 每线程槽位**)、`runtime/posix/src/posix.c`
 > (线程记录扩展 / 惰性 detach 回收 / mutexattr / once / key / rwlock / barrier)、
-> `runtime/posix/src/posix_selftest.c`(+8 用例)、`runtime/posix/plugin.toml`(导出面
+> `runtime/posix/src/posix_selftest.c`(+8 用例)、`runtime/posix/brick.toml`(导出面
 > 0.1.1.0; `pthread_*` 条目 73 条; cases 20→28)、`api/iface/runtime/posix/posix.toml`
 > (重新发布)、`app/hello/src/main.c`(**重写为 POSIX 多线程样例**)、
 > `tests/gates.toml`(smoke 增 `[APPCONF]` 判据 + `APP-PT-*` 点名; posix-test 增 021–028)。
@@ -104,7 +104,7 @@ ADR-0014 落地的 pthread 只是 **TR-B 最小集**: `create/join/exit/self/equ
 | 声明面 | `brickie check` | 0 错/0 警(1 提示: 被再导出单元未冻结, dev 允许); 闭包 17 插件 |
 | 插件自检 | `brickie test posix-test` | `[POSIXCONF] SUMMARY pass=28 fail=0`(新增 021–028 全绿) |
 | **APP 多线程样例** | `brickie test smoke` | `[APPCONF] SUMMARY pass=7 fail=0`; 心跳 `tick=2` / `us: ok)` / `irq_ticks=338` |
-| 接口治理 | `brickie iface publish runtime/posix#posix` | 单元 **0.1.0.0 → 0.1.1.0**(ADDED, green); 快照/CHANGELOG/lock 落盘; hash 抄回 plugin.toml |
+| 接口治理 | `brickie iface publish runtime/posix#posix` | 单元 **0.1.0.0 → 0.1.1.0**(ADDED, green); 快照/CHANGELOG/lock 落盘; hash 抄回 brick.toml |
 | 构建 | `brickie build` | 通过 |
 
 ## 4. 遗留(如实登记)

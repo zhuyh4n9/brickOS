@@ -11,7 +11,7 @@
 > `tools/brickie/rust/src/model.rs`(`dep_closure()` + `cross_plugin_includes()` 扫描器)、
 > `tools/brickie/rust/src/check.rs`(deps 域增加同口径校验)、
 > **新增** `iface-posix/`(Interface 薄皮肤, `form = "skin"`, 再导出 `runtime/posix#posix`)、
-> `app/hello/plugin.toml`(+`[[dep]] iface-posix`)、`app/hello/src/main.c`(只 include 皮肤头)、
+> `app/hello/brick.toml`(+`[[dep]] iface-posix`)、`app/hello/src/main.c`(只 include 皮肤头)、
 > `app/hello/README.md`、`product.toml`(注释)。
 > 设计依据: `1-01` §7.3(依赖方向表; APP 仅经 Interface)/§7.4(skin 再导出)/D18(POSIX 双角色)、
 > `4-02` §2(插件布局与 include 面)、`2-01`/`brickie-v0.1` §7(声明面是唯一真值)。
@@ -77,7 +77,7 @@
 **Interface 皮肤**。本刀落地设计 D18 的 `iface-posix`:
 
 ```toml
-# iface-posix/plugin.toml
+# iface-posix/brick.toml
 [plugin]
 plugin_type = "interface"
 api_type    = "runtime_adapter"   # 不变量 1 + 3(被再导出单元 runtime/posix#posix 的分类)
@@ -97,7 +97,7 @@ symbols     = ["usleep", "pthread_attr_init", "pthread_create"]
 APP 侧改成:
 
 ```toml
-# app/hello/plugin.toml
+# app/hello/brick.toml
 [[dep]] name = "iface-posix" kind = "runtime" symbol = "usleep"
 [[dep]] name = "iface-posix" kind = "init"    phase  = "late"
 ```

@@ -1,76 +1,76 @@
-# product.toml — 镜像组合(brickOS prototype v0.2.0, QEMU virt aarch64)
+# product.toml — image composition (brickOS prototype v0.2.0, QEMU virt aarch64)
 #
-# 产品级**只声明"选择与预算"**; 插件的自述(dep/export/privileged)只许在各自的
-# plugin.toml 里(BRV-D4 唯一真值)。
+# Product level: **only "selection and budget"**; plugin self-description lives in its brick.toml (BRV-D4).
 schema = 1
 
 [product]
 name    = "brickos-prototype"
-# ★ v0.2.0(定版本): 上一代(v0.1.0)交付的是**声明期**那一半(发现/校验/描述符生成),
-#   这一代交付**运行期**那一半 —— 插件管理器与四阶段启动链、声明面驱动的构建
-#   (`brickie build` 取代组合段 Makefile)、调度/同步/中断下半部、POSIX 运行时与 fd 表、
-#   VFS 存储栈、设备与存储域框架(bdev/pci)、以及架在真 eMMC 上的第三方 FAT/EROFS。
-#   逐条账见 `docs/decisions/` 的 ADR-0008..0022 与 `WORKAROUNDS.md`。
+# ★ v0.2.0: v0.1.0 delivered the **declaration-phase** half (discovery/validation/descriptor gen);
+#   this release delivers the **runtime** half — plugin manager + four-phase start chain,
+#   build driven by the declaration surface (`brickie build` replaces the composition Makefile),
+#   POSIX runtime + fd table, VFS storage stack, device/storage frameworks (bdev/pci),
+#   and third-party FAT/EROFS on real eMMC.
+#   Itemized record: ADR-0008..0022 in `docs/decisions/` and `WORKAROUNDS.md`.
 version = "0.2.0.0"             # COMPAT_GEN.MAJOR.MINOR.REVISE
-app     = "app/hello"           # 恰一个(§3.2)
+app     = "app/hello"           # exactly one (§3.2)
 core    = ">=0.1.0"
-stage   = "dev"                 # dev | release; CLI 覆盖(§7.5)
+stage   = "dev"                 # dev | release; CLI overrides (§7.5)
 
 [select]
-# 只列**直接选择**的插件; 其余经依赖闭包拉进来(能力经 `[[dep]]` 声明, 产品只做选择
-# —— BRV-D4 唯一真值)。本产品的闭包链:
-#   app/hello    → iface/posix(Interface 薄皮肤, ADR-0018)→ runtime/posix
-#                → iface/min  (core native 直通皮肤, ADR-0020; 日志/时钟/tick/版本)
-#                  ★ 两个 iface 皮肤刻意**不列**在下面: 都由 APP 的 `[[dep]]` 自动拉入
-#                    (与 framework/file-table 同款"闭包可读性"取舍)。
-#   service/dump → service/{trace,backtrace,hexdump,memleak}
-#   fs/devfs     → framework/{dev-core,cdev-core,vfs-core} + fs/tmpfs(挂载点父 FS)
-#   io/uart-pl011→ framework/{cdev-core,dev-core,vfs-core}
-#   fs/tmpfs     → framework/vfs-core
+# Lists only **directly selected** plugins; the rest come in via dependency closure
+# `[[dep]]`; the product only selects — BRV-D4). Closure chain of this product:
+#   app/hello    -> iface/posix (thin Interface skin, ADR-0018) -> runtime/posix
+#                -> iface/min  (core native pass-through skin, ADR-0020; log/clock/tick/version)
+#                  * Both iface skins are deliberately **not** listed below: APP's `[[dep]]`
+#                    (same "closure readability" trade-off as framework/file-table).
+#   service/dump -> service/{trace,backtrace,hexdump,memleak}
+#   fs/devfs     -> framework/{dev-core,cdev-core,vfs-core} + fs/tmpfs (parent FS of mount points)
+#   io/uart-pl011-> framework/{cdev-core,dev-core,vfs-core}
+#   fs/tmpfs     -> framework/vfs-core
 #                          ↓
-#   framework/{vfs-core,dev-core,cdev-core}   (存储/设备域的框架件, ADR-0009)
-# ★ 为什么直接列 fs/devfs 与 io/uart-pl011 而不只列 tmpfs: 设计 `1-03` §1 的 v1.0
-#   插件清单里这三件(tmpfs rootfs / devfs /dev / uart-pl011 tty)都是**选择项** ——
-#   裁剪掉 devfs 就是 `8-01` §1.2 的形态 B(只有设备框架, 无 /dev 命名空间);
-#   而 "挂载计划含 / 或 /dev 即拉入"(§1 注)在本原型里还没有生成链路
-#   (WORKAROUND br-wa-fs-001), 所以选择权仍显式写在产品侧。
+#   framework/{vfs-core,dev-core,cdev-core}   (storage/device domain framework parts, ADR-0009)
+# * Why list fs/devfs and io/uart-pl011 directly instead of only tmpfs: in design `1-03` §1's v1.0
+#   plugin list all three (tmpfs rootfs / devfs /dev / uart-pl011 tty) are **selection items** —
+#   dropping devfs yields form B of `8-01` §1.2 (device frameworks only, no /dev namespace);
+#   and "mount plan containing / or /dev pulls it in" (§1 note) has no generation path here
+#   (WORKAROUND br-wa-fs-001), so the choice stays explicit on the product side.
 plugins = [
   "platform/qemu-aarch64",
-  # ★ ADR-0011: 镜像的调度器从 `sched/coop` 换成 `sched/rr`(时间片轮转抢占)。
-  #   为什么必须换: 本刀真正的新机制 = **IRQ 出口换栈**(core)与**下半部**(core),
-  #   而它们的唯一消费者就是"有时间片策略的调度器" —— 目标上没有它, 这两条路径
-  #   就只能靠宿主用例覆盖, 等于没在真实异常出口上验证过。
-  #   `sched/coop` **仍留在树里**: `brickie check` 照旧校验它的声明面与 sched_class
-  #   组合, 宿主 `sched-test` 覆盖它的全部分界(含"忙线程不被切走"的 TC-TASK-101)。
-  #   换回去只需改这一行(`br_sched_register` 恰一次 ⇒ 一次只能装一个调度器)。
+  # * ADR-0011: image scheduler switched from `sched/coop` to `sched/rr` (round-robin preemption).
+  #   Why: this cut's new mechanisms = **IRQ-exit stack switch** (core) and **bottom halves** (core),
+  #   whose only consumer is "a scheduler with a time-slice policy" — without it on target
+  #   would be covered only by host cases, i.e. never validated on the real exception exit.
+  #   `sched/coop` **stays in the tree**: `brickie check` still validates its declaration
+  #   sched_class composition, and host `sched-test` covers all its boundaries (incl. TC-TASK-101).
+  #   Switching back needs only this line (`br_sched_register` exactly once => one at a time).
   "sched/rr",
   "service/dump",
-  # ★ ADR-0014/0015: POSIX 运行时(runtime/posix)。它的闭包链:
-  #   runtime/posix → framework/{file-table, vfs-core} + platform/qemu-aarch64
-  #   ⇒ 直接列它一件, 其余两件框架件由 [[dep]] 自动拉入(所以下面那行可以省 —— 留着是为了
-  #     "文件表在 POSIX 运行时之外也有独立证据"这件事可读)。
+  # * ADR-0014/0015: POSIX runtime (runtime/posix). Its closure chain:
+  #   runtime/posix -> framework/{file-table, vfs-core} + platform/qemu-aarch64
+  #   => listing it alone pulls the other two framework parts via [[dep]] (so the next line is
+  #      optional; kept to make "file table has evidence outside POSIX runtime" readable).
   "runtime/posix",
-  # ★ 文件表(fd 表, ADR-0012): runtime/posix 落地后**本行已是冗余**(它经上面的
-  #   `runtime/posix --init--> framework/file-table` 自动进闭包)。留着是刻意的:
-  #   它让"文件表在 POSIX 运行时之外也有独立证据"这件事在 `[select]` 里可读, 而且
-  #   POSIX 运行时被裁掉的产品(极小 native 组合)仍能单独带上 fd 表。删掉它 `check` 依然 0 错。
+  # * File table (fd table, ADR-0012): after runtime/posix landed this line is **redundant** (enters
+  #   the closure via `runtime/posix --init--> framework/file-table`). Kept deliberately:
+  #   it makes "file table has evidence outside POSIX runtime" readable in `[select]`, and products
+  #   with POSIX runtime trimmed (minimal native) can still carry it; `check` stays 0 errors without it.
   "framework/file-table",
-  # ★ ADR-0021: 块设备子分类框架(bdev-core)。与 cdev-core 并列的存储域第二条设备链;
-  #   本刀先落框架件(暂无驱动消费者), eMMC 驱动(adapter/uboot-mmc)随后接入。
+  # * ADR-0021: block-device subclass framework (bdev-core). Second device chain of the
+  #   this cut lands the framework part first (no driver consumer yet); the eMMC driver joins later.
   "framework/bdev-core",
-  # ★ ADR-0021 D-2: 通用 PCI(e) 机制(枚举/BAR 分配)。它依赖 platform 读板级事实;
-  #   本刀先落它并单独验证(枚举到 sdhci-pci), eMMC 驱动随后以 init 边消费它。
+  # * ADR-0021 D-2: generic PCI(e) mechanism (enumeration/BAR allocation). Depends on platform
+  #   landed and validated alone here (enumerates sdhci-pci); the driver later consumes it via init.
   "framework/pci-core",
-  # ★ ADR-0021 D-3: 第三方模块隔离 —— 移植自 u-boot(GPL-2.0+)的 eMMC/SDHCI 驱动。
-  #   它是闭包内**唯一**的 third_party 插件; 框架件与平台侧保持 WTFPL。
+  # * ADR-0021 D-3: third-party module isolation — eMMC/SDHCI driver ported from u-boot (GPL-2.0+).
+  #   The **only** third_party plugin in the closure; framework and platform stay WTFPL.
   "adapter/uboot-mmc",
-  # ★ ADR-0022: 文件系统这一刀的两件移植件(同源同许可: nxp-imx u-boot `fs/fat` 与
-  #   `fs/erofs`, GPL-2.0+)。它们**必须**是 third_party: 工具链禁 `native` 依赖
-  #   `third_party`(rules.rs::api_type_edge_reason), 而两件都要在 `uboot-mmc` 的 start 相
-  #   (全局开中断后)之后才谈得上挂载 —— 那条顺序只能经 `[[dep]] adapter/uboot-mmc`
-  #   表达。于是 eMMC 与其上的文件系统构成一个**自洽的第三方子图**:
-  #     uboot-mmc(块设备)→ uboot-fat(可写卷 ×3)/ uboot-erofs(只读镜像 ×1)
-  #   四条卷的分工与设备名见 platform 的 `[build.target.qemu].extra` 与 ADR-0022。
+  # * ADR-0022: this cut's two filesystem ports (same origin/license: nxp-imx u-boot `fs/fat` and
+  #   `fs/erofs`, GPL-2.0+). They **must** be third_party: the toolchain forbids `native`
+  #   `third_party` (rules.rs::api_type_edge_reason), and both need `uboot-mmc`'s start phase (after
+  #   global IRQ enable) before mounting — that order can only be expressed via `[[dep]]
+  #   adapter/uboot-mmc. So eMMC and its filesystems form a **self-contained third-party subgraph**:
+  #     uboot-mmc (block dev) -> uboot-fat (3 writable volumes) / uboot-erofs (1 read-only image)
+  #   The 4 volumes' roles and device names: platform's `[build.target.qemu].extra` and ADR-0022.
   "adapter/uboot-fat",
   "adapter/uboot-erofs",
   "fs/tmpfs",
@@ -79,97 +79,97 @@ plugins = [
 ]
 
 [selftest]
-# ============================================================ 自检开关(ADR-0010)
+# ============================================================ selftest switch (ADR-0010)
 #
-# 自检 = 各插件的**接口测试**(<plugin>/src/*_selftest.c 里的 `*_selftest()`), 与核心
-# 代码分离; 由 core 在"全部 start 之后、调度器接管之前"统一驱动(见 br_plugin.h /
-# plugin_mgr.c 的 br_plugin_manager_selftest)。
+# Selftest = each plugin's **interface tests** (`*_selftest()` in <plugin>/src/*_selftest.c),
+# separate from core code; driven by core "after all starts, before the scheduler takes over"
+# br_plugin_manager_selftest in plugin_mgr.c).
 #
-# ★ 这个开关是**生成期**的: 关掉 ⇒ 生成物把描述符的 `.selftest` 写成
-#   BR_PLUGIN_NO_HOOK, 且 `core/selftest/**` 不参与编译 ⇒ 测试代码**整段被
-#   --gc-sections 裁出镜像**(不是"编了不跑")。判据 = 关掉后 `[SELFTEST]` 段消失。
+# * This switch is **generation-time**: off => generated descriptors write `.selftest` as
+#   BR_PLUGIN_NO_HOOK and `core/selftest/**` is not compiled => test code is **entirely
+#   removed by --gc-sections** (not "compiled but not run"). Criterion = `[SELFTEST]` vanishes.
 #
-# 语义: true/false 显式; "inherit"(或整表不写) = 跟随 [product].stage
-#       —— dev 开 / release 关(开发镜像自带自检, 发布镜像不带)。
-enabled = "inherit"
-# plugins: 只跑列出的插件(**可选**; 空/不写 = 所有声明了 [selftest] 的插件都跑)。
-# 用途: 只在某个镜像里留一两套自检时, 把其余的也一并裁掉。
+# Semantics: true/false explicit; "inherit" (or table absent) = follow [product].stage
+#       — on for dev / off for release (dev images carry selftests, release images do not).
+enabled = false
+# plugins: run only the listed plugins (**optional**; empty/absent = all with [selftest]).
+# Use: when keeping only one or two selftest suites in an image, trim the rest too.
 # plugins = []
 
 [budget]
-# 两份上限的分工(brickie-v0.1 §8.1): platform 的 [[res]] = **物理容量**(已抬到 8 MiB:
-# 页表 + 划给 core 的三池), 本项 = **插件预算**(各插件 [[res]] 之和 ≤ 本值)。
-# ★ ADR-0022 抬到 256 KiB(原 64): 本刀加了两件**介质类 FS** —— FAT 移植件要静态的扇区/
-#   簇缓冲与三卷记账(u-boot 的 `fsdata` 形状本身就带大缓冲), EROFS 移植件要 4 KiB 块缓冲 +
-#   LZ4 解压缓冲(都不宜放栈上, 见各件 plugin.toml 的 [[res]] 说明); 另外 eMMC 驱动从单例
-#   变成四实例的静态表(+12 KiB)。本值管的仍是"插件代码/数据", 不是 platform 交出来的池容量。
+# Division of the two limits (brickie-v0.1 §8.1): platform's [[res]] = **physical capacity** (raised
+# to 8 MiB: page tables + core's three pools); this item = **plugin budget** (sum of [[res]] <= value).
+# * ADR-0022 raised it to 256 KiB (was 64): this cut adds two **media-class FS** ports — FAT
+#   needs static sector/cluster buffers + 3-volume bookkeeping (u-boot's `fsdata` is
+#   large-buffered); EROFS needs a 4 KiB block + LZ4 decompress buffer (neither fits
+#   the stack; see each brick.toml [[res]]); eMMC driver: 1 -> 4 static instances (+12 KiB).
 ram_kib   = 256
 stack_kib = 16
 
 [kernel]
-# ============================================================ 时钟节拍(参考 Linux 的 CONFIG_HZ)
-# 每秒多少次时钟中断(Hz)。每 1/HZ 秒, platform 的 timer ISR 走一次:
-#   br_clock_tick_notify()(core 的 tick 计数 = jiffies 前进 1)
-#   → br_sched_on_tick()(扫到期超时 / 调度器 on_tick 递减时间片)
-#   → 重装下一个期限。
-# 缺省 200(本项不写 = 200)⇒ 5 ms 一拍。brickie build 把它转成 -DBR_CFG_TICK_HZ,
-# 下发到全部编译单元 —— 于是"每秒多少次中断"只有一处真值: platform 的装弹周期
-# 与 core 的 jiffies 读同一个宏(ADR-0017)。
-# 常见取值 100/200/250/1000; 合法范围 1..100000(br_time.h 的 _Static_assert 兜底)。
+# ============================================================ clock tick (cf. Linux CONFIG_HZ)
+# Clock interrupts per second (Hz). Every 1/HZ second platform's timer ISR runs:
+#   br_clock_tick_notify() (core tick count = jiffies += 1)
+#   -> br_sched_on_tick() (scan expired timeouts / scheduler on_tick decrements the slice)
+#   -> reload the next deadline.
+# Default 200 (absent = 200) => 5 ms per tick. brickie build turns it into -DBR_CFG_TICK_HZ
+# for all compile units — so "interrupts per second" has a single truth: platform's reload period
+# and core's jiffies read the same macro (ADR-0017).
+# Common values 100/200/250/1000; valid range 1..100000 (backstopped by br_time.h _Static_assert).
 hz = 200
 
 [lint]
-frozen_deps = "inherit"         # inherit(跟随 [product].stage) | allow | deny
-# 显式豁免: **空**。设计 §7.3 的通则是 app 只许依赖 interface; 现在这条通则**已经能满足**:
-#   - `app/hello → iface/posix`(Interface 薄皮肤, ADR-0018)与 `app/hello → iface/min`
-#     (core native 直通皮肤, ADR-0020)都是方向表里的**合法边**, 不需要豁免;
-#   - APP 源码里也不再直连 iface 层以下(`<br/core/...>` 由 ADR-0020 的扫描判红);
-#   - 原先那条 M0 引导例外(`app → platform`: 平台身份/心跳)已随 ADR-0016 删除
-#     (心跳计数收归 core; 平台身份日志由 platform 自己打)。
-# ⇒ 本表保持空。判据不是"加了白名单所以不报", 而是**没有任何非法边**: 删空之后
-#   `brickie check` 仍 0 错误。而"声明 ↔ 使用"现在也交叉校验(ADR-0018): 用了别家插件的
-#   头却没声明依赖, 在 deps 域与 `brickie build` 都会报红。
+frozen_deps = "inherit"         # inherit (follows [product].stage) | allow | deny
+# Explicit exemptions: **empty**. Design §7.3: app may depend only on interface; it now holds:
+#   - `app/hello -> iface/posix` (thin Interface skin, ADR-0018) and `app/hello -> iface/min`
+#     (core native pass-through skin, ADR-0020) are **legal edges**; no exemption needed;
+#   - APP sources no longer reach below the iface layer (flagged by the ADR-0020 scan);
+#   - the former M0 bootstrap exception (`app -> platform`: identity/heartbeat) was removed with
+#     ADR-0016 (heartbeat counting moved to core; platform logs its own identity).
+# => This table stays empty. The criterion is not "a whitelist silences it" but **no illegal
+#   edge exists**: after emptying it `brickie check` is still 0 errors. "Declaration <-> use" is
+#   cross-checked too (ADR-0018): using another plugin's header without declaring the dep is flagged.
 allow_edges = [
 ]
 
 [build]
-# ============================================================ 构建策略(brickie build)
+# ============================================================ build policy (brickie build)
 #
-# ★ 本表是**图片构建的唯一真值**(ADR-0004 / 设计 ADR-0003 的 S1–S3):
-#   顶层 Makefile 不再列任何 `core/src/**` / `platform/**` 字面路径 —— 那些由
-#   `[select]` 的闭包 + 各插件 `[build]` + platform 的 `[build.target]` 决定。
+# * This table is the **single truth for image builds** (ADR-0004 / design ADR-0003 S1-S3):
+#   the top-level Makefile lists no literal `core/src/**` / `platform/**` paths — those come from
+#   the `[select]` closure + each plugin's `[build]` + platform's `[build.target]`.
 #
-# 分工:
-#   目标事实(arch/交叉前缀/arch 标志/链接脚本/QEMU 型号) → platform 插件的 `[build.target]`
-#   产品策略(本表) → 编译/汇编/链接标志 + 产物落点 + 核心本体(非插件)的源集合
-#   插件自身的源集合 → 各自 plugin.toml 的 `[build]`
-#   工具候选序与解析 → `brickie-core`(contract §9 R-14: 生成物要把解析结果烧进去)
+# Division of work:
+#   target facts (arch/cross prefix/arch flags/linker script/QEMU model) -> platform `[build.target]`
+#   product policy (this table) -> compile/asm/link flags + outputs + core (non-plugin) sources
+#   each plugin's own sources -> its brick.toml `[build]`
+#   tool candidate order/resolution -> `brickie-core` (contract §9 R-14: result gets baked in)
 #
-# WORKAROUND(br-wa-toolchain-001): 外部交叉工具链的**选型**(前缀/变体/链接脚本)写在
-#   platform 的 `[build.target]` 里, 本表只写产品策略 —— 内部工具链就绪时改声明面即可,
-#   构建规则不动。
+# WORKAROUND(br-wa-toolchain-001): the external cross toolchain **choice** (prefix/variant/linker
+#   script) lives in platform's `[build.target]`; this table holds product policy only — once
+#   toolchain is ready, only the declaration surface changes; build rules stay put.
 core_sources  = ["core/src/*.c", "core/src/*/*.c", "core/src/*/*.S"]
 core_includes = ["core/include"]
-# 生成物源集合(`brickie gen` 产出的描述符): 插件管理器经 `.br_plugins` 段枚举它们
-# (设计 3-05 §2.2)。`**` 与命名空间深度无关(不把"能不能发现生成物"绑死在"插件名恰好
-# 两段"); **闭包过滤是工具的责任** —— 不在 `[select]` 闭包里的插件的生成物会被跳过
-# (BRV-BLD-0013 info), 所以不会出现"描述符进镜像而它的 .c 没进 ⇒ 链接期未定义符号"。
+# Generated source set (descriptors produced by `brickie gen`): the plugin manager enumerates them
+# via the `.br_plugins` section (design 3-05 §2.2). `**` is independent of namespace depth (it is
+# not tied to two-segment names); **closure filtering is the tool's job** — generated output
+# outside the `[select]` closure is skipped (BRV-BLD-0013 info), so no "descriptor in, .c out =>
 gen_sources   = ["build/gen/**/plugin_desc.c"]
-# core 自检套件的源集合(ADR-0010)。**必须与 core_sources 分开**: core_sources 的
-# `core/src/*/*.c` 通配管不到 `core/selftest/`(不同顶层目录), 且自检关掉时这一族
-# 压根不编 —— 于是"关掉自检"对 core 侧也是"代码不进镜像"。
+# Core selftest suite sources (ADR-0010). **Must be separate from core_sources**: its glob
+# `core/src/*/*.c` does not reach `core/selftest/` (different top-level dir), and with it off this
+# family is not compiled at all — so "selftest off" also means "code out of the image" for core.
 selftest_sources = ["core/selftest/*.c"]
 obj_dir       = "build/obj"
 
-# 交叉编译纪律(逐条都有理由, 不是"随手加的优化开关"):
-#   -ffreestanding / -fno-builtin  无宿主运行时假设; 不把循环偷偷换成 memcpy
-#   -fno-stack-protector           没有 libc 的 __stack_chk_fail
-#   -fno-omit-frame-pointer        ★ service/backtrace 的**编译期前提**: 栈回溯靠
-#                                  x29(fp) 链走查(5-01 §3), 而 -O2 默认会把 fp 当普通
-#                                  寄存器省掉 ⇒ 链断在第一帧。代价是每函数一次 stp/ldp。
-#   -ffunction-sections/-fdata-sections + -Wl,--gc-sections  裸机镜像要"没用到的不进镜像"
-#   -fno-pic/-fno-pie/-no-pie      裸机无重定位(恒等映射, 3-04)
-#   -fno-asynchronous-unwind-tables/-fno-unwind-tables  没有 .eh_frame 的读者
+# Cross-compilation discipline (every flag has a reason, not a casual optimization switch):
+#   -ffreestanding / -fno-builtin  no host runtime assumptions; no silent loop->memcpy
+#   -fno-stack-protector           no libc __stack_chk_fail
+#   -fno-omit-frame-pointer        * compile-time precondition of service/backtrace: unwinding walks
+#                                  the x29(fp) chain (5-01 §3), while -O2 by default treats fp as an
+#                                  ordinary register => the chain breaks at frame one (one stp/ldp each).
+#   -ffunction-sections/-fdata-sections + -Wl,--gc-sections  bare-metal image: unused code stays out
+#   -fno-pic/-fno-pie/-no-pie      no relocations on bare metal (identity mapping, 3-04)
+#   -fno-asynchronous-unwind-tables/-fno-unwind-tables  nothing reads .eh_frame
 cflags = [
   "-std=c11", "-O2", "-g3",
   "-Wall", "-Wextra", "-Werror", "-Wshadow", "-Wundef", "-Wpointer-arith",
@@ -180,19 +180,19 @@ cflags = [
   "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
   "-fno-omit-frame-pointer",
 ]
-# 汇编由 cpp 预处理(`__ASSEMBLER__` 由 GCC 自动定义), 于是 .S 也能
-# `#include <br/core/br_exc.h>` —— 异常帧偏移只有一处真值。
+# Assembly is cpp-preprocessed (`__ASSEMBLER__` defined by GCC), so .S can also
+# `#include <br/core/br_exc.h>` — exception frame offsets have a single truth.
 asflags = ["-g3"]
 
 ldflags = [
   "-nostdlib", "-nostartfiles", "-static", "-no-pie",
   "-Wl,--build-id=none", "-Wl,--gc-sections", "-Wl,-z,max-page-size=4096",
 ]
-# 链接脚本与 -Wl,-Map 由工具注入(前者来自 platform 的 `[build.target]`, 后者来自产物落点),
-# 不在这里重复 —— 一份事实一个可写处。
+# The linker script and -Wl,-Map are injected by the tool (from platform `[build.target]` and the
+# locations respectively); not repeated here — one fact, one writable place.
 
 [build.release]
-# `--profile release` **追加**的标志。当前为空: 原型的 dev 与 release 只差
-# **组合期检查严格度**(release 强制走 `brickie check --profile release`)。
-# 镜像内的断言轴(1-01 §13: debug=panic / release=trace)尚未落地 —— 见 ADR-0004 §4。
+# Flags **appended** by `--profile release`. Currently empty: dev and release differ only in
+# **composition-time check strictness** (release forces `brickie check --profile release`).
+# The in-image assertion axis (1-01 §13: debug=panic / release=trace) is not landed — ADR-0004 §4.
 cflags_extra = []

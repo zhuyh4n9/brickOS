@@ -7,8 +7,9 @@
 namespace brickie {
 namespace {
 
-// vars 的值必须是可替换的文本。契约里都是字符串, 但为了不把"数字/bool"
-// 这种明显无歧义的 JSON 标量当用法错, 这里就地串化; null ⇒ 空串(可选变量)。
+// vars values must be substitutable text. The contract uses only strings, but to avoid flagging
+// obviously unambiguous JSON scalars ("number/bool") as usage errors, stringify them here;
+// null ⇒ empty string (optional variable).
 bool scalarToText(const J &v, std::string &out) {
     switch (v.t) {
         case JType::Str:
@@ -29,13 +30,13 @@ bool scalarToText(const J &v, std::string &out) {
 bool collectVars(const J *vars, Vars &out, std::string &err) {
     if (vars == nullptr) return true;
     if (!vars->isObj()) {
-        err = "`vars` 必须是 JSON 对象(`{键: 字符串}`)";
+        err = "`vars` must be a JSON object (`{key: string}`)";
         return false;
     }
     for (const auto &kv : vars->o) {
         std::string text;
         if (!scalarToText(kv.second, text)) {
-            err = "`vars." + kv.first + "` 不是字符串/数字/bool/null";
+            err = "`vars." + kv.first + "` is not a string/number/bool/null";
             return false;
         }
         out[kv.first] = std::move(text);
@@ -49,15 +50,15 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
     RenderResult res;
 
     if (templatesRoot.empty()) {
-        res.diags.usage("`render` 需要 `templates_root`(模板根目录的绝对路径)",
-                        "见 contract §6: args = {templates_root, artifacts:[{path,template,vars}]}");
+        res.diags.usage("`render` requires `templates_root` (absolute path to the template root)",
+                        "see contract §6: args = {templates_root, artifacts:[{path,template,vars}]}");
         return res;
     }
 
     const J *artifacts = args.find("artifacts");
     if (artifacts == nullptr || !artifacts->isArr()) {
-        res.diags.usage("`render` 需要 `args.artifacts` 数组",
-                        "每条 = {path, template, vars}; 计划由 brickie-core 的 plan-* 给出");
+        res.diags.usage("`render` requires a `args.artifacts` array",
+                        "each = {path, template, vars}; the plan comes from brickie-core's plan-*");
         return res;
     }
 
@@ -69,7 +70,7 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
         const J &item = artifacts->a[i];
         const std::string where = "artifacts[" + std::to_string(i) + "]";
         if (!item.isObj()) {
-            res.diags.usage(where + " 不是 JSON 对象", "每条 = {path, template, vars}");
+            res.diags.usage(where + " is not a JSON object", "each = {path, template, vars}");
             anyError = true;
             continue;
         }
@@ -81,34 +82,35 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
         const std::string kind =
             item.find("kind") != nullptr ? item.find("kind")->asStr() : std::string();
 
-        // contract §4 的文件归属: `kind = "machine"`(如 brickie.lock / 快照)的内容由
-        // `brickie-core` 拥有, 不走模板渲染 ⇒ 计划里带着它时**跳过**, 不是用法错
-        // (L5 按 §4 用 core 给的内容落盘)。渲染器只承接 human/generated/rendered。
+        // contract §4 file ownership: content for `kind = "machine"` (e.g. brickie.lock / snapshots) is
+        // owned by `brickie-core` and does not go through template rendering ⇒ **skip** it when the plan
+        // carries one; that is not a usage error (L5 writes core's content per §4). The renderer only
+        // handles human/generated/rendered.
         if (kind == "machine") continue;
 
         std::string why;
         if (!safeRelPath(path, why)) {
-            res.diags.usageAt(path, where + ".path 非法: " + why,
-                              "生成物路径必须是仓库内相对路径(如 service/crypto/plugin.toml)");
+            res.diags.usageAt(path, where + ".path is invalid: " + why,
+                              "generated paths must be repo-relative (e.g. service/crypto/brick.toml)");
             anyError = true;
             continue;
         }
         if (!seenPaths.insert(path).second) {
-            res.diags.usageAt(path, where + ": 同一请求里输出路径重复: `" + path + "`",
-                              "计划应由 brickie-core 去重");
+            res.diags.usageAt(path, where + ": duplicate output path in the same request: `" + path + "`",
+                              "the plan should be deduplicated by brickie-core");
             anyError = true;
             continue;
         }
         if (tpl.empty()) {
-            res.diags.usageAt(path, where + " 缺 `template`",
-                              "模板 id 相对 templates_root, 如 native/ability/c/plugin.toml.tmpl;"
-                              " machine 文件(kind=\"machine\")由 brickie-core 产出, 不走渲染");
+            res.diags.usageAt(path, where + " is missing `template`",
+                              "the template id is relative to templates_root, e.g. native/ability/c/brick.toml.tmpl;"
+                              " machine files (kind=\"machine\") are produced by brickie-core and are not rendered");
             anyError = true;
             continue;
         }
         if (!safeRelPath(tpl, why)) {
-            res.diags.usageAt(tpl, where + ".template 非法: " + why,
-                              "模板 id 必须是 templates_root 下的相对路径");
+            res.diags.usageAt(tpl, where + ".template is invalid: " + why,
+                              "the template id must be a relative path under templates_root");
             anyError = true;
             continue;
         }
@@ -116,7 +118,7 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
         Vars vars;
         std::string varsErr;
         if (!collectVars(item.find("vars"), vars, varsErr)) {
-            res.diags.usageAt(path, where + ".vars 非法: " + varsErr, "");
+            res.diags.usageAt(path, where + ".vars is invalid: " + varsErr, "");
             anyError = true;
             continue;
         }
@@ -125,8 +127,8 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
         if (const J *m = item.find("mode"); m != nullptr && !m->isNull()) {
             if (!parseMode(m->asStr(), mode)) {
                 res.diags.usageAt(path,
-                                  where + ".mode 非法: `" + m->asStr() + "`(只接受 3–4 位八进制)",
-                                  "缺省 0644; 载荷/落盘按该模式位");
+                                  where + ".mode is invalid: `" + m->asStr() + "` (only 3–4 octal digits)",
+                                  "defaults to 0644; payload/write uses these permission bits");
                 anyError = true;
                 continue;
             }
@@ -136,8 +138,8 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
         std::string readErr;
         const std::string tplPath = joinPath(templatesRoot, tpl);
         if (!readFile(tplPath, tplText, readErr)) {
-            res.diags.usageAt(tpl, where + ": 模板不可读: " + tplPath,
-                              "检查 templates_root 与 template id(模板缺失 = 环境错, exit 2)");
+            res.diags.usageAt(tpl, where + ": template not readable: " + tplPath,
+                              "check templates_root and the template id (missing template = environment error, exit 2)");
             anyError = true;
             continue;
         }
@@ -145,8 +147,8 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
         std::string content;
         std::string renderErr;
         if (!render(tplText, vars, tpl, content, renderErr)) {
-            res.diags.usageAt(tpl, where + ": 渲染失败: " + renderErr,
-                              "模板用到未提供的变量就是用法错(exit 2); 变量契约见 cxx/README.md");
+            res.diags.usageAt(tpl, where + ": rendering failed: " + renderErr,
+                              "a template using an unprovided variable is a usage error (exit 2); see cxx/README.md for the variable contract");
             anyError = true;
             continue;
         }
@@ -159,7 +161,8 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
         files.push_back(std::move(f));
     }
 
-    // 一条错都不留才出 files —— 半套生成物比不生成更糟(§8.4 的既有口径)。
+    // files are emitted only when not a single error remains -- a half-generated set is worse than none
+    // (§8.4's established rule).
     if (anyError || res.diags.hasError()) return res;
     res.files = std::move(files);
     return res;

@@ -21,9 +21,9 @@ prototype 的 `platform/` 一直是"被 Makefile 直接编进镜像的一组文�
 ## 决策
 
 1. **目录即插件**: `platform/qemu-aarch64/`(顶层 `platform/` = namespace, §8.3 ④),
-   内部布局按 `4-02` §2 —— `plugin.toml` 在插件根、对外头文件在 `include/`、
+   内部布局按 `4-02` §2 —— `brick.toml` 在插件根、对外头文件在 `include/`、
    生成物一律落仓库级 `build/gen/<plugin>/`。
-2. **声明面唯一真值**: 平台契约(`br_plat.h` 的 7 个符号)在 `plugin.toml` 的
+2. **声明面唯一真值**: 平台契约(`br_plat.h` 的 7 个符号)在 `brick.toml` 的
    `[[export.entries]]` 里显式列出; 描述符 C 代码是生成物, 由 `brickie gen` 重建
    (v0.1 不编译它 —— V-9 的零编译依赖)。
 3. **APP 与 M0 引导例外**: 镜像的 APP 是 `app/hello`(`1-03` §1 明写"M0: 直接主循环,

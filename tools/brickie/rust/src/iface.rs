@@ -1,26 +1,26 @@
-//! 版本面与接口发布面: `ver-show` / `ver-bump` / `iface-*`。
+//! Version surface and interface publish surface: `ver-show` / `ver-bump` / `iface-*`.
 //!
-//! 本模块是 V-4/V-5/V-6/V-11/V-15/V-16/V-17 的落点:
+//! Landing point for V-4/V-5/V-6/V-11/V-15/V-16/V-17:
 //!
-//! - **IFACE-IR 规范化**(§6.2 的 10 条规则)+ `sha256` 域分隔 hash;
-//! - **变更集**(§6.3): `ADDED`/`EXTENDED`/`CHANGED`/`SEMANTIC`/`REMOVED`/`STATUS`/
-//!   `FREEZE`/`NONE`, append vs modify 按**条目内部结构**判(§5.4);
-//! - **影响报告**: `dependents.direct/transitive/unsatisfied`;
-//! - **版本推进**(§5.2 逐行)与**幂等**(§6.5): 面未变 ⇒ 空操作;
-//! - **解冻窗口**(§5.3.4)+ `unfreeze` 记 baseline(裁定 R-7)、`refreeze` 比对;
-//! - **写路径纪律**(§9.1.1): 只产出机器文件, `plugin.toml` 永不改写。
+//! - **IFACE-IR canonicalization** (the 10 rules of §6.2) + `sha256` domain-separated hash;
+//! - **change set** (§6.3): `ADDED`/`EXTENDED`/`CHANGED`/`SEMANTIC`/`REMOVED`/`STATUS`/
+//!   `FREEZE`/`NONE`; append vs modify decided by **entry internal structure** (§5.4);
+//! - **impact report**: `dependents.direct/transitive/unsatisfied`;
+//! - **version advance** (§5.2 row by row) and **idempotence** (§6.5): unchanged surface ⇒ no-op;
+//! - **unfreeze window** (§5.3.4) + `unfreeze` records baseline (ruling R-7), `refreeze` compares;
+//! - **write-path discipline** (§9.1.1): emit machine files only, `brick.toml` is never rewritten.
 //!
-//! ## 实现期裁定(见 rust/README.md §10)
-//! - **S-8**: **首次发布 = 建档**(无旧快照 ⇒ 不推进任何段, 只记录当前声明版本与 hash);
-//!   之后每次 publish 才按变更集推进。否则每个新单元一发布就烧掉一个 MINOR。
-//! - **S-9**: 状态机命令(`deprecate`/`undeprecate`)的合法性按**快照状态**(发布记录)
-//!   判定, 新面按声明面构造 ⇒ 重复执行是**空操作**(幂等)。
-//! - **S-10**: `publish --profile release` 的"依赖方 compat_gen 仍匹配"门钩按 §6.5 表
-//!   执行: 有 `COMPAT_GEN` 跃迁且存在 `unsatisfied` ⇒ 拒绝落盘(`BRV-VER-0001`)。
-//! - **S-11**: `SEMANTIC` 变更在 v0.1 **无声明面输入**(纯行为语义不可从 TOML 观测)
-//!   ⇒ 不产生该类别, `BRV-IFACE-0010` 无可报; 登记为缺口。
-//! - **S-12**: `iface status` **不产 files**(它是门禁, 不是修复命令); 不一致时把
-//!   "应有的快照"放在 `data.expected_snapshot` 里供人取用。
+//! ## Implementation rulings (see rust/README.md §10)
+//! - **S-8**: **first publish = record creation** (no old snapshot ⇒ advance no segment, only record the current declared version and hash);
+//!   later publishes advance per change set. Otherwise every new unit would burn a MINOR on its first publish.
+//! - **S-9**: validity of state-machine commands (`deprecate`/`undeprecate`) is judged by **snapshot status** (publish record);
+//!   the new surface is built from the declaration ⇒ repeated runs are **no-ops** (idempotent).
+//! - **S-10**: the "dependents' compat_gen still matches" gate of `publish --profile release` follows the §6.5 table:
+//!   a `COMPAT_GEN` transition with any `unsatisfied` dependent ⇒ refuse to write (`BRV-VER-0001`).
+//! - **S-11**: `SEMANTIC` changes have **no declaration-surface input** in v0.1 (pure behavioral semantics are not observable from TOML)
+//!   ⇒ the category is never produced; `BRV-IFACE-0010` has nothing to report; logged as a gap.
+//! - **S-12**: `iface status` **emits no files** (it is a gate, not a repair command); on mismatch it puts
+//!   the "expected snapshot" in `data.expected_snapshot` for manual use.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -34,7 +34,7 @@ use crate::model::{self, Plugin, SnapshotEntry, TreeLoad};
 use crate::proto::{Request, Response};
 use crate::version::{self, Version};
 
-/// IFACE-IR 的 hash 域分隔前缀(规则 10: `hash_rev` 进域分隔)。
+/// Hash domain-separation prefix for IFACE-IR (rule 10: `hash_rev` enters the domain separator).
 pub const HASH_REV: &str = "brickie-iface-ir/1";
 
 // ================================================================== IFACE-IR
@@ -43,7 +43,7 @@ fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// `text` 里以**标识符边界**出现的 `from` 替换成 `to`。
+/// Replace `from` with `to` in `text` where `from` appears at **identifier boundaries**.
 fn replace_token(text: &str, from: &str, to: &str) -> String {
     if from.is_empty() {
         return text.to_string();
@@ -62,14 +62,14 @@ fn replace_token(text: &str, from: &str, to: &str) -> String {
                 continue;
             }
         }
-        let ch = text[i..].chars().next().expect("i 在 char 边界上");
+        let ch = text[i..].chars().next().expect("i is on a char boundary");
         out.push(ch);
         i += ch.len_utf8();
     }
     out
 }
 
-/// 规则 4: 类型别名展开到规范名(迭代到不动点, 限 8 轮防别名成环)。
+/// Rule 4: expand type aliases to canonical names (iterate to fixpoint, capped at 8 rounds against alias cycles).
 pub fn expand_typedefs(text: &str, typedefs: &[(String, String)]) -> String {
     let mut cur = text.to_string();
     for _ in 0..8 {
@@ -88,7 +88,7 @@ pub fn expand_typedefs(text: &str, typedefs: &[(String, String)]) -> String {
     cur
 }
 
-/// 规则 2: 空白归一(单空格 / 无尾随); 同时消去运算符周围的排版差异。
+/// Rule 2: normalize whitespace (single space / no trailing); also removes layout differences around operators.
 pub fn normalize_ws(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_space = false;
@@ -108,7 +108,7 @@ pub fn normalize_ws(s: &str) -> String {
     out
 }
 
-/// 规则 3: **参数名不参与** sig(只留类型与顺序); `--strict-params` 时保留。
+/// Rule 3: **parameter names do not enter** the sig (keep types and order only); kept with `--strict-params`.
 pub fn strip_param_names(sig: &str) -> String {
     let open = match sig.find('(') {
         Some(i) => i,
@@ -172,7 +172,7 @@ pub fn strip_param_names(sig: &str) -> String {
     }
 }
 
-/// 规范化一个 `func` 的 `sig`。
+/// Canonicalize the `sig` of a `func`.
 pub fn canonical_sig(raw: &str, typedefs: &[(String, String)], strict_params: bool) -> String {
     let expanded = expand_typedefs(raw, typedefs);
     let stripped = if strict_params {
@@ -183,12 +183,12 @@ pub fn canonical_sig(raw: &str, typedefs: &[(String, String)], strict_params: bo
     normalize_ws(&stripped)
 }
 
-/// 规范化 `type` 的 `layout`。
+/// Canonicalize the `layout` of a `type`.
 pub fn canonical_layout(raw: &str, typedefs: &[(String, String)]) -> String {
     normalize_ws(&expand_typedefs(raw, typedefs))
 }
 
-/// 一个接口面条目(声明面 / 快照面共用)。
+/// One interface-surface entry (shared by declaration and snapshot surfaces).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Entry {
     pub kind: String,
@@ -229,7 +229,7 @@ impl Entry {
         (self.kind.clone(), self.name.clone())
     }
 
-    /// 只比"面"的字段(`status` 不进 hash, 见规则 6)。
+    /// Compare only "surface" fields (`status` does not enter the hash; see rule 6).
     pub fn same_surface(&self, other: &Entry) -> bool {
         self.kind == other.kind
             && self.name == other.name
@@ -240,7 +240,7 @@ impl Entry {
     }
 }
 
-/// 规则 1 + 5 + 6 + 7 + 9: 规范化正文(排序、字段选择、枚举按声明序)。
+/// Rules 1 + 5 + 6 + 7 + 9: canonical body (sorting, field selection, enums in declaration order).
 pub fn canonical_surface_text(
     id: &str,
     entries: &[Entry],
@@ -252,7 +252,7 @@ pub fn canonical_surface_text(
     let mut out = String::new();
     out.push_str(HASH_REV);
     out.push('\n');
-    // 规则 10: 域分隔 = hash_rev + unit id(防跨单元碰撞)。
+    // Rule 10: domain separator = hash_rev + unit id (prevents cross-unit collisions).
     out.push_str(id);
     out.push('\n');
     for e in sorted {
@@ -268,7 +268,7 @@ pub fn canonical_surface_text(
         if let Some(l) = &e.layout {
             out.push_str(&format!("layout {}\n", canonical_layout(l, typedefs)));
         }
-        // 规则 9: macro/var 取 value、enum 取成员表(声明序)、service 取 ops 槽位摘要。
+        // Rule 9: macro/var use value, enum uses the member list (declaration order), service uses the ops slot summary.
         if let Some(v) = &e.value {
             out.push_str(&format!("value {}\n", normalize_ws(v)));
         }
@@ -279,7 +279,7 @@ pub fn canonical_surface_text(
     out
 }
 
-/// `sha256:<64 hex>`(规则 8: SHA-256 over UTF-8 canonical text)。
+/// `sha256:<64 hex>` (rule 8: SHA-256 over UTF-8 canonical text).
 pub fn surface_hash(
     id: &str,
     entries: &[Entry],
@@ -292,7 +292,7 @@ pub fn surface_hash(
     format!("sha256:{hex}")
 }
 
-/// 展示取前 12 位 hex(§5.1)。
+/// Display takes the first 12 hex chars (§5.1).
 pub fn short_hash(h: Option<&str>) -> String {
     match h {
         None => String::new(),
@@ -303,9 +303,9 @@ pub fn short_hash(h: Option<&str>) -> String {
     }
 }
 
-// ================================================================== 面模型
+// ================================================================== surface model
 
-/// 一个接口单元的"面"(可来自声明, 也可来自快照)。
+/// The "surface" of an interface unit (may come from a declaration or from a snapshot).
 #[derive(Clone, Debug, Default)]
 pub struct Surface {
     pub id: String,
@@ -319,7 +319,7 @@ pub struct Surface {
     pub compat_gen: u64,
     pub freeze_state: String,
     pub status: String,
-    /// `plugin.toml [[export]].hash`(声明里的记录; 用于 `BRV-IFACE-0012`)。
+    /// `brick.toml [[export]].hash` (record in the declaration; used by `BRV-IFACE-0012`).
     pub declared_hash: Option<String>,
     pub reexport_of: Vec<String>,
     pub symbols: Vec<String>,
@@ -329,7 +329,7 @@ pub struct Surface {
 
 impl Surface {
     pub fn from_declaration(tree: &TreeLoad, provider: &str, unit: &str, idx: usize) -> Surface {
-        let p = tree.by_name(provider).expect("resolve 已保证存在");
+        let p = tree.by_name(provider).expect("resolve guarantees existence");
         let e = &p.exports[idx];
         Surface {
             id: format!("{provider}#{unit}"),
@@ -382,7 +382,7 @@ impl Surface {
         surface_hash(&self.id, &self.entries, &self.typedefs, strict_params)
     }
 
-    /// 一份快照(读取用)。
+    /// A snapshot (for reading).
     pub fn to_snapshot(&self, hash: &str, strict_params: bool, baseline: Option<(&str, &[Entry])>) -> model::Snapshot {
         model::Snapshot {
             file: snapshot_path(&self.provider, &self.unit),
@@ -425,7 +425,7 @@ pub fn entry_to_snapshot(e: &Entry) -> SnapshotEntry {
     }
 }
 
-/// 裁定 R-11: `api/iface/<provider 路径段>/<unit>.toml`。
+/// Ruling R-11: `api/iface/<provider path segments>/<unit>.toml`.
 pub fn snapshot_path(provider: &str, unit: &str) -> String {
     let mut p = String::from("api/iface");
     for seg in provider.split('/') {
@@ -440,16 +440,16 @@ pub fn snapshot_path(provider: &str, unit: &str) -> String {
     p
 }
 
-// ================================================================== 变更集
+// ================================================================== change set
 
-/// 一个变更条目(§6.3)。
+/// One change entry (§6.3).
 #[derive(Clone, Debug)]
 pub struct Change {
     pub kind: &'static str,
     pub name: String,
     pub from: Option<String>,
     pub to: Option<String>,
-    /// 旧条目的治理状态(判"须解冻"用)。
+    /// Governance status of the old entry (used to decide "must unfreeze").
     pub old_status: String,
     pub note: String,
 }
@@ -467,14 +467,14 @@ impl Change {
         })
     }
 
-    /// §6.3: `CHANGED`/`REMOVED` 且涉及已 `frozen`/`deprecated` 条目 ⇒ 须解冻。
+    /// §6.3: `CHANGED`/`REMOVED` touching an already `frozen`/`deprecated` entry ⇒ must unfreeze.
     pub fn is_hard(&self) -> bool {
         matches!(self.kind, "CHANGED" | "REMOVED")
             && matches!(self.old_status.as_str(), "frozen" | "deprecated")
     }
 }
 
-/// 计算 `old`(通常 = 快照) → `new`(通常 = 声明 + 本次变更)的变更集。
+/// Compute the change set from `old` (usually the snapshot) → `new` (usually declaration + this change).
 pub fn change_set(old: &Surface, new: &Surface) -> Vec<Change> {
     let mut out: Vec<Change> = Vec::new();
     let old_map: BTreeMap<(String, String), &Entry> =
@@ -490,7 +490,7 @@ pub fn change_set(old: &Surface, new: &Surface) -> Vec<Change> {
                 from: None,
                 to: Some(ne.name.clone()),
                 old_status: String::new(),
-                note: "新增条目(append-only, 免解冻)".to_string(),
+                note: "added entry (append-only, no unfreeze)".to_string(),
             }),
             Some(oe) => {
                 if !oe.same_surface(ne) {
@@ -502,8 +502,8 @@ pub fn change_set(old: &Surface, new: &Surface) -> Vec<Change> {
                         to: describe(ne),
                         old_status: oe.status.clone(),
                         note: match kind {
-                            "EXTENDED" => "已冻结条目的合法追加(枚举末尾加成员)".to_string(),
-                            _ => "已有条目的 sig/layout/value/ops 变化(§5.4)".to_string(),
+                            "EXTENDED" => "legal append to an already frozen entry (member added at end of enum)".to_string(),
+                            _ => "sig/layout/value/ops changed on an existing entry (§5.4)".to_string(),
                         },
                     });
                 }
@@ -514,7 +514,7 @@ pub fn change_set(old: &Surface, new: &Surface) -> Vec<Change> {
                         from: Some(oe.status.clone()),
                         to: Some(ne.status.clone()),
                         old_status: oe.status.clone(),
-                        note: "治理状态转移(面未动)".to_string(),
+                        note: "governance status transition (surface unchanged)".to_string(),
                     });
                 }
             }
@@ -528,7 +528,7 @@ pub fn change_set(old: &Surface, new: &Surface) -> Vec<Change> {
                 from: Some(oe.name.clone()),
                 to: None,
                 old_status: oe.status.clone(),
-                note: "条目消失(须已 deprecated + 满足弃用周期)".to_string(),
+                note: "entry disappeared (must be deprecated + deprecation period met)".to_string(),
             });
         }
     }
@@ -539,17 +539,17 @@ pub fn change_set(old: &Surface, new: &Surface) -> Vec<Change> {
             from: Some(old.freeze_state.clone()),
             to: Some(new.freeze_state.clone()),
             old_status: String::new(),
-            note: "freeze_state 转移".to_string(),
+            note: "freeze_state transition".to_string(),
         });
     }
     out.sort_by(|a, b| (a.kind, a.name.as_str()).cmp(&(b.kind, b.name.as_str())));
     out
 }
 
-/// §5.4 的 append vs modify 判定(落在**条目内部结构**上)。
+/// §5.4 append vs modify decision (based on **entry internal structure**).
 pub fn classify_modify(oe: &Entry, ne: &Entry) -> &'static str {
     match oe.kind.as_str() {
-        // 枚举末尾追加成员 ⇒ 追加; 重排/改值/删除 ⇒ 修改。
+        // member appended at the end of an enum ⇒ append; reorder/value change/remove ⇒ modify.
         "enum" => {
             let om: Vec<&str> = oe.value.as_deref().unwrap_or("").split(',').collect();
             let nm: Vec<&str> = ne.value.as_deref().unwrap_or("").split(',').collect();
@@ -559,13 +559,13 @@ pub fn classify_modify(oe: &Entry, ne: &Entry) -> &'static str {
                 "CHANGED"
             }
         }
-        // service: 新增 service 名 = 新增条目; 已有 ops 表加槽 = 修改。
+        // service: a new service name = a new entry; adding a slot to an existing ops table = modify.
         "service" => "CHANGED",
-        // type(结构体): 加/删/重排字段 = 修改(D22)。
+        // type (struct): add/remove/reorder fields = modify (D22).
         "type" => "CHANGED",
-        // macro/var: 改已有宏的值 ⇒ 修改。
+        // macro/var: changing the value of an existing macro ⇒ modify.
         "macro" | "var" => "CHANGED",
-        // func: 签名变化 ⇒ 修改(纯语义变更不可从声明面观测, 见 S-11)。
+        // func: signature change ⇒ modify (pure semantic changes are not observable from the declaration surface; see S-11).
         _ => "CHANGED",
     }
 }
@@ -586,9 +586,9 @@ fn describe(e: &Entry) -> Option<String> {
     None
 }
 
-// ================================================================== 影响报告
+// ================================================================== impact report
 
-/// 反向依赖报告(§6.3)。
+/// Reverse-dependency report (§6.3).
 #[derive(Clone, Debug, Default)]
 pub struct Dependents {
     pub direct: Vec<String>,
@@ -606,9 +606,9 @@ impl Dependents {
     }
 }
 
-/// 计算某个 `provider` 的依赖者(按已声明的 `[[dep]]` / `requires_iface` / `reexport_of`)。
+/// Compute the dependents of a `provider` (per declared `[[dep]]` / `requires_iface` / `reexport_of`).
 ///
-/// `new_cg` / `new_ver` 用于判定 `unsatisfied`(失配者)。
+/// `new_cg` / `new_ver` are used to decide `unsatisfied` (mismatched) dependents.
 pub fn dependents_of(
     tree: &TreeLoad,
     provider: &str,
@@ -631,10 +631,10 @@ pub fn dependents_of(
             if r.id.split_once('#').map(|(pn, _)| pn) == Some(provider) {
                 is_direct = true;
                 let why = if !version::compat_gen_matches(r.compat_gen, new_cg) {
-                    format!("compat_gen 已由 {} 变 {new_cg}, 需重新确认", r.compat_gen)
+                    format!("compat_gen changed from {} to {new_cg}, reconfirmation needed", r.compat_gen)
                 } else if !r.range.matches(new_ver.triple()) {
                     format!(
-                        "range `{}` 不再满足新版本 {}",
+                        "range `{}` no longer satisfies the new version {}",
                         r.range_raw, new_ver
                     )
                 } else {
@@ -660,7 +660,7 @@ pub fn dependents_of(
         }
     }
 
-    // 传递闭包(反向): 谁依赖 direct 集合。
+    // Transitive closure (reverse): who depends on the direct set.
     let mut transitive: BTreeSet<String> = direct.clone();
     let mut grew = true;
     while grew {
@@ -682,9 +682,9 @@ pub fn dependents_of(
     }
 }
 
-// ================================================================== 环境
+// ================================================================== environment
 
-/// 命令的加载环境(IO 只在这里)。
+/// Command load environment (IO happens only here).
 pub struct Env {
     pub root: PathBuf,
     pub tree: TreeLoad,
@@ -711,25 +711,25 @@ impl Env {
     }
 }
 
-/// 解析 `<provider>#<unit>` 或插件名(裁定 R-3)。
+/// Resolve `<provider>#<unit>` or a plugin name (ruling R-3).
 fn resolve(tree: &TreeLoad, id: &str) -> Result<(String, String, usize), String> {
     if let Some((prov, unit)) = id.split_once('#') {
         let p = tree
             .by_name(prov)
-            .ok_or_else(|| format!("插件 `{prov}` 不在插件树里"))?;
+            .ok_or_else(|| format!("plugin `{prov}` is not in the plugin tree"))?;
         let idx = p
             .exports
             .iter()
             .position(|e| e.name == unit)
-            .ok_or_else(|| format!("插件 `{prov}` 没有接口单元 `{unit}`"))?;
+            .ok_or_else(|| format!("plugin `{prov}` has no interface unit `{unit}`"))?;
         Ok((prov.to_string(), unit.to_string(), idx))
     } else {
         let p = tree
             .by_name(id)
-            .ok_or_else(|| format!("插件 `{id}` 不在插件树里"))?;
+            .ok_or_else(|| format!("plugin `{id}` is not in the plugin tree"))?;
         if p.exports.len() != 1 {
             return Err(format!(
-                "插件 `{id}` 有 {} 个 `[[export]]`, 不能唯一确定单元; 请用 `<provider>#<unit>`(裁定 R-3)",
+                "plugin `{id}` has {} `[[export]]` entries, cannot determine a unique unit; use `<provider>#<unit>` (ruling R-3)",
                 p.exports.len()
             ));
         }
@@ -737,7 +737,7 @@ fn resolve(tree: &TreeLoad, id: &str) -> Result<(String, String, usize), String>
     }
 }
 
-/// note 路径存在性(相对 `root` 或当前工作目录)。
+/// Note path existence (relative to `root` or the current working directory).
 fn note_exists(root: &Path, note: &str) -> bool {
     let p = PathBuf::from(note);
     if p.is_absolute() {
@@ -750,7 +750,7 @@ fn machine_file(path: &str, content: String) -> Value {
     json!({"path": path, "kind": "machine", "content": content, "mode": "0644"})
 }
 
-/// 有效冻结态: 任一处声明 `unfreezing` 即视为在解冻窗口。
+/// Effective freeze state: `unfreezing` in either place means the unfreeze window is open.
 pub fn effective_freeze(decl: &str, snap: Option<&str>) -> String {
     if decl == "unfreezing" || snap == Some("unfreezing") {
         "unfreezing".to_string()
@@ -761,7 +761,7 @@ pub fn effective_freeze(decl: &str, snap: Option<&str>) -> String {
     }
 }
 
-/// 生成 `brickie.lock` 的正文(插件来自树, 单元来自已发布快照 + 本次更新)。
+/// Build the body of `brickie.lock` (plugins from the tree, units from published snapshots + this update).
 fn build_lock_content(
     tree: &TreeLoad,
     root: &Path,
@@ -812,13 +812,13 @@ fn build_lock_content(
     emit::render_lock(&lock)
 }
 
-/// `api/iface/CHANGELOG.md` 的版本段(裁定 R-12: 段头 = `<unit> v<4 段> (compat_gen=<N>)`)。
+/// Version section of `api/iface/CHANGELOG.md` (ruling R-12: section head = `<unit> v<4 segments> (compat_gen=<N>)`).
 fn changelog_content(root: &Path, unit_id: &str, ver: Version, hash: &str, summary: &str) -> String {
     let rel = "api/iface/CHANGELOG.md";
     let abs = root.join(rel);
     let existing = std::fs::read_to_string(&abs).unwrap_or_default();
     let header = "# brickie iface CHANGELOG\n\n\
-                  > 机器拥有(`brickie-core` 产出); 按**版本段**追加, **无时间戳**(contract §4 / R-12)。\n";
+                  > Machine-owned (produced by `brickie-core`); appended per **version section**, **no timestamp** (contract §4 / R-12).\n";
     let base = if existing.trim().is_empty() {
         format!("{header}\n")
     } else {
@@ -837,14 +837,14 @@ fn changelog_content(root: &Path, unit_id: &str, ver: Version, hash: &str, summa
     out.push('\n');
     out.push_str(&format!("- hash: {hash}\n"));
     if !summary.is_empty() {
-        out.push_str(&format!("- 变更: {summary}\n"));
+        out.push_str(&format!("- changes: {summary}\n"));
     }
     out
 }
 
-// ================================================================== 命令入口
+// ================================================================== command entry
 
-/// `ver-show` / `ver-bump` / `iface-*` 的统一入口。
+/// Unified entry point for `ver-show` / `ver-bump` / `iface-*`.
 pub fn run(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
     match req.command.as_str() {
@@ -864,8 +864,8 @@ pub fn run(req: &Request) -> Response {
             let env = Env::load(&root);
             let mut d = env.diags.clone();
             d.usage(
-                format!("iface 不认识命令 `{other}`"),
-                "见 contract §5 的命令表",
+                format!("iface does not recognize command `{other}`"),
+                "see the command table in contract §5",
             );
             Response::ok(d, json!({}))
         }
@@ -875,7 +875,7 @@ pub fn run(req: &Request) -> Response {
 fn resolve_or_usage(env: &Env, id: &str) -> Result<(String, String, usize), Response> {
     resolve(&env.tree, id).map_err(|msg| {
         let mut d = env.diags.clone();
-        d.usage(msg, "contract §5: `id` = `<provider>#<unit>` 或恰有一个 export 的插件名");
+        d.usage(msg, "contract §5: `id` = `<provider>#<unit>` or a plugin name with exactly one export");
         Response::ok(d, json!({}))
     })
 }
@@ -909,16 +909,16 @@ fn cmd_ver_show(req: &Request, root: &Path) -> Response {
             false,
         ),
     };
-    // RV-11/C-12 要求 `ver show` **显式标注**"代不参与比较"。这是**输出语义**, 不是诊断:
-    // 它由 `data.not_comparable = true` + L5 的呈现行承担(见 present.py 的 ver show),
-    // 不占用 BRV 码 —— 用 `BRV-MF-0001` 去装一条纯提示会把机读消费方引向"这里有个声明面错误"。
+    // RV-11/C-12 require `ver show` to **explicitly mark** that "generation is not compared". This is **output semantics**, not a diagnostic:
+    // it is carried by `data.not_comparable = true` + the L5 presentation line (see ver show in present.py),
+    // and consumes no BRV code — packing a pure hint into `BRV-MF-0001` would steer machine consumers toward "there is a declaration-surface error here".
     let d = env.diags.clone();
     let source_note = if compat_gen == 0 {
-        "从未冻结(compat_gen = 0)".to_string()
+        "never frozen (compat_gen = 0)".to_string()
     } else if published {
-        format!("快照记录的已发布代(compat_gen = {compat_gen})")
+        format!("published generation recorded in the snapshot (compat_gen = {compat_gen})")
     } else {
-        format!("声明的 compat_gen = {compat_gen}")
+        format!("declared compat_gen = {compat_gen}")
     };
     Response::ok(
         d,
@@ -938,8 +938,8 @@ fn cmd_ver_show(req: &Request, root: &Path) -> Response {
             "status": status,
             "source": source,
             "compat_gen_source": {"kind": if compat_gen == 0 { "never-frozen" } else { "refreeze-sequence" }, "note": source_note},
-            // RV-11 / C-12: 显式标注"代不参与比较"。这是**输出语义**(C-12 要求的显式标注),
-            // 不是诊断 —— 用 BRV 码去装一条纯提示会把机读消费方引向"这里有个声明面错误"。
+            // RV-11 / C-12: explicitly mark that "generation is not compared". This is **output semantics** (the explicit mark C-12 requires),
+            // not a diagnostic — packing a pure hint into a BRV code would steer machine consumers toward "there is a declaration-surface error here".
             "not_comparable": true,
             "published": published,
             "not_abi": true,
@@ -962,8 +962,8 @@ fn cmd_ver_bump(req: &Request, root: &Path) -> Response {
     if !crate::rules::in_list(&["major", "minor", "revise"], &rule) {
         let mut d = env.diags.clone();
         d.usage(
-            format!("`--rule {rule}` 越界"),
-            "合法值: major | minor | revise(§5.2/§7.7: compat_gen **不在** rule 里)",
+            format!("`--rule {rule}` out of range"),
+            "legal values: major | minor | revise (§5.2/§7.7: compat_gen is **not** a rule)",
         );
         return Response::ok(d, json!({}));
     }
@@ -987,12 +987,12 @@ fn cmd_ver_bump(req: &Request, root: &Path) -> Response {
                 .target(&prov)
                 .file(&decl.file)
                 .span(format!("export[{idx}].version"))
-                .hint("§5.2: 任一段只增不减"),
+                .hint("§5.2: no version segment may decrease"),
         );
         return Response::ok(d, json!({}));
     }
 
-    // 面的条目: 快照优先(发布记录), 否则声明。
+    // Surface entries: snapshot first (publish record), else declaration.
     let entries: Vec<Entry> = match &snap {
         Some(s) => s.entries.iter().map(Entry::from_snapshot).collect(),
         None => decl.entries.clone(),
@@ -1005,7 +1005,7 @@ fn cmd_ver_bump(req: &Request, root: &Path) -> Response {
     let mut new_surface = decl.clone();
     new_surface.entries = entries;
     new_surface.version = new_ver;
-    // S-19: 版本推进不动解冻窗口。
+    // S-19: version advance does not touch the unfreeze window.
     new_surface.freeze_state = effective_freeze(
         &decl.freeze_state,
         snap.as_ref().and_then(|s| s.freeze_state.as_deref()),
@@ -1023,14 +1023,14 @@ fn cmd_ver_bump(req: &Request, root: &Path) -> Response {
         Diag::new(
             Severity::Info,
             format!(
-                "`plugin.toml` 里应把 `[[export]].version` 改成 \"{new_ver}\"(裁定 R-3: 人写文件永不被工具改写)"
+                "`brick.toml` should set `[[export]].version` to \"{new_ver}\" (ruling R-3: human-written files are never rewritten by tools)"
             ),
         )
         .code("BRV-MF-0001")
         .target(&prov)
         .file(&decl.file)
         .span(format!("export[{idx}].version"))
-        .hint("缺口代用(R-9): '应改成什么'无专属信息码"),
+        .hint("gap substitute (R-9): no dedicated info code for 'what to change it to'"),
     );
 
     Response::ok_with_files(
@@ -1069,8 +1069,8 @@ fn cmd_iface_list(_req: &Request, root: &Path) -> Response {
                 Some(s) => (
                     s.version.unwrap_or(decl.version),
                     s.compat_gen.unwrap_or(decl.compat_gen),
-                    // 有效冻结态(S-19): 声明或快照任一处是 `unfreezing` 就算在窗口里 ——
-                    // 与 check / publish / ver show 同一口径, 免得 list/show 与门禁互相打架。
+                    // Effective freeze state (S-19): `unfreezing` in either declaration or snapshot counts as in-window —
+                    // same rule as check / publish / ver show, so list/show never fight the gates.
                     effective_freeze(&decl.freeze_state, s.freeze_state.as_deref()),
                     s.status.clone().unwrap_or_else(|| decl.status.clone()),
                     true,
@@ -1135,17 +1135,17 @@ fn cmd_iface_show(req: &Request, root: &Path) -> Response {
         .unwrap_or_else(|| "decl".to_string());
 
     let mut d = env.diags.clone();
-    // NOTE_ABI 提示(V-11③)与 requires_iface 的 info(V-10③)。
+    // NOTE_ABI hint (V-11③) and requires_iface info (V-10③).
     d.push(
         Diag::new(
             Severity::Info,
-            "NOT_ABI: 声明面 hash ≠ ABI 兼容证明(v0.1 truth = 声明面; §6.6/RV-3)".to_string(),
+            "NOT_ABI: declaration-surface hash ≠ ABI compatibility proof (v0.1 truth = declaration surface; §6.6/RV-3)".to_string(),
         )
         .code("BRV-MF-0001")
         .target(&prov)
         .file(&decl.file)
         .span(format!("export[{idx}]"))
-        .hint("缺口代用(R-9): NOT_ABI 无专属信息码"),
+        .hint("gap substitute (R-9): NOT_ABI has no dedicated info code"),
     );
     if let Some(p) = env.tree.by_name(&prov) {
         for (ri, r) in p.compat.requires_iface.iter().enumerate() {
@@ -1153,7 +1153,7 @@ fn cmd_iface_show(req: &Request, root: &Path) -> Response {
                 Diag::new(
                     Severity::Info,
                     format!(
-                        "声明面接口依赖 `{}`(compat_gen={}, range={}): v0.1 不扫描声明面接口依赖(V-10③)",
+                        "declaration-surface interface dependency `{}` (compat_gen={}, range={}): v0.1 does not scan declaration-surface interface dependencies (V-10③)",
                         r.id, r.compat_gen, r.range_raw
                     ),
                 )
@@ -1167,9 +1167,9 @@ fn cmd_iface_show(req: &Request, root: &Path) -> Response {
     }
 
     let entries: Vec<Value> = decl.entries.iter().map(entry_json).collect();
-    // 有效值(S-19 口径): 快照是**发布记录**, 声明是**当前意图**; 解冻窗口里二者会不同,
-    // 因此 unit/data 给出的必须是"有效冻结态"(任一处 unfreezing 即 unfreezing),
-    // 否则 `iface show` 会与 `check --profile release`(BRV-IFACE-0009)的判定互相矛盾。
+    // Effective values (S-19 rule): the snapshot is the **publish record**, the declaration is the **current intent**; they differ inside an unfreeze window,
+    // so unit/data must report the "effective freeze state" (unfreezing anywhere ⇒ unfreezing),
+    // otherwise `iface show` would contradict the verdict of `check --profile release` (BRV-IFACE-0009).
     let (eff_version, eff_cg, eff_freeze, eff_status) = match snap {
         Some(s) => (
             s.version.unwrap_or(decl.version).to_string(),
@@ -1240,7 +1240,7 @@ fn entry_json(e: &Entry) -> Value {
     })
 }
 
-// ------------------------------------------------------------------ 版本推进辅助
+// ------------------------------------------------------------------ version advance helpers
 
 struct VersionPlan {
     from: Version,
@@ -1261,7 +1261,7 @@ fn plan_version(
         return VersionPlan {
             from,
             to: set.unwrap_or(from),
-            reasons: vec!["首次发布: 建档, 不推进任何段(裁定 S-8)".to_string()],
+            reasons: vec!["first publish: record creation, no segment advanced (ruling S-8)".to_string()],
         };
     }
     let event = if !hard.is_empty() {
@@ -1276,22 +1276,22 @@ fn plan_version(
     let mut reasons = Vec::new();
     if !hard.is_empty() {
         reasons.push(format!(
-            "COMPAT_GEN+1: 已有 frozen/deprecated 条目被改或删({} 条)",
+            "COMPAT_GEN+1: existing frozen/deprecated entries changed or removed ({} entries)",
             hard.len()
         ));
         reasons.push("MINOR→0 / REVISE→0".to_string());
     } else if !changes.is_empty() {
         let kinds: BTreeSet<&str> = changes.iter().map(|c| c.kind).collect();
         reasons.push(format!(
-            "MINOR+1: 变更集 {{{}}}(新增/追加/状态转移/仅 experimental 改动)",
+            "MINOR+1: change set {{{}}} (additions/appends/status transitions/experimental-only changes)",
             kinds.into_iter().collect::<Vec<_>>().join(",")
         ));
         reasons.push("REVISE→0".to_string());
     } else {
-        reasons.push("面未变 ⇒ 空操作(§6.5)".to_string());
+        reasons.push("surface unchanged ⇒ no-op (§6.5)".to_string());
     }
     if set.is_some() {
-        reasons.push("--set 覆盖本次写入的单元版本(裁定 R-8)".to_string());
+        reasons.push("--set overrides the unit version written by this run (ruling R-8)".to_string());
     }
     VersionPlan { from, to, reasons }
 }
@@ -1366,13 +1366,13 @@ fn cmd_iface_status(req: &Request, root: &Path) -> Response {
             d.push(
                 Diag::new(
                     Severity::Error,
-                    format!("`{}` 尚无发布快照(未发布)⇒ 无法比对", decl.id),
+                    format!("`{}` has no publish snapshot yet (unpublished) ⇒ cannot compare", decl.id),
                 )
                 .code("BRV-MF-0001")
                 .target(&prov)
                 .file(&decl.file)
                 .span(format!("export[{idx}]"))
-                .hint("先 `brickie iface publish`; 缺口代用(R-9)"),
+                .hint("run `brickie iface publish` first; gap substitute (R-9)"),
             );
         }
         Some(sh) => {
@@ -1382,7 +1382,7 @@ fn cmd_iface_status(req: &Request, root: &Path) -> Response {
                     Diag::new(
                         Severity::Error,
                         format!(
-                            "声明面 hash 与快照 hash 不等: 重算 {}, 快照 {}",
+                            "declaration-surface hash differs from snapshot hash: recomputed {}, snapshot {}",
                             short_hash(Some(&recomputed)),
                             short_hash(Some(sh))
                         ),
@@ -1391,13 +1391,13 @@ fn cmd_iface_status(req: &Request, root: &Path) -> Response {
                     .target(&prov)
                     .file(&decl.file)
                     .span(format!("export[{idx}]"))
-                    .hint("缺口代用(R-9): '快照过期'无专属码; 手编快照 ⇒ 红(N-3)"),
+                    .hint("gap substitute (R-9): no dedicated code for 'stale snapshot'; hand-edited snapshot ⇒ red (N-3)"),
                 );
             }
         }
     }
 
-    // V-11④ / BRV-IFACE-0012: 同一真值的两处记录必须相等。
+    // V-11④ / BRV-IFACE-0012: the two records of the same truth must be equal.
     if let (Some(dh), Some(sh)) = (&decl.declared_hash, &snapshot_hash) {
         if !dh.is_empty() && !sh.is_empty() && dh != sh {
             consistent = false;
@@ -1405,7 +1405,7 @@ fn cmd_iface_status(req: &Request, root: &Path) -> Response {
                 Diag::new(
                     Severity::Error,
                     format!(
-                        "`plugin.toml [[export]].hash`({}) 与快照 hash({}) 不等 —— hash 是同一真值的两处记录",
+                        "`brick.toml [[export]].hash`({}) differs from snapshot hash({}) — the hash is one truth recorded in two places",
                         short_hash(Some(dh)),
                         short_hash(Some(sh))
                     ),
@@ -1414,13 +1414,13 @@ fn cmd_iface_status(req: &Request, root: &Path) -> Response {
                 .target(&prov)
                 .file(&decl.file)
                 .span(format!("export[{idx}].hash"))
-                .hint("§9.1.1 规则 4 / §10 V-11④: 手工改一处 ⇒ 红"),
+                .hint("§9.1.1 rule 4 / §10 V-11④: editing one place by hand ⇒ red"),
             );
         }
     }
 
     let files = if !check && !consistent {
-        // S-12: status 是门禁, 不写盘; 把"应有的快照"放进 data 供人取用。
+        // S-12: status is a gate and writes nothing; the "expected snapshot" goes into data for manual use.
         Vec::new()
     } else {
         Vec::new()
@@ -1470,7 +1470,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
     let snap = env.snap(&decl.id).cloned();
     let decl_hash = decl.hash(strict);
 
-    // `--set`(裁定 R-8): 覆盖本次写入的单元版本, 仍受单调约束。
+    // `--set` (ruling R-8): overrides the unit version written by this run, still bound by monotonicity.
     let set = match req.arg_str("set") {
         None => None,
         Some(raw) => match version::parse_version(&raw) {
@@ -1483,18 +1483,18 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                     &decl.file,
                     format!("export[{idx}].version"),
                     e.message,
-                    "§5.1: `--set` 必须是四段 `COMPAT_GEN.MAJOR.MINOR.REVISE`",
+                    "§5.1: `--set` must be four segments `COMPAT_GEN.MAJOR.MINOR.REVISE`",
                 );
                 return Response::ok(d, json!({}));
             }
         },
     };
 
-    // ---- 幂等(§6.5): 面内容 + 条目集合 + status + freeze_state 全等 ⇒ 空操作 ----
+    // ---- idempotence (§6.5): surface content + entry set + status + freeze_state all equal ⇒ no-op ----
     if let Some(s) = &snap {
         let old = Surface::from_snapshot(s);
         let same_entries = entries_equal(&old.entries, &decl.entries);
-        // S-19: 冻结态比"有效冻结态"(声明 OR 快照)⇒ 窗口内重复 publish 仍是空操作。
+        // S-19: freeze state compares the "effective freeze state" (declaration OR snapshot) ⇒ repeated publish inside the window is still a no-op.
         let same_freeze = s.freeze_state.clone().unwrap_or_else(|| "unfrozen".into())
             == effective_freeze(
                 &decl.freeze_state,
@@ -1512,7 +1512,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                     "compat_gen": s.compat_gen,
                     "verdict": "green",
                     "changes": [],
-                    "version_change": {"from": s.version.map(|v| v.to_string()), "to": s.version.map(|v| v.to_string()), "reasons": ["面未变 ⇒ 空操作(§6.5)"]},
+                    "version_change": {"from": s.version.map(|v| v.to_string()), "to": s.version.map(|v| v.to_string()), "reasons": ["surface unchanged ⇒ no-op (§6.5)"]},
                     "report": {"dependents": dependents_of(&env.tree, &prov, s.compat_gen.unwrap_or(0), s.version.unwrap_or_default()).to_json()},
                 }),
             );
@@ -1530,14 +1530,14 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                 from: None,
                 to: Some(e.name.clone()),
                 old_status: String::new(),
-                note: "首次发布: 建档".to_string(),
+                note: "first publish: record creation".to_string(),
             })
             .collect::<Vec<_>>()
     } else {
         change_set(&old, &decl)
     };
 
-    // ---- 门钩(§6.3/§6.5) ----
+    // ---- gates (§6.3/§6.5) ----
     let mut d = env.diags.clone();
     let hard: Vec<&Change> = changes.iter().filter(|c| c.is_hard()).collect();
     let eff_freeze = effective_freeze(
@@ -1546,7 +1546,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
     );
     let mut blocked = false;
     if !hard.is_empty() {
-        // REMOVED 必须已 deprecated(§6.3)。
+        // REMOVED requires the entry to be deprecated first (§6.3).
         for c in &hard {
             if c.kind == "REMOVED" && c.old_status != "deprecated" {
                 blocked = true;
@@ -1554,7 +1554,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                     Diag::new(
                         Severity::Error,
                         format!(
-                            "`REMOVED` 条目 `{}` 仍是 `{}`: 删除必须先 `deprecated` 并满足弃用周期(§6.3/§6.4)",
+                            "`REMOVED` entry `{}` is still `{}`: removal requires `deprecated` first plus the deprecation period (§6.3/§6.4)",
                             c.name, c.old_status
                         ),
                     )
@@ -1562,7 +1562,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                     .target(&prov)
                     .file(&decl.file)
                     .span("export.entries")
-                    .hint("先 `brickie iface deprecate`; 缺口代用(R-9)"),
+                    .hint("run `brickie iface deprecate` first; gap substitute (R-9)"),
                 );
             }
         }
@@ -1577,7 +1577,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                 Diag::new(
                     Severity::Error,
                     format!(
-                        "变更集命中'须解冻'的 {} 条(CHANGED/REMOVED 涉及已冻结条目), 但单元不在 `unfreezing`(当前 `{}`)",
+                        "change set hits {} 'must unfreeze' entries (CHANGED/REMOVED touching frozen entries), but the unit is not `unfreezing` (currently `{}`)",
                         hard.len(),
                         eff_freeze
                     ),
@@ -1586,7 +1586,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                 .target(&prov)
                 .file(&decl.file)
                 .span(format!("export[{idx}].freeze_state"))
-                .hint("§5.3.3 硬路径: unfreeze → 改/删 → refreeze; 缺口代用(R-9)"),
+                .hint("§5.3.3 hard path: unfreeze → change/remove → refreeze; gap substitute (R-9)"),
             );
         }
         if note.is_none() {
@@ -1595,7 +1595,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                 Diag::new(
                     Severity::Error,
                     format!(
-                        "变更集命中'须解冻'(§5.3.4 最高门槛)⇒ 必须带 `--note <决策记录>`({} 条)",
+                        "change set hits 'must unfreeze' (§5.3.4 highest bar) ⇒ `--note <decision record>` required ({} entries)",
                         hard.len()
                     ),
                 )
@@ -1603,7 +1603,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                 .target(&prov)
                 .file(&decl.file)
                 .span("--note")
-                .hint("§5.3.4 规则 1 / V-6; 缺口代用(R-9): 缺 note 无专属码"),
+                .hint("§5.3.4 rule 1 / V-6; gap substitute (R-9): no dedicated code for a missing note"),
             );
         }
     }
@@ -1623,7 +1623,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
                 .target(&prov)
                 .file(&decl.file)
                 .span(format!("export[{idx}].version"))
-                .hint("§5.2/§6.5: `--set` 必须 ≥ 当前版本"),
+                .hint("§5.2/§6.5: `--set` must be ≥ the current version"),
         );
     }
     let dependents = dependents_of(&env.tree, &prov, plan.to.compat_gen, plan.to);
@@ -1636,7 +1636,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
             Diag::new(
                 Severity::Error,
                 format!(
-                    "发布前门钩(release): COMPAT_GEN 由 {} 变 {}, {} 个依赖方将失配",
+                    "pre-publish gate (release): COMPAT_GEN changes from {} to {}, {} dependents will mismatch",
                     plan.from.compat_gen,
                     plan.to.compat_gen,
                     dependents.unsatisfied.len()
@@ -1646,7 +1646,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
             .target(&prov)
             .file(&decl.file)
             .span("export.version")
-            .hint("§6.5: 变更后依赖方仍须满足 compat_gen 精确匹配; 先协调依赖方"),
+            .hint("§6.5: after the change dependents must still satisfy an exact compat_gen match; coordinate with dependents first"),
         );
     }
 
@@ -1671,13 +1671,13 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
         );
     }
 
-    // ---- 写机器文件: 快照 + CHANGELOG + lock(§5.2 表) ----
+    // ---- write machine files: snapshot + CHANGELOG + lock (§5.2 table) ----
     let mut new_surface = decl.clone();
     new_surface.version = plan.to;
-    // 裁定 S-19: `publish` **不得**抹掉解冻窗口 —— 有效冻结态取"声明 OR 快照"。
+    // Ruling S-19: `publish` **must not** erase the unfreeze window — the effective freeze state takes "declaration OR snapshot".
     new_surface.freeze_state = eff_freeze.clone();
-    // 且窗口内发布**消费**基线(新面成为新的承诺面), 使随后的 `refreeze` 只关窗口、
-    // 不重复 bump `COMPAT_GEN`(避免"publish + refreeze 双 bump")。
+    // and a publish inside the window **consumes** the baseline (the new surface becomes the new promise), so a later `refreeze` only closes the window
+    // without bumping `COMPAT_GEN` again (avoiding a "publish + refreeze double bump").
     let baseline_owned: Option<(String, Vec<Entry>)> =
         if eff_freeze == "unfreezing" {
             Some((decl_hash.clone(), decl.entries.clone()))
@@ -1693,7 +1693,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
     );
     let rel = snapshot_path(&prov, &unit);
     let changelog_summary: String = if initial {
-        "首次发布(建档)".to_string()
+        "first publish (record creation)".to_string()
     } else {
         changes
             .iter()
@@ -1770,34 +1770,34 @@ fn cmd_iface_freeze(req: &Request, root: &Path) -> Response {
         d.push(
             Diag::new(
                 Severity::Error,
-                "`iface freeze` 需要 `--note <决策记录>`(§5.3.4 最高门槛 / A-26)".to_string(),
+                "`iface freeze` requires `--note <decision record>` (§5.3.4 highest bar / A-26)".to_string(),
             )
             .code("BRV-MF-0001")
             .target(&prov)
             .file(&decl.file)
             .span("--note")
-            .hint("缺口代用(R-9): 缺 note 无专属码"),
+            .hint("gap substitute (R-9): no dedicated code for a missing note"),
         );
         return Response::ok(d, json!({}));
     };
     if !note_exists(root, &note) {
         d.usage(
-            format!("`--note` 指向的路径不存在: {note}"),
-            "§5.3.4: note 是决策记录文件; 用法错 ⇒ 退出码 2",
+            format!("`--note` path does not exist: {note}"),
+            "§5.3.4: note is a decision-record file; usage error ⇒ exit code 2",
         );
         return Response::ok(d, json!({}));
     }
     if let Some(e) = &entry {
         if !decl.entries.iter().any(|x| x.name == *e) {
             d.usage(
-                format!("单元 `{}` 没有条目 `{e}`", decl.id),
-                "`entry` 必须是 `[[export.entries]].name`",
+                format!("unit `{}` has no entry `{e}`", decl.id),
+                "`entry` must be a `[[export.entries]].name`",
             );
             return Response::ok(d, json!({}));
         }
     }
 
-    // §6.4 / A-26: v0.1 只出"待升格提案", 不落 frozen 快照、不 bump COMPAT_GEN。
+    // §6.4 / A-26: v0.1 only emits a "promotion proposal"; writes no frozen snapshot and bumps no COMPAT_GEN.
     let proposal_rel = format!("build/gen/proposals/{}.toml", decl.unit);
     let mut doc = TDoc::new()
         .set("schema", TValue::Int(1))
@@ -1814,7 +1814,7 @@ fn cmd_iface_freeze(req: &Request, root: &Path) -> Response {
     prop.push_bool("v01_no_frozen_snapshot", true);
     prop.push_str(
         "reason",
-        "v0.1 只能生成待升格提案(§6.4 / A-26): 不落 frozen 快照、不 bump COMPAT_GEN; 真正升格在 v0.4+",
+        "v0.1 can only generate a promotion proposal (§6.4 / A-26): no frozen snapshot, no COMPAT_GEN bump; actual promotion is v0.4+",
     );
     doc = doc.push(prop);
     let mut entry_tbl = TTable::new(&["entry"]);
@@ -1837,7 +1837,7 @@ fn cmd_iface_freeze(req: &Request, root: &Path) -> Response {
     }
     let content = format!(
         "{}{}",
-        emit::machine_text_header(&format!("接口升格提案 {}", decl.id)),
+        emit::machine_text_header(&format!("interface promotion proposal {}", decl.id)),
         doc.render()
     );
     Response::ok_with_files(
@@ -1874,20 +1874,20 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
         d.push(
             Diag::new(
                 Severity::Error,
-                format!("`iface {verb}` 需要 `--note <决策记录>`(§6.5)"),
+                format!("`iface {verb}` requires `--note <decision record>` (§6.5)"),
             )
             .code("BRV-MF-0001")
             .target(&prov)
             .file(&decl.file)
             .span("--note")
-            .hint("缺口代用(R-9): 缺 note 无专属码"),
+            .hint("gap substitute (R-9): no dedicated code for a missing note"),
         );
         return Response::ok(d, json!({}));
     };
     if !note_exists(root, &note) {
         d.usage(
-            format!("`--note` 指向的路径不存在: {note}"),
-            "§6.5: note 是决策记录文件; 用法错 ⇒ 退出码 2",
+            format!("`--note` path does not exist: {note}"),
+            "§6.5: note is a decision-record file; usage error ⇒ exit code 2",
         );
         return Response::ok(d, json!({}));
     }
@@ -1898,7 +1898,7 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
         "frozen"
     };
     let mut new_surface = decl.clone();
-    // 状态机命令不改冻结窗口(S-19): 有效冻结态取"声明 OR 快照"。
+    // State-machine commands do not touch the unfreeze window (S-19): the effective freeze state takes "declaration OR snapshot".
     new_surface.freeze_state = effective_freeze(
         &decl.freeze_state,
         snap.as_ref().and_then(|s| s.freeze_state.as_deref()),
@@ -1906,7 +1906,7 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
     let mut changed_any = false;
     let mut errors: Vec<String> = Vec::new();
 
-    // 当前状态 = 发布记录(快照)优先 ⇒ 重复执行是空操作(裁定 S-9)。
+    // Current status = publish record (snapshot) first ⇒ repeated runs are no-ops (ruling S-9).
     let cur_status = |name: &str| -> Option<String> {
         if let Some(s) = &snap {
             if let Some(e) = s.entries.iter().find(|e| e.name == name) {
@@ -1924,8 +1924,8 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
         Some(e) => {
             if !decl.entries.iter().any(|x| x.name == *e) {
                 d.usage(
-                    format!("单元 `{}` 没有条目 `{e}`", decl.id),
-                    "`entry` 必须是 `[[export.entries]].name`",
+                    format!("unit `{}` has no entry `{e}`", decl.id),
+                    "`entry` must be a `[[export.entries]].name`",
                 );
                 return Response::ok(d, json!({}));
             }
@@ -1945,7 +1945,7 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
         };
         if !legal && cur != target_status {
             errors.push(format!(
-                "条目 `{name}` 当前是 `{cur}`, 不能直接 `{verb}` 到 `{target_status}`(状态机非法跳跃)"
+                "entry `{name}` is currently `{cur}`, cannot `{verb}` directly to `{target_status}` (illegal state-machine jump)"
             ));
             continue;
         }
@@ -1956,14 +1956,14 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
             e.status = target_status.to_string();
         }
     }
-    // 单元级状态(无 entry 指定时)。
+    // Unit-level status (when no entry is specified).
     if entry.is_none() {
         let cur_unit = snap
             .as_ref()
             .and_then(|s| s.status.clone())
             .unwrap_or_else(|| decl.status.clone());
         if cur_unit == target_status {
-            // 已是目标态
+            // already at the target state
         } else if (verb == "deprecate" && cur_unit == "frozen")
             || (verb == "undeprecate" && cur_unit == "deprecated")
         {
@@ -1971,7 +1971,7 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
             new_surface.status = target_status.to_string();
         } else {
             errors.push(format!(
-                "单元 `{}` 当前状态 `{cur_unit}`, 不能直接 `{verb}` 到 `{target_status}`",
+                "unit `{}` is currently `{cur_unit}`, cannot `{verb}` directly to `{target_status}`",
                 decl.id
             ));
         }
@@ -1985,7 +1985,7 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
                     .target(&prov)
                     .file(&decl.file)
                     .span("export.status")
-                    .hint("§6.3 STATUS / §6.4: 状态转移合法性由引擎校验(如 experimental→deprecated 直跳 ⇒ 红)"),
+                    .hint("§6.3 STATUS / §6.4: state-transition legality is checked by the engine (e.g. an experimental→deprecated jump ⇒ red)"),
             );
         }
         return Response::ok(
@@ -2030,14 +2030,14 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
         Diag::new(
             Severity::Info,
             format!(
-                "`plugin.toml` 里 `[[export]]`/`[[export.entries]]` 的 `status` 应相应改成 `{target_status}`(裁定 R-3)"
+                "`brick.toml` `[[export]]`/`[[export.entries]]` `status` should be changed to `{target_status}` accordingly (ruling R-3)"
             ),
         )
         .code("BRV-MF-0001")
         .target(&prov)
         .file(&decl.file)
         .span("export.status")
-        .hint("缺口代用(R-9): '应改成什么'无专属信息码"),
+        .hint("gap substitute (R-9): no dedicated info code for 'what to change it to'"),
     );
     let files = vec![
         machine_file(&rel, emit::render_snapshot(&snap_out)),
@@ -2082,13 +2082,13 @@ fn cmd_iface_unfreeze(req: &Request, root: &Path) -> Response {
         d.push(
             Diag::new(
                 Severity::Error,
-                "`iface unfreeze` 需要 `--note <决策记录>`(§5.3.4 规则 1: 最高门槛 RFC)".to_string(),
+                "`iface unfreeze` requires `--note <decision record>` (§5.3.4 rule 1: highest-bar RFC)".to_string(),
             )
             .code("BRV-MF-0001")
             .target(&prov)
             .file(&decl.file)
             .span("--note")
-            .hint("缺口代用(R-9): 缺 note 无专属码; V-16 观测点 1"),
+            .hint("gap substitute (R-9): no dedicated code for a missing note; V-16 observation point 1"),
         );
         return Response::ok(
             d,
@@ -2097,8 +2097,8 @@ fn cmd_iface_unfreeze(req: &Request, root: &Path) -> Response {
     };
     if !note_exists(root, &note) {
         d.usage(
-            format!("`--note` 指向的路径不存在: {note}"),
-            "§5.3.4: note 是决策记录文件; 用法错 ⇒ 退出码 2",
+            format!("`--note` path does not exist: {note}"),
+            "§5.3.4: note is a decision-record file; usage error ⇒ exit code 2",
         );
         return Response::ok(d, json!({}));
     }
@@ -2111,18 +2111,18 @@ fn cmd_iface_unfreeze(req: &Request, root: &Path) -> Response {
         d.push(
             Diag::new(
                 Severity::Error,
-                format!("只有 `freeze_state = frozen` 的单元才能解冻; `{}` 当前是 `{cur}`", decl.id),
+                format!("only units with `freeze_state = frozen` can unfreeze; `{}` is currently `{cur}`", decl.id),
             )
             .code("BRV-MF-0001")
             .target(&prov)
             .file(&decl.file)
             .span(format!("export[{idx}].freeze_state"))
-            .hint("§5.3.4: `frozen → unfreezing`; 缺口代用(R-9)"),
+            .hint("§5.3.4: `frozen → unfreezing`; gap substitute (R-9)"),
         );
         return Response::ok(d, json!({"id": decl.id, "freeze_state": cur}));
     }
 
-    // 基线 = 当前面 hash + 条目表(裁定 R-7)。
+    // Baseline = current surface hash + entry table (ruling R-7).
     let entries: Vec<Entry> = match &snap {
         Some(s) if !s.entries.is_empty() => s.entries.iter().map(Entry::from_snapshot).collect(),
         _ => decl.entries.clone(),
@@ -2175,8 +2175,8 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
     if let Some(n) = &note {
         if !note_exists(root, n) {
             d.usage(
-                format!("`--note` 指向的路径不存在: {n}"),
-                "§5.3.4: note 是决策记录文件; 用法错 ⇒ 退出码 2",
+                format!("`--note` path does not exist: {n}"),
+                "§5.3.4: note is a decision-record file; usage error ⇒ exit code 2",
             );
             return Response::ok(d, json!({}));
         }
@@ -2190,13 +2190,13 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
         d.push(
             Diag::new(
                 Severity::Error,
-                format!("只有处于 `unfreezing` 的单元才能重新冻结; `{}` 当前是 `{cur}`", decl.id),
+                format!("only units in `unfreezing` can refreeze; `{}` is currently `{cur}`", decl.id),
             )
             .code("BRV-MF-0001")
             .target(&prov)
             .file(&decl.file)
             .span(format!("export[{idx}].freeze_state"))
-            .hint("先 `brickie iface unfreeze`; 缺口代用(R-9)"),
+            .hint("run `brickie iface unfreeze` first; gap substitute (R-9)"),
         );
         return Response::ok(d, json!({"id": decl.id, "freeze_state": cur}));
     }
@@ -2204,18 +2204,18 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
         d.push(
             Diag::new(
                 Severity::Error,
-                format!("`{}` 没有快照/基线, 无法判定是否改了已冻结条目(裁定 R-7)", decl.id),
+                format!("`{}` has no snapshot/baseline, cannot tell whether frozen entries changed (ruling R-7)", decl.id),
             )
             .code("BRV-MF-0001")
             .target(&prov)
             .file(&decl.file)
             .span(format!("export[{idx}].freeze_state"))
-            .hint("先 `unfreeze`(它写基线); 缺口代用(R-9)"),
+            .hint("run `unfreeze` first (it writes the baseline); gap substitute (R-9)"),
         );
         return Response::ok(d, json!({"id": decl.id, "freeze_state": cur}));
     };
 
-    // 基线面(裁定 R-7): 与 baseline 比, 确有"改/删已冻结条目"才 COMPAT_GEN+1。
+    // Baseline surface (ruling R-7): compare with the baseline; COMPAT_GEN+1 only if a frozen entry was actually changed/removed.
     let baseline = Surface {
         id: decl.id.clone(),
         provider: prov.clone(),
@@ -2243,7 +2243,7 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
     new_surface.version = s.version.unwrap_or(decl.version);
     new_surface.compat_gen = s.compat_gen.unwrap_or(decl.compat_gen);
     new_surface.entries = baseline.entries.clone();
-    // 用声明面的当前条目(若声明面没变则等于基线)。
+    // Use the declaration surface's current entries (equal to the baseline if the declaration is unchanged).
     let mut current = decl.clone();
     current.entries = if decl.entries.is_empty() {
         baseline.entries.clone()
@@ -2266,12 +2266,12 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
         new_surface.entries = current.entries.clone();
     }
     if !hard.is_empty() && note.is_none() {
-        // 改/删已冻结条目必须带决策记录。
+        // Changing/removing a frozen entry requires a decision record.
         d.push(
             Diag::new(
                 Severity::Error,
                 format!(
-                    "`refreeze` 命中'改/删已冻结条目'({} 条)⇒ 需要 `--note <决策记录>`(§5.3.4)",
+                    "`refreeze` hits 'frozen entries changed/removed' ({} entries) ⇒ `--note <decision record>` required (§5.3.4)",
                     hard.len()
                 ),
             )
@@ -2279,7 +2279,7 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
             .target(&prov)
             .file(&decl.file)
             .span("--note")
-            .hint("缺口代用(R-9)"),
+            .hint("gap substitute (R-9)"),
         );
         return Response::ok(
             d,
@@ -2299,9 +2299,9 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
                 plan.to,
                 &hash,
                 if empty_unfreeze {
-                    "空解冻 refreeze(四段全不动)"
+                    "empty-unfreeze refreeze (all four segments unchanged)"
                 } else {
-                    "refreeze(修改已冻结面)"
+                    "refreeze (frozen surface modified)"
                 },
             ),
         ),
@@ -2311,12 +2311,12 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
             Severity::Info,
             if empty_unfreeze {
                 format!(
-                    "空解冻: `{}` 未改/删任何已冻结条目 ⇒ 四段全不动(§5.3.4 规则 2 / V-16)",
+                    "empty unfreeze: `{}` changed/removed no frozen entry ⇒ all four segments unchanged (§5.3.4 rule 2 / V-16)",
                     decl.id
                 )
             } else {
                 format!(
-                    "`{}` 的 refreeze 记录了 {} 条变更(其中须解冻 {} 条)",
+                    "refreeze of `{}` recorded {} changes ({} of which must unfreeze)",
                     decl.id,
                     changes.len(),
                     hard.len()
@@ -2327,7 +2327,7 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
         .target(&prov)
         .file(&decl.file)
         .span(format!("export[{idx}].freeze_state"))
-        .hint("缺口代用(R-9): 解冻窗口结论无专属信息码"),
+        .hint("gap substitute (R-9): no dedicated info code for the unfreeze-window verdict"),
     );
     Response::ok_with_files(
         d,
@@ -2348,12 +2348,12 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
     )
 }
 
-/// 供 selftest / check 复用的: 由插件与单元取出声明面。
+/// Reused by selftest / check: get the declaration surface from a plugin and unit.
 pub fn declaration_surface(tree: &TreeLoad, provider: &str, unit: &str, idx: usize) -> Surface {
     Surface::from_declaration(tree, provider, unit, idx)
 }
 
-/// 供 selftest 复用的: 插件模型(便于构造) ⇒ 声明面。
+/// Reused by selftest: plugin model (easy to construct) ⇒ declaration surface.
 pub fn surface_of_export(p: &Plugin, idx: usize) -> Surface {
     let e = &p.exports[idx];
     Surface {
@@ -2379,7 +2379,7 @@ pub fn surface_of_export(p: &Plugin, idx: usize) -> Surface {
     }
 }
 
-/// 供 selftest 复用的: 一个插件里所有单元的快照路径。
+/// Reused by selftest: snapshot paths of all units in a plugin.
 pub fn unit_ids_of(p: &Plugin) -> Vec<String> {
     p.unit_ids()
 }

@@ -1,0 +1,54 @@
+schema = 1
+
+[plugin]
+name        = "fs/devfs"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "fs"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "设备文件系统: 把 dev-core 注册表投影为 /dev/<name> 节点(实时枚举, open 经类 open_file 钩子)"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 2
+notes    = "静态部分只有根 inode + iops/fops 表; 设备节点 inode 在 lookup 时从 core 堆现造(约 48 B/次)"
+
+[[dep]]
+name  = "framework/dev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/cdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "fs/tmpfs"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name   = "framework/dev-core"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_dev_count"
+
+[[dep]]
+name   = "framework/vfs-core"
+range  = ">=0.1.0"
+kind   = "runtime"
+symbol = "br_mount_register"
+
+[build]
+
+sources  = ["src/*.c"]

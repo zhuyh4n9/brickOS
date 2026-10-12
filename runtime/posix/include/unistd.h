@@ -1,11 +1,11 @@
 /*
- * brickOS prototype v0.2.0 — 系统调用面(unistd.h; runtime/posix 插件提供)
+ * brickOS prototype v0.2.0 — syscall surface (unistd.h; provided by the runtime/posix plugin)
  *
- * 覆盖范围 = `11-02-svc-posix-subset.md` 里 **TR-A + TR-B** 的 fd/文件/目录/进程族。
- * 明确**不在**本头里的(子集诚实义务, 见该文的 TR-C/TR-D):
- *   `fork`/`exec*`/`wait*`(单地址空间, `1-01` §2.1)、信号族(无信号模型)、
- *   `gettimeofday/time`(无墙钟源, P-1)、`exit/_exit`(无进程退出语义, Q-5)、
- *   `mmap/mprotect`(vfs 恒 -ENOTSUP, P-7)、`chroot/pipe/mknod`(无对应机制)。
+ * Coverage = the **TR-A + TR-B** fd/file/directory/process families from
+ * `11-02-svc-posix-subset.md`. Explicitly **not** here (subset honesty duty, see TR-C/TR-D there):
+ *   `fork`/`exec*`/`wait*` (single address space, `1-01` §2.1), signal family (no signal model),
+ *   `gettimeofday/time` (no wall-clock source, P-1), `exit/_exit` (no process-exit semantics, Q-5),
+ *   `mmap/mprotect` (vfs is always -ENOTSUP, P-7), `chroot/pipe/mknod` (no counterpart mechanism).
  */
 #ifndef BR_POSIX_UNISTD_H
 #define BR_POSIX_UNISTD_H
@@ -13,7 +13,7 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 
-/* ---- 文件 I/O ---- */
+/* ---- file I/O ---- */
 ssize_t read (int fd, void *buf, size_t n);
 ssize_t write(int fd, const void *buf, size_t n);
 ssize_t pread (int fd, void *buf, size_t n, off_t off);
@@ -28,7 +28,7 @@ int     ftruncate(int fd, off_t len);
 int     truncate(const char *path, off_t len);
 int     isatty(int fd);
 
-/* ---- 名字空间 ---- */
+/* ---- name space ---- */
 int unlink(const char *path);
 int rmdir (const char *path);
 int link  (const char *old_path, const char *new_path);
@@ -36,13 +36,14 @@ int symlink(const char *target, const char *linkpath);
 ssize_t readlink(const char *path, char *buf, size_t cap);
 int rename(const char *old_path, const char *new_path);
 
-/* ---- 工作目录(相对路径的落点; cwd 是 POSIX 概念, 归本服务, vfs 只认绝对路径)---- */
+/* ---- working directory (target of relative paths; cwd is a POSIX concept owned by this service,
+ * vfs knows only absolute paths)---- */
 int   chdir (const char *path);
 char *getcwd(char *buf, size_t size);
 
-/* ---- 权限(本代 = 存在性检查 + 一律放行; 见 ADR-0014)---- */
-/* POSIX 必需的标准描述符编号。本仓的 fd 0/1/2 由 runtime/posix 的初始化
- * 绑定到 console(见该插件的 start 钩子)。 */
+/* ---- permissions (this generation = existence check + always allow; see ADR-0014)---- */
+/* POSIX-required standard descriptor numbers. Here fd 0/1/2 are bound to the console by
+ * runtime/posix initialization (see that plugin's start hook). */
 #define STDIN_FILENO   0
 #define STDOUT_FILENO  1
 #define STDERR_FILENO  2
@@ -53,11 +54,11 @@ char *getcwd(char *buf, size_t size);
 #define R_OK  4
 int access(const char *path, int mode);
 
-/* ---- 时间(见 time.h 关于"没有墙钟"的说明)---- */
+/* ---- time (see time.h on "no wall clock")---- */
 unsigned int sleep(unsigned int seconds);
 int          usleep(useconds_t usec);
 
-/* ---- 进程身份(单 APP: 常量)---- */
+/* ---- process identity (single APP: constants)---- */
 pid_t getpid(void);
 pid_t getppid(void);
 uid_t getuid(void);

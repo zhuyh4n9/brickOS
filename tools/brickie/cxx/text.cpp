@@ -24,7 +24,7 @@ std::string dirName(const std::string &path) {
 bool readFile(const std::string &path, std::string &out, std::string &err) {
     std::ifstream in(path, std::ios::binary);
     if (!in) {
-        err = "无法读取文件: " + path;
+        err = "cannot read file: " + path;
         return false;
     }
     std::ostringstream ss;
@@ -66,28 +66,28 @@ bool render(const std::string &tpl, const Vars &vars, const std::string &tplName
         out.append(tpl, i, open - i);
         size_t close = tpl.find("}}", open + 2);
         if (close == std::string::npos) {
-            err = tplName + ": 占位符未闭合(offset " + std::to_string(open) + ")";
+            err = tplName + ": unclosed placeholder (offset " + std::to_string(open) + ")";
             return false;
         }
         std::string key = tpl.substr(open + 2, close - open - 2);
-        // 两边空白容忍: {{ KEY }}
+        // tolerate whitespace around key: {{ KEY }}
         while (!key.empty() && (key.front() == ' ' || key.front() == '\t')) key.erase(key.begin());
         while (!key.empty() && (key.back() == ' ' || key.back() == '\t')) key.pop_back();
         if (key.empty()) {
-            err = tplName + ": 空占位符(offset " + std::to_string(open) + ")";
+            err = tplName + ": empty placeholder (offset " + std::to_string(open) + ")";
             return false;
         }
         for (char c : key) {
             bool ok = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') ||
                       (c >= '0' && c <= '9') || c == '_';
             if (!ok) {
-                err = tplName + ": 占位符键非法 `" + key + "`(只允许 [A-Za-z0-9_])";
+                err = tplName + ": invalid placeholder key `" + key + "` (only [A-Za-z0-9_])";
                 return false;
             }
         }
         auto it = vars.find(key);
         if (it == vars.end()) {
-            err = tplName + ": 模板用到未提供的占位符 `{{" + key + "}}`";
+            err = tplName + ": template uses undefined placeholder `{{" + key + "}}`";
             return false;
         }
         out += it->second;
@@ -97,7 +97,7 @@ bool render(const std::string &tpl, const Vars &vars, const std::string &tplName
 }
 
 bool parseMode(const std::string &text, std::string &canonical) {
-    // 只接受八进制文本: 3 位("755")或 4 位("0644")。空串 / 非八进制 / 过长一律拒。
+    // Accept octal text only: 3 digits ("755") or 4 digits ("0644"). Reject empty, non-octal, or too long.
     if (text.size() < 3 || text.size() > 4) return false;
     unsigned value = 0;
     for (char c : text) {
@@ -113,15 +113,15 @@ bool parseMode(const std::string &text, std::string &canonical) {
 
 bool safeRelPath(const std::string &path, std::string &err) {
     if (path.empty()) {
-        err = "路径为空";
+        err = "empty path";
         return false;
     }
     if (path[0] == '/') {
-        err = "不允许绝对路径(`" + path + "`)";
+        err = "absolute path not allowed (`" + path + "`)";
         return false;
     }
     if (path.find('\\') != std::string::npos) {
-        err = "不允许反斜杠路径分隔符(`" + path + "`)";
+        err = "backslash path separator not allowed (`" + path + "`)";
         return false;
     }
     std::size_t i = 0;
@@ -130,11 +130,11 @@ bool safeRelPath(const std::string &path, std::string &err) {
         std::string seg =
             path.substr(i, end == std::string::npos ? std::string::npos : end - i);
         if (seg.empty()) {
-            err = "不允许空路径段(`//` 或结尾 `/`): `" + path + "`";
+            err = "empty path segment not allowed (`//` or trailing `/`): `" + path + "`";
             return false;
         }
         if (seg == "." || seg == "..") {
-            err = "不允许 `.`/`..` 路径段: `" + path + "`";
+            err = "'.'/'..' path segment not allowed: `" + path + "`";
             return false;
         }
         if (end == std::string::npos) break;

@@ -1,34 +1,36 @@
 /*
- * adapter/uboot-fat — VFS 对接 + 生命周期钩子(本件新增, 无上游对应)
+ * adapter/uboot-fat — VFS integration + lifecycle hooks (new here, no upstream counterpart)
  *
- * ============================== 本文件干什么 ==============================
- * 把**上游原件的路径风格 API**(`fat_exists`/`fat_read_file`/`file_fat_write_at`/
- * `fat_unlink`/…, 定义在 `third_party/uboot-imx/fs/fat/fat_write.c` 那一个编译单元里)
- * 接到本项目的 VFS 契约
- * (framework/vfs-core/include/br/vfs/br_vfs.h)上:
+ * ============================== what this file does ==============================
+ * Connect the **upstream path-style API** (`fat_exists`/`fat_read_file`/`file_fat_write_at`/
+ * `fat_unlink`/…, defined in the single compilation unit `third_party/uboot-imx/fs/fat/fat_write.c`)
+ * to this project's VFS contract
+ * (framework/vfs-core/include/br/vfs/br_vfs.h):
  *
- *   层 1(super):     mount(读 BPB 判 12/16/32 + 校验卷几何) / sync(bdev flush) /
- *                     free_inode / unmount(BR_NULL)
- *   层 2(inode):     lookup / create / unlink / mkdir / rmdir / rename / getattr / setattr
- *   层 3(file):      文件面 read/write/lseek/close;目录面 read(一条 br_dirent_t)/close
+ *   layer 1 (super): mount (read BPB, decide 12/16/32 + check volume geometry) / sync (bdev flush) /
+ *                    free_inode / unmount (BR_NULL)
+ *   layer 2 (inode): lookup / create / unlink / mkdir / rmdir / rename / getattr / setattr
+ *   layer 3 (file):  file side read/write/lseek/close; dir side read (one br_dirent_t)/close
  *
- * ## inode = 瞬态**路径包装**(设计 SD-3, 与 fs/tmpfs 的"持久节点"正相反)
- *   每次 lookup/create 用 br_malloc 造一个 `uboot_fat_ino_t`:
- *       { 卷 id, 相对挂载点的路径(根 = ""), 类型, 大小快照 }
- *   于是"节点"不需要在介质上建索引 —— 胶水层直接把路径交给上游的路径风格 API。
- *   所有权: **谁拿到谁释放**。free_inode 必须 br_free 掉它(照 br_vfs.c 的 ino_put 契约);
- *   唯一的例外是**挂载根**: 它由 mount 分配、挂在 uboot_fat_fs_t 上长期持有, vfs 永不把
- *   它交给 free_inode —— 但它仍然要用 br_malloc(不许进 BSS, 见 glue/fat_glue.h 的说明)。
+ * ## inode = transient **path wrapper** (design SD-3, opposite of fs/tmpfs's "persistent node")
+ *   Each lookup/create br_malloc's a `uboot_fat_ino_t`:
+ *       { volume id, path relative to mount point (root = ""), type, size snapshot }
+ *   So a "node" needs no on-media index — the glue hands the path to the upstream path API.
+ *   Ownership: **whoever holds it frees it**. free_inode must br_free it (br_vfs.c ino_put contract);
+ *   the only exception is the **mount root**: mount allocates it and it lives on uboot_fat_fs_t; vfs
+ *   never passes it to free_inode — but it must still br_malloc (never BSS, see glue/fat_glue.h).
  *
- * ## 为什么目录 read 由本层合成 "." 与 ".."
- *   FAT 的**根目录**里没有 "." / ".."(非 FAT32 的根目录甚至不在簇链上), 而 VFS 的
- *   消费者(以及 TC-VFS-*)把它当 POSIX 目录看待 ⇒ 头两条由本层就地合成(与 fs/tmpfs 同款)。
+ * ## why this layer synthesizes "." and ".." for directory reads
+ *   FAT's **root directory** has no "." / ".." (non-FAT32 roots are not even on the cluster chain),
+ *   while VFS consumers (and TC-VFS-*) treat it as a POSIX directory ⇒ synthesize the first two here
+ *   (same as fs/tmpfs).
  *
- * ## 有意偏离/_欠债(见 README)
- *   · `link`/`symlink`/`readlink` 三个槽位**不填**(BR_NULL ⇒ -ENOTSUP): FAT 没有链接。
- *   · 名字上界: FAT 的长名可以到 255 字节, 而 br_dirent_t.name 只有 BR_NAME_MAX(32) ⇒
- *     长名 > 31 字节的文件在 readdir 里返回 -ENOSPC(与 fs/tmpfs 同口径, 见 uboot_fat_name_ok)。
- *   · `BR_O_APPEND` 与 `O_TRUNC` 在 fops->open 里处理; 权限执法(只读 fd 不许写)归 vfs/posix。
+ * ## intentional deviations / debt (see README)
+ *   · `link`/`symlink`/`readlink` slots are **unfilled** (BR_NULL ⇒ -ENOTSUP): FAT has no links.
+ *   · name bound: FAT long names reach 255 bytes, but br_dirent_t.name is only BR_NAME_MAX(32) ⇒
+ *     names > 31 bytes return -ENOSPC from readdir (same rule as fs/tmpfs, see uboot_fat_name_ok).
+ *   · `BR_O_APPEND` and `O_TRUNC` are handled in fops->open; permission checks (no write on a
+ *     read-only fd) belong to vfs/posix.
  * ==========================================================================
  */
 #include <br/core/br_error.h>
@@ -39,27 +41,27 @@
 
 #include "fat_glue.h"
 
-/* ==================================================================== 挂载表(本插件私有的"挂载点 → 卷"
- * ★ 为什么还要一份自己的表: vfs 的挂载表只记 {path, ops, fs_priv, root}; 而本插件的
- *   "哪个挂载点对应哪块块设备"现在是**挂载计划的事实**(ADR-0030): APP 调
- *   `mount(源设备, 目标, "fat", …)` 把 (dev, mnt) 交给本件, 由 `glue/fat_blk.c` 的
- *   `uboot_fat_vol_claim()` 认领一个卷槽。
- *   这里只缓存 id 供 mount 用, 不与 vfs 的表重复存根 inode。
+/* ==================================================================== mount table (plugin-private "mount point → volume")
+ * ★ why keep our own table: vfs's mount table only records {path, ops, fs_priv, root}; but the
+ *   mapping "which mount point maps to which block device" is now **the mount plan's fact**
+ *   (ADR-0030): the APP calls `mount(source, target, "fat", …)` handing (dev, mnt) to this file,
+ *   and `uboot_fat_vol_claim()` in `glue/fat_blk.c` claims a volume slot.
+ *   Only the id is cached here for mount; no duplicate root inode with vfs's table.
  */
 typedef struct uboot_fat_mount_slot {
-    /* ★ 挂载点是**我们自己的副本**(定长, 有界), 不是 vfs 给的指针: `cfg->path` 指向
-     *   `br_vfs_mount()` 里的**栈缓冲**(`norm`), mount 返回后即失效 —— 直接存指针会在
-     *   自检阶段读到被覆盖的栈内存(实测症状: `TC-FAT-001 vol_info_failed` /
-     *   `TC-FAT-008 fs_ops.sync_rc=-2`, 而挂载那一刻的日志完全正常)。
-     *   上界 = UB_FAT_PATH_MAX(本插件的路径口径)。 */
+    /* ★ the mount point is **our own copy** (fixed-size, bounded), not a vfs pointer: `cfg->path`
+     *   points at a **stack buffer** (`norm`) inside `br_vfs_mount()` and dies when mount returns —
+     *   storing the pointer reads overwritten stack in self-tests (observed: `TC-FAT-001
+     *   vol_info_failed` / `TC-FAT-008 fs_ops.sync_rc=-2`, while the mount-time log looked fine).
+     *   Bound = UB_FAT_PATH_MAX (this plugin's path rule). */
     char            mnt[UB_FAT_PATH_MAX];
-    uboot_fat_fs_t *fs;      /* mount 成功后才填 */
+    uboot_fat_fs_t *fs;      /* set only after a successful mount */
     br_bool         mounted;
 } uboot_fat_mount_slot_t;
 
 static uboot_fat_mount_slot_t s_slots[UB_FAT_VOL_MAX];
 
-/* ==================================================================== ops 表(先声明函数) */
+/* ==================================================================== ops tables (forward decls first) */
 
 static br_inode_t *uboot_fat_lookup (br_inode_t *dir, const char *name);
 static int  uboot_fat_create (br_inode_t *dir, const char *name, br_u32 flags, br_inode_t **out);
@@ -87,17 +89,18 @@ static void uboot_fat_free_inode(br_inode_t *ino);
 static int  uboot_fat_sync      (void *fs_priv);
 
 /*
- * 卷级落盘(**唯一实现**): 让块设备 flush。
+ * Volume-level flush (**the only implementation**): make the block device flush.
  *
- * 为什么是唯一一处: `fs_ops.sync` 与 `br_file_ops.fsync` 是同一件事的两个入口(卷级/句柄级),
- * 两处各写一份 = 第二个真值, 迟早不一致。
+ * Why only one place: `fs_ops.sync` and `br_file_ops.fsync` are two entries (volume/handle) to the
+ * same thing; two copies = a second truth that will drift.
  *
- * ★ ADR-0026 之后这里**只剩** bdev.flush —— 因为不再有"glue 持有的 FAT 缓存":
- *   上游每个写入口(`file_fat_write_at`/`fat_unlink`/`fat_mkdir`/`fat_rename`)在自己内部
- *   就把 dirty 的 FAT 窗口(`flush_dirty_fat_buffer`)与目录项(`flush_dir`)落盘了, 而它的
- *   `fsdata` 是**每次调用自带、返回前 free** 的局部量(这正是上游的模型; 上一版"fsdata 归卷"
- *   是我们的偏离, 已随 ADR-0026 撤销)。因此两次 API 调用之间不存在未落盘的插件内状态,
- *   `sync` 的语义就退化成"让设备把已写的扇区真正落介质"(设计 `7-02` §1 的 SD-8 口径)。
+ * ★ after ADR-0026 this is **only** bdev.flush — there is no "glue-held FAT cache" anymore:
+ *   each upstream write entry (`file_fat_write_at`/`fat_unlink`/`fat_mkdir`/`fat_rename`) flushes
+ *   its dirty FAT window (`flush_dirty_fat_buffer`) and directory entries (`flush_dir`) internally,
+ *   and its `fsdata` is a per-call local freed before return (the upstream model; the earlier
+ *   "fsdata owned by the volume" was our deviation, reverted with ADR-0026). So no unflushed plugin
+ *   state spans two API calls, and `sync` degrades to "make the device really commit written
+ *   sectors" (SD-8 rule of design `7-02` §1).
  */
 static int uboot_fat_flush_volume(uboot_fat_vol_t *vol)
 {
@@ -116,37 +119,38 @@ static int uboot_fat_flush_volume(uboot_fat_vol_t *vol)
     return (vol->ops->flush(vol->priv) == 0) ? 0 : BR_ERR(EIO);
 }
 
-/* 文件面: 六个槽位填满 + 三个显式 BR_NULL(契约: 不支持的槽位 = BR_NULL ⇒ -ENOTSUP) */
+/* file side: six slots filled + three explicit BR_NULL (contract: unsupported slot = BR_NULL ⇒ -ENOTSUP) */
 static const br_file_ops_t s_file_fops = {
     .open        = uboot_fat_file_open,
     .read        = uboot_fat_file_read,
     .write       = uboot_fat_file_write,
     .lseek       = uboot_fat_file_lseek,
     .ioctl       = BR_NULL,
-    .fsync       = uboot_fat_fsync,   /* 与 fs_ops.sync 同一件事: 先回写 FAT 缓存, 再让设备 flush */
-    .poll        = BR_NULL,   /* 块介质恒可读写; 等待面归 v2(SD-7) */
-    .poll_attach = BR_NULL,   /* v2 预留(wait-queue), v1 恒 NULL */
+    .fsync       = uboot_fat_fsync,   /* same as fs_ops.sync: write back FAT cache, then flush device */
+    .poll        = BR_NULL,   /* block media are always ready; the wait face is v2 (SD-7) */
+    .poll_attach = BR_NULL,   /* reserved for v2 (wait-queue); always NULL in v1 */
     .close       = uboot_fat_file_close,
 };
 
-/* 目录面(read = 一条 br_dirent_t)。写/定位对目录无语义, 槽位留空。 */
+/* dir side (read = one br_dirent_t). write/seek have no meaning for a dir; slots left empty. */
 static const br_file_ops_t s_dir_fops = {
     .open        = uboot_fat_dir_open,
     .read        = uboot_fat_dir_read,
     .write       = BR_NULL,
     .lseek       = BR_NULL,
     .ioctl       = BR_NULL,
-    .fsync       = uboot_fat_fsync,   /* 目录句柄的"落盘"= 本卷的落盘 */
+    .fsync       = uboot_fat_fsync,   /* a dir handle's "flush" = this volume's flush */
     .poll        = BR_NULL,
     .poll_attach = BR_NULL,
     .close       = uboot_fat_dir_close,
 };
 
 /*
- * 层 2: inode ops。★ 目录与文件**共用一张表**: lookup/create/… 的槽位自己判类型,
- * 而"文件节点"只需要 getattr/setattr(截断)两个槽位真的可达(vfs 只对目录派发名字空间操作)。
- * 为什么不像 tmpfs 那样也共用: 这里要让"给文件节点派发名字空间操作"得到一个明确的
- * -ENOTDIR/-EISDIR 而不是"表里恰好有实现"—— 于是本件按**类型分表**(表只有两张, 代价为零)。
+ * Layer 2: inode ops. ★ dirs and files **share one table**: lookup/create/… slots check the type
+ * themselves, and a "file node" only ever reaches getattr/setattr (truncate), since vfs dispatches
+ * namespace ops to dirs only. Why not share a single table like tmpfs: a namespace op dispatched to
+ * a file node must give a clear -ENOTDIR/-EISDIR rather than "the table happened to implement it" —
+ * so this file splits by **type** (only two tables, zero cost).
  */
 static const br_inode_ops_t s_dir_iops = {
     .lookup  = uboot_fat_lookup,
@@ -157,14 +161,14 @@ static const br_inode_ops_t s_dir_iops = {
     .rename  = uboot_fat_rename,
     .getattr = uboot_fat_getattr,
     .setattr = uboot_fat_setattr,
-    /* ADR-0013 追加(表尾): FAT 没有链接 ⇒ 三个槽位显式 BR_NULL(-ENOTSUP) */
+    /* ADR-0013 addition (table tail): FAT has no links ⇒ three slots explicitly BR_NULL (-ENOTSUP) */
     .symlink  = BR_NULL,
     .readlink = BR_NULL,
     .link     = BR_NULL,
 };
 
-/* 文件节点的 iops: 只有 getattr/setattr 有意义(vfs 不会给非目录派发名字空间操作,
- * 而 br_fstat / br_truncate 会经它)。 */
+/* file node iops: only getattr/setattr are meaningful (vfs never dispatches namespace ops to a
+ * non-dir, while br_fstat / br_truncate come through here). */
 static const br_inode_ops_t s_file_iops = {
     .lookup  = BR_NULL,
     .create  = BR_NULL,
@@ -182,16 +186,17 @@ static const br_inode_ops_t s_file_iops = {
 static const br_fs_ops_t s_fs_ops = {
     .mount      = uboot_fat_mount,
     .free_inode = uboot_fat_free_inode,
-    .unmount    = BR_NULL,   /* v1 的签名先行槽位(运行时卸载不早于 v3, O-S3) */
+    .unmount    = BR_NULL,   /* v1 signature-only slot (runtime unmount no earlier than v3, O-S3) */
     .sync       = uboot_fat_sync,
 };
 
-/* ==================================================================== 小工具 */
+/* ==================================================================== small helpers */
 
 /*
- * 有界复制(cap **含**结尾 '\0')。★ 名字刻意与 `compat/fat_env.h` 的
- * `uboot_fat_strcpy()`(2 参, 上界 256 —— 那是**给上游**用的环境实现)区分开: 这是 glue 自己的
- * 工具, 长度由调用方给(本插件的路径缓冲 `UB_FAT_PATH_MAX`)。
+ * Bounded copy (cap **includes** the trailing '\0'). ★ deliberately named apart from
+ * `uboot_fat_strcpy()` in the compat env header (2 args, bound 256 — that env implementation is
+ * **for upstream**): this is glue's own helper, with the length given by the caller (this plugin's
+ * path buffer `UB_FAT_PATH_MAX`).
  */
 static void uboot_fat_strcpy_bounded(char *dst, const char *src, br_size_t cap)
 {
@@ -211,11 +216,12 @@ static void uboot_fat_strcpy_bounded(char *dst, const char *src, br_size_t cap)
 }
 
 /*
- * 名字规则(唯一执法点; lookup/create/mkdir/rmdir/rename 都走它):
- *   非空、不含 '/'、长度 ≤ UB_FAT_NAME_MAX-1(= BR_NAME_MAX-1 = 31)。
- * 为什么是**长度上界**而不是"FAT 允许的 255": 本仓库的目录项是定长 br_dirent_t,
- * name[] 只有 32 字节 ⇒ 长名能建出来却列不出来, 那比直接拒绝更坏(与 fs/tmpfs 同口径)。
- * 逐字节扫到 NUL 或扫满 BR_NAME_MAX ⇒ 未终止的串也**只读 32 字节**。
+ * Name rule (single enforcement point; lookup/create/mkdir/rmdir/rename all go through it):
+ *   non-empty, no '/', length ≤ UB_FAT_NAME_MAX-1 (= BR_NAME_MAX-1 = 31).
+ * Why a **length bound** instead of "the 255 FAT allows": this repo's dirent is the fixed-size
+ * br_dirent_t with name[] only 32 bytes ⇒ a long name could be created but not listed, which is
+ * worse than rejecting it (same rule as fs/tmpfs). Scan byte by byte until NUL or BR_NAME_MAX ⇒ an
+ * unterminated string is **read as 32 bytes only**.
  */
 br_bool uboot_fat_name_ok(const char *name)
 {
@@ -235,10 +241,10 @@ br_bool uboot_fat_name_ok(const char *name)
             return BR_FALSE;
         }
     }
-    return BR_FALSE;                 /* 扫满窗口仍无 NUL ⇒ 超过 BR_NAME_MAX-1 */
+    return BR_FALSE;                 /* window filled without NUL ⇒ longer than BR_NAME_MAX-1 */
 }
 
-/* 名字是 "." / ".." 吗(变更操作用它显式拒绝 —— 根的自指语义见 lookup) */
+/* is the name "." / ".."? (mutating ops reject explicitly; root self-reference is in lookup) */
 static br_bool uboot_fat_name_dot(const char *name)
 {
     if (name == BR_NULL) {
@@ -254,10 +260,10 @@ static br_bool uboot_fat_name_dot(const char *name)
 }
 
 /*
- * 拼接"父目录相对路径 + 名字"→ 相对路径(本插件所有路径的唯一构造处)。
- *   dir_path == "" ⇒ 结果就是 name(挂载根下的直接子项)
+ * Join "parent-relative path + name" → relative path (the only path constructor in this plugin).
+ *   dir_path == "" ⇒ the result is just name (a direct child of the mount root)
  *   dir_path != "" ⇒ "dir_path/name"
- * 覆盖写 out(调用方给的栈缓冲, cap ≥ UB_FAT_PATH_MAX)。返回 0 / -ENOSPC。
+ * Overwrites out (caller-provided stack buffer, cap ≥ UB_FAT_PATH_MAX). Returns 0 / -ENOSPC.
  */
 int uboot_fat_join_path(const char *dir_path, const char *name,
                         char *out, br_size_t cap)
@@ -290,7 +296,7 @@ int uboot_fat_join_path(const char *dir_path, const char *name,
     return 0;
 }
 
-/* 相对路径的父目录(就地截断): "" 的父仍是 ""; "a" 的父是 ""; "a/b" 的父是 "a"。 */
+/* parent of a relative path (truncate in place): parent of "" is ""; of "a" is ""; of "a/b" is "a". */
 static void uboot_fat_parent_path(const char *path, char *out, br_size_t cap)
 {
     br_size_t n = uboot_fat_strlen(path);
@@ -299,7 +305,7 @@ static void uboot_fat_parent_path(const char *path, char *out, br_size_t cap)
         n--;
     }
     if ((n > 0u) && (path[n - 1u] == '/')) {
-        n--;                          /* 去掉分隔符本身 */
+        n--;                          /* drop the separator itself */
     }
     if (n >= cap) {
         n = (cap > 0u) ? (cap - 1u) : 0u;
@@ -308,7 +314,7 @@ static void uboot_fat_parent_path(const char *path, char *out, br_size_t cap)
     out[n] = '\0';
 }
 
-/* 相对路径的深度(分量个数; "" = 0)。用来给"环"设一个静态上界(与 vfs 的路径上界一致)。 */
+/* depth of a relative path (component count; "" = 0). Gives "loops" a static bound (matches vfs). */
 static br_u32 uboot_fat_path_depth(const char *path)
 {
     br_u32 depth = 0u;
@@ -322,24 +328,25 @@ static br_u32 uboot_fat_path_depth(const char *path)
 }
 
 /*
- * 目录句柄的**会话状态**: 上游 `fat_opendir()` 交回一个不透明的
- * `struct fs_dir_stream *`(它的具体类型 `fat_dir` 是上游那个编译单元的私事, glue 看不见),
- * 而 VFS 面的目录读还要额外合成两条 "."/".." 记录 ⇒ 游标必须由 glue 自己持有。
- * 于是每个 open 造一个包装: {上游的流, 游标}; close 时把两者都还回去。
- * 游标: 0 = ".", 1 = "..", ≥2 = 第 (cursor-2) 条真目录项。
+ * **Session state** of a dir handle: upstream `fat_opendir()` returns an opaque
+ * `struct fs_dir_stream *` (its concrete `fat_dir` type is private to that upstream compilation
+ * unit, invisible to glue), while the VFS-side dir read also synthesizes two "."/".." records ⇒ the
+ * cursor must be glue-owned. So every open makes a wrapper {upstream stream, cursor}; close returns
+ * both.
+ * Cursor: 0 = ".", 1 = "..", ≥2 = the (cursor-2)-th real directory entry.
  */
 typedef struct uboot_fat_dirstream {
-    struct fs_dir_stream *ds;      /* 上游 fat_opendir 给的流(close 时 fat_closedir 归还) */
-    br_u32                cursor;  /* vfs 面的迭代游标(见上) */
+    struct fs_dir_stream *ds;      /* stream from upstream fat_opendir (given back by fat_closedir) */
+    br_u32                cursor;  /* vfs-side iteration cursor (see above) */
 } uboot_fat_dirstream_t;
 
-/* 节点身份: head.fpriv == 节点自己(CA-2 的"首字段"布局; 与 tmpfs 同款) */
+/* node identity: head.fpriv == the node itself (CA-2 "first field" layout; same as tmpfs) */
 static uboot_fat_ino_t *uboot_fat_node(const br_inode_t *ino)
 {
     return (uboot_fat_ino_t *)ino->fpriv;
 }
 
-/* 造一个瞬态节点。 `type` = BR_INODE_DIR/BR_INODE_FILE; `size` 只对文件有意义。 */
+/* make a transient node. `type` = BR_INODE_DIR/BR_INODE_FILE; `size` matters for files only. */
 static uboot_fat_ino_t *uboot_fat_node_new(br_u32 vol, br_u32 type,
                                            const char *path, br_u32 size)
 {
@@ -355,12 +362,12 @@ static uboot_fat_ino_t *uboot_fat_node_new(br_u32 vol, br_u32 type,
     n->vol        = (br_u8)vol;
     n->type       = (br_u8)type;
     n->size       = size;
-    /* 路径在构造点就已经被 uboot_fat_join_path 限长; 这里再做一次有界复制是纯防御。 */
+    /* the path was already length-bounded by uboot_fat_join_path; this second copy is pure defense. */
     uboot_fat_strcpy_bounded(n->path, path, UB_FAT_PATH_MAX);
     return n;
 }
 
-/* 只对文件节点取"当前长度"(目录 ⇒ -EISDIR)。path 为空(= 卷根)时也是目录。 */
+/* current length for a file node only (dir ⇒ -EISDIR). Empty path (= volume root) is a dir too. */
 static int uboot_fat_size_of(const uboot_fat_ino_t *n, br_u32 *out)
 {
     loff_t sz = 0;
@@ -372,15 +379,16 @@ static int uboot_fat_size_of(const uboot_fat_ino_t *n, br_u32 *out)
         return BR_ERR(ENODEV);
     }
     if (n->path[0] == '\0') {
-        return BR_ERR(EISDIR);          /* 卷根 ⇒ 目录 */
+        return BR_ERR(EISDIR);          /* volume root ⇒ directory */
     }
     rc = uboot_fat_vol_bind(vol);
     if (rc != 0) {
         return rc;
     }
     if (fat_exists(n->path) == 0) {
-        /* ★ 关键: 先判存在。u-boot 的 fs_size() 对"是目录"的路径**故意返回成功 + size 0**
-         * (它的注释写着 fs_size 不该对目录失败)—— 直接用它会把目录当成 0 字节文件。 */
+        /* ★ key: check existence first. u-boot's fs_size() **deliberately returns success + size 0**
+         * for "this is a directory" (its comment says fs_size must not fail on dirs) — using it
+         * directly would treat a directory as a 0-byte file. */
         return BR_ERR(ENOENT);
     }
     rc = fat_size(n->path, &sz);
@@ -394,7 +402,7 @@ static int uboot_fat_size_of(const uboot_fat_ino_t *n, br_u32 *out)
     return 0;
 }
 
-/* 目录项的路径 → 类型(存在性判定 + 类型判定一次做完)。未命中 ⇒ -ENOENT。 */
+/* path of a dirent → type (existence + type decided in one pass). Miss ⇒ -ENOENT. */
 static int uboot_fat_kind_of(const uboot_fat_ino_t *n, br_bool *is_dir)
 {
     uboot_fat_vol_t *vol = uboot_fat_vol_get(n->vol);
@@ -408,10 +416,10 @@ static int uboot_fat_kind_of(const uboot_fat_ino_t *n, br_bool *is_dir)
         return rc;
     }
     if (n->path[0] == '\0') {
-        *is_dir = BR_TRUE;               /* 卷根 */
+        *is_dir = BR_TRUE;               /* volume root */
         return 0;
     }
-    /* 目录: 只有目录能被 fat_opendir 打开(文件 ⇒ -ENOTDIR) */
+    /* dirs: only a directory can be opened by fat_opendir (a file ⇒ -ENOTDIR) */
     {
         struct fs_dir_stream *ds = BR_NULL;
         int rc2 = fat_opendir(n->path, &ds);
@@ -429,7 +437,7 @@ static int uboot_fat_kind_of(const uboot_fat_ino_t *n, br_bool *is_dir)
     return BR_ERR(ENOENT);
 }
 
-/* 卷内绝对路径(上游风格): "/hello.txt" / "/dir" / "/"。返回 0 或负 errno。 */
+/* volume-absolute path (upstream style): "/hello.txt" / "/dir" / "/". Returns 0 or negative errno. */
 static int uboot_fat_raw_path(const uboot_fat_ino_t *n, char *out, br_size_t cap)
 {
     const br_size_t need = uboot_fat_strlen(n->path) + 2u;
@@ -442,7 +450,7 @@ static int uboot_fat_raw_path(const uboot_fat_ino_t *n, char *out, br_size_t cap
     return 0;
 }
 
-/* 目录项名 → br_dirent_t(VFS 的定长记录)。名字超上界 ⇒ -ENOSPC(见文件头)。 */
+/* dirent name → br_dirent_t (VFS's fixed-size record). Name over the bound ⇒ -ENOSPC (see header). */
 static int uboot_fat_fill_dirent(br_dirent_t *de, br_u32 type, const char *name)
 {
     const br_size_t len = uboot_fat_strlen(name);
@@ -457,7 +465,7 @@ static int uboot_fat_fill_dirent(br_dirent_t *de, br_u32 type, const char *name)
     return 0;
 }
 
-/* ==================================================================== 层 3: 文件面 */
+/* ==================================================================== layer 3: file side */
 
 static int uboot_fat_file_open(br_file_t *f, br_u32 flags)
 {
@@ -467,7 +475,7 @@ static int uboot_fat_file_open(br_file_t *f, br_u32 flags)
     if ((n == BR_NULL) || (n->type != BR_INODE_FILE)) {
         return BR_ERR(EISDIR);
     }
-    /* O_TRUNC: 打开即截断到 0(走同一个截断原语, 没有第二条"清空"路径) */
+    /* O_TRUNC: truncate to 0 on open (same truncate primitive, no second "empty it" path) */
     if ((flags & BR_O_TRUNC) != 0u) {
         char raw[UB_FAT_PATH_MAX];
 
@@ -484,7 +492,7 @@ static int uboot_fat_file_open(br_file_t *f, br_u32 flags)
     if ((flags & BR_O_APPEND) != 0u) {
         br_u32 sz = 0u;
 
-        rc = uboot_fat_size_of(n, &sz);      /* 每次打开都从介质取真值, 不信缓存的 size */
+        rc = uboot_fat_size_of(n, &sz);      /* read the truth from media on every open; no cache */
         if (rc != 0) {
             return rc;
         }
@@ -509,7 +517,7 @@ static br_s64 uboot_fat_file_read(br_file_t *f, void *buf, br_size_t n)
         return BR_ERR(EISDIR);
     }
     if (n == 0u) {
-        return 0;                            /* 空读是空操作 */
+        return 0;                            /* an empty read is a no-op */
     }
     rc = uboot_fat_size_of(node, &size);
     if (rc != 0) {
@@ -520,7 +528,7 @@ static br_s64 uboot_fat_file_read(br_file_t *f, void *buf, br_size_t n)
         return BR_ERR(EINVAL);
     }
     if ((br_u64)off >= (br_u64)size) {
-        return 0;                            /* 读到/越过 EOF: 0 字节是**成功** */
+        return 0;                            /* at/over EOF: 0 bytes is **success** */
     }
 
     vol = uboot_fat_vol_get(node->vol);
@@ -540,7 +548,7 @@ static br_s64 uboot_fat_file_read(br_file_t *f, void *buf, br_size_t n)
     if (want > (br_size_t)((br_u64)size - (br_u64)off)) {
         want = (br_size_t)((br_u64)size - (br_u64)off);
     }
-    /* ★ len 必须显式给 want: 上游 `len == 0` 的语义是"读到文件末尾", 与 POSIX read 不同。 */
+    /* ★ len must be given explicitly as want: upstream `len == 0` means "read to EOF", unlike POSIX. */
     rc = fat_read_file(raw, buf, (loff_t)off, (loff_t)want, &act);
     if (rc < 0) {
         return rc;
@@ -561,7 +569,7 @@ static br_s64 uboot_fat_file_write(br_file_t *f, const void *buf, br_size_t n)
     if ((node == BR_NULL) || (node->type != BR_INODE_FILE)) {
         return BR_ERR(EISDIR);
     }
-    /* BR_O_APPEND 的契约是"**每次写前**定位到末尾", 所以零长度写也要先定位 */
+    /* BR_O_APPEND means "seek to the end **before every write**", so even a zero-length write seeks */
     if ((br_file_flags(f) & BR_O_APPEND) != 0u) {
         br_u32 sz = 0u;
 
@@ -593,14 +601,14 @@ static br_s64 uboot_fat_file_write(br_file_t *f, const void *buf, br_size_t n)
         return rc;
     }
 
-    /* 上游的语义: 从 pos 写 size 字节; **不允许空洞**(pos > 现长 ⇒ -EINVAL) */
+    /* upstream semantics: write size bytes at pos; **no holes allowed** (pos > current len ⇒ -EINVAL) */
     rc = file_fat_write_at(raw, off, (void *)(br_uintptr_t)buf, (loff_t)n, &act);
     if (rc < 0) {
         return rc;
     }
     br_file_set_offset(f, off + (br_s64)act);
     if ((br_u64)(off + (br_s64)act) > (br_u64)node->size) {
-        node->size = (br_u32)(off + (br_s64)act);   /* 快照跟上(目录项的真值在介质上) */
+        node->size = (br_u32)(off + (br_s64)act);   /* keep the snapshot in step (truth is on media) */
     }
     return (br_s64)act;
 }
@@ -625,7 +633,7 @@ static br_s64 uboot_fat_file_lseek(br_file_t *f, br_s64 off, int whence)
     case BR_SEEK_END: {
         br_u32 sz = 0u;
 
-        rc = uboot_fat_size_of(node, &sz);   /* 从介质取, 不用可能过期的快照 */
+        rc = uboot_fat_size_of(node, &sz);   /* read from media, not a possibly stale snapshot */
         if (rc != 0) {
             return rc;
         }
@@ -647,16 +655,18 @@ static br_s64 uboot_fat_file_lseek(br_file_t *f, br_s64 off, int whence)
 }
 
 /*
- * `fops->fsync`(= runtime/posix 的 `fsync(fd)`)。
+ * `fops->fsync` (= `fsync(fd)` in runtime/posix).
  *
- * ★ 为什么它必须有(而不是像 v1 早期那样留 BR_NULL):
- *   `fsync` 的语义是"把我写下去的字节弄到介质上", 而本插件的写路径已经**逐次**把数据与
- *   目录项落盘, 唯一可能还留在内存里的是 **FAT 缓存**(`fsdata.fatbuf`, 6 扇区窗口,
- *   由 set_fatent_value 标记 dirty)。所以 fsync = ①回写 dirty 的 FAT 窗口 ②让 bdev flush。
- *   留 BR_NULL 会让消费者拿到 -ENOTSUP, 而它在语义上并不是"不支持"。
+ * ★ why it must exist (instead of BR_NULL as in early v1):
+ *   `fsync` means "get the bytes I wrote onto the media", and this plugin's write path already
+ *   commits data and dirents **call by call**; the only thing possibly left in memory is the **FAT
+ *   cache** (`fsdata.fatbuf`, a 6-sector window, marked dirty by set_fatent_value). So fsync =
+ *   ① write back the dirty FAT window ② let bdev flush. Leaving BR_NULL would hand consumers
+ *   -ENOTSUP, which is not semantically "unsupported".
  *
- * 用 `br_file_inode()` 取节点而不是 `br_file_fpriv()`: **目录句柄**的 fpriv 已经被
- * 目录迭代器占用了(fat_dir*), 而 inode 的 fpriv 恒等于节点本身(CA-2 首字段布局)。
+ * Use `br_file_inode()` rather than `br_file_fpriv()` to get the node: a **dir handle**'s fpriv is
+ * already taken by the dir iterator (fat_dir*), while an inode's fpriv always equals the node
+ * itself (CA-2 first-field layout).
  */
 static int uboot_fat_fsync(br_file_t *f)
 {
@@ -668,18 +678,18 @@ static int uboot_fat_fsync(br_file_t *f)
         return BR_ERR(EINVAL);
     }
     vol = uboot_fat_vol_get(node->vol);
-    return uboot_fat_flush_volume(vol);   /* 与 fs_ops.sync **同一段代码** */
+    return uboot_fat_flush_volume(vol);   /* **the same code** as fs_ops.sync */
 }
 
 static int uboot_fat_file_close(br_file_t *f)
 {
-    /* 会话状态 = inode 里的路径(不在 fpriv 里另开一份) ⇒ 没有要归还的东西。
-     * vfs 随后会经 free_inode 释放**瞬态 inode** 本身。 */
+    /* session state = the path in the inode (no second copy in fpriv) ⇒ nothing to give back.
+     * vfs then frees the **transient inode** itself via free_inode. */
     (void)f;
     return 0;
 }
 
-/* ==================================================================== 层 3: 目录面 */
+/* ==================================================================== layer 3: dir side */
 
 static int uboot_fat_dir_open(br_file_t *f, br_u32 flags)
 {
@@ -693,7 +703,7 @@ static int uboot_fat_dir_open(br_file_t *f, br_u32 flags)
     if ((node == BR_NULL) || (node->type != BR_INODE_DIR)) {
         return BR_ERR(ENOTDIR);
     }
-    (void)flags;                     /* vfs 已挡下"目录写打开 ⇒ -EISDIR" */
+    (void)flags;                     /* vfs already blocks "write-open a dir ⇒ -EISDIR" */
     vol = uboot_fat_vol_get(node->vol);
     if (vol == BR_NULL) {
         return BR_ERR(ENODEV);
@@ -710,7 +720,7 @@ static int uboot_fat_dir_open(br_file_t *f, br_u32 flags)
     if (rc < 0) {
         return rc;
     }
-    /* 会话状态(迭代游标)放在**文件句柄**的 fpriv 上, 不动节点身份 */
+    /* session state (iteration cursor) goes on the **file handle**'s fpriv, not on node identity */
     st = (uboot_fat_dirstream_t *)br_malloc(sizeof(*st));
     if (st == BR_NULL) {
         fat_closedir(ds);
@@ -732,13 +742,13 @@ static br_s64 uboot_fat_dir_read(br_file_t *f, void *buf, br_size_t n)
     if ((st == BR_NULL) || (st->ds == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
-    /* 定长记录不可截断(与 fs/tmpfs 同口径): 装不下一条就 -EINVAL ——
-     * 返回 0 会被 br_readdir 读成"目录已穷尽", 那是撒谎。 */
+    /* a fixed-size record cannot be truncated (same rule as fs/tmpfs): too small ⇒ -EINVAL —
+     * returning 0 would be read by br_readdir as "directory exhausted", which is a lie. */
     if ((buf == BR_NULL) || (n < (br_size_t)sizeof(br_dirent_t))) {
         return BR_ERR(EINVAL);
     }
 
-    /* 头两条就地合成(见文件头): FAT 的根目录里没有 "."/".."。 */
+    /* first two synthesized in place (see file header): FAT's root dir has no "."/".." */
     if (st->cursor == 0u) {
         st->cursor = 1u;
         rc = uboot_fat_fill_dirent(de, BR_INODE_DIR, ".");
@@ -753,7 +763,7 @@ static br_s64 uboot_fat_dir_read(br_file_t *f, void *buf, br_size_t n)
 
     rc = fat_readdir(st->ds, &dent);
     if (rc < 0) {
-        return 0;                    /* 上游用 -ENOENT 表示"目录穷尽" ⇒ 收敛成 0 */
+        return 0;                    /* upstream uses -ENOENT for "exhausted" ⇒ collapse to 0 */
     }
     if (dent == BR_NULL) {
         return 0;
@@ -776,12 +786,12 @@ static int uboot_fat_dir_close(br_file_t *f)
             fat_closedir(st->ds);
         }
         br_free(st);
-        br_file_set_fpriv(f, BR_NULL);   /* 让二次 close 成为空操作 */
+        br_file_set_fpriv(f, BR_NULL);   /* makes a second close a no-op */
     }
     return 0;
 }
 
-/* ==================================================================== 层 2: inode ops */
+/* ==================================================================== layer 2: inode ops */
 
 static br_inode_t *uboot_fat_lookup(br_inode_t *dir, const char *name)
 {
@@ -801,7 +811,7 @@ static br_inode_t *uboot_fat_lookup(br_inode_t *dir, const char *name)
         return BR_NULL;
     }
 
-    /* "." / "..": 就地解析(根的父亲 = 根, 于是 "/.." == "/" 这条 POSIX 性质成立) */
+    /* "." / "..": resolved in place (the root's parent = the root, so POSIX "/.." == "/" holds) */
     if (uboot_fat_name_dot(name) == BR_TRUE) {
         const char *parent_path;
 
@@ -814,12 +824,13 @@ static br_inode_t *uboot_fat_lookup(br_inode_t *dir, const char *name)
         return (out != BR_NULL) ? &out->head : BR_NULL;
     }
 
-    /* 非法名字(空/含 '/')在走查里就是"不存在"; 超长 ⇒ 本层没有错误码通道(返回 BR_NULL,
-     * vfs 会给 -ENOENT)。名字超上界这条**判据**在 create/mkdir/readdir 上有显式 errno。 */
+    /* an invalid name (empty / contains '/') is just "not found" during lookup; too long ⇒ this layer
+     * has no error-code channel (returns BR_NULL, vfs yields -ENOENT). create/mkdir/readdir carry an
+     * explicit errno for the over-bound **criterion**. */
     if (uboot_fat_name_ok(name) == BR_FALSE) {
         return BR_NULL;
     }
-    /* 深度上界: 相对路径 ≤ BR_NAME_MAX-1 的分量数(纯防御; 真值由 vfs 的路径缓冲管) */
+    /* depth bound: ≤ BR_NAME_MAX-1 components (pure defense; vfs's path buffer holds the truth) */
     if (uboot_fat_path_depth(d->path) >= (UB_FAT_NAME_MAX - 1u)) {
         return BR_NULL;
     }
@@ -841,7 +852,7 @@ static br_inode_t *uboot_fat_lookup(br_inode_t *dir, const char *name)
         uboot_fat_strcpy_bounded(probe.path, child, UB_FAT_PATH_MAX);
         rc = uboot_fat_kind_of(&probe, &is_dir);
         if (rc == BR_ERR(ENOENT)) {
-            return BR_NULL;                 /* 未命中: BR_NULL(不是错误码) */
+            return BR_NULL;                 /* miss: BR_NULL (not an error code) */
         }
         if (rc != 0) {
             return BR_NULL;
@@ -849,7 +860,7 @@ static br_inode_t *uboot_fat_lookup(br_inode_t *dir, const char *name)
         if (is_dir == BR_FALSE) {
             rc = uboot_fat_size_of(&probe, &size);
             if (rc != 0) {
-                size = 0u;                  /* 取不到长度就报 0; getattr 会重新问介质 */
+                size = 0u;                  /* report 0 if unavailable; getattr re-asks the media */
             }
         }
     }
@@ -875,7 +886,7 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
         return BR_ERR(ENOTDIR);
     }
-    /* 名字规则里"超长"这一支给 -ENOSPC(与 fs/tmpfs 同口径: 本仓库用定长目录项) */
+    /* the "too long" branch of the name rule gives -ENOSPC (same rule as fs/tmpfs: fixed dirents) */
     if (uboot_fat_name_dot(name) == BR_TRUE) {
         return BR_ERR(EINVAL);
     }
@@ -900,7 +911,7 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
         uboot_fat_strcpy_bounded(probe.path, child, UB_FAT_PATH_MAX);
         rc = uboot_fat_kind_of(&probe, &is_dir);
         if (rc == 0) {
-            /* 已存在: O_EXCL ⇒ -EEXIST; 否则复用(Linux 口径; vfs 的走查已经先 lookup 过一次) */
+            /* already exists: O_EXCL ⇒ -EEXIST; else reuse (Linux rule; vfs already looked it up) */
             if ((flags & BR_O_EXCL) != 0u) {
                 return BR_ERR(EEXIST);
             }
@@ -924,9 +935,9 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
         }
     }
 
-    /* 真正建文件。步骤与 fs/tmpfs 的 create 同型: 先"准入判据"(能不能写), 再落介质。
-     * 先写 0 字节(上游 file_fat_write_at 的 create_link 路径)把目录项建出来,
-     * 之后每次 write 才能走到"文件已存在"的分支。 */
+    /* actually create the file. Same shape as fs/tmpfs create: first the "admission" checks (can we
+     * write), then the media. Write 0 bytes first (upstream file_fat_write_at's create_link path) to
+     * create the dirent, so later writes take the "file exists" branch. */
     {
         uboot_fat_vol_t *vol = uboot_fat_vol_get(d->vol);
         char raw[UB_FAT_PATH_MAX];
@@ -943,7 +954,7 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
         memcpy(raw + 1, child, uboot_fat_strlen(child) + 1u);
         rc = file_fat_write_at(raw, 0, (void *)(br_uintptr_t)"", 0, &act);
         if (rc < 0) {
-            return rc;                          /* 介质写不下/名字非法 ⇒ 原样上传 */
+            return rc;                          /* media full / bad name ⇒ pass through as-is */
         }
     }
 
@@ -987,10 +998,10 @@ static int uboot_fat_unlink(br_inode_t *dir, const char *name)
         uboot_fat_strcpy_bounded(probe.path, child, UB_FAT_PATH_MAX);
         rc = uboot_fat_kind_of(&probe, &is_dir);
         if (rc != 0) {
-            return rc;                       /* -ENOENT 原样上传 */
+            return rc;                       /* -ENOENT passed through as-is */
         }
         if (is_dir == BR_TRUE) {
-            return BR_ERR(EISDIR);        /* 目录要 rmdir */
+            return BR_ERR(EISDIR);        /* a directory needs rmdir */
         }
     }
     vol = uboot_fat_vol_get(d->vol);
@@ -1037,10 +1048,10 @@ static int uboot_fat_mkdir(br_inode_t *dir, const char *name)
     if (rc != 0) {
         return rc;
     }
-    /* 上游的 raw 路径是 "/a/b"; 挂载根 ⇒ "/" */
+    /* upstream raw paths are "/a/b"; the mount root ⇒ "/" */
     raw[0] = '/';
     memcpy(raw + 1, child, uboot_fat_strlen(child) + 1u);
-    /* 上游对"已存在"返回 -EEXIST(见 fat_mkdir), 与 vfs 的期望一致 */
+    /* upstream returns -EEXIST for "already exists" (see fat_mkdir), matching what vfs expects */
     return fat_mkdir(raw);
 }
 
@@ -1113,7 +1124,7 @@ static int uboot_fat_rename(br_inode_t *dir, const char *name,
     if ((dir->type != BR_INODE_DIR) || (ndir->type != BR_INODE_DIR)) {
         return BR_ERR(ENOTDIR);
     }
-    /* 源与目标是同一卷(跨挂载由 vfs 在更前面挡下) */
+    /* source and target are on the same volume (cross-mount is stopped earlier by vfs) */
     if (dir->iops != &s_dir_iops) {
         return BR_ERR(EXDEV);
     }
@@ -1151,8 +1162,8 @@ static int uboot_fat_rename(br_inode_t *dir, const char *name,
     memcpy(old_raw + 1, child, uboot_fat_strlen(child) + 1u);
     new_raw[0] = '/';
     memcpy(new_raw + 1, nchild, uboot_fat_strlen(nchild) + 1u);
-    /* 上游的 fat_rename 已经做了"不许把目录搬进自己的子树"(check_path_prefix),
-     * 本层不重复实现(第二份实现 = 第二个真值)。 */
+    /* upstream fat_rename already rejects "move a directory into its own subtree"
+     * (check_path_prefix); this layer does not re-implement it (second implementation = second truth). */
     return fat_rename(old_raw, new_raw);
 }
 
@@ -1170,13 +1181,13 @@ static int uboot_fat_getattr(br_inode_t *ino, br_stat_t *st)
     if (n == BR_NULL) {
         return BR_ERR(EINVAL);
     }
-    st->valid = BR_STAT_SIZE;      /* nlink 不置位: FAT 没有硬链接(契约允许不填) */
+    st->valid = BR_STAT_SIZE;      /* nlink not set: FAT has no hard links (contract allows omitting) */
     st->type  = ino->type;
     if (ino->type == BR_INODE_DIR) {
-        st->size = 0u;             /* 目录的 size 在本仓库无契约, 取 0(与 tmpfs 同) */
+        st->size = 0u;             /* a dir's size has no contract here, use 0 (same as tmpfs) */
     } else {
         br_u32 sz = 0u;
-        const int rc = uboot_fat_size_of(n, &sz);   /* 每次问介质(目录项的 size 是唯一真值) */
+        const int rc = uboot_fat_size_of(n, &sz);   /* ask the media each time (dirent size is truth) */
 
         if (rc != 0) {
             return rc;
@@ -1198,12 +1209,13 @@ static int uboot_fat_setattr(br_inode_t *ino, const br_stat_t *st)
     if ((ino == BR_NULL) || (st == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
-    /* v1 只认 size(截断)。不认的位**必须**报 -ENOTSUP —— 假装成功比拒绝危险。 */
+    /* v1 honors only size (truncate). Unrecognized bits **must** give -ENOTSUP: faking success is
+     * more dangerous than refusing. */
     if ((st->valid & ~(br_u32)BR_STAT_SIZE) != 0u) {
         return BR_ERR(ENOTSUP);
     }
     if ((st->valid & BR_STAT_SIZE) == 0u) {
-        return 0;                  /* 没要求改任何东西 */
+        return 0;                  /* nothing was asked to change */
     }
     if (ino->type != BR_INODE_FILE) {
         return BR_ERR(EISDIR);
@@ -1231,22 +1243,25 @@ static int uboot_fat_setattr(br_inode_t *ino, const br_stat_t *st)
     return rc;
 }
 
-/* ==================================================================== 层 1: super */
+/* ==================================================================== layer 1: super */
 
 /*
- * BPB 判定 + **卷几何校验**。上游的 get_fs_info 只做"参数是否自洽"; 本件的 mount 还得回答
- * "这个 BPB 与背后那块设备的几何对得上吗"—— 对不上就拒挂(首败即停机是刻意的)。
- * 校验三件事(全部由 BPB 与 geometry 机械可判):
- *   ① 卷内扇区总数 ≤ 设备扇区数(否则读会越出设备);
- *   ② 数据区起点(可负, FAT12/16 的"负簇"约定)+ 簇数 ≥ 0 且在卷内;
- *   ③ 簇数落在该 FAT 类型的**定义区间**(12: < 4085; 16: 4085..65524; 32: ≥ 65525)——
- *      这条同时验证了 determine_legacy_fat_bits 的判定与 BPB 自洽。
+ * BPB check + **volume geometry validation**. Upstream get_fs_info only checks whether the
+ * parameters are self-consistent; this file's mount must also answer "does this BPB match the
+ * geometry of the device behind it" — if not, refuse to mount (fail-fast is intentional).
+ * Check three things (all mechanically decidable from BPB and geometry):
+ *   ① total sectors in the volume ≤ device sectors (else reads run past the device);
+ *   ② data area start (can be negative under FAT12/16's "negative cluster" rule) + cluster count ≥ 0
+ *      and inside the volume;
+ *   ③ the cluster count falls in the **defining range** of the FAT type (12: < 4085; 16: 4085..65524;
+ *      32: ≥ 65525) — this also validates determine_legacy_fat_bits' decision against the BPB.
  */
 static int uboot_fat_mount_check(const uboot_fat_vol_t *vol, char *why, br_size_t cap)
 {
-    /* ★ 这里的 `vol->*` 是**挂载期从 BPB 解析出来的观测值**(fat_blk.c 的
-     * uboot_fat_vol_probe), 不是第二份 fsdata: 上游每个 API 自带 fsdata, glue 拿不到它, 也
-     * 不需要它 —— 判据只需要"类型/簇数/数据区在卷内"这三个事实。 */
+    /* ★ the `vol->*` fields here are **observations parsed from the BPB at mount time**
+     * (uboot_fat_vol_probe in fat_blk.c), not a second fsdata: every upstream API carries its own
+     * fsdata, glue cannot see it and does not need it — the checks only need "type / cluster count /
+     * data area inside the volume". */
     const uboot_fat_vol_t *fs = vol;
     const br_u64 n_sectors = vol->geom.n_sectors;
     br_u32 data_start;
@@ -1263,7 +1278,7 @@ static int uboot_fat_mount_check(const uboot_fat_vol_t *vol, char *why, br_size_
     }
 
     if (fs->fatsize == 32) {
-        /* FAT32: data_begin 已经"等于"首簇(簇 2)的扇区号 */
+        /* FAT32: data_begin already "equals" the sector of the first cluster (cluster 2) */
         data_start = fs->data_begin + (fs->clust_size * 2u);
     } else {
         data_start = fs->rootdir_sect + fs->rootdir_size;
@@ -1277,7 +1292,7 @@ static int uboot_fat_mount_check(const uboot_fat_vol_t *vol, char *why, br_size_
     switch (fs->fatsize) {
     case 12:
         lo = 1u;
-        hi = UB_FAT_MAX_FAT12;                  /* ≤ 0xFF4(见 glue/fat_glue.h 的出处) */
+        hi = UB_FAT_MAX_FAT12;                  /* ≤ 0xFF4 (source in glue/fat_glue.h) */
         break;
     case 16:
         lo = UB_FAT_MAX_FAT12 + 1u;             /* 4085 */
@@ -1285,7 +1300,7 @@ static int uboot_fat_mount_check(const uboot_fat_vol_t *vol, char *why, br_size_
         break;
     case 32:
         lo = 65525u;
-        hi = 0x0ffffff0u;                       /* FAT32 的簇号空间 */
+        hi = 0x0ffffff0u;                       /* FAT32 cluster-number space */
         break;
     default:
         uboot_fat_strcpy_bounded(why, "unknown FAT type", cap);
@@ -1307,22 +1322,22 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
     br_u32 id = 0u;
     int rc;
 
-    (void)fs_priv;      /* ★ ADR-0030: 驱动注册时不带挂载体 —— 每次 mount 各造一份 */
+    (void)fs_priv;      /* ★ ADR-0030: registration carries no mount body — each mount makes one */
 
     if ((cfg == BR_NULL) || (cfg->path == BR_NULL) || (cfg->dev == BR_NULL) ||
         (root == BR_NULL)) {
-        br_log_error("uboot-fat: mount 参数不全(path=%s dev=%s) —— "
-                     "介质类 FS 必须由 APP 给出源设备(mount(source, target, \"fat\", …))",
+        br_log_error("uboot-fat: incomplete mount args (path=%s dev=%s) — "
+                     "a media FS needs the APP to supply the source device (mount(source, target, \"fat\", …))",
                      (cfg != BR_NULL && cfg->path != BR_NULL) ? cfg->path : "(null)",
                      (cfg != BR_NULL && cfg->dev != BR_NULL) ? cfg->dev : "(null)");
         return BR_ERR(EINVAL);
     }
     *root = BR_NULL;
 
-    /* 卷 = (源设备, 挂载点) 这一对, 由 APP 的挂载计划给出; 认领一个槽。 */
+    /* a volume = the (source device, mount point) pair given by the APP's mount plan; claim a slot. */
     rc = uboot_fat_vol_claim(cfg->dev, cfg->path, &id);
     if (rc != 0) {
-        br_log_error("uboot-fat: 认领卷失败 (dev=%s mnt=%s) rc=%d", cfg->dev, cfg->path, rc);
+        br_log_error("uboot-fat: volume claim failed (dev=%s mnt=%s) rc=%d", cfg->dev, cfg->path, rc);
         return rc;
     }
     vol = uboot_fat_vol_get(id);
@@ -1330,7 +1345,7 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
         return BR_ERR(EINVAL);
     }
 
-    /* 每次 mount 各有一份挂载体(它持有根 inode; vfs 的挂载表持它到关机) */
+    /* each mount gets its own mount body (it holds the root inode; vfs's mount table keeps it) */
     fs = (uboot_fat_fs_t *)br_malloc(sizeof(*fs));
     if (fs == BR_NULL) {
         return BR_ERR(ENOMEM);
@@ -1352,7 +1367,7 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
         return rc;
     }
 
-    /* 根 inode: br_malloc, 由本插件长期持有(vfs 永不 free_inode 它) */
+    /* root inode: br_malloc'd, held long-term by this plugin (vfs never calls free_inode on it) */
     r = uboot_fat_node_new(id, BR_INODE_DIR, "", 0u);
     if (r == BR_NULL) {
         uboot_fat_vol_unbind();
@@ -1361,18 +1376,19 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
     }
     fs->root = &r->head;
 
-    /* ★ ADR-0030: 挂载体是**每次 mount 各造一份**, 所以在**这里**登记内部视图
-     *   (sync / vol_info 的查询面)。从前这张表在 init 相预置, 现在由挂载事实填充。
-     *   `cfg->path` 由 vfs 的挂载表持有(到关机), 生命周期够长。 */
+    /* ★ ADR-0030: the mount body is **made per mount**, so register the internal view **here**
+     *   (the query face for sync / vol_info). This table used to be preset in the init phase; now it
+     *   is filled by mount facts. `cfg->path` is held by vfs's mount table (until shutdown), long
+     *   enough. */
     uboot_fat_strcpy_bounded(s_slots[id].mnt, cfg->path, (br_size_t)sizeof(s_slots[id].mnt));
     s_slots[id].fs      = fs;
     s_slots[id].mounted = BR_TRUE;
 
-    /* ★ 就绪行的**形状是集成契约**: `tests/gates.toml` 的 `fat-test` 关要求逐卷点名
-     *   `uboot-fat: <挂载点> 就绪`(与 `adapter/uboot-erofs` 的
-     *   `uboot-erofs: /assets 就绪`、`adapter/uboot-mmc` 的
-     *   `uboot-mmc: eMMC ready` 同款)。后面的括号是给人看的诊断, 不是判据。 */
-    br_log_info("uboot-fat: %s 就绪 (dev=%s, FAT%d, %u sectors x %u B, cluster %u sectors, %u clusters)",
+    /* ★ the **shape of the ready line is an integration contract**: the `fat-test` gate in
+     *   `tests/gates.toml` requires each volume to be named as `uboot-fat: <mount point> ready`
+     *   (same as `uboot-erofs: /assets ready` in `adapter/uboot-erofs` and `uboot-mmc: eMMC ready`
+     *   in `adapter/uboot-mmc`). The trailing parenthesis is a human diagnostic, not a criterion. */
+    br_log_info("uboot-fat: %s ready (dev=%s, FAT%d, %u sectors x %u B, cluster %u sectors, %u clusters)",
                 cfg->path, vol->dev, vol->fatsize, vol->total_sect,
                 (unsigned)vol->sect_size, vol->clust_size,
                 (vol->clust_size != 0u) ? (vol->total_sect / vol->clust_size) : 0u);
@@ -1383,11 +1399,11 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
 static void uboot_fat_free_inode(br_inode_t *ino)
 {
     if (ino != BR_NULL) {
-        br_free(ino);                        /* 瞬态路径包装: 谁造谁释放 */
+        br_free(ino);                        /* transient path wrapper: the maker frees it */
     }
 }
 
-/* 卷级 sync(= `br_file_ops.fsync` 的另一入口, 共用 uboot_fat_flush_volume)。 */
+/* volume-level sync (= the other entry of `br_file_ops.fsync`, sharing uboot_fat_flush_volume). */
 static int uboot_fat_sync(void *fs_priv)
 {
     uboot_fat_fs_t *fs = (uboot_fat_fs_t *)fs_priv;
@@ -1398,9 +1414,9 @@ static int uboot_fat_sync(void *fs_priv)
     return uboot_fat_flush_volume(fs->vol);
 }
 
-/* ==================================================================== 自检需要的内部视图 */
+/* ==================================================================== internal views for self-tests */
 
-/* 卷级 sync 的内部视图(自检 TC-FAT-008 的判据; fs_ops.sync 就是它) */
+/* internal view of volume-level sync (the TC-FAT-008 criterion; fs_ops.sync is exactly it) */
 int uboot_fat_test_sync(const char *mnt)
 {
     for (br_u32 i = 0u; i < (br_u32)UB_FAT_VOL_MAX; i++) {
@@ -1428,14 +1444,15 @@ int uboot_fat_mount_vol_info(const char *mnt, uboot_fat_vol_info_t *out)
     return BR_ERR(ENOENT);
 }
 
-/* ==================================================================== 生命周期
+/* ==================================================================== lifecycle
  *
- * ADR-0030 之后只剩一件事: **start 相登记驱动**(`"fat"`)。挂载由 **APP** 发起 ——
- * 它按自己的 `[[mount]]` 计划调 POSIX `mount("emmcN", "/fatNN", "fat", …)`, 于是
- * `uboot_fat_mount()` 每次认领一个卷、造一份挂载体。
- * 顺序前提: 块设备由 `adapter/uboot-mmc` 在**它的** start 相注册, 而 APP 的 start 在
- * 全部非 APP start 之后(插件管理器的相位规则)⇒ 到这里设备一定已就绪。
- * EARLY/CORE 空手返回: early 相堆还没建池(br_mem_init 在 core.init), 而挂载要分配根 inode。
+ * After ADR-0030 only one thing remains: **register the driver in the start phase** (`"fat"`).
+ * Mounting is initiated by the **APP** — it calls POSIX `mount("emmcN", "/fatNN", "fat", …)` per its
+ * own `[[mount]]` plan, so `uboot_fat_mount()` claims a volume and makes a mount body each time.
+ * Ordering premise: block devices are registered by `adapter/uboot-mmc` in **its** start phase, and
+ * the APP's start runs after all non-APP starts (plugin manager phase rule) ⇒ by then the devices
+ * must be ready. EARLY/CORE return empty-handed: the early phase has no heap pool yet (br_mem_init
+ * is in core.init), and mounting allocates the root inode.
  */
 int uboot_fat_early_init(void);
 int uboot_fat_init(void);
@@ -1443,19 +1460,20 @@ int uboot_fat_start(void);
 
 int uboot_fat_early_init(void)
 {
-    /* EARLY 相: 堆还没建池(br_mem_init 在 core.init), 本件此时不分配任何东西。 */
+    /* EARLY phase: no heap pool yet (br_mem_init is in core.init); this file allocates nothing here. */
     return 0;
 }
 
 int uboot_fat_start(void)
 {
-    /* ★ ADR-0030: 只**登记驱动**, 不挂载 —— 挂哪块卡、挂到哪个挂载点, 由 APP 的
-     *   挂载计划决定(每次 `mount("emmcN", "/fatNN", "fat", 0, NULL)` 认领一个卷)。
-     *   从前这里按插件自己的三行表逐卷挂载 ⇒ "挂载计划"有两个真值(该欠债已由 ADR-0030 还清)。 */
+    /* ★ ADR-0030: only **register the driver**, no mounting — which card and which mount point is
+     *   the APP mount plan's call (each `mount("emmcN", "/fatNN", "fat", 0, NULL)` claims a volume).
+     *   This used to mount volume by volume from the plugin's own three-row table ⇒ two truths for
+     *   the "mount plan" (that debt was paid off by ADR-0030). */
     const int rc = br_fs_driver_register("fat", &s_fs_ops, BR_NULL);
 
     if (rc != 0) {
-        br_log_error("uboot-fat: 注册驱动 fat 失败 rc=%d", rc);
+        br_log_error("uboot-fat: failed to register driver fat rc=%d", rc);
         return rc;
     }
     return 0;
@@ -1463,8 +1481,9 @@ int uboot_fat_start(void)
 
 int uboot_fat_init(void)
 {
-    /* CORE 相: 无事可做。挂载点与源设备现在都由 **APP 的挂载计划**给出(ADR-0030),
-     * 卷槽在 mount 时认领 —— 本件不再预置任何"三卷表"(那曾是挂载计划的第二个真值)。 */
+    /* CORE phase: nothing to do. Mount points and source devices now come from the **APP mount
+     * plan** (ADR-0030), volume slots are claimed at mount time — no preset "three-volume table" here
+     * (that was a second truth for the mount plan). */
     return 0;
 }
 

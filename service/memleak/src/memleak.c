@@ -1,47 +1,54 @@
 /*
- * service/memleak — 泄漏/堆破坏报告服务(实现体)
+ * service/memleak — leak / heap corruption reporting service (implementation)
  *
- * 设计出处: `docs/5-debug/5-01-debug.md` §4「ASan / memleak 策略(分层, 诚实工程)」:
- *   - v1.x 的便宜替代 = TLSF 红区(malloc header/footer guard)+ freelist 毒化 + 栈 canary;
- *   - v2.0 的 target memleak = per-plugin arena 记账(分配带插件归属, 关机/dump 时
- *     按插件出泄漏报告)。
- *   本文件实现的是上面两行的**交集**: core 的便宜机制已到位(违约计数由 core 出),
- *   而 v2 的 arena 在本原型里只做到"归属标签"(见 `br/core/br_mem.h` §③ 记账契约)。
+ * Design source: `docs/5-debug/5-01-debug.md` §4 "ASan / memleak policy (layered, honest engineering)":
+ *   - the cheap v1.x substitute = TLSF red zones (malloc header/footer guard) + freelist poisoning +
+ *     stack canary;
+ *   - the v2.0 target memleak = per-plugin arena accounting (allocation carries plugin ownership;
+ *     on shutdown/dump produce a per-plugin leak report).
+ *   This file implements the **intersection** of those two lines: core's cheap mechanism is already in
+ *   place (violation counters come from core), while the v2 arena is only carried as far as an
+ *   "ownership tag" in this prototype (see `br/core/br_mem.h` §③ accounting contract).
  *
- * ★ 诚实声明(与 `br_memleak.h` 抬头一致, ADR-0003):
- *   归属标签 ≠ v2 arena —— 没有预算上限、没有强制归属、没有 OOM 策略。
- *   本插件能回答"哪些块没还 / 是谁标的 / 在哪分配的", 不能回答"某插件超预算"。
- *   WORKAROUND(br-wa-debug-001) 登记的就是这一段差距与它的还债动作(v2 arena)。
+ * ★ Honest statement (consistent with the `br_memleak.h` header, ADR-0003):
+ *   An ownership tag ≠ a v2 arena — no budget cap, no enforced ownership, no OOM policy.
+ *   This plugin can answer "which blocks were not returned / who tagged them / where they were
+ *   allocated", but not "some plugin is over budget".
+ *   WORKAROUND(br-wa-debug-001) registers exactly that gap and its repayment action (v2 arena).
  *
- * ★ 只读边界(ADR-0003 §2.6):
- *   本插件**只消费** core 的堆观测契约 —— `br_heap_stats_get` / `br_heap_walk` /
- *   `br_heap_check` / `br_heap_usage` / `br_heap_owner_*`; 不建池、不改堆、
- *   报告路径不分配内存。消费方是插件 ⇒ 观测面必须落在 core 的对外头文件里,
- *   不能藏在 core 内部(与 3-02 §17.4 对 `br_irq_stats_get` 的处置同型)。
+ * ★ Read-only boundary (ADR-0003 §2.6):
+ *   This plugin **only consumes** core's heap observation contract — `br_heap_stats_get` /
+ *   `br_heap_walk` / `br_heap_check` / `br_heap_usage` / `br_heap_owner_*`; it builds no pool, changes
+ *   no heap, and allocates nothing on the report path. The consumer is a plugin ⇒ the observation
+ *   surface must live in core's public header, not hidden inside core (same treatment as
+ *   `br_irq_stats_get` in 3-02 §17.4).
  *
- * ★ 静态预算(5-01 §3 的约束"捕获路径只用静态缓冲, 不碰堆/调度器"):
- *   归属归并用**固定 16 槽**的静态数组, 槽满后的归属并进一个 `"(other)"` 溢出槽
- *   (summary 的 owners 计数把这一槽也算一个归属)。
- *   明细行**不在报告期缓存**: 每个归属重新走一遍 `br_heap_walk` 换取零行缓冲
- *   (每次最多打 BR_MEMLEAK_MAX_ROWS_PER_OWNER 条)。这是"用时间换静态 RAM"的裁定 ——
- *   报告是 debug 路径, 走一遍堆不便宜, 但 4 KiB 的插件预算装不下
- *   16 归属 × 8 明细的块表。
+ * ★ Static budget (constraint of 5-01 §3: "the capture path uses only static buffers, touching no heap
+ *   or scheduler"):
+ *   Ownership aggregation uses a **fixed 16-slot** static array; once full, further owners merge into
+ *   one `"(other)"` overflow slot (the summary's owners count includes that slot as one owner).
+ *   Detail rows are **not cached during the report**: each owner re-walks `br_heap_walk` to keep a
+ *   zero-row buffer (printing at most BR_MEMLEAK_MAX_ROWS_PER_OWNER rows each time). This is the
+ *   ruling "trade time for static RAM" — the report is a debug path and a heap walk is not cheap, but
+ *   a 4 KiB plugin budget cannot hold a block table of 16 owners × 8 details.
  *
- * 线程纪律: 全部 **thread-only**(会打印、会走堆)。
+ * Threading discipline: everything is **thread-only** (it prints and walks the heap).
  */
 #include <br/debug/br_memleak.h>
 
 #include <br/core/br_log.h>
 
 /* =====================================================================
- * 归属标签(③ 记账契约的消费侧)
+ * Ownership tag (consumer side of the ③ accounting contract)
  * ===================================================================== */
 
 /*
- * 本插件自己的归属标签。v0.1 没有运行期插件管理器(br-wa-boot-001), 所以
- * `br_memleak_init()` 不保证被调用过; 采用"首次需要时注册 + 成功即缓存"的懒注册,
- * 既满足 init 的语义(幂等), 也让自检/报告在未显式 init 的组合下仍能工作。
- * 注册失败(堆未就绪 / 标签表满)不缓存, 下次再试 —— core 的 register 对重名幂等。
+ * This plugin's own ownership tag. v0.1 has no runtime plugin manager (br-wa-boot-001), so
+ * `br_memleak_init()` is not guaranteed to have been called; we use lazy registration ("register on
+ * first need + cache on success"), which both satisfies init semantics (idempotent) and lets
+ * self-test/report work in combinations that never init explicitly.
+ * A failed registration (heap not ready / tag table full) is not cached; the next call retries —
+ * core's register is idempotent for duplicate names.
  */
 static br_owner_t s_owner      = BR_OWNER_NONE;
 static br_bool    s_owner_done = BR_FALSE;
@@ -63,10 +70,11 @@ br_owner_t br_memleak_owner(void)
 }
 
 /*
- * 5-01 §4 的口径: 这里只注册归属标签(基础账)。
- * ★ 头文件抬头还提到"trace 事件名", 但 memleak 的 plugin.toml **没有**声明
- *   `service/trace` 依赖边 ⇒ 不在这里造一条未声明的调用边(那正是声明面唯一真值
- *   要拦的东西)。事件名留待该依赖边被显式声明后再补, 见 README「待回灌」。
+ * Stance of 5-01 §4: only the ownership tag (base accounting) is registered here.
+ * ★ The header also mentions "trace event names", but memleak's brick.toml does **not** declare a
+ *   `service/trace` dependency edge ⇒ do not create an undeclared call edge here (that is exactly
+ *   what the single-source-of-truth declaration surface must stop). Event names wait until that
+ *   dependency edge is declared, see "to be re-imported" in the README.
  */
 int br_memleak_init(void)
 {
@@ -75,7 +83,7 @@ int br_memleak_init(void)
 }
 
 /* =====================================================================
- * 存活块观测(br_heap_walk 的三个消费者)
+ * Live block observation (three consumers of br_heap_walk)
  * ===================================================================== */
 
 static int ml_count_cb(void *ctx, const br_heap_block_t *blk)
@@ -89,7 +97,7 @@ br_u32 br_memleak_live(void)
 {
     br_u32 n = 0u;
 
-    /* 堆未就绪 ⇒ br_heap_walk 返回 -ENODEV; 语义上"没有存活块" */
+    /* Heap not ready ⇒ br_heap_walk returns -ENODEV; semantically "no live blocks" */
     if (br_heap_walk(ml_count_cb, &n) < 0) {
         return 0u;
     }
@@ -122,12 +130,13 @@ br_u32 br_memleak_live_by_owner(br_owner_t owner)
 }
 
 /*
- * ★ 这是**当前状态**, 不是累计。5-01 §4 的违约(红区/魔数/毒化)落在 core 的块头
- *   与空闲链里, `br_heap_check()` 每次调用都重扫全堆 ⇒ "此刻还剩几处违约"。
- *   累计口径(redzone_hits / canary_hits / double_free)在 `br_heap_stats_t` 里,
- *   由 `br_memleak_report()` 的 summary 之外单独取用; 本函数刻意不做两者相加,
- *   免得"修好的破坏"被永远记成红 —— 用例 TC-DBG-041 依赖这个语义
- *   (复原红区之后必须回到 0)。
+ * ★ This is the **current state**, not a cumulative total. The violations of 5-01 §4
+ *   (red zone/magic/poisoning) live in core's block headers and free list, and every
+ *   `br_heap_check()` call rescans the whole heap ⇒ "how many violations remain right now".
+ *   Cumulative figures (redzone_hits / canary_hits / double_free) live in `br_heap_stats_t` and are
+ *   taken separately, outside `br_memleak_report()`'s summary; this function deliberately does not
+ *   add the two, so that "a corruption that was repaired" is not recorded as red forever — case
+ *   TC-DBG-041 depends on this semantics (after restoring a red zone it must return to 0).
  */
 br_u32 br_memleak_corruptions(void)
 {
@@ -135,10 +144,10 @@ br_u32 br_memleak_corruptions(void)
 }
 
 /* =====================================================================
- * 报告: 归属归并(静态上界 + "(other)" 溢出槽)
+ * Report: owner aggregation (static bound + "(other)" overflow slot)
  * ===================================================================== */
 
-#define ML_OWNER_SLOTS   16u   /* 逐归属上界: 5-01 §3 的静态缓冲纪律 */
+#define ML_OWNER_SLOTS   16u   /* per-owner bound: static buffer discipline of 5-01 §3 */
 #define ML_OTHER_NAME    "(other)"
 
 typedef struct {
@@ -149,13 +158,13 @@ typedef struct {
 } ml_slot_t;
 
 static ml_slot_t s_slots[ML_OWNER_SLOTS];
-static br_u32    s_slot_count;      /* 已占用槽数(<= ML_OWNER_SLOTS) */
+static br_u32    s_slot_count;      /* occupied slot count (<= ML_OWNER_SLOTS) */
 
-static br_bool   s_other_used;      /* 溢出槽是否被用过 */
+static br_bool   s_other_used;      /* whether the overflow slot was used */
 static br_u32    s_other_live;
 static br_size_t s_other_bytes;
 
-static br_u32    s_sum_live;        /* 本次遍历的全局存活块/字节 */
+static br_u32    s_sum_live;        /* global live blocks/bytes of this walk */
 static br_size_t s_sum_bytes;
 
 static void ml_reset(void)
@@ -174,7 +183,8 @@ static void ml_reset(void)
     s_sum_bytes   = 0u;
 }
 
-/* 槽表里找归属; 未登记 ⇒ -1(不区分"溢出"与"没见过" —— 两者都并进 "(other)") */
+/* Find an owner in the slot table; not registered ⇒ -1 (no distinction between "overflow" and
+ * "never seen" — both merge into "(other)") */
 static int ml_slot_find(br_owner_t owner)
 {
     for (br_u32 i = 0u; i < s_slot_count; i++) {
@@ -185,7 +195,7 @@ static int ml_slot_find(br_owner_t owner)
     return -1;
 }
 
-/* 取(必要时新建)归属槽; 表满 ⇒ BR_NULL(调用方并进 "(other)") */
+/* Take (creating if needed) an owner slot; table full ⇒ BR_NULL (caller merges into "(other)") */
 static ml_slot_t *ml_slot_take(br_owner_t owner)
 {
     const int idx = ml_slot_find(owner);
@@ -224,7 +234,7 @@ static int ml_aggr_cb(void *ctx, const br_heap_block_t *blk)
     return 0;
 }
 
-/* summary 的 owners 口径: 有存活块的归属数(含 "(other)" 这一伪归属) */
+/* summary's owners figure: number of owners with live blocks (including the "(other)" pseudo-owner) */
 static br_u32 ml_owner_total(void)
 {
     br_u32 n = 0u;
@@ -242,7 +252,7 @@ static br_u32 ml_owner_total(void)
 
 typedef struct {
     br_owner_t owner;
-    br_bool    other;    /* 匹配"不在槽表里"的归属 */
+    br_bool    other;    /* matches owners "not in the slot table" */
     br_u32     rows;
 } ml_detail_ctx_t;
 
@@ -252,7 +262,7 @@ static int ml_detail_cb(void *ctx, const br_heap_block_t *blk)
     br_bool          match;
 
     if (c->rows >= BR_MEMLEAK_MAX_ROWS_PER_OWNER) {
-        return 0;   /* 已列满: 继续走完但不打印(超出部分只体现在 owner 行的计数里) */
+        return 0;   /* rows full: keep walking but print nothing (the excess only shows in the owner row count) */
     }
     if (c->other) {
         match = (ml_slot_find(blk->owner) < 0) ? BR_TRUE : BR_FALSE;
@@ -275,7 +285,7 @@ br_u32 br_memleak_report(void)
     br_u32          owners;
     br_u32          corrupt;
 
-    /* 第一道门: 堆未就绪就只留一行, 不假装有账 */
+    /* First gate: if the heap is not ready leave one line only, do not pretend there is accounting */
     if (br_heap_stats_get(&st) != 0) {
         br_log_info("[LEAK] heap not ready");
         return 0u;
@@ -293,7 +303,7 @@ br_u32 br_memleak_report(void)
     br_log_info("[LEAK] summary live=%u bytes=%lu owners=%u corrupt=%u high_water=%lu",
                 s_sum_live, s_sum_bytes, owners, corrupt, st.high_water);
 
-    /* 归属汇总行 + 每个归属最多 BR_MEMLEAK_MAX_ROWS_PER_OWNER 条明细 */
+    /* Owner summary line + at most BR_MEMLEAK_MAX_ROWS_PER_OWNER detail rows per owner */
     for (br_u32 i = 0u; i < s_slot_count; i++) {
         ml_detail_ctx_t c;
 
@@ -314,7 +324,7 @@ br_u32 br_memleak_report(void)
 
         br_log_info("[LEAK] owner=%s live=%u bytes=%lu",
                     ML_OTHER_NAME, s_other_live, s_other_bytes);
-        c.owner = BR_OWNER_NONE;   /* other 分支按"不在槽表里"匹配, owner 字段不参与 */
+        c.owner = BR_OWNER_NONE;   /* the other branch matches by "not in the slot table"; owner is unused */
         c.other = BR_TRUE;
         c.rows  = 0u;
         (void)br_heap_walk(ml_detail_cb, &c);
@@ -324,27 +334,29 @@ br_u32 br_memleak_report(void)
 }
 
 /* =====================================================================
- * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物
- * `build/gen/service/memleak/plugin_desc.c` 引用; 设计 1-01 §9 / 3-05 §2)
- * 自带原型满足 -Wmissing-prototypes(钩子名由生成器推导, 不进对外头与 [[export]])。
+ * Plugin lifecycle hooks (name = symbol_prefix(short) + phase; referenced by the generated
+ * `build/gen/service/memleak/plugin_desc.c`; design 1-01 §9 / 3-05 §2)
+ * Self-declared prototypes satisfy -Wmissing-prototypes (hook names are derived by the generator,
+ * not in the public header or [[export]]).
  * ===================================================================== */
 int memleak_early_init(void);
 int memleak_init(void);
 int memleak_start(void);
 
-/* EARLY 相: 无动作(不用堆/无线程/关中断 —— 本插件虽然"看堆", 但此刻堆还没认领)。 */
+/* EARLY phase: no action (no heap/threads/interrupt disabling — although this plugin "watches the
+ * heap", the heap is not claimed yet at this point). */
 int memleak_early_init(void)
 {
     return 0;
 }
 
-/* LATE 相(Service 类别 ⇒ ② 完成点): 现有 init 的转调。 */
+/* LATE phase (Service category ⇒ ② completion point): forward to the existing init. */
 int memleak_init(void)
 {
     return br_memleak_init();
 }
 
-/* START 相: 本服务没有需要"中断可用/可建线程"之后才做的事。 */
+/* START phase: this service has nothing to do after "interrupts available / threads creatable". */
 int memleak_start(void)
 {
     return 0;

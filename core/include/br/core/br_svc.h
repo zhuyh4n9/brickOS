@@ -1,48 +1,48 @@
 /*
- * brickOS prototype v0.2.0 — 服务注册表(core 侧)
+ * brickOS prototype v0.2.0 — service registry (core side)
  *
- * 设计依据: `3-01` §9(`br_service_publish` / `br_service_lookup`),
- *           `3-06`(服务管理)、`11-01`(服务模型)、`1-01` §9(发布/查找发生在 init 相)。
+ * Design basis: `3-01` §9 (`br_service_publish` / `br_service_lookup`),
+ *           `3-06` (service management), `11-01` (service model), `1-01` §9 (publish/lookup happen in the init phase).
  *
- * 语义(逐字照设计, 不做增删):
- *   - **core 只管 名字 → 指针**, 不解释 ops 的类型(类型安全是插件之间的事);
- *   - 发布 = 服务方在自己的 `init` 里调; 查找 = 依赖方在自己的 `init` 里调
- *     ⇒ 相序 + init 拓扑序**共同保证**"取得到"(1-01 §9 的两个完成点);
- *   - 重名 ⇒ `-EEXIST`(不覆盖 —— 覆盖会让"谁是真身"取决于启动顺序);
- *   - 查不到 ⇒ 返回 `BR_NULL`(不是错误码: 设计的签名就是返回指针, `3-01` §9)。
+ * Semantics (verbatim from the design, nothing added or dropped):
+ *   - **core only maps name -> pointer**, it does not interpret the ops type (type safety is between plugins);
+ *   - publish = called by the provider in its own `init`; lookup = called by the consumer in its own `init`
+ *     => phase order + init topological order **together guarantee** it is found (the two completion points of 1-01 §9);
+ *   - duplicate name => `-EEXIST` (no overwrite -- overwriting would make "who is the real one" depend on boot order);
+ *   - not found => return `BR_NULL` (not an error code: the designed signature returns a pointer, `3-01` §9).
  *
- * 与设计的偏离: 本刀新增两个**观测**入口(count/name_at), 供 5-01 风格的 dump 与
- * 一致性用例读注册表; 它们不改变发布/查找语义(ADR-0005 §2)。
+ * Deviation from the design: this cut adds two **observation** entries (count/name_at) so 5-01 style dumps and
+ * consistency cases can read the registry; they do not change publish/lookup semantics (ADR-0005 §2).
  */
 #ifndef BR_CORE_BR_SVC_H
 #define BR_CORE_BR_SVC_H
 
 #include <br/core/br_types.h>
 
-/* 注册表容量: 静态上界(与 trace 环、IRQ 域池同款 —— 设计允许 manifest 裁剪,
- * v0.2 取默认值)。 */
+/* Registry capacity: static upper bound (same style as the trace ring and IRQ domain pool -- the design
+ * allows manifest trimming, v0.2 takes the default). */
 #ifndef BR_SERVICE_MAX
 #define BR_SERVICE_MAX 32u
 #endif
 
-/* 发布一个服务。`ops` 由服务方拥有(通常指向一个静态 const 结构);
- * 重名 ⇒ -EEXIST; 表满 ⇒ -ENOSPC; name/ops 为空 ⇒ -EINVAL。 */
+/* Publish a service. `ops` is owned by the provider (usually points to a static const struct);
+ * duplicate name => -EEXIST; table full => -ENOSPC; null name/ops => -EINVAL. */
 int br_service_publish(const char *name, const void *ops);
 
-/* 查找一个服务。不存在 ⇒ BR_NULL。 */
+/* Look up a service. Not present => BR_NULL. */
 const void *br_service_lookup(const char *name);
 
-/* ---- 观测 ---- */
+/* ---- observation ---- */
 br_u32 br_service_count(void);
-const char *br_service_name_at(br_u32 index);   /* index 越界 ⇒ BR_NULL */
-/* 该服务是否已被查找过(记账: 5-01 §4 的"谁在用谁")。 */
+const char *br_service_name_at(br_u32 index);   /* index out of range => BR_NULL */
+/* Lookup count for this service (accounting: 5-01 §4 "who uses whom"). */
 br_u32 br_service_lookup_hits(const char *name);
 
 /*
- * 注册表自检套件已移到 `core/selftest/svc_selftest.c`(ADR-0010), 故不在此声明。
- * 为什么不留在对外头: 自检是**测试面**, 不是插件能力 —— 声明进 `br_*.h` 会让
- * "改一个用例"变成接口变更(golden 接口 hash 覆盖的正是对外声明面); 实现与声明面
- * 都在 core/selftest/。
+ * The registry selftest suite moved to `core/selftest/svc_selftest.c` (ADR-0010), so it is not declared here.
+ * Why not keep it in the public header: selftest is a **test surface**, not a plugin capability -- declaring it in
+ * `br_*.h` would turn "change one case" into an interface change (the golden interface hash covers exactly the
+ * public declaration surface); implementation and declarations both live in core/selftest/.
  */
 
 #endif /* BR_CORE_BR_SVC_H */

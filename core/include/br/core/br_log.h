@@ -1,16 +1,18 @@
 /*
- * brickOS prototype v0.1.0 — 日志契约
+ * brickOS prototype v0.1.0 — logging contract
  *
- * 与设计文档的关系(设计在 brickOS-Design 分支):
- *   设计侧的"日志"是 **Service 插件**(11-01: 日志/OTA/crypto...; trace 是观测设施, 5-01)。
- *   v0.1.0 还没有插件管理器, 所以这里是一个**core 内的最小打印设施**, 不是那个服务。
- *   等 M0/M2 落地后, 本文件的职责应收敛为:
- *     - trace 事件(`BR_TRACE_EVT`, 5-01 §1)的调用点保留
- *     - 文本行输出移交 `service/log` 与 platform 早期 console 的正式契约
- *   见 WORKAROUNDS.md 的 br-wa-boot-001。
+ * Relation to the design docs (design lives on the brickOS-Design branch):
+ *   On the design side "logging" is a **Service plugin** (11-01: log/OTA/crypto...; trace is an
+ *   observability facility, 5-01). v0.1.0 has no plugin manager yet, so this is a **minimal
+ *   in-core printing facility**, not that service. After M0/M2 land, this file's responsibility
+ *   should converge to:
+ *     - keep the call sites for trace events (`BR_TRACE_EVT`, 5-01 §1)
+ *     - hand text-line output to `service/log` and the platform early console contract
+ *   See WORKAROUNDS.md, br-wa-boot-001.
  *
- * 格式化支持子集(不拉 libc 的 printf): %c %s %d %i %u %x %X %p %% 与长度修饰 l/ll/z,
- * 以及宽度与 '0' 填充(如 %08x / %6u)。未识别的转换符原样丢弃并打出其字符。
+ * Format subset supported (no libc printf): %c %s %d %i %u %x %X %p %% with length modifiers
+ * l/ll/z, plus width and '0' padding (e.g. %08x / %6u). Unrecognized conversions are dropped and
+ * their character is printed.
  */
 #ifndef BR_CORE_BR_LOG_H
 #define BR_CORE_BR_LOG_H
@@ -26,18 +28,18 @@ typedef enum {
 } br_log_level_t;
 
 /*
- * 记录日志起点时间戳。必须在 br_clock_init() 之后调用。
- * 调用前 br_log_write 仍然可用(时间戳从 0 起), 便于早期 init 链打印。
+ * Record the logging start timestamp. Must be called after br_clock_init().
+ * br_log_write still works before that call (timestamp starts at 0), for early init chains.
  */
 void br_log_init(void);
 
-/* 低于该等级的日志被丢弃。缺省 BR_LOG_INFO。 */
+/* Logs below this level are dropped. Default BR_LOG_INFO. */
 void br_log_set_level(br_log_level_t level);
 br_log_level_t br_log_get_level(void);
 
 /*
- * 归 core 所有的格式化输出入口。
- * `level` 既决定是否输出, 也决定行首标签; `fmt` 支持上文列出的子集。
+ * The core-owned formatted output entry point.
+ * `level` decides both whether to emit and the line prefix tag; `fmt` supports the subset above.
  */
 void br_log_write(br_log_level_t level, const char *fmt, ...)
     __attribute__((format(printf, 2, 3)));

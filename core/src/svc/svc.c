@@ -1,25 +1,30 @@
 /*
- * brickOS prototype v0.2.0 — 服务注册表(core 公地)
+ * brickOS prototype v0.2.0 — service registry (core common)
  *
- * 设计依据: `3-01` §9(`br_service_publish` / `br_service_lookup`)、`3-06`(服务管理)、
- *           `1-01` §9(发布 = 服务方 init; 查找 = 依赖方 init ⇒ 相序 + init 拓扑序共同保证取得到)。
+ * Design basis: `3-01` §9 (`br_service_publish` / `br_service_lookup`), `3-06` (service
+ *           management), `1-01` §9 (publish = provider init; lookup = consumer init ⇒ phase
+ *           order + init topology order together guarantee it is found).
  *
- * 语义(逐字照设计, 不做增删):
- *   - core 只管 **名字 → 指针**, 不解释 ops 的类型;
- *   - 重名 ⇒ `-EEXIST`(不覆盖 —— 覆盖会让"谁是真身"取决于启动顺序);
- *   - 表满 ⇒ `-ENOSPC`; 空 `name`/空 `ops` ⇒ `-EINVAL`;
- *   - 查不到 ⇒ `BR_NULL`(设计的签名就是返回指针)。
+ * Semantics (verbatim from the design, nothing added or removed):
+ *   - core only manages **name → pointer**, it does not interpret the ops type;
+ *   - duplicate name ⇒ `-EEXIST` (no overwrite — overwriting would make "who is the real one"
+ *     depend on boot order);
+ *   - table full ⇒ `-ENOSPC`; empty `name`/empty `ops` ⇒ `-EINVAL`;
+ *   - not found ⇒ `BR_NULL` (the designed signature returns a pointer).
  *
- * 单线程前提(设计 `3-06` §2 第 1 项): **发布/查找都发生在 init 相**(EARLY/CORE/LATE),
- * 那时全局关中断、无线程 ⇒ 注册表不需要锁。START 相之后再发布是调用方的错, 本文件
- * 不做检测(也不假装线程安全)。
+ * Single-threaded premise (design `3-06` §2 item 1): **publish/lookup both happen in the init
+ * phase** (EARLY/CORE/LATE), when interrupts are globally off and there are no threads ⇒ the
+ * registry needs no lock. Publishing after the START phase is the caller's fault; this file
+ * neither detects it (nor pretends to be thread-safe).
  *
- * 与设计的偏离(登记在 `docs/decisions/0005-plugin-manager.md` §2.7):
- *   - 新增三个**观测**入口(`br_service_count` / `br_service_name_at` /
- *     `br_service_lookup_hits`, 见 `br_svc.h`), 供 dump 风格呈现与一致性用例读表;
- *   - 白盒移除入口 `svc_remove`(声明在 `core/src/svc/svc_internal.h`): 设计里没有
- *     unpublish, 而 core 自检(ADR-0010)要用 `selftest.` 前缀的临时条目并**自己清干净**
- *     —— 用例本体已搬到 `core/selftest/svc_selftest.c`。
+ * Deviations from the design (recorded in `docs/decisions/0005-plugin-manager.md` §2.7):
+ *   - three added **observation** entry points (`br_service_count` / `br_service_name_at` /
+ *     `br_service_lookup_hits`, see `br_svc.h`), for dump-style rendering and consistency
+ *     cases reading the table;
+ *   - a white-box removal entry `svc_remove` (declared in `core/src/svc/svc_internal.h`): the
+ *     design has no unpublish, but core self-test (ADR-0010) needs temporary entries with the
+ *     `selftest.` prefix and must **clean them up itself** — the case body has moved to
+ *     `core/selftest/svc_selftest.c`.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -28,18 +33,18 @@
 
 #include "svc_internal.h"
 
-/* ==================================================================== 表 */
+/* ==================================================================== table */
 
 typedef struct br_svc_entry {
     const char *name;
     const void *ops;
-    br_u32      hits;   /* lookup 命中次数(记账: 5-01 §4 的"谁在用谁") */
+    br_u32      hits;   /* lookup hits (accounting: "who uses whom" of 5-01 §4) */
 } br_svc_entry_t;
 
 static br_svc_entry_t s_svc[BR_SERVICE_MAX];
 static br_u32 s_count;
 
-/* 名字相等(publish/lookup/hits 的比较; 自检也用它复核 name_at 的返回 —— 见 svc_internal.h)。 */
+/* Name equality (comparison for publish/lookup/hits; the self-test also uses it to recheck name_at's return — see svc_internal.h). */
 br_bool name_equal(const char *a, const char *b)
 {
     if (a == BR_NULL || b == BR_NULL) {
@@ -52,7 +57,7 @@ br_bool name_equal(const char *a, const char *b)
     return (*a == '\0') && (*b == '\0');
 }
 
-/* ==================================================================== 发布/查找 */
+/* ==================================================================== publish/lookup */
 
 int br_service_publish(const char *name, const void *ops)
 {
@@ -61,7 +66,7 @@ int br_service_publish(const char *name, const void *ops)
     }
     for (br_u32 i = 0u; i < s_count; i++) {
         if (name_equal(s_svc[i].name, name)) {
-            return BR_ERR(EEXIST);   /* 不覆盖 */
+            return BR_ERR(EEXIST);   /* no overwrite */
         }
     }
     if (s_count >= BR_SERVICE_MAX) {
@@ -88,7 +93,7 @@ const void *br_service_lookup(const char *name)
     return BR_NULL;
 }
 
-/* ==================================================================== 观测 */
+/* ==================================================================== observation */
 
 br_u32 br_service_count(void)
 {
@@ -116,7 +121,7 @@ br_u32 br_service_lookup_hits(const char *name)
     return 0u;
 }
 
-/* 白盒移除(生产面没有 unpublish; 只有自检用它清掉自己的临时条目 —— 见 svc_internal.h)。 */
+/* White-box removal (the production surface has no unpublish; only the self-test uses it to clear its own temporary entries — see svc_internal.h). */
 void svc_remove(const char *name)
 {
     if (name == BR_NULL) {

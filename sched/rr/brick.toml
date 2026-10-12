@@ -1,0 +1,65 @@
+schema = 1
+
+[plugin]
+name        = "sched/rr"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "scheduler"
+
+sched_kind  = "preempt"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "时间片轮转(round-robin)抢占调度器: FIFO 就绪队列 + 每线程时间片; 用尽即在 IRQ 出口换栈"
+license     = "WTFPL"
+
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "就绪队列 head/tail/len + ops 表(每线程私有尾 16 B: ready_next + 时间片 + 观测计数, 在 core 的 TCB 池里)"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+
+[[dep]]
+name  = "platform/qemu-aarch64"
+range = ">=0.1.0"
+kind  = "init"
+
+[[export]]
+name         = "rr"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = ""
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "rr_early_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "rr_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "rr_start"
+sig  = "int (void)"
+
+[privileged]
+level = "P3"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

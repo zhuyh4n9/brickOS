@@ -1,0 +1,63 @@
+schema = 1
+
+[plugin]
+name        = "sched/coop"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "scheduler"
+sched_kind  = "coop"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "协作式调度器: FIFO 就绪队列 + 只在显式点换栈(yield/阻塞/退出/首次调度); 无抢占、无时间片"
+license     = "WTFPL"
+sched_class = "COOP_ONLY"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "就绪队列 head/tail/len + ops 表(每线程私有尾 8 B 的 ready_next 在 core 的 TCB 池里)"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+
+[[dep]]
+name  = "platform/qemu-aarch64"
+range = ">=0.1.0"
+kind  = "init"
+
+[[export]]
+name         = "coop"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = ""
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "coop_early_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "coop_init"
+sig  = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "coop_start"
+sig  = "int (void)"
+
+[privileged]
+level = "P3"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

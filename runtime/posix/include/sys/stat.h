@@ -1,14 +1,15 @@
 /*
- * brickOS prototype v0.2.0 — 文件状态(sys/stat.h; runtime/posix 插件提供)
+ * brickOS prototype v0.2.0 — file status (sys/stat.h; provided by the runtime/posix plugin)
  *
- * ★ `struct stat` 的字段: 本原型**没有** uid/gid/时间戳/设备号的存储面(vfs 的
- *   `br_stat_t` 只有 `{valid, type, size, nlink}`, 见 br_vfs.h)。于是:
- *     - `st_mode` 由 `br_stat_t.type` **合成**(S_IFDIR/S_IFREG/S_IFLNK | 0777);
- *     - `st_nlink` / `st_size` 是真的(来自 br_stat_t);
- *     - `st_ino` / `st_dev` / `st_uid` / `st_gid` / `st_atime`… **恒为 0**(不是"读失败",
- *       而是如实回答"这个面不存在")。这一点写在 ADR-0014 的欠账里 —— 依赖 inode 号做
- *       去重的代码在本代拿不到它。
- *   `struct stat` 保留这些字段是为了**布局稳定**: 将来 vfs 补上它们时, 消费者不必改结构。
+ * ★ `struct stat` fields: this prototype has **no** storage for uid/gid/timestamps/device numbers (vfs's
+ *   `br_stat_t` is only `{valid, type, size, nlink}`, see br_vfs.h). Hence:
+ *     - `st_mode` is **synthesized** from `br_stat_t.type` (S_IFDIR/S_IFREG/S_IFLNK | 0777);
+ *     - `st_nlink` / `st_size` are real (from br_stat_t);
+ *     - `st_ino` / `st_dev` / `st_uid` / `st_gid` / `st_atime`… are **always 0** (not "read failed",
+ *       but an honest answer that "this surface does not exist"). This is recorded in ADR-0014's
+ *       debt — code relying on inode numbers for dedup cannot get them this generation.
+ *   `struct stat` keeps these fields for **layout stability**: when vfs adds them later, consumers
+ *   need not change their structs.
  */
 #ifndef BR_POSIX_SYS_STAT_H
 #define BR_POSIX_SYS_STAT_H
@@ -31,7 +32,7 @@ struct stat {
     time_t    st_ctime;
 };
 
-/* ---- 文件类型位(Linux 数值)---- */
+/* ---- file type bits (Linux values) ---- */
 #define S_IFMT    0170000
 #define S_IFSOCK  0140000
 #define S_IFLNK   0120000
@@ -49,7 +50,7 @@ struct stat {
 #define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
-/* ---- 权限位(不执法, 但要能表达; 见 ADR-0014 的"权限模型"欠账)---- */
+/* ---- permission bits (not enforced, but expressible; see ADR-0014's "permission model" debt) ---- */
 #define S_ISUID  0004000
 #define S_ISGID  0002000
 #define S_ISVTX  0001000
@@ -66,7 +67,7 @@ struct stat {
 #define S_IWOTH  0000002
 #define S_IXOTH  0000001
 
-/* 本代报出的固定权限(没有权限模型 ⇒ 如实报"全开", 而不是编一个 0644 出来骗人) */
+/* Fixed permissions reported this generation (no permission model ⇒ honestly report "all open" rather than inventing an 0644) */
 #define BR_POSIX_MODE_BITS  0777
 
 int stat(const char *path, struct stat *st);
@@ -74,10 +75,10 @@ int lstat(const char *path, struct stat *st);
 int fstat(int fd, struct stat *st);
 
 int mkdir(const char *path, mode_t mode);
-int chmod(const char *path, mode_t mode);      /* 空操作 ⇒ 0(用户裁定; 见 ADR-0014) */
-int fchmod(int fd, mode_t mode);               /* 空操作 ⇒ 0 */
-int chown(const char *path, uid_t uid, gid_t gid);  /* 空操作 ⇒ 0 */
-int fchown(int fd, uid_t uid, gid_t gid);           /* 空操作 ⇒ 0 */
-mode_t umask(mode_t mask);                     /* 记录并返回旧值(不执法) */
+int chmod(const char *path, mode_t mode);      /* no-op ⇒ 0 (user decision; see ADR-0014) */
+int fchmod(int fd, mode_t mode);               /* no-op ⇒ 0 */
+int chown(const char *path, uid_t uid, gid_t gid);  /* no-op ⇒ 0 */
+int fchown(int fd, uid_t uid, gid_t gid);           /* no-op ⇒ 0 */
+mode_t umask(mode_t mask);                     /* record and return old value (not enforced) */
 
 #endif /* BR_POSIX_SYS_STAT_H */

@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "build/index/dependents.json — v0.1 反向依赖索引(BRV-D2: 单条记录形状)",
-  "description": "形状对齐 contract §5.1 的 `dep-index` data: `{dependents: {<plugin>: [{from, kind}]}}`。只在 `dependents` 存在时校验其值形状; 索引内容由 brickie-core 产出(§8 禁止 L5 拼接机器文件内容)。",
+  "title": "build/index/dependents.json - v0.1 reverse dependency index (BRV-D2: single-record shape)",
+  "description": "Shape matches contract §5.1 dep-index data: {dependents: {<plugin>: [{from, kind}]}}. Only the value shape of dependents is validated when present; the index content is produced by brickie-core (§8 forbids L5 from assembling machine-file content).",
   "type": "object",
   "additionalProperties": true,
   "properties": {

@@ -1,12 +1,13 @@
-/* adapter/uboot-mmc — `<sdhci.h>` 的适配壳(→ **vendor 原件**)。
+/* adapter/uboot-mmc - shim for `<sdhci.h>` (-> the **vendor original**).
  *
- * ★ `struct sdhci_host` 是上游 SDHCI 主机驱动自己的状态(寄存器窗口、`flags` 的
- *   `USE_ADMA` 位、`adma_desc_table`…), 而 `sdhci.c`/`sdhci-adma.c` 直接读写它。
- *   ★ 我们的 glue **也要写它**的 `flags` 位(运行期 SET_PATH 切 ADMA2/PIO)与 `ioaddr`/
- *   `cfg`/`quirks` —— 那个字段**就是接口**(任务书 §2.6)。抄一份会立刻漂移。
- *   ⇒ 逐字节用 vendor 那份。
+ * `struct sdhci_host` is the upstream SDHCI host driver's own state (register window, the
+ * `USE_ADMA` bit in `flags`, `adma_desc_table`, ...), and `sdhci.c`/`sdhci-adma.c` read and
+ * write it directly. Our glue **also writes** its `flags` bits (runtime SET_PATH switching
+ * between ADMA2 and PIO) plus `ioaddr`/`cfg`/`quirks` - that struct **is** the interface
+ * (task doc §2.6). Copying it would drift immediately.
+ *   => use the vendor copy byte for byte.
  *
- * ★ 它 include `<asm/io.h>`/`<asm/gpio.h>`/`<linux/kernel.h>` 等, 全由 `compat/` 兑现。
+ * It includes `<asm/io.h>`/`<asm/gpio.h>`/`<linux/kernel.h>` etc., all satisfied by `compat/`.
  */
 #ifndef BR_ADAPTER_UBOOT_MMC_SHIM_SDHCI_H
 #define BR_ADAPTER_UBOOT_MMC_SHIM_SDHCI_H

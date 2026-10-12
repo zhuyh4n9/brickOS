@@ -1,29 +1,29 @@
-"""brickie — brickOS 组合期工具(host 侧)。
+"""brickie — brickOS composition-time tooling (host side).
 
-分层(见 ``Design/docs/2-toolchain/brickie/brickie-v0.1.md`` §9.1 与
+Layering (see ``Design/docs/2-toolchain/brickie/brickie-v0.1.md`` §9.1 and
 ``tools/brickie/docs/contract.md``):
 
-    L5 前端  Python3  本包: 参数解析 / 编排 / schema 形状校验 / 落盘 / 呈现 / 退出码
-    L2 生成器 C++     ``brickie-gen``: 只做模板渲染(骨架 / 描述符 / 头文件)
-    L0/L1     Rust    ``brickie-core``: 全部判定与错误码(模型 / 求解 / 版本 / 接口)
+    L5 frontend  Python3  this package: argparse / orchestration / schema shape validation / writes / presentation / exit codes
+    L2 generator C++     ``brickie-gen``: template rendering only (skeletons / descriptors / headers)
+    L0/L1        Rust    ``brickie-core``: all decisions and error codes (model / solve / version / interface)
 
-**本包的纪律**(contract §8 / V-18c): 没有业务规则。闭包、区间、拓扑、环、相位、
-分类学、特权、预算、四段版本推进、IFACE-IR 与 hash 一律在原生侧; 本包只做
-"允许的六件事"—— 参数解析、找二进制、调子进程、读写文件、JSON 序列化、按
-``schema/*.schema.json`` 做**单条记录形状**校验。
+**Rules for this package** (contract §8 / V-18c): no business rules. Closures, ranges, topology, cycles, phases,
+taxonomy, privileges, budgets, four-segment version advancement, IFACE-IR and hashes all live on the native side; this package only does
+"the six allowed things" — argparse, locating binaries, calling subprocesses, reading/writing files, JSON serialization, and
+**single-record shape** validation against ``schema/*.schema.json``.
 
-模块地图:
+Module map:
 
-    cli.py       29 个叶子命令(23 组合期 + 6 构建族) + 2 个全局开关的 argparse 与编排流水线
-    native.py    定位并调用 brickie-core / brickie-gen(JSON over stdio)
-    runner.py    构建族的**执行器**(并发/超时/日志/跳过被短路的下游; 无判定)
-    schema.py    自带最小 JSON-Schema 子集(BRV-MF-0001 / 退出码 2)
-    writer.py    幂等落盘 / --check 逐字节比对 / 声明面扫描
-    present.py   把 data 渲染成人读文本(--json 与文本同源)
-    hostinfo.py  宿主三元组(build/host/<arch>/<os> 的坐标, 与 tools/host-detect.sh 同口径)
+    cli.py       29 leaf commands (23 composition + 6 build family) + 2 global switches: argparse and orchestration pipeline
+    native.py    locate and call brickie-core / brickie-gen (JSON over stdio)
+    runner.py    **executor** of the build family (concurrency/timeout/logging/skipping short-circuited downstream; no decisions)
+    schema.py    bundled minimal JSON-Schema subset (BRV-MF-0001 / exit code 2)
+    writer.py    idempotent writes / --check byte-for-byte compare / declaration-surface scan
+    present.py   render data as human-readable text (--json and text share one source)
+    hostinfo.py  host triple (coordinates for build/host/<arch>/<os>, same rules as tools/host-detect.sh)
 """
 
 __version__ = "0.1.0"
 
-# L5 ↔ L0/L1/L2 的 JSON over stdio 契约版本(contract §2)。不兼容变更必须进位。
+# JSON over stdio contract version for L5 ↔ L0/L1/L2 (contract §2). Incompatible changes must bump it.
 PROTOCOL = 1

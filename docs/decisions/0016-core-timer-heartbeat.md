@@ -8,7 +8,7 @@
 > `platform/qemu-aarch64/include/br/platform/br_plat.h`(注释: 消费者请读 core)、
 > `platform/qemu-aarch64/src/plat_qemu_virt.c`(平台身份日志移到自己的 start)、
 > `app/hello/src/main.c`(去掉 platform 头; 读 core 计数)、
-> `app/hello/plugin.toml`(删 `[[dep]]` platform)、`product.toml`(`[lint].allow_edges` 清空)。
+> `app/hello/brick.toml`(删 `[[dep]]` platform)、`product.toml`(`[lint].allow_edges` 清空)。
 > 设计依据: `1-01` §8(平台能力三层模式)/§9(启动序列)、`3-01` §4(时间组)/§10(平台侧 core 接口)/
 > `§13.6`(特权分级; P-IRQ-17: APP 是 P0, 中断控制归 P3)、`3-02` §11.1(timer PPI 的 tick 路径)、
 > `3-05`(插件管理器: 声明边的方向表)。
@@ -91,7 +91,7 @@ START 相里 platform 先于 APP 跑(ADR-0005: APP 的 start **最后**), 所以
 `app/hello/src/main.c` 去掉 `#include <br/platform/br_plat.h>`; `irq_ticks=` 改读
 `br_clock_tick_count()`; 不再打 `platform: …` 那行。于是:
 
-* `app/hello/plugin.toml` 的 `[[dep]]` 全部删除(APP 现在只 include core 头);
+* `app/hello/brick.toml` 的 `[[dep]]` 全部删除(APP 现在只 include core 头);
 * `product.toml [lint].allow_edges` **清空**(最后一条豁免消失)。
 
 ★ 这不是"加了白名单所以不报": 删空之后 `brickie check` 仍 0 错误 —— 那条非法边真的

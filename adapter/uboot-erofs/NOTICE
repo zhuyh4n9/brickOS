@@ -16,7 +16,7 @@ adapter/uboot-erofs — 第三方来源与许可说明
 
 上游文件 → 它在构建里怎么参与
 -----------------------------
-★ 上游源码**没有副本**: `plugin.toml` 的 `[build].sources` 直接写 `third_party` 路径
+★ 上游源码**没有副本**: `brick.toml` 的 `[build].sources` 直接写 `third_party` 路径
   (`../../third_party/uboot-imx/...`)。下表左边是 vendor 路径(相对
   `third_party/uboot-imx/`), 右边是参与方式。
 
@@ -47,7 +47,7 @@ adapter/uboot-erofs — 第三方来源与许可说明
   glue/     本项目代码 —— `erofs_glue.h`(适配层内部契约) / `erofs_vfs.c`(块层 shim +
             VFS 四层 ops + 全局 `sbi` 的存储 + on-disk 布局 `_Static_assert`) /
             `erofs_selftest.c`(`TC-EROFS-*`)。**glue/ 里没有上游源码副本。**
-  plugin.toml   项目声明面(取代上游 `fs/erofs/Kconfig` + `Makefile` 的构建与特性声明)
+  brick.toml   项目声明面(取代上游 `fs/erofs/Kconfig` + `Makefile` 的构建与特性声明)
 
   符号口径: 被编译的上游原件保持**上游的链接形态**(如 `LZ4_decompress_safe*` 是全局符号;
   旧 `src/` 那版把它们收成 `static` 的改写已随 ADR-0026 取消)。本插件另导出 `uboot_erofs_*`
@@ -82,3 +82,5 @@ adapter/uboot-erofs — 第三方来源与许可说明
   本插件与 `adapter/uboot-mmc` 是整个 brickOS 原型树内的 GPL 代码; `framework/**`、
   `platform/**` 等保持 WTFPL。残余风险(静态链接后整镜像构成 GPL 组合作品)登记在
   `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。
+
+WORKAROUND(br-wa-tp-001): residual GPL combined-work risk of statically linking this port into the image (registered in WORKAROUNDS.md).

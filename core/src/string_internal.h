@@ -1,13 +1,16 @@
 /*
- * brickOS prototype v0.1.0 — 编译器支持例程的内部原型(core 私有)
+ * brickOS prototype v0.1.0 - internal prototypes for compiler support routines (core-private)
  *
- * 这四个符号**不是 native API**(不进 `3-01` 的 48 函数面, 也不是插件可见面):
- * 它们是 GCC 会自己发射的调用目标, 属"链接能否成立"的地基。放在 core/src 下的
- * 内部头里, 是为了满足 `-Wmissing-prototypes`(定义前必须有原型), 同时**不**把
- * 它们混进 `core/include/br/core/` 的契约头 —— 契约头里出现的名字都算对外面。
+ * These four symbols are **not native API** (not part of the 48-function surface in `3-01`,
+ * and not visible to plugins): GCC emits calls to them itself, so they are part of the
+ * foundation of whether linking succeeds. They live in an internal header under core/src to
+ * satisfy `-Wmissing-prototypes` (a prototype must precede the definition) while **not**
+ * mixing them into the contract headers in `core/include/br/core/` - any name in a contract
+ * header counts as public surface.
  *
- * ★ 符号归一**做不到**(ADR-0014 §4): core 在 EARLY 相就要 `memset`, 而 POSIX 运行时是
- *   LATE 相的服务 ⇒ 那四个符号只能留在 core。本文件因此长期存在, 不是临时件。
+ * Symbol unification is **not achievable** (ADR-0014 §4): core needs `memset` in the EARLY
+ * phase while the POSIX runtime is a LATE-phase service, so those four symbols must stay in
+ * core. This file is therefore permanent, not temporary.
  */
 #ifndef BR_CORE_STRING_INTERNAL_H
 #define BR_CORE_STRING_INTERNAL_H

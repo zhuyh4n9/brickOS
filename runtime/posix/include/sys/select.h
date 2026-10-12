@@ -1,13 +1,14 @@
 /*
- * brickOS prototype v0.2.0 — select 面(sys/select.h; runtime/posix 插件提供)
+ * brickOS prototype v0.2.0 - select surface (sys/select.h; provided by the runtime/posix plugin)
  *
- * ★ `select` 建在 `poll` 之上(语义等价, 少一份实现)。`fd_set` 是**定长位图**:
- *   `FD_SETSIZE = 64` 比原生 fd 表(`BR_FT_MAX = 32`)宽一倍, 于是"用 select 管到
- *   表外"这件事不会静默截断 —— 超界位在 `select` 里被判为无效并返回 -EINVAL。
+ * `select` is built on top of `poll` (equivalent semantics, one less implementation). `fd_set`
+ * is a **fixed-size bitmap**: `FD_SETSIZE = 64` is twice as wide as the native fd table
+ * (`BR_FT_MAX = 32`), so "managing beyond the table with select" cannot silently truncate -
+ * out-of-range bits are judged invalid by `select` and return -EINVAL.
  *
- * ★ struct timeval 放在这里(而不是 sys/time.h): 本代**没有 gettimeofday**(无墙钟, P-1),
- *   于是"时间值的载体"只有 select 这一个消费者。将来补墙钟时, 这里改成一个 include
- *   即可(把 timeval 挪去 sys/time.h)。
+ * `struct timeval` lives here (rather than sys/time.h): this generation has **no gettimeofday**
+ * (no wall clock, P-1), so select is the only consumer of "a time value". When a wall clock is
+ * added, this becomes an include (move timeval to sys/time.h).
  */
 #ifndef BR_POSIX_SYS_SELECT_H
 #define BR_POSIX_SYS_SELECT_H

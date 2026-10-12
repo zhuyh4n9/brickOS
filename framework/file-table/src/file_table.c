@@ -1,23 +1,23 @@
 /*
- * brickOS prototype v0.2.0 — 文件表实现(framework/file-table 插件)
+ * brickOS prototype v0.2.0 — file table implementation (framework/file-table plugin)
  *
- * 契约与全部语义见 `include/br/ft/br_ft.h`(本文件只放机制); 逐条裁定见
- * `docs/decisions/0012-file-table-and-errno.md`。
+ * Contract and all semantics are in `include/br/ft/br_ft.h` (this file holds mechanism only); per-item
+ * rulings are in `docs/decisions/0012-file-table-and-errno.md`.
  *
- * ## 六件事, 与契约头一一对应
- *   ① 静态定长表 + "在场判据 = 句柄非空"(没有独立的 used 位)
- *   ② 最小可用 fd 分配 / 表满 -EMFILE / 空句柄 -EINVAL
- *   ③ 非法 fd 一律 -EBADF(越界与空槽**同一个码** —— POSIX 不区分, 区分了反而泄漏信息)
- *   ④ 引用数 = 在场槽位个数(扫表判定, 不设计数器); release 回报"最后一个引用"
- *   ⑤ dup / dup2(POSIX 语义, 含 dup2 的目标顶替与 displaced 回报)
- *   ⑥ release_all(退出路径; 先干跑, 装不下则表不变)
+ * ## Six things, matching the contract header one for one
+ *   ① static fixed-size table + "presence test = handle non-NULL" (no separate used bit)
+ *   ② lowest free fd allocation / table full -EMFILE / NULL handle -EINVAL
+ *   ③ invalid fd always -EBADF (out-of-range and empty slot share one code — POSIX does not distinguish them, and distinguishing would leak information)
+ *   ④ refcount = number of present slots (determined by scanning the table, no counter); release reports the "last reference"
+ *   ⑤ dup / dup2 (POSIX semantics, including dup2 target displacement and the displaced report)
+ *   ⑥ release_all (exit path; dry run first, table unchanged if it does not fit)
  *
- * ## 并发(为什么是关中断而不是 spinlock)
- *   表是**共享状态**, 会被多线程(以及将来的 socket 层)并发调用。保护的粒度是"一次
- *   表操作", 临界区只有几条指令(32 槽扫描), 且**从不在临界区里睡眠** —— 于是关中断
- *   (core 的 `br_irq_lock`, 设计 3-02 §6.4, 嵌套安全)就是正确且最省的形态:
- *   不需要对象、不需要 init、不会有"锁没初始化"这类缺陷。
- *   `sched_class = SAFE_PREEMPT` 的依据也在这里: 无睡眠 + 临界区全覆盖 ⇒ 抢占下安全。
+ * ## Concurrency (why IRQ masking, not a spinlock)
+ *   The table is shared state called concurrently by multiple threads (and a future socket layer). Protection
+ *   granularity is one table operation, the critical section is a few instructions (32-slot scan), and it never sleeps inside
+ *   the critical section — so IRQ masking (core's `br_irq_lock`, design 3-02 §6.4, nesting-safe) is the correct and cheapest
+ *   form: no object, no init, no "lock not initialized" class of defects.
+ *   The basis for `sched_class = SAFE_PREEMPT` is the same: no sleeping + full critical-section coverage => preemption-safe.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -25,27 +25,27 @@
 #include <br/core/br_types.h>
 #include <br/ft/br_ft.h>
 
-/* 生命周期钩子原型(生成物按 `symbol_prefix` = `file_table_` 推导并引用它们;
- * `-Wmissing-prototypes` 由这里的原型满足, 与 vfs-core 同法)。 */
+/* Lifecycle hook prototypes (the generated code derives and references them from `symbol_prefix` = `file_table_`;
+ * `-Wmissing-prototypes` is satisfied by the prototypes here, same approach as vfs-core). */
 int file_table_early_init(void);
 int file_table_init(void);
 int file_table_start(void);
 
-/* ==================================================================== 静态表 */
+/* ==================================================================== Static table */
 
 typedef struct ft_slot {
-    br_file_t *file;    /* BR_NULL = 空槽(**这就是**在场判据) */
-    br_u32     flags;   /* 不透明: 表只存与还, 解释权归消费者(runtime/posix) */
+    br_file_t *file;    /* BR_NULL = empty slot (this is the presence test) */
+    br_u32     flags;   /* opaque: the table only stores and returns it; the consumer (runtime/posix) interprets it */
 } ft_slot_t;
 
 static ft_slot_t s_slots[BR_FT_MAX];
-static br_u32    s_count;   /* 恒等于"非空槽位个数"(不变量, 由本文件独占维护) */
+static br_u32    s_count;   /* always equals the number of non-empty slots (invariant maintained solely here) */
 
-_Static_assert(BR_FT_MAX > 0u, "BR_FT_MAX 必须为正");
+_Static_assert(BR_FT_MAX > 0u, "BR_FT_MAX must be positive");
 _Static_assert((sizeof(s_slots) + sizeof(s_count)) <= 1024u,
-               "文件表超出 plugin.toml [[res]] 声明的 1 KiB 预算");
+               "file table exceeds the 1 KiB budget declared in brick.toml [[res]]");
 
-/* ==================================================================== 内部小件 */
+/* ==================================================================== Internal helpers */
 
 static br_bool ft_in_range(int fd)
 {
@@ -57,7 +57,7 @@ static br_bool ft_in_use(br_u32 i)
     return (s_slots[i].file != BR_NULL) ? BR_TRUE : BR_FALSE;
 }
 
-/* 除 `skip` 之外还有别的 fd 指向同一句柄吗(= 该句柄还有别的引用吗)? */
+/* Does any fd other than `skip` point to the same handle (= does the handle have another reference)? */
 static br_bool ft_shared_with_others(br_file_t *file, int skip)
 {
     for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
@@ -71,7 +71,7 @@ static br_bool ft_shared_with_others(br_file_t *file, int skip)
     return BR_FALSE;
 }
 
-/* 摘掉一个槽(调用方持锁并保证它非空)。 */
+/* Detach one slot (caller holds the lock and guarantees it is non-empty). */
 static void ft_clear_slot(br_u32 i)
 {
     s_slots[i].file  = BR_NULL;
@@ -79,7 +79,7 @@ static void ft_clear_slot(br_u32 i)
     s_count--;
 }
 
-/* ==================================================================== 生命周期 */
+/* ==================================================================== Lifecycle */
 
 br_u32 br_ft_reset(void)
 {
@@ -128,7 +128,7 @@ int br_ft_fd_at(br_u32 index)
     return found;
 }
 
-/* ==================================================================== 表操作 */
+/* ==================================================================== Table operations */
 
 int br_ft_alloc(br_file_t *file, br_u32 flags)
 {
@@ -223,7 +223,7 @@ int br_ft_release(int fd, br_file_t **last_file)
         ft_clear_slot((br_u32)fd);
 
         if ((last_file != BR_NULL) && (shared == BR_FALSE)) {
-            *last_file = f;                 /* 最后一个引用: 交调用方去 br_file_close */
+            *last_file = f;                 /* last reference: hand to the caller for br_file_close */
         }
     }
 
@@ -242,8 +242,8 @@ int br_ft_release_all(br_file_t **out, br_u32 cap)
     br_u32 distinct = 0u;
     int    rc;
 
-    /* 第一趟(**动手之前**): 标出"每个句柄的头一个槽", 并数出按指针去重的条数。
-     * 去重表必须在清槽之前算完 —— 边清边判会把先前的副本抹掉, 同一个句柄就被回报两次。 */
+    /* First pass (before touching anything): mark the first slot of each handle and count the
+     * pointer-deduplicated entries. Dedup must finish before clearing slots — clearing as we go would erase earlier duplicates and report one handle twice. */
     for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
         first_of[i] = BR_FALSE;
         if (ft_in_use(i) == BR_FALSE) {
@@ -263,7 +263,7 @@ int br_ft_release_all(br_file_t **out, br_u32 cap)
     }
 
     if (distinct > cap) {
-        rc = BR_ERR(ENOSPC);             /* 装不下 ⇒ 表**不变**(半途清空更糟) */
+        rc = BR_ERR(ENOSPC);             /* does not fit => table unchanged (partial clearing is worse) */
     } else {
         br_u32 n = 0u;
         for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
@@ -283,7 +283,7 @@ int br_ft_release_all(br_file_t **out, br_u32 cap)
     return rc;
 }
 
-/* ==================================================================== dup 族 */
+/* ==================================================================== dup family */
 
 int br_ft_dup(int oldfd)
 {
@@ -300,11 +300,11 @@ int br_ft_dup(int oldfd)
         br_file_t  *f  = s_slots[(br_u32)oldfd].file;
         const br_u32 fl = s_slots[(br_u32)oldfd].flags;
 
-        rc = BR_ERR(EMFILE);             /* 表满时 oldfd **不动**(POSIX: 失败不留副作用) */
+        rc = BR_ERR(EMFILE);             /* on a full table oldfd is untouched (POSIX: failure leaves no side effects) */
         for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
             if (ft_in_use(i) == BR_FALSE) {
                 s_slots[i].file  = f;
-                s_slots[i].flags = fl;      /* 快照复制(共享位见契约头的"flags 两个身份") */
+                s_slots[i].flags = fl;      /* snapshot copy (shared bit: see "flags has two identities" in the contract header) */
                 s_count++;
                 rc = (int)i;
                 break;
@@ -326,7 +326,7 @@ int br_ft_dup2(int oldfd, int newfd, br_file_t **displaced)
     }
 
     if (oldfd == newfd) {
-        /* POSIX: dup2(fd, fd) 在 fd 有效时返回 fd 本身(**不关闭**)。 */
+        /* POSIX: dup2(fd, fd) returns fd itself when fd is valid (without closing it). */
         return (br_ft_get(oldfd) != BR_NULL) ? newfd : BR_ERR(EBADF);
     }
 
@@ -336,7 +336,7 @@ int br_ft_dup2(int oldfd, int newfd, br_file_t **displaced)
     if (ft_in_use((br_u32)oldfd) == BR_FALSE) {
         rc = BR_ERR(EBADF);
     } else {
-        /* ① 目标已占用 ⇒ 先等价 close(newfd)。 */
+        /* ① target occupied => first do the equivalent of close(newfd). */
         if (ft_in_use((br_u32)newfd) == BR_TRUE) {
             br_file_t  *victim = s_slots[(br_u32)newfd].file;
             const br_bool shared = ft_shared_with_others(victim, newfd);
@@ -347,7 +347,7 @@ int br_ft_dup2(int oldfd, int newfd, br_file_t **displaced)
                 *displaced = victim;
             }
         }
-        /* ② 把 oldfd 的句柄放到 newfd 上(两个 fd 现在共享同一 open file description)。 */
+        /* ② put oldfd's handle on newfd (both fds now share one open file description). */
         s_slots[(br_u32)newfd].file  = s_slots[(br_u32)oldfd].file;
         s_slots[(br_u32)newfd].flags = s_slots[(br_u32)oldfd].flags;
         s_count++;
@@ -358,30 +358,30 @@ int br_ft_dup2(int oldfd, int newfd, br_file_t **displaced)
     return rc;
 }
 
-/* ==================================================================== 生命周期钩子 */
+/* ==================================================================== Lifecycle hooks */
 
 int file_table_early_init(void)
 {
-    /* EARLY: 静态表是 BSS ⇒ 本来就是空的。返回非 0 说明有插件在 EARLY 之前就动了表。 */
+    /* EARLY: the static table is BSS => already empty. A nonzero return means some plugin touched the table before EARLY. */
     const br_u32 dropped = br_ft_reset();
 
     if (dropped != 0u) {
-        br_log_warn("file-table: early_init 丢弃了 %u 个未关闭的 fd", dropped);
+        br_log_warn("file-table: early_init dropped %u unclosed fds", dropped);
     }
     return 0;
 }
 
 int file_table_init(void)
 {
-    /* 本件没有要初始化的状态: 表是 BSS, 也没有外部依赖(零 [[dep]])。
-     * 刻意不造空 API —— 与 vfs-core 的 init 同法(R-S4: 框架件往里的每一行都要有消费者)。 */
+    /* Nothing to initialize here: the table is BSS and there are no external dependencies (zero [[dep]]).
+     * Deliberately no empty API — same as vfs-core's init (R-S4: every line in a framework piece must have a consumer). */
     return 0;
 }
 
 int file_table_start(void)
 {
-    /* START 相只留一行启动证据(表容量 + 已在场的 fd 数 —— 后者正常为 0: 本件不装
-     * 标准流, 而 `runtime/posix` **也刻意不装**(v1 没有进程模型, ADR-0014 §2.9)。 */
+    /* START phase leaves one line of startup evidence (table capacity + fds already present — the latter is normally 0:
+     * this piece does not install standard streams, and `runtime/posix` deliberately does not either (v1 has no process model, ADR-0014 §2.9). */
     br_log_info("file-table: cap=%u fd slots, %u open", (br_u32)BR_FT_MAX, br_ft_count());
     return 0;
 }

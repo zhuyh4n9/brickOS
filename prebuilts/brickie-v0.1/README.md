@@ -3,7 +3,7 @@
 > 这一级目录**只放指针, 不放第二份二进制**。工具的唯一进库落点是设计规定的
 > **自举种子**: `prebuilts/seed/brickie/<host-arch>/<host-os>/bin/`(ADR `0004` /
 > `brickie-v0.1` BRV-D5)。在这里再放一份拷贝会造出"两个落点、谁是真值"的问题 ——
-> 与 `api/iface/**` vs `plugin.toml` 的双真值纪律同一条理由。
+> 与 `api/iface/**` vs `brick.toml` 的双真值纪律同一条理由。
 
 ## v0.1 的三个可执行(三件齐才叫一个完整种子)
 

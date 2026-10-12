@@ -1,33 +1,36 @@
 /*
- * brickOS prototype v0.1.0 — 内存子系统实现(mem.c):
- *   br_mem_init 认领三池 + TLSF 包装(记账/红区/毒化) + contig 池 + DMA + 观测
+ * brickOS prototype v0.1.0 — memory subsystem implementation (mem.c):
+ *   br_mem_init claims three pools + TLSF wrapper (accounting/redzone/poison) + contig pool + DMA + observation
  *
- * 权威设计: `docs/3-os-core/3-01-core-api-list.md` §6(br-mem 组 **11 函数**),
- *   §14 CA-6(dma_addr 恒等)/ CA-7(contig 独立成池)/ CA-8(页池);
- *   `docs/3-os-core/3-04-memory.md`(三池由 platform region 表划分; §3 的启动时序 =
- *   core.init, 早于 EARLY 相);
- *   `docs/5-debug/5-01-debug.md` §4(红区 / freelist 毒化 / 重复释放拦截,
- *   per-plugin 归属记账的 v1.x 便宜形态 = owner 标签)。
+ * Authoritative design: `docs/3-os-core/3-01-core-api-list.md` §6 (br-mem group, 11 functions),
+ *   §14 CA-6 (dma_addr identity) / CA-7 (contig as its own pool) / CA-8 (page pool);
+ *   `docs/3-os-core/3-04-memory.md` (the three pools come from the platform region table; §3
+ *   boot sequence = core.init, before the EARLY phase);
+ *   `docs/5-debug/5-01-debug.md` §4 (redzone / freelist poisoning / double-free interception;
+ *   the cheap v1.x form of per-plugin ownership accounting = an owner tag).
  *
- * 池的输入是 `br_mm.h` 的 region 表: core 不拥有 RAM, 只按 BR_MM_KIND_* 认领
- * (§6 原文: "platform region 表把 RAM 划为 heap / contig 池 / 页池")。
+ * Pool input is the region table in `br_mm.h`: core does not own RAM, it only claims by
+ * BR_MM_KIND_* (§6 text: "the platform region table splits RAM into heap / contig pool / page pool").
  *
- * 用户块布局(**冻结的 32 B 块头**, 观测契约 br_heap_block_t 的字段都在里面):
+ * User block layout (frozen 32 B block header; the br_heap_block_t observation contract
+ * fields all live inside it):
  *
- *   TLSF 块: [ TLSF 头 16B | ------------------- payload ------------------- ]
- *   payload: [ mem 头 32B | 用户区 n | 红区(0xA5) | 尾 8B magic2|size 副本 ]
- *   用户指针 = mem 头 + 32 = TLSF payload + 32
+ *   TLSF block: [ TLSF header 16B | ------------------- payload ------------------- ]
+ *   payload: [ mem header 32B | user area n | redzone (0xA5) | footer 8B magic2|size copy ]
+ *   user pointer = mem header + 32 = TLSF payload + 32
  *
- *   红区长度 = (8 - n % 8) % 8 + BR_MEM_REDZONE(最小 8 B) —— 补到 8 字节边界后
- *   **再留 8 B**, 目的是让"写用户区后一字节"这种最典型的单字节越界一定落在红区里
- *   (TC-LEAK-UNIT 的判据)。TLSF 请求 = 32 + ALIGN8(n) + 8 + 8。
+ *   redzone length = (8 - n % 8) % 8 + BR_MEM_REDZONE (minimum 8 B) — after padding to an
+ *   8-byte boundary it keeps another 8 B, so the most typical single-byte overflow ("write one
+ *   byte past the user area") always lands in the redzone (the TC-LEAK-UNIT check).
+ *   TLSF request = 32 + ALIGN8(n) + 8 + 8.
  *
- * 为什么块头里不存 block(实占): 32 B 放不下
- *   {magic,size,block,owner,caller,seq,state,next} 的全宽字段; block 由 n 唯一
- *   推导(见 mem_req)且可由 `br_tlsf_block_size()` 随时问回, 存两份反而多一处真值。
+ * Why the header does not store block (actual footprint): 32 B cannot hold full-width
+ *   {magic,size,block,owner,caller,seq,state,next}; block follows uniquely from n
+ *   (see mem_req) and can be queried any time via `br_tlsf_block_size()`, so storing it twice
+ *   would only add a second source of truth.
  *
- * 热路径纪律(§6 的"v1 只有全局堆"): br_malloc/br_free **不打日志**;
- * 日志只用于错误与初始化摘要(前缀 "mem: ")。
+ * Hot-path rule (§6's "v1 has only a global heap"): br_malloc/br_free do NOT log;
+ * logging is only for errors and the init summary (prefix "mem: ").
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -38,57 +41,57 @@
 #include "tlsf_internal.h"
 
 /* =====================================================================
- * 常量与块布局
+ * Constants and block layout
  * ===================================================================== */
 
-#define BR_MEM_HDR        32u    /* mem 层块头 */
-#define BR_MEM_FOOTER     8u     /* 尾部 magic2 + size 副本 */
-#define BR_MEM_REDZONE    8u     /* 红区最小长度(在 8 字节补齐之外) */
+#define BR_MEM_HDR        32u    /* mem-layer block header */
+#define BR_MEM_FOOTER     8u     /* trailing magic2 + size copy */
+#define BR_MEM_REDZONE    8u     /* minimum redzone length (beyond the 8-byte padding) */
 
 #define BR_MEM_MAGIC      0x4D454D42u   /* "BMEM" */
 #define BR_MEM_FOOT_MAGIC 0x544F4F46u   /* "FOOT" */
-#define BR_MEM_RZ_BYTE    0xA5u         /* 红区填充值 */
-#define BR_MEM_POISON     0x5Au         /* 释放后用户区毒化值 */
+#define BR_MEM_RZ_BYTE    0xA5u         /* redzone fill byte */
+#define BR_MEM_POISON     0x5Au         /* user-area poison value after free */
 
 #define BR_MEM_ST_LIVE    0x11A7u
 #define BR_MEM_ST_DEAD    0xDEADu
 
 #define BR_OWNER_MAX      16u
 
-/* contig / DMA 池的静态节点上界(原型: 运行期分配的小池, 不做动态扩容)。 */
+/* static node bound for the contig / DMA pools (prototype: small pools allocated at run time, no growth). */
 #define BR_CONTIG_MAX_FREE   64u
 #define BR_CONTIG_MAX_ALLOC  64u
 
 typedef struct br_mem_hdr {
-    br_u32              magic;   /* [0x00] 头魔数(破坏 ⇒ canary) */
-    br_u32              size;    /* [0x04] 用户请求字节(< 4 GiB; 池远小于此) */
-    br_u32              seq;     /* [0x08] 分配序号(单调; walk 排序键) */
-    br_u16              owner;   /* [0x0C] 归属标签 */
-    br_u16              state;   /* [0x0E] LIVE / DEAD(重复释放判据) */
-    struct br_mem_hdr  *next;    /* [0x10] 存活块单链 */
-    br_uintptr_t        caller;  /* [0x18] 分配点返回地址 */
+    br_u32              magic;   /* [0x00] header magic (corruption ⇒ canary) */
+    br_u32              size;    /* [0x04] user-requested bytes (< 4 GiB; pools are far smaller) */
+    br_u32              seq;     /* [0x08] allocation sequence (monotonic; walk sort key) */
+    br_u16              owner;   /* [0x0C] ownership tag */
+    br_u16              state;   /* [0x0E] LIVE / DEAD (double-free check) */
+    struct br_mem_hdr  *next;    /* [0x10] live-block singly linked list */
+    br_uintptr_t        caller;  /* [0x18] return address of the allocation site */
 } br_mem_hdr_t;
 
-_Static_assert(sizeof(br_mem_hdr_t) == BR_MEM_HDR, "mem 块头必须 32 B(布局冻结)");
+_Static_assert(sizeof(br_mem_hdr_t) == BR_MEM_HDR, "mem block header must be 32 B (layout frozen)");
 
 typedef struct br_mem_footer {
-    br_u32 magic;   /* 尾魔数 */
-    br_u32 size;    /* size 副本(与头对不上 ⇒ 头部/尾部被踩) */
+    br_u32 magic;   /* footer magic */
+    br_u32 size;    /* size copy (mismatch with header ⇒ header/footer stomped) */
 } br_mem_footer_t;
 
-_Static_assert(sizeof(br_mem_footer_t) == BR_MEM_FOOTER, "尾哨兵必须 8 B");
+_Static_assert(sizeof(br_mem_footer_t) == BR_MEM_FOOTER, "footer sentinel must be 8 B");
 
 /* =====================================================================
- * 全局状态(原型单实例; v1 无线程 ⇒ 无锁)
+ * Global state (single instance in the prototype; no threads in v1 ⇒ no locking)
  * ===================================================================== */
 
 static struct {
-    br_bool          attempted;   /* 幂等: 首次调用的结果被缓存, 不重建 */
+    br_bool          attempted;   /* idempotent: first call's result is cached, never rebuilt */
     int              init_rc;
     br_bool          ready;
     br_bool          have_dma;
     br_mem_layout_t  layout;
-    br_mem_hdr_t    *live;        /* 存活块单链(push-front ⇒ seq 递减) */
+    br_mem_hdr_t    *live;        /* live-block singly linked list (push-front ⇒ seq decreasing) */
     br_u32           seq;
     br_size_t        high_water;
     br_u32           n_alloc;
@@ -103,7 +106,7 @@ static struct {
     br_u32           contig_size_mismatch;
 } s_mem;
 
-/* 归属标签表(5-01 §4 的 v1.x 形态: 只有标签, 没有预算/强制)。 */
+/* Owner tag table (the v1.x form from 5-01 §4: tags only, no budget/enforcement). */
 static struct {
     const char *name;
 } s_owners[BR_OWNER_MAX];
@@ -111,7 +114,7 @@ static br_u32     s_owner_n;
 static br_owner_t s_owner_cur = BR_OWNER_NONE;
 
 /* =====================================================================
- * 小工具(无 libc)
+ * Small helpers (no libc)
  * ===================================================================== */
 
 static br_bool mem_str_eq(const char *a, const char *b)
@@ -139,7 +142,7 @@ static br_size_t mem_align8(br_size_t v)
     return (v + 7u) & ~(br_size_t)7u;
 }
 
-/* TLSF 请求 = 块头 32 + 用户区补齐 8 B + 红区 8 + 尾 8。 */
+/* TLSF request = block header 32 + user area padded to 8 B + redzone 8 + footer 8. */
 static br_size_t mem_req(br_size_t n)
 {
     return (br_size_t)BR_MEM_HDR + mem_align8(n) +
@@ -151,7 +154,7 @@ static br_u8 *mem_user(const br_mem_hdr_t *h)
     return (br_u8 *)(void *)h + BR_MEM_HDR;
 }
 
-/* 红区 = [user + n, user + ALIGN8(n) + 8); 尾哨兵紧随其后。 */
+/* redzone = [user + n, user + ALIGN8(n) + 8); the footer sentinel follows immediately. */
 static br_u8 *mem_rz_begin(const br_mem_hdr_t *h)
 {
     return mem_user(h) + h->size;
@@ -162,7 +165,7 @@ static br_u8 *mem_foot_at(const br_mem_hdr_t *h)
     return mem_user(h) + mem_align8(h->size) + (br_size_t)BR_MEM_REDZONE;
 }
 
-/* 用户指针 → 块头(合法性: 在堆池内、按 BR_MALLOC_ALIGN 对齐); 非法 ⇒ NULL。 */
+/* user pointer → block header (validity: inside the heap pool, aligned to BR_MALLOC_ALIGN); invalid ⇒ NULL. */
 static br_mem_hdr_t *mem_hdr_of_user(void *p)
 {
     if ((p == BR_NULL) || (s_mem.ready == BR_FALSE)) {
@@ -203,12 +206,14 @@ static void mem_unlink_live(br_mem_hdr_t *h)
 }
 
 /* =====================================================================
- * contig 池(CA-7): 有序空闲链 + 首次适配 + 对齐空洞切块还链 + 释放合并
+ * contig pool (CA-7): sorted free list + first fit + aligned hole split back to the list + merge on free
  *
- * 记录表 vs 空闲链: 分配记录(addr/block/user_size)是**释放时唯一的真值来源**。
- * `br_mem_free_contig(ptr,size)` 的 size 入参不可信 —— 它由调用方记忆, 记错了
- * 会把池切出洞; 所以实现一律按记录里的 block 大小归还, 只把不一致当错误计数
- * (3-04 §2 的"静态划分"精神: 释放边界不能由调用方即兴决定)。
+ * Record table vs free list: the allocation record (addr/block/user_size) is the only source
+ * of truth at free time. The size argument of `br_mem_free_contig(ptr,size)` is untrustworthy —
+ * the caller remembers it, and a wrong value would punch holes in the pool; so the
+ * implementation always returns the block size from the record and only counts a mismatch as
+ * an error (the "static partitioning" spirit of 3-04 §2: the free boundary is not decided
+ * ad hoc by the caller).
  * ===================================================================== */
 
 typedef struct {
@@ -217,9 +222,9 @@ typedef struct {
 } br_contig_free_t;
 
 typedef struct {
-    br_uintptr_t addr;    /* 用户块起始 */
-    br_size_t    block;   /* 实际占用(16 对齐后) */
-    br_size_t    size;    /* 用户请求 */
+    br_uintptr_t addr;    /* user block start */
+    br_size_t    block;   /* actual footprint (after 16-byte alignment) */
+    br_size_t    size;    /* user request */
 } br_contig_alloc_t;
 
 typedef struct {
@@ -260,7 +265,7 @@ static void contig_pool_init(br_contig_pool_t *cp, br_uintptr_t base, br_size_t 
     }
 }
 
-/* 按地址升序插入空闲节点(不合并; 合并由 contig_merge 一次完成)。 */
+/* insert a free node in ascending address order (no merging; contig_merge does that in one pass). */
 static br_bool contig_free_insert(br_contig_pool_t *cp, br_uintptr_t addr, br_size_t size)
 {
     if (cp->n_free >= (br_u32)BR_CONTIG_MAX_FREE) {
@@ -280,7 +285,7 @@ static br_bool contig_free_insert(br_contig_pool_t *cp, br_uintptr_t addr, br_si
     return BR_TRUE;
 }
 
-/* 一次线性合并相邻空闲节点(链已按地址升序且互不重叠)。 */
+/* one linear pass merging adjacent free nodes (the list is address-sorted and non-overlapping). */
 static void contig_merge(br_contig_pool_t *cp)
 {
     br_u32 i = 0u;
@@ -307,7 +312,7 @@ static int contig_alloc(br_contig_pool_t *cp, br_size_t size, br_size_t align, v
     if (size == 0u) {
         return BR_ERR(EINVAL);
     }
-    /* align 必须是 2 的幂(0 与含多个 1 位的值都拒)。 */
+    /* align must be a power of two (0 and values with several 1 bits are rejected). */
     if ((align == 0u) || ((align & (align - 1u)) != 0u)) {
         return BR_ERR(EINVAL);
     }
@@ -344,7 +349,7 @@ static int contig_alloc(br_contig_pool_t *cp, br_size_t size, br_size_t align, v
         cp->allocs[cp->n_alloc].size  = size;
         cp->n_alloc++;
 
-        /* 把该空闲节点从链上摘掉, 再把前/后空洞各作为独立节点还链。 */
+        /* unlink that free node, then return the front/back holes as separate nodes. */
         for (br_u32 k = i; (k + 1u) < cp->n_free; k++) {
             cp->free_list[k] = cp->free_list[k + 1u];
         }
@@ -378,14 +383,14 @@ static void contig_free(br_contig_pool_t *cp, void *ptr, br_size_t size)
         }
     }
     if (idx >= (br_u32)BR_CONTIG_MAX_ALLOC) {
-        s_mem.contig_bad_free++;   /* 不在本池/从未分配: 忽略 + 记错 */
-        br_log_warn("mem: contig free 非池内指针 %p", ptr);
+        s_mem.contig_bad_free++;   /* not in this pool / never allocated: ignore + count */
+        br_log_warn("mem: contig free of non-pool pointer %p", ptr);
         return;
     }
 
     const br_contig_alloc_t rec = cp->allocs[idx];
     if (size != rec.size) {
-        s_mem.contig_size_mismatch++;   /* 按记录释放, 不信任入参 */
+        s_mem.contig_size_mismatch++;   /* free by record, do not trust the argument */
     }
 
     cp->n_alloc--;
@@ -398,14 +403,14 @@ static void contig_free(br_contig_pool_t *cp, void *ptr, br_size_t size)
 
     if (contig_free_insert(cp, rec.addr, rec.block) == BR_FALSE) {
         s_mem.contig_bad_free++;
-        br_log_error("mem: contig 空闲链满, %p 未归还(欠账)", ptr);
+        br_log_error("mem: contig free list full, %p not returned (leak)", ptr);
         return;
     }
     contig_merge(cp);
 }
 
 /* =====================================================================
- * 归属标签(③ 记账契约; 5-01 §4 的 v1.x 形态)
+ * Owner tags (③ accounting contract; the v1.x form of 5-01 §4)
  * ===================================================================== */
 
 br_owner_t br_heap_owner_register(const char *name)
@@ -415,7 +420,7 @@ br_owner_t br_heap_owner_register(const char *name)
     }
     for (br_u32 i = 0u; i < s_owner_n; i++) {
         if (mem_str_eq(s_owners[i].name, name) == BR_TRUE) {
-            return BR_OWNER_NONE;   /* 重名: 不新建 */
+            return BR_OWNER_NONE;   /* duplicate name: do not create a new one */
         }
     }
     s_owners[s_owner_n].name = name;
@@ -447,7 +452,7 @@ br_owner_t br_heap_owner_get(void)
 }
 
 /* =====================================================================
- * 字节堆(TLSF 包装; §6)
+ * Byte heap (TLSF wrapper; §6)
  * ===================================================================== */
 
 void *br_malloc(br_size_t n)
@@ -456,7 +461,7 @@ void *br_malloc(br_size_t n)
         s_mem.n_fail++;
         return BR_NULL;
     }
-    if (n > (br_size_t)0xFFFFFFF0u) {   /* size 字段是 u32(块头 32 B 的冻结布局) */
+    if (n > (br_size_t)0xFFFFFFF0u) {   /* the size field is u32 (frozen 32 B block header layout) */
         s_mem.n_fail++;
         return BR_NULL;
     }
@@ -464,7 +469,7 @@ void *br_malloc(br_size_t n)
     br_u8 *h = (br_u8 *)br_tlsf_alloc(mem_req(n));
     if (h == BR_NULL) {
         s_mem.n_fail++;
-        return BR_NULL;   /* 热路径: 不打日志(§6; 计数已足够定位) */
+        return BR_NULL;   /* hot path: no logging (§6; counters suffice to locate it) */
     }
 
     br_mem_hdr_t *hdr = (br_mem_hdr_t *)(void *)h;
@@ -500,7 +505,7 @@ void *br_malloc(br_size_t n)
 void br_free(void *p)
 {
     if (p == BR_NULL) {
-        return;   /* §6: free(NULL) = 无操作 */
+        return;   /* §6: free(NULL) is a no-op */
     }
     if (s_mem.ready == BR_FALSE) {
         s_mem.bad_free++;
@@ -509,23 +514,24 @@ void br_free(void *p)
 
     br_mem_hdr_t *h = mem_hdr_of_user(p);
     if (h == BR_NULL) {
-        s_mem.bad_free++;   /* 非本堆/未对齐 */
-        br_log_error("mem: free 非本堆指针 %p", p);
+        s_mem.bad_free++;   /* not this heap / misaligned */
+        br_log_error("mem: free of non-heap pointer %p", p);
         return;
     }
 
-    /* ★ 空闲链存**块尾**(tlsf.c), 所以块头在 free 后仍可读 ⇒ 这里能区分
-     *   "已释放"(state=DEAD, 头未复用)与"野指针", 给出 double_free 计数。 */
+    /* ★ the free list stores the block TAIL (tlsf.c), so the block header is still readable
+     *   after free ⇒ this can tell "already freed" (state=DEAD, header not reused) from a
+     *   wild pointer, and count double_free. */
     if ((h->magic == BR_MEM_MAGIC) && (h->state == BR_MEM_ST_DEAD)) {
         s_mem.double_free++;
         return;
     }
     if (mem_find_live(h) == BR_NULL) {
-        s_mem.double_free++;   /* 本堆地址但不在存活链: 重复释放或伪造指针 */
+        s_mem.double_free++;   /* heap address but not on the live list: double free or forged pointer */
         return;
     }
     if (h->magic != BR_MEM_MAGIC) {
-        s_mem.canary_hits++;   /* 头魔数被踩, 仍继续释放以避免泄漏 */
+        s_mem.canary_hits++;   /* header magic stomped, keep freeing anyway to avoid a leak */
     }
 
     const br_size_t n   = h->size;
@@ -539,7 +545,7 @@ void br_free(void *p)
     }
     if (bad > 0u) {
         s_mem.redzone_hits += bad;
-        br_log_error("mem: 红区被踩 %u 字节 (blk=%p size=%lu)", bad, p, (unsigned long)n);
+        br_log_error("mem: redzone stomped, %u bytes (blk=%p size=%lu)", bad, p, (unsigned long)n);
     }
 
     const br_mem_footer_t *f = (const br_mem_footer_t *)(const void *)fo;
@@ -547,7 +553,7 @@ void br_free(void *p)
         s_mem.canary_hits++;
     }
 
-    mem_fill((void *)p, n, (br_u8)BR_MEM_POISON);   /* 毒化用户区(悬垂读可见) */
+    mem_fill((void *)p, n, (br_u8)BR_MEM_POISON);   /* poison the user area (makes dangling reads visible) */
 
     mem_unlink_live(h);
     h->state = BR_MEM_ST_DEAD;
@@ -563,7 +569,7 @@ void br_free(void *p)
 void *br_calloc(br_size_t n, br_size_t size)
 {
     if ((n != 0u) && (size > (~(br_size_t)0u) / n)) {
-        s_mem.n_fail++;   /* 乘法溢出: §6 的错误面(避免"算小了再越界写") */
+        s_mem.n_fail++;   /* multiplication overflow: the §6 error face (avoid "computed small, then wrote out of bounds") */
         return BR_NULL;
     }
     const br_size_t total = n * size;
@@ -594,7 +600,7 @@ void *br_realloc(void *p, br_size_t n)
     const br_size_t old_n = h->size;
     void *q = br_malloc(n);
     if (q == BR_NULL) {
-        return BR_NULL;   /* 原块保持有效(POSIX 语义; n_fail 已由 br_malloc 计) */
+        return BR_NULL;   /* the original block stays valid (POSIX semantics; n_fail already counted by br_malloc) */
     }
 
     const br_size_t keep = (old_n < n) ? old_n : n;
@@ -615,8 +621,8 @@ int br_heap_usage(br_size_t *used, br_size_t *total)
     if ((used == BR_NULL) || (total == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
-    /* 与 br_heap_stats_get 的 used/total 是同一投影: 两者都直接问 TLSF 计数,
-     * 不做第二份缓存 —— 否则"记账"与"实况"会各自漂移。 */
+    /* same projection as used/total in br_heap_stats_get: both ask the TLSF counters directly,
+     * with no second cache — otherwise "accounting" and "reality" would drift apart. */
     *used  = br_tlsf_used();
     *total = s_mem.layout.heap.size;
     return BR_OK;
@@ -657,8 +663,10 @@ int br_heap_walk(br_heap_walk_fn fn, void *ctx)
         return BR_ERR(EINVAL);
     }
 
-    /* 存活链是 push-front ⇒ 头→尾 seq 严格递减。原地反转即得升序, 回调后翻回。
-     * ★ 约束: 回调内**不得**分配/释放(会改链); 只读观测(与 memleak 的用法一致)。 */
+    /* the live list is push-front ⇒ seq strictly decreases from head to tail. In-place reversal
+     * gives ascending order; flip back after the callbacks.
+     * ★ constraint: the callback must NOT allocate/free (it would mutate the list); read-only
+     * observation (as memleak uses it). */
     br_mem_hdr_t *prev = BR_NULL;
     br_mem_hdr_t *cur  = s_mem.live;
     while (cur != BR_NULL) {
@@ -734,7 +742,7 @@ br_u32 br_heap_check(void)
 }
 
 /* =====================================================================
- * 连续池 / 页池 / DMA(§6; CA-6/CA-7/CA-8)
+ * contig pool / page pool / DMA (§6; CA-6/CA-7/CA-8)
  * ===================================================================== */
 
 int br_mem_alloc_contig(br_size_t size, br_size_t align, void **out)
@@ -770,15 +778,16 @@ int br_dma_alloc(br_size_t n, br_u32 attrs, br_dma_buf_t *out)
         return BR_ERR(ENODEV);
     }
     if (s_mem.have_dma == BR_FALSE) {
-        return BR_ERR(ENODEV);   /* region 表没声明 DMA 池 */
+        return BR_ERR(ENODEV);   /* the region table declares no DMA pool */
     }
     if (n == 0u) {
         return BR_ERR(EINVAL);
     }
 
-    /* v1 默认即 4 KiB 对齐(CA-6 恒等映射 + 设备侧一致性); BR_DMA_F_ALIGN4K 置位
-     * 不改变路径。BR_DMA_F_CACHED 在 v1 是**非目标**(§6 的头部注释: 默认非缓存
-     * 是设备一致性的保守选择), 刻意忽略而不报错 —— append-only 属性位。 */
+    /* v1 is 4 KiB aligned by default (CA-6 identity mapping + device-side consistency);
+     * setting BR_DMA_F_ALIGN4K does not change the path. BR_DMA_F_CACHED is a non-goal in v1
+     * (§6 header comment: uncached by default is the conservative choice for device
+     * consistency), deliberately ignored rather than rejected — append-only attribute bits. */
     void *v = BR_NULL;
     const int rc = contig_alloc(&s_dma, n, (br_size_t)BR_PAGE_SIZE, &v);
     if (rc != BR_OK) {
@@ -789,7 +798,7 @@ int br_dma_alloc(br_size_t n, br_u32 attrs, br_dma_buf_t *out)
         mem_fill(v, n, 0u);
     }
     out->vaddr    = v;
-    out->dma_addr = (br_uintptr_t)v;   /* CA-6 / INV-6: v1 恒等 */
+    out->dma_addr = (br_uintptr_t)v;   /* CA-6 / INV-6: identity in v1 */
     out->size     = n;
     return BR_OK;
 }
@@ -809,9 +818,9 @@ int br_dma_free(const br_dma_buf_t *b)
         return BR_ERR(EINVAL);
     }
     if (b->dma_addr != (br_uintptr_t)b->vaddr) {
-        /* CA-6 的一致性判据: 两个地址是同一处真值的两个视图, 对不上就不归还
-         * (归还错地址会把池切坏)。 */
-        br_log_error("mem: dma_free 地址不一致 vaddr=%p dma=0x%lx",
+        /* CA-6 consistency check: the two addresses are two views of one source of truth; if
+         * they disagree, do not return the block (returning the wrong address would damage the pool). */
+        br_log_error("mem: dma_free address mismatch vaddr=%p dma=0x%lx",
                      b->vaddr, (unsigned long)b->dma_addr);
         return BR_ERR(EINVAL);
     }
@@ -820,7 +829,7 @@ int br_dma_free(const br_dma_buf_t *b)
 }
 
 /* =====================================================================
- * 初始化(§6 / 3-04 §3): 认领 region, 建 TLSF + 页位图 + contig/DMA 池
+ * Init (§6 / 3-04 §3): claim regions, build TLSF + page bitmap + contig/DMA pools
  * ===================================================================== */
 
 static int mem_claim_pools(void)
@@ -837,12 +846,12 @@ static int mem_claim_pools(void)
         if (r == BR_NULL) {
             continue;
         }
-        /* region 粒度校验: 池必须是 4 KiB 对齐、4 KiB 整数倍(3-01 §6 的
-         * BR_PAGE_SIZE 口径; br_mm_region_add 已挡一次, 这里是第二道)。 */
+        /* region granularity check: a pool must be 4 KiB aligned and a 4 KiB multiple
+         * (the BR_PAGE_SIZE rule of 3-01 §6; br_mm_region_add already blocks once, this is the second line). */
         if (((r->base & (br_uintptr_t)(BR_PAGE_SIZE - 1u)) != 0u) ||
             (r->size == 0u) ||
             ((r->size & (br_size_t)(BR_PAGE_SIZE - 1u)) != 0u)) {
-            br_log_error("mem: region[%u] 粒度不合法 base=%p size=%lu",
+            br_log_error("mem: region[%u] illegal granularity base=%p size=%lu",
                          (unsigned)i, (void *)r->base, (unsigned long)r->size);
             return BR_ERR(EINVAL);
         }
@@ -874,18 +883,18 @@ static int mem_claim_pools(void)
             }
             break;
         default:
-            break;   /* IMAGE/STACK/MMIO/RESERVED: 不是池, 不认领 */
+            break;   /* IMAGE/STACK/MMIO/RESERVED: not pools, do not claim */
         }
     }
 
     if ((heap.size == 0u) || (contig.size == 0u) || (page.size == 0u)) {
-        br_log_error("mem: 缺必需池(heap=%lu contig=%lu page=%lu)",
+        br_log_error("mem: missing required pool (heap=%lu contig=%lu page=%lu)",
                      (unsigned long)heap.size, (unsigned long)contig.size,
                      (unsigned long)page.size);
         return BR_ERR(ENODEV);
     }
 
-    /* 池太小: 分别给出下界, 避免建出一个"永远分配不出东西"的池。 */
+    /* pools too small: each gets its own lower bound, so we never build a pool that can never allocate. */
     if (heap.size < ((br_size_t)BR_TLSF_OVERHEAD * 2u)) {
         return BR_ERR(ENOMEM);
     }
@@ -901,12 +910,12 @@ static int mem_claim_pools(void)
 
     int rc = br_tlsf_init((void *)heap.base, heap.size);
     if (rc != BR_OK) {
-        br_log_error("mem: TLSF 初始化失败 rc=%d", rc);
+        br_log_error("mem: TLSF init failed rc=%d", rc);
         return rc;
     }
     rc = br_page_pool_init(page.base, page.size);
     if (rc != BR_OK) {
-        br_log_error("mem: 页池初始化失败 rc=%d", rc);
+        br_log_error("mem: page pool init failed rc=%d", rc);
         return rc;
     }
 
@@ -935,7 +944,7 @@ static int mem_claim_pools(void)
 int br_mem_init(void)
 {
     if (s_mem.attempted == BR_TRUE) {
-        return s_mem.init_rc;   /* 幂等: 二次调用返回首次结果, 不重建 */
+        return s_mem.init_rc;   /* idempotent: a second call returns the first result, never rebuilds */
     }
     s_mem.attempted = BR_TRUE;
     s_mem.init_rc   = mem_claim_pools();

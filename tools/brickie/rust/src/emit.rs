@@ -1,22 +1,22 @@
-//! 确定性 TOML / JSON 文本发射器(机器文件用)。
+//! Deterministic TOML / JSON text emitter (for machine files).
 //!
-//! 纪律(contract §4): 机器文件里**不得出现时间戳 / 随机数 / 主机相关信息**;
-//! 同一输入两次运行 ⇒ 逐字节相同。本模块只做"结构 → 文本", 不排序语义 ——
-//! 顺序由调用方(本 crate 内部)显式给定, 保证可复现。
+//! Discipline (contract §4): machine files **must contain no timestamps / random numbers / host-specific info**;
+//! the same input run twice ⇒ byte-identical. This module only turns "structure → text" and does not sort semantics —
+//! ordering is given explicitly by the caller (inside this crate) to guarantee reproducibility.
 //!
-//! 对外导出:
-//! - [`TDoc`] / [`TTable`] / [`TValue`] —— 可复用的"TOML 表 / 数组表"发射原语
-//!   (快照序列化由 agent-B 在 iface.rs 里复用这些原语, 见 README)。
-//! - [`render_lock`] —— `brickie.lock` 的规范化文本。
-//! - [`render_dependents`] —— `build/index/dependents.json` 的规范化文本。
+//! Public exports:
+//! - [`TDoc`] / [`TTable`] / [`TValue`] —— reusable "TOML table / array table" emit primitives
+//!   (snapshot serialization reuses these primitives in iface.rs, owned by agent-B; see README).
+//! - [`render_lock`] —— canonical text of `brickie.lock`.
+//! - [`render_dependents`] —— canonical text of `build/index/dependents.json`.
 
 use crate::model::{Lock, Snapshot};
 
-/// 生成物首行标记(与 cxx `text.h` 的 `kGeneratedMarker` / contract §6 同字面量)。
-/// "识别这个文件是不是本工具的生成物"用。
+/// First-line marker of generated files (same literal as cxx `text.h` `kGeneratedMarker` / contract §6).
+/// Used to tell whether a file is a product of this tool.
 pub const GENERATED_MARKER: &str = "brickie:generated";
 
-/// TOML 标量 / 数组值。
+/// TOML scalar / array value.
 #[derive(Clone, Debug)]
 pub enum TValue {
     Str(String),
@@ -44,12 +44,12 @@ impl TValue {
     }
 }
 
-/// 一个 TOML 表(或 `[[数组表]]`)节点。
+/// One TOML table (or `[[array table]]`) node.
 #[derive(Clone, Debug, Default)]
 pub struct TTable {
-    /// 表头路径段, 如 `["plugin", "export"]`。
+    /// Header path segments, e.g. `["plugin", "export"]`.
     pub header: Vec<String>,
-    /// `true` ⇒ `[[header]]`(数组表)。
+    /// `true` ⇒ `[[header]]` (array table).
     pub array: bool,
     pub values: Vec<(String, TValue)>,
     pub children: Vec<TTable>,
@@ -121,7 +121,7 @@ impl TTable {
     }
 }
 
-/// 一份 TOML 文档: 根键值 + 表(按插入序发射)。
+/// A TOML document: root key-values + tables (emitted in insertion order).
 #[derive(Clone, Debug, Default)]
 pub struct TDoc {
     pub values: Vec<(String, TValue)>,
@@ -143,7 +143,7 @@ impl TDoc {
         self
     }
 
-    /// 渲染为文本; 以换行结尾, 无 BOM, `\n` 行尾(LF)。
+    /// Render to text; ends with a newline, no BOM, `\n` line endings (LF).
     pub fn render(&self) -> String {
         let mut out = String::new();
         for (k, v) in &self.values {
@@ -156,7 +156,7 @@ impl TDoc {
     }
 }
 
-/// TOML 基本字符串转义(只支持 basic string, 不用多行字符串)。
+/// TOML basic-string escaping (supports basic strings only, no multi-line strings).
 pub fn toml_string(s: &str) -> String {
     let mut out = String::with_capacity(s.len() + 2);
     out.push('"');
@@ -177,20 +177,20 @@ pub fn toml_string(s: &str) -> String {
     out
 }
 
-// ------------------------------------------------------------------ 机器文件
+// ------------------------------------------------------------------ machine files
 
-/// 机器 TOML 文件的公共文件头: 首行标记 + 一句"请勿手改"(无时间戳)。
+/// Common header for machine TOML files: first-line marker + a "do not edit by hand" note (no timestamp).
 fn machine_header(what: &str) -> String {
     format!(
-        "# {GENERATED_MARKER}\n# {what} — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)\n\n"
+        "# {GENERATED_MARKER}\n# {what} — machine-owned file, do not edit by hand; byte-identical across runs on the same input (contract §4)\n\n"
     )
 }
 
-/// `brickie.lock` 的规范化文本(幂等 / 无时间戳)。
+/// Canonical text of `brickie.lock` (idempotent / no timestamp).
 ///
-/// 形状 = `schema/lock.schema.json`(权威): `schema` + `[lock]` 下的 `profile` /
-/// `plugins[]` / `units[]`。`[lock.product]` 是本实现的扩展(schema 的
-/// `additionalProperties: true` 允许), 便于记录产品头。
+/// Shape = `schema/lock.schema.json` (authoritative): `schema` + `profile` /
+/// `plugins[]` / `units[]` under `[lock]`. `[lock.product]` is an extension of this implementation
+/// (allowed by the schema's `additionalProperties: true`) to record the product header.
 pub fn render_lock(lock: &Lock) -> String {
     let mut doc = TDoc::new().set("schema", TValue::Int(lock.schema));
 
@@ -232,7 +232,7 @@ pub fn render_lock(lock: &Lock) -> String {
     format!("{}{}", machine_header("brickie.lock"), doc.render())
 }
 
-/// `build/index/dependents.json` 的规范化文本(键排序, 无时间戳)。
+/// Canonical text of `build/index/dependents.json` (keys sorted, no timestamp).
 pub fn render_dependents(index: &crate::model::DependentsIndex) -> String {
     let mut map = serde_json::Map::new();
     for (plugin, edges) in &index.dependents {
@@ -246,20 +246,20 @@ pub fn render_dependents(index: &crate::model::DependentsIndex) -> String {
         "schema": index.schema,
         "dependents": serde_json::Value::Object(map),
     });
-    format!("{}\n", serde_json::to_string_pretty(&root).expect("JSON 必可序列化"))
+    format!("{}\n", serde_json::to_string_pretty(&root).expect("JSON must be serializable"))
 }
 
-/// 快照序列化的**可复用原语**(agent-B: iface.rs 用这些拼 `api/iface/<provider>/<unit>.toml`)。
+/// **Reusable primitives** for snapshot serialization (agent-B: iface.rs assembles `api/iface/<provider>/<unit>.toml` from these).
 ///
-/// 本函数给出一个**形状示例**(不含 hash 计算 —— hash 归 agent-B 的 IFACE-IR):
-/// 快照头强制 `hash_scope` / `truth` 与 `NOT_ABI` 提示(RV-3 / V-11)。
+/// This function gives a **shape example** (no hash computation — hashing belongs to agent-B's IFACE-IR):
+/// the snapshot header enforces `hash_scope` / `truth` and the `NOT_ABI` note (RV-3 / V-11).
 pub fn render_snapshot(snap: &Snapshot) -> String {
     let mut doc = TDoc::new()
         .set("schema", TValue::Int(1))
         .set("unit", TValue::Str(snap.id.clone()))
         .set("provider", TValue::Str(snap.provider.clone()))
         .set("NOT_ABI", TValue::Str(
-            "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)".to_string(),
+            "declaration-surface hash ≠ proof of ABI compatibility (v0.1 truth=decl, §6.6/RV-3)".to_string(),
         ));
 
     let mut head = TTable::new(&["unit_meta"]);
@@ -272,9 +272,9 @@ pub fn render_snapshot(snap: &Snapshot) -> String {
     head.push_str("hash", snap.hash.clone().unwrap_or_default());
     head.push_str("hash_scope", snap.hash_scope.clone().unwrap_or_default());
     head.push_str("truth", snap.truth.clone().unwrap_or_default());
-    // IFACE-IR 规则 10: `strict_params` 必须存进快照(否则跨环境 hash 抖动)。
+    // IFACE-IR rule 10: `strict_params` must be stored in the snapshot (otherwise hashes vary across environments).
     head.push_bool("strict_params", snap.strict_params.unwrap_or(false));
-    // 裁定 R-7: 解冻窗口的基线(只有处于解冻窗口时才有)。
+    // Ruling R-7: baseline of the unfreeze window (present only while in an unfreeze window).
     if let Some(b) = &snap.baseline_hash {
         head.push_str("baseline_hash", b.clone());
     }
@@ -320,10 +320,10 @@ pub fn render_snapshot(snap: &Snapshot) -> String {
         doc = doc.push(t);
     }
 
-    format!("{}{}", machine_header(&format!("api/iface 快照 {}", snap.file)), doc.render())
+    format!("{}{}", machine_header(&format!("api/iface snapshot {}", snap.file)), doc.render())
 }
 
-/// 机器 TOML 文件的公共文件头(供 iface.rs 的提案/其它机器文件复用)。
+/// Common header for machine TOML files (reused by iface.rs proposals and other machine files).
 pub fn machine_text_header(what: &str) -> String {
     machine_header(what)
 }

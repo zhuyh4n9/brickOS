@@ -8,7 +8,7 @@
 > **可展开符号链接的重启式解析** + 布局守卫; `src/vfs_internal.h`: 路径上界 64 → 128);
 > `fs/tmpfs/src/tmpfs.c`(**数据体引用计数** = 硬链接; `symlink`/`readlink`/`link` 三个槽位;
 > `unlink` 认符号链接); `io/uart-pl011/src/uart_selftest.c`(`br_stat_t` 布局变更的具名初始化);
-> `framework/vfs-core/plugin.toml`(导出面 + 结构布局); `tests/gates.toml`(`fs-test` 的 tag 名单)。
+> `framework/vfs-core/brick.toml`(导出面 + 结构布局); `tests/gates.toml`(`fs-test` 的 tag 名单)。
 > 设计依据: `7-01-vfs.md` §1(SD-1 统一可打开模型)/§2(SD-15/D23 四层 ops; 原文把
 > `symlink/readlink/mknod` 写作"v2 预留: 槽位未占; 到 v2 再 append")、`7-01` §4.1、
 > `8-01-device.md` §2(D21 的设备接入与"看得见打不开")、`3-01` §11(错误码子集)。
@@ -164,7 +164,7 @@ _Static_assert(BR_VFS_PATH_MAX == BR_VFS_PATH_MAX_INTERNAL, "…必须一致…"
 | tmpfs | `src/tmpfs.c`: `tmpfs_body_t` 引用计数 + 三个槽位 + `unlink` 认符号链接 + `getattr` 报 `nlink` |
 | 用例 | `src/vfs_selftest.c` 的 `TC-VFS-014..020`(7 条): 建链与 lstat/stat 跟随 / readlink 边界 / 经链接读写 / 绝对与含 `..` 的相对目标 / `O_NOFOLLOW` 与环 / 硬链接与跨挂载 `-EXDEV` / 链接参与名字空间变更 |
 | 门禁 | `tests/gates.toml` 的 `fs-test` tag 名单 13 → 20 |
-| 声明面 | `framework/vfs-core/plugin.toml`(导出面 + `br_inode_ops_t`/`br_stat_t` 的结构布局行) |
+| 声明面 | `framework/vfs-core/brick.toml`(导出面 + `br_inode_ops_t`/`br_stat_t` 的结构布局行) |
 
 **验证(实测)**
 

@@ -1,11 +1,11 @@
-// brickie — 极小 JSON 实现(自研, 无第三方依赖)
+// brickie — minimal JSON implementation (own code, no third-party deps)
 //
-// 为什么自研: v0.1 依赖纪律(Design/docs/2-toolchain/brickie/brickie-v0.1.md §9.3)
-// 规定 C++ 侧「标准库 + 轻量模板引擎(或自研文本渲染)」, 且 C9 要求
-// 「稳定的进程间 JSON 契约」——契约的编解码本身不能引入外部件。
+// Why own code: v0.1 dependency discipline (Design/docs/2-toolchain/brickie/brickie-v0.1.md §9.3)
+// allows only "std library + lightweight template engine (or own text rendering)" for C++, and
+// C9 requires a "stable inter-process JSON contract" — its codec cannot add external components.
 //
-// 支持: null / bool / number / string(含 \u 转义与代理对)/ array / object。
-// object 保留插入顺序, 以便输出 diff 稳定(V-2 的"逐字节一致"依赖确定性序列化)。
+// Supports: null / bool / number / string (with \u escapes and surrogate pairs) / array / object.
+// object keeps insertion order for stable output diffs (V-2 "byte-identical" needs it).
 #pragma once
 
 #include <string>
@@ -36,7 +36,7 @@ public:
     bool isStr() const { return t == JType::Str; }
     bool isNull() const { return t == JType::Null; }
 
-    // object 取值; 不存在或类型不符返回 nullptr
+    // object lookup; returns nullptr if missing or wrong type
     const J *find(const std::string &k) const;
     J &set(const std::string &k, J v);
     void push(J v);
@@ -46,10 +46,10 @@ public:
     double asNum(double dflt = 0.0) const;
 };
 
-// 解析失败时返回 false, err 填人类可读原因(含偏移)
+// on parse failure returns false and fills err with a human-readable reason (incl. offset)
 bool parseJson(const std::string &text, J &out, std::string &err);
 
-// indent < 0 ⇒ 紧凑输出(单行)。字符串按 JSON 规则转义, 非 ASCII 原样输出(合法 UTF-8)。
+// indent < 0 ⇒ compact output (single line). Strings escaped per JSON rules; non-ASCII emitted as-is (valid UTF-8).
 std::string dumpJson(const J &v, int indent = 2);
 
 }  // namespace brickie

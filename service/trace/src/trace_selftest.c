@@ -1,22 +1,22 @@
 /*
- * brickOS prototype v0.2.0 — service/trace 的**自检套件**(service/trace/src/trace_selftest.c)
+ * brickOS prototype v0.2.0 — service/trace selftest suite (service/trace/src/trace_selftest.c)
  *
- * 设计依据与裁定: `docs/decisions/0010-plugin-selftest.md`(自检与生产代码分离)。
- * 本文件是从 `trace.c` **原样搬来**的用例(TC-DBG-001..003): case id、断言与日志串
- * 一字未改 —— 门禁 `tests/gates.toml` 按 `[DBGCONF] PASS/FAIL` 与 require_tags 判红绿。
+ * Design basis and ruling: `docs/decisions/0010-plugin-selftest.md` (selftest separate from
+ * production code). Cases (TC-DBG-001..003) taken verbatim from `trace.c`: case ids,
+ * assertions and log strings unchanged — gate `tests/gates.toml` decides by `[DBGCONF] PASS/FAIL`.
  *
- * ## 边界
- *   只经 `br/debug/br_trace_svc.h` 的**公开 API** 驱动(marker / register / name /
- *   report / seen / reset / summary), 不看 core 环的内部;
- *   **例外只有两处**: "两个 tag 初始槽位相同"与"名字逐字节相等"要用生产实现里的
- *   `trc_slot_of` / `trc_streq`。它们经 `src/trace_internal.h` 的访问器**转调生产实现**
- *   (不复制逻辑), 理由见该头文件。
+ * ## Boundary
+ *   Driven only through the public API of `br/debug/br_trace_svc.h` (marker / register / name /
+ *   report / seen / reset / summary), never core ring internals;
+ *   only two exceptions: "two tags share an initial slot" and "names are byte-equal" need
+ *   `trc_slot_of` / `trc_streq` from the production implementation. They are reached through the
+ *   `src/trace_internal.h` accessors (no logic copied); see that header for the rationale.
  *
- * ## 与插件管理器的契约
- *   返回**失败项数**(0 = 全绿); 日志自己打(`[DBGCONF] PASS/FAIL ...`)。
- *   **失败不停机** —— 红绿由门禁判(`tests/gates.toml` 的 forbid 里有 `[DBGCONF] FAIL`)。
- *   入口名 `trace_selftest` 由生成物按 `symbol_prefix` 推导(见 plugin_desc.c 的
- *   `.selftest`), 不是本插件的对外 API。
+ * ## Contract with the plugin manager
+ *   Returns the failure count (0 = all green); logs are emitted here (`[DBGCONF] PASS/FAIL ...`).
+ *   Failure does not halt — the gate decides (`[DBGCONF] FAIL` is in tests/gates.toml forbid).
+ *   The entry name `trace_selftest` is derived by the generated code from `symbol_prefix` (see
+ *   `.selftest` in plugin_desc.c), not this plugin's public API.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -26,40 +26,40 @@
 
 #include "trace_internal.h"
 
-/* 入口原型(声明面集中在生成物里; 这里重述只为满足全局函数的原型纪律)。 */
+/* Entry prototype (declarations live in generated code; restated here for the global-function prototype rule). */
 int trace_selftest(void);
 
-/* ==================================================================== 用例夹具
+/* ==================================================================== Test fixtures
  *
- * selftest 的 tag 用静态数组: marker 的幂等判据是指针相等。
+ * selftest tags use static arrays: marker idempotence is judged by pointer equality.
  */
 static const char TRC_TAG_SELFTEST[] = "selftest.a";
 
-/* 线性探测判据: 下面两个 tag 的初始槽位**相同**(此处 = 16; 用例内用 trc_slot_of
- * 复核), 用来断言"撞槽不再 -ENOSPC, 而是探测到下一个空槽、各自拿到不同 id"。 */
+/* Linear-probe check: the next two tags have the same initial slot (here = 16; verified in
+ * the case via trc_slot_of), asserting a slot collision no longer yields -ENOSPC but probes on to distinct ids. */
 static const char TRC_TAG_SLOT_A[] = "selftest.victor";
 static const char TRC_TAG_SLOT_B[] = "selftest.yankee";
 
-/* "内容同名但指针不同 ⇒ -ENOSPC" 判据。刻意用**非 const**的可写数组: 常量合并
- * (-fmerge-constants)可能把内容相同的 const 数组并成同一地址, 那就测不到
- * "指针不同"这一支了。 */
+/* "Same contents but different pointers => -ENOSPC" check. Deliberately non-const writable
+ * arrays: constant merging (-fmerge-constants) could fold identical const arrays to one
+ * address, which would no longer exercise the "different pointers" branch. */
 static char TRC_TAG_DUP_A[] = "selftest.dup";
 static char TRC_TAG_DUP_B[] = "selftest.dup";
 
-/* 记一条 DBGCONF 判据; 返回 0/1 便于累加失败数 */
+/* Record one DBGCONF check; returns 0/1 so failures can be summed */
 static br_u32 trc_conf(br_bool ok, const char *tag, const char *what)
 {
     br_log_info("[DBGCONF] %s %s %s", ok ? "PASS" : "FAIL", tag, what);
     return ok ? 0u : 1u;
 }
 
-/* ==================================================================== 用例 */
+/* ==================================================================== Cases */
 
 int trace_selftest(void)
 {
     br_u32 fails = 0u;
 
-    /* ---- TC-DBG-001: marker 幂等 + 动态 id/名字 + 消费计数 ---- */
+    /* ---- TC-DBG-001: marker idempotence + dynamic id/name + drain count ---- */
     br_trace_svc_reset();
 
     const int   id1 = br_trace_svc_marker(TRC_TAG_SELFTEST);
@@ -69,18 +69,18 @@ int trace_selftest(void)
     fails += trc_conf((id1 >= (int)BR_TRACE_SVC_ID_BASE) && (id1 == id2)
                       && (nm != BR_NULL) && br_trace_internal_streq(nm, TRC_TAG_SELFTEST),
                       "TC-DBG-001",
-                      "marker 两次得到同一动态 id(>= BASE)且 name 可解码");
+                      "two markers yield the same dynamic id (>= BASE) and name decodes");
 
     const br_u32 got1 = br_trace_svc_report(0u);
     fails += trc_conf((got1 >= 2u) && (id1 >= 0)
                       && (br_trace_svc_seen((br_u32)id1) >= 2u),
                       "TC-DBG-001",
-                      "report(0) 取回 >=2 条且 seen(id) >= 2");
+                      "report(0) returns >=2 records and seen(id) >= 2");
 
-    /* ---- TC-DBG-001(续): 撞槽走线性探测, 不再"撞车即错" ----
-     * 两个 tag 的初始槽位相同(用例内用 trc_slot_of 复核, 免得 hash 改动后这条
-     * 断言悄悄变成空转); 断言两者都注册成功、id 不同、名字各自可解码。
-     * 用 register(不发事件); tag 是静态数组(指针稳定) ⇒ 重复跑 selftest 仍幂等。 */
+    /* ---- TC-DBG-001 (cont.): slot collision takes linear probing, no longer "collision is an error" ----
+     * Both tags share the same initial slot (verified in the case via trc_slot_of, so a hash
+     * change cannot silently turn this assertion into a no-op); asserts both register, with distinct
+     * ids and decodable names. Uses register (no event); tags are static arrays (stable pointers) => rerunning selftest stays idempotent. */
     const int   ca  = br_trace_svc_register(TRC_TAG_SLOT_A);
     const int   cb  = br_trace_svc_register(TRC_TAG_SLOT_B);
     const char *cna = (ca >= 0) ? br_trace_svc_name((br_u32)ca) : BR_NULL;
@@ -93,31 +93,31 @@ int trace_selftest(void)
                       && (cna != BR_NULL) && br_trace_internal_streq(cna, TRC_TAG_SLOT_A)
                       && (cnb != BR_NULL) && br_trace_internal_streq(cnb, TRC_TAG_SLOT_B),
                       "TC-DBG-001",
-                      "hash 同槽的两个 tag 线性探测后都注册成功(id 不同、名字正确)");
+                      "two tags with the same hash slot both register after linear probing (distinct ids, correct names)");
 
-    /* 内容同名但指针不同 ⇒ -ENOSPC(身份不可判定, 不复用也不新建第二份名字)。
-     * 顺带断言两个静态数组地址确实不同(常量合并若发生, 这条会先报出来)。 */
+    /* Same contents but different pointers => -ENOSPC (identity undecidable: no reuse, no second name).
+     * Also asserts the two static array addresses really differ (constant merging would surface here first). */
     const int da = br_trace_svc_register(TRC_TAG_DUP_A);
     const int db = br_trace_svc_register(TRC_TAG_DUP_B);
 
-    /* -Warray-compare: 直接比较数组名会被警告, 这里显式比首元素地址 */
+    /* -Warray-compare: comparing array names warns, so compare first-element addresses explicitly */
     fails += trc_conf((da >= (int)BR_TRACE_SVC_ID_BASE)
                       && (db == BR_ERR(ENOSPC))
                       && (&TRC_TAG_DUP_A[0] != &TRC_TAG_DUP_B[0]),
                       "TC-DBG-001",
-                      "内容同名但指针不同 ⇒ -ENOSPC(不复用、不新建)");
+                      "same contents but different pointers => -ENOSPC (no reuse, no new entry)");
 
-    /* ---- TC-DBG-002: 故意把环打满, overrun > 0 是"这段历史不可信"的诚实信号 ----
-     * 连续发 RING_SIZE + 8 条而不消费: 生产者覆盖尚未消费的旧槽位, overrun 递增。
-     * summary 打印的 overrun 直接取 br_trace_overrun(), 与断言值同源 ⇒ 相等按构造成立;
-     * 这里额外验证"打印前后读数不变"(drain/summary 都不改生产者计数)。 */
+    /* ---- TC-DBG-002: deliberately overflow the ring; overrun > 0 is the honest "this history is untrustworthy" signal ----
+     * Emit RING_SIZE + 8 records without draining: the producer overwrites unread old slots, so overrun grows.
+     * The overrun printed by summary comes straight from br_trace_overrun(), same source as the asserted
+     * value => equality holds by construction; additionally verifies the reading is unchanged across the print (drain/summary do not touch the producer count). */
     const br_u32 orun_before = br_trace_overrun();
 
     for (br_u32 i = 0u; i < ((br_u32)BR_TRACE_RING_SIZE + 8u); i++) {
         (void)br_trace_svc_marker(TRC_TAG_SELFTEST);
     }
 
-    /* 全部 drain; 有界循环: 消费期间 ISR 可能继续补货, 不能死等"空" */
+    /* Drain everything; bounded loop: an ISR may refill during draining, so never spin waiting for "empty" */
     for (br_u32 i = 0u; i < 8u; i++) {
         if (br_trace_svc_report(0u) == 0u) {
             break;
@@ -131,9 +131,9 @@ int trace_selftest(void)
     fails += trc_conf((orun_after > 0u) && (orun_after >= orun_before)
                       && (orun_post == orun_after),
                       "TC-DBG-002",
-                      "打满环后 overrun > 0 且 summary 的 overrun 与之一致");
+                      "after overflowing the ring overrun > 0 and summary's overrun matches");
 
-    /* ---- TC-DBG-003: 截断消费后从最旧未消费处续读, 不丢中间积压 ---- */
+    /* ---- TC-DBG-003: after a truncated drain, resume at the oldest unread record without losing the backlog ---- */
     br_trace_svc_reset();
 
     for (br_u32 i = 0u; i < 5u; i++) {
@@ -145,9 +145,9 @@ int trace_selftest(void)
 
     fails += trc_conf((first == 2u) && (rest >= 3u),
                       "TC-DBG-003",
-                      "report(2) 只取 2 条, 紧接 report(0) 续读 >=3 条");
+                      "report(2) takes only 2 records, then report(0) resumes with >=3");
 
-    /* ---- 收尾: 清计数并把环 drain 空, 免得污染后续 dump 的 trace 段 ---- */
+    /* ---- Teardown: reset counters and drain the ring so later dumps' trace section stays clean ---- */
     br_trace_svc_reset();
     for (br_u32 i = 0u; i < 8u; i++) {
         if (br_trace_svc_report(0u) == 0u) {

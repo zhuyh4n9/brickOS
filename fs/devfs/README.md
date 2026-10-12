@@ -14,7 +14,7 @@
 > 逐条裁定与偏离: `docs/decisions/0009-vfs-storage-stack.md`(§2.3 "`type` 是语义唯一真值" /
 > §2.4 "看得见打不开" / §3 裁定 6 flash 无文件面、裁定 11 设备节点的 iops 只填 getattr)。
 
-## 声明面(`plugin.toml` 是唯一真值)
+## 声明面(`brick.toml` 是唯一真值)
 
 | 项 | 值 | 依据 |
 |---|---|---|
@@ -83,7 +83,7 @@
 ## 目录
 
 ```
-plugin.toml        人写   ← 插件级唯一真值(本目录不改它)
+brick.toml        人写   ← 插件级唯一真值(本目录不改它)
 src/devfs.c        人写   ← 注册表投影(lookup/readdir/getattr/free_inode)+ 挂载与生命周期钩子
 README.md          ← 本文件
 tests/smoke.toml   ← 声明面用例骨架(借 vfs-core 的 TC-VFS-* id, 见上)
@@ -92,7 +92,7 @@ tests/smoke.toml   ← 声明面用例骨架(借 vfs-core 的 TC-VFS-* id, 见�
 ## 已知欠账(不在本插件目录可修)
 
 - `br-wa-fs-001`: **挂载点是代码常量** —— `src/devfs.c` 的 `BR_DEVFS_MOUNT_PATH` 与
-  `plugin.toml` 的 `[[mount]]` 是**两处真值**, 工具侧既不消费 `[[mount]]` 也不校验两者一致
+  `brick.toml` 的 `[[mount]]` 是**两处真值**, 工具侧既不消费 `[[mount]]` 也不校验两者一致
   (与 `br-wa-mem-001` 的 budget→region 同源)。退出条件 = 组合器按 `[[mount]]` 产出挂载计划,
   届时该常量随之消失。登记表见根目录 `WORKAROUNDS.md`。
 - 设备节点的**私有不属于本件**: 会话由 cdev-core 的适配层建/销; 本件的 `free_inode` 只

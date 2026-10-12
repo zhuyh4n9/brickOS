@@ -1,28 +1,29 @@
 /*
- * brickOS prototype v0.1.0 — 内存映射子系统一致性用例(in-image conformance)
+ * brickOS prototype v0.1.0 — memory-mapping subsystem conformance cases (in-image conformance)
  *
- * 设计依据:
- *   - `docs/6-test/6-01-test.md` §3.5(TC-MEM-* 内存组)/§3.6(TC-MM-* MMU 组);
- *   - `docs/3-os-core/3-04-memory.md` §1(v1 政策 = 恒等映射 + 属性隔离);
- *   - `docs/3-os-core/3-01-core-api-list.md` §6/§7(三池 + region 表 + cache 维护)。
+ * Design basis:
+ *   - `docs/6-test/6-01-test.md` §3.5 (TC-MEM-* memory group) / §3.6 (TC-MM-* MMU group);
+ *   - `docs/3-os-core/3-04-memory.md` §1 (v1 policy = identity mapping + attribute isolation);
+ *   - `docs/3-os-core/3-01-core-api-list.md` §6/§7 (three pools + region table + cache maintenance).
  *
- * 为什么是 **in-image** 而不是 host 用例:
- *   6-01 §3.6 已把 MMU 组标成 target-only —— "恒等映射""真保护页""翻译 fault"这三件事
- *   在 host 上根本不存在(host 侧只验算法性质, 见 `make mem-test`)。本文件把用例编进
- *   镜像, 由 `br_plat_mem_conformance()` 在启动期跑一遍, 每项打一行
- *   `[MEMCONF] PASS/FAIL <tag> <说明>`, 末尾打 `[MEMCONF] SUMMARY pass=N fail=0 total=N`
- *   —— 于是红绿由 `make smoke` / `make dbg-test` 的 grep 判定, 不靠人眼。
+ * Why **in-image** rather than host cases:
+ *   6-01 §3.6 already marks the MMU group target-only — "identity mapping", "real protection
+ *   page" and "translation fault" simply do not exist on the host (the host side verifies
+ *   algorithmic properties only, see `make mem-test`). This file compiles the cases into the
+ *   image; `br_plat_mem_conformance()` runs them at startup and prints one line per item
+ *   `[MEMCONF] PASS/FAIL <tag> <text>`, ending with `[MEMCONF] SUMMARY pass=N fail=0 total=N`
+ *   — so red/green is decided by grepping `make smoke` / `make dbg-test`, not by eye.
  *
- * 覆盖:
- *   MM-ACTIVE  MMU 真的开着(br_mm_active() + SCTLR_EL1.M 硬件回读)
- *   MM-IDENT   抽样 8 个地址: 已映射 + 页表 PA == VA 页框(恒等映射的唯一判据)
- *   MM-POOLS   四池与 region 表一致 / 页总数换算 / 互不重叠 / 都在 8 MiB 窗口内
- *   MM-REGION  region 表非空、kind 可识别、find 命中与未命中
- *   MM-RO      **真保护**: RO 页上的写探针必须取 permission fault
- *   MM-NXDESC  NX 位能被 query 读回(不真的跳过去执行, 见该用例注释)
- *   MM-UNMAP   窗口外未映射地址 ⇒ translation fault, 且可恢复
- *   TC-MEM-001..007  三池 + DMA + 记账的最小断言(6-01 §3.5 在 target 上的投影)
- *   TC-MM-001..003   region_add 的错误码 / DEVICE 区 cache_flush / map-unmap 未实现
+ * Coverage:
+ *   MM-ACTIVE  the MMU is really on (br_mm_active() + SCTLR_EL1.M hardware read-back)
+ *   MM-IDENT   sample 8 addresses: mapped + page-table PA == VA frame (the sole identity-mapping criterion)
+ *   MM-POOLS   four pools match the region table / page count math / non-overlapping / all inside the 8 MiB window
+ *   MM-REGION  region table non-empty, kinds recognizable, find hit and miss
+ *   MM-RO      **real protection**: a write probe on an RO page must take a permission fault
+ *   MM-NXDESC  the NX bit is readable back via query (we do not really jump there, see that case's comment)
+ *   MM-UNMAP   an unmapped address outside the window => translation fault, recoverable
+ *   TC-MEM-001..007  minimal assertions for the three pools + DMA + accounting (6-01 §3.5 projected onto target)
+ *   TC-MM-001..003   region_add error codes / DEVICE-region cache_flush / map-unmap unimplemented
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -31,10 +32,11 @@
 #include <br/core/br_mm.h>
 
 #include <br/platform/br_mmu.h>
-#include <br/platform/br_plat.h>   /* br_plat_mem_conformance 的入口原型(唯一真值) */
+#include <br/platform/br_plat.h>   /* prototype of the br_plat_mem_conformance entry point (single source of truth) */
 
 /* =====================================================================
- * 断言与统计(与 irq_conf.c 同型: 失败数就是返回值, 供 Makefile 判红绿)
+ * Assertions and counters (same shape as irq_conf.c: the failure count is the return
+ * value, used by the Makefile to decide red/green)
  * ===================================================================== */
 static br_u32 s_pass;
 static br_u32 s_fail;
@@ -51,11 +53,13 @@ static void conf_report(br_bool ok, const char *tag, const char *what)
 }
 
 /* =====================================================================
- * extable 探针(3-02 §10.4; 与 irq_conf.c 的 conf_probe_read32 同型)
+ * extable probe (3-02 §10.4; same shape as conf_probe_read32 in irq_conf.c)
  *
- * ★ 返回值的**唯一来源**是 core 按表项 `reg`/`errno_val` 写进异常帧的那个寄存器(x0);
- *   成功路径自己 `mov %w[ret], wzr`。修复标签本身不造错误码 —— 否则这个探针就验证不了
- *   "表项必须带 reg + errno_val"这条设计结论(§10.4 的易错点)。
+ * The **sole source** of the return value is the register (x0) that core writes into the
+ * exception frame from the table entry's `reg`/`errno_val`; the success path sets
+ * `mov %w[ret], wzr` itself. The fixup label must not create an error code — otherwise this
+ * probe could not verify the design conclusion "a table entry must carry reg + errno_val"
+ * (§10.4 pitfall).
  * ===================================================================== */
 static int conf_probe_read32(br_uintptr_t addr, br_u32 *out)
 {
@@ -83,8 +87,9 @@ static int conf_probe_read32(br_uintptr_t addr, br_u32 *out)
     return ret;
 }
 
-/* 写探针: MM-RO 要验的正是"只读页上的写取 permission fault"——读探针验不了这件事。
- * 与读探针唯一的差别是故障指令是 `str`, 其余(表项 reg=0 / errno=-14 / 修复标签)照抄。 */
+/* Write probe: MM-RO must verify exactly "a write on a read-only page takes a permission
+ * fault" — a read probe cannot. The only difference from the read probe is that the faulting
+ * instruction is `str`; the rest (table entry reg=0 / errno=-14 / fixup label) is copied. */
 static int conf_probe_write32(br_uintptr_t addr, br_u32 val)
 {
     register br_s32       ret __asm__("x0");
@@ -110,7 +115,7 @@ static int conf_probe_write32(br_uintptr_t addr, br_u32 val)
 }
 
 /* =====================================================================
- * 小工具
+ * small helpers
  * ===================================================================== */
 static const br_mm_region_t *conf_region_of_kind(br_u32 kind)
 {
@@ -131,8 +136,9 @@ static br_bool conf_kind_known(br_u32 kind)
     return (kind >= BR_MM_KIND_IMAGE && kind <= BR_MM_KIND_RESERVED) ? BR_TRUE : BR_FALSE;
 }
 
-/* region 属性构造: kind 必须走 BR_MM_WITH_KIND 移位, 直接 `| BR_MM_KIND_x` 会把
- * 取值 8 写进属性低半字节(那一位不属于 kind 字段) —— 这是本头文件的经典误用。 */
+/* Build region attrs: kind must go through the BR_MM_WITH_KIND shift; a direct
+ * `| BR_MM_KIND_x` would write the value 8 into the attribute low nibble (that bit is not
+ * part of the kind field) — the classic misuse of this header. */
 static br_u32 conf_attrs_kind(br_u32 attrs, br_u32 kind)
 {
     return BR_MM_WITH_KIND(attrs, kind);
@@ -141,7 +147,7 @@ static br_u32 conf_attrs_kind(br_u32 attrs, br_u32 kind)
 /* =====================================================================
  * MM-ACTIVE / MM-IDENT
  * ===================================================================== */
-static br_u32 s_marker = 0x1D3E7u;      /* 镜像内变量(MM-IDENT 的抽样点之一) */
+static br_u32 s_marker = 0x1D3E7u;      /* in-image variable (one MM-IDENT sample point) */
 
 static void conf_mm_active(void)
 {
@@ -154,7 +160,7 @@ static void conf_mm_active(void)
                 info.sctlr, (br_u32)m_bit, info.tcr, info.mair, info.ttbr0);
 
     conf_report(br_mm_active() && m_bit, "MM-ACTIVE",
-                "br_mm_active() 为真且 SCTLR_EL1.M(bit0)==1(MMU 已在跑)");
+                "br_mm_active() true and SCTLR_EL1.M (bit0)==1 (MMU is running)");
 }
 
 static void conf_mm_ident(void)
@@ -165,17 +171,18 @@ static void conf_mm_ident(void)
     br_u32          bad = 0u;
 
     if (br_mem_layout(&lay) != 0) {
-        conf_report(BR_FALSE, "MM-IDENT", "取池布局失败, 无法抽样池地址");
+        conf_report(BR_FALSE, "MM-IDENT", "pool layout lookup failed, cannot sample pool addresses");
         return;
     }
 
     const br_mm_region_t *res = conf_region_of_kind(BR_MM_KIND_RESERVED);
     if (res == BR_NULL) {
-        conf_report(BR_FALSE, "MM-IDENT", "region 表里没有 RESERVED 区");
+        conf_report(BR_FALSE, "MM-IDENT", "no RESERVED region in the region table");
         return;
     }
 
-    /* 8 个抽样点: 镜像内变量 / 栈上局部 / 堆池首尾 / 页池首尾 / contig 池首 / 保留区首 */
+    /* 8 sample points: in-image variable / stack local / heap pool ends / page pool ends /
+     * contig pool start / reserved region start */
     addrs[0] = (br_uintptr_t)&s_marker;
     addrs[1] = (br_uintptr_t)&stack_local;
     addrs[2] = lay.heap.base;
@@ -203,7 +210,7 @@ static void conf_mm_ident(void)
     }
 
     conf_report(bad == 0u, "MM-IDENT",
-                "抽样 8 个地址(镜像/栈/堆首尾/页池首尾/contig/保留区): 已映射且页表 PA == VA 页框");
+                "8 sampled addresses (image/stack/heap ends/page pool ends/contig/reserved): mapped and page-table PA == VA frame");
 }
 
 /* =====================================================================
@@ -220,7 +227,7 @@ static void conf_mm_pools(void)
     br_u32           overlap  = 0u;
 
     if (br_mem_layout(&lay) != 0) {
-        conf_report(BR_FALSE, "MM-POOLS", "br_mem_layout() 返回非 0(池未就绪)");
+        conf_report(BR_FALSE, "MM-POOLS", "br_mem_layout() returned non-zero (pools not ready)");
         return;
     }
 
@@ -229,7 +236,8 @@ static void conf_mm_pools(void)
     pools[2] = &lay.page;
     pools[3] = &lay.dma;
 
-    /* (a) 四池 base/size 与 region 表逐条一致: 池是"认领 region"来的, 不该有第二个几何 */
+    /* (a) each pool's base/size matches the region table entry by entry: pools come from
+     * "claiming a region", there must not be a second geometry */
     for (br_u32 i = 0u; i < 4u; i++) {
         const br_mm_region_t *r = conf_region_of_kind(kinds[i]);
 
@@ -246,15 +254,15 @@ static void conf_mm_pools(void)
         }
     }
     conf_report(mismatch == 0u, "MM-POOLS",
-                "四池 base/size 与 region 表逐条一致(池几何 = 声明面, 无第二真值)");
+                "all four pools' base/size match the region table entry by entry (pool geometry = declaration, no second truth)");
 
-    /* (b) 页池换算: page_total 页 × 4 KiB == 页池字节数 */
+    /* (b) page pool math: page_total pages x 4 KiB == page pool byte size */
     conf_report(lay.page_size == BR_PAGE_SIZE
                 && (br_size_t)lay.page_total * BR_PAGE_SIZE == lay.page.size,
                 "MM-POOLS",
-                "page_size==4096 且 page_total*4096 == 页池 size");
+                "page_size==4096 and page_total*4096 == page pool size");
 
-    /* (c) 四池两两不重叠 */
+    /* (c) the four pools are pairwise non-overlapping */
     for (br_u32 i = 0u; i < 4u; i++) {
         for (br_u32 j = i + 1u; j < 4u; j++) {
             const br_uintptr_t ai = pools[i]->base;
@@ -267,10 +275,11 @@ static void conf_mm_pools(void)
             }
         }
     }
-    conf_report(overlap == 0u, "MM-POOLS", "四池两两不重叠");
+    conf_report(overlap == 0u, "MM-POOLS", "all four pools are pairwise non-overlapping");
 
-    /* (d) 都在 8 MiB 页表窗口内(窗口外就是未映射 ⇒ 池一旦越界, 第一次分配就 fault) */
-    conf_report(outside == 0u, "MM-POOLS", "四池都落在 8 MiB RAM 映射窗口内");
+    /* (d) all inside the 8 MiB page-table window (outside is unmapped => the first
+     * allocation would fault once a pool goes out of range) */
+    conf_report(outside == 0u, "MM-POOLS", "all four pools fall inside the 8 MiB RAM mapping window");
 }
 
 /* =====================================================================
@@ -283,7 +292,7 @@ static void conf_mm_region(void)
 
     br_log_info("[MEMCONF] info region table: %u entries (max %u)", n, (br_u32)BR_MM_MAX_REGIONS);
     conf_report(n > 0u && n <= BR_MM_MAX_REGIONS, "MM-REGION",
-                "br_mm_region_count() > 0 且未越表容量");
+                "br_mm_region_count() > 0 and within table capacity");
 
     for (br_u32 i = 0u; i < n; i++) {
         const br_mm_region_t *r = br_mm_region_get(i);
@@ -295,28 +304,28 @@ static void conf_mm_region(void)
         br_log_info("[MEMCONF] info   [%u] base=0x%lx size=%lu attrs=0x%x kind=%u",
                     i, (br_u64)r->base, (br_u64)r->size, r->attrs, BR_MM_KIND(r->attrs));
     }
-    conf_report(bad_kind == 0u, "MM-REGION", "每条 region 的 kind 都能被识别(image..reserved)");
+    conf_report(bad_kind == 0u, "MM-REGION", "every region's kind is recognizable (image..reserved)");
 
     const br_mm_region_t *img = conf_region_of_kind(BR_MM_KIND_IMAGE);
     const br_mm_region_t *hit = (img != BR_NULL) ? br_mm_region_find(img->base) : BR_NULL;
 
     conf_report(img != BR_NULL && hit != BR_NULL
                 && hit->base == img->base && hit->size == img->size,
-                "MM-REGION", "region_find(镜像基址) 命中且 base/size 与声明一致");
+                "MM-REGION", "region_find(image base) hits and base/size match the declaration");
 
     conf_report(br_mm_region_find((br_uintptr_t)BR_PLAT_CONF_UNMAPPED) == BR_NULL,
-                "MM-REGION", "未声明地址(0x42000000, 窗口外)⇒ region_find == NULL");
+                "MM-REGION", "undeclared address (0x42000000, outside the window) => region_find == NULL");
 }
 
 /* =====================================================================
- * MM-RO / MM-NXDESC / MM-UNMAP(真保护与可恢复 fault)
+ * MM-RO / MM-NXDESC / MM-UNMAP (real protection and recoverable faults)
  * ===================================================================== */
 static void conf_mm_ro(void)
 {
     const br_mm_region_t *res = conf_region_of_kind(BR_MM_KIND_RESERVED);
 
     if (res == BR_NULL || res->size < (2u * BR_PAGE_SIZE)) {
-        conf_report(BR_FALSE, "MM-RO", "保留区缺失或不足两页");
+        conf_report(BR_FALSE, "MM-RO", "reserved region missing or smaller than two pages");
         return;
     }
 
@@ -330,14 +339,15 @@ static void conf_mm_ro(void)
     br_log_info("[MEMCONF] info RO page=0x%lx set_attrs=%d query_attrs=0x%x",
                 (br_u64)page, rs, attrs);
     conf_report(rs == 0 && rq == 0 && (attrs & BR_MM_RO) != 0u, "MM-RO",
-                "set_attrs(RO) 成功且 query 从**页表**读回 BR_MM_RO");
+                "set_attrs(RO) succeeds and query reads BR_MM_RO back from the **page table**");
 
-    /* 真保护: 写探针必须命中修复(permission fault, EC=0x25/DFSC=0x0F 一类) */
+    /* Real protection: the write probe must hit the fixup (permission fault, EC=0x25/DFSC=0x0F class) */
     const int wr = conf_probe_write32(page, 0xDEADBEEFu);
     conf_report(wr == BR_ERR(EFAULT), "MM-RO",
-                "只读页上的写取 permission fault ⇒ extable 修复为 -EFAULT(真保护, 非影子)");
+                "write on a read-only page takes permission fault => extable fixes up to -EFAULT (real protection, not a shadow)");
 
-    /* 收尾: 属性是可撤销的, 改回 RW 后必须能正常写 —— 否则"保护"与"砖"没区别 */
+    /* Cleanup: attributes are revocable; after setting back to RW writes must work — otherwise
+     * "protection" would be indistinguishable from "brick" */
     const int rs2 = br_mm_set_attrs(page, BR_PAGE_SIZE,
                                     conf_attrs_kind(BR_MM_CACHED, BR_MM_KIND_RESERVED));
     const int wr2 = conf_probe_write32(page, 0x5A5A5A5Au);
@@ -345,7 +355,7 @@ static void conf_mm_ro(void)
     const int rd = conf_probe_read32(page, &back);
 
     conf_report(rs2 == 0 && wr2 == 0 && rd == 0 && back == 0x5A5A5A5Au, "MM-RO",
-                "改回 RW 后可正常写回读(保护可撤销, 不把页留在只读态给后续用例)");
+                "after restoring RW, write then read-back works (protection is revocable; the page is not left read-only for later cases)");
 }
 
 static void conf_mm_nxdesc(void)
@@ -353,7 +363,7 @@ static void conf_mm_nxdesc(void)
     const br_mm_region_t *res = conf_region_of_kind(BR_MM_KIND_RESERVED);
 
     if (res == BR_NULL || res->size < (2u * BR_PAGE_SIZE)) {
-        conf_report(BR_FALSE, "MM-NXDESC", "保留区缺失或不足两页");
+        conf_report(BR_FALSE, "MM-NXDESC", "reserved region missing or smaller than two pages");
         return;
     }
 
@@ -367,32 +377,38 @@ static void conf_mm_nxdesc(void)
     br_log_info("[MEMCONF] info NX page=0x%lx set_attrs=%d query_attrs=0x%x",
                 (br_u64)page, rs, attrs);
     conf_report(rs == 0 && rq == 0 && (attrs & BR_MM_NX) != 0u, "MM-NXDESC",
-                "set_attrs(NX) 后 query 读回 BR_MM_NX(PXN|UXN 同时置位)");
+                "after set_attrs(NX), query reads back BR_MM_NX (PXN|UXN both set)");
 
     /*
-     * ★ 刻意**不**真的跳到这一页上取指: executing-NX 走 instruction abort(EC=0x20/0x21),
-     *   而 core 的 extable 只覆盖 data abort(3-02 §10.4/irq_fault.c 的 EC 判定)⇒
-     *   跳过去必然走 fatal panic, 而不是"降级为错误码"。NX 的落点验证止于"描述符位生效",
-     *   这是本原型的能力边界, 不是漏测。
+     * We deliberately do **not** really jump to this page to fetch instructions:
+     * execute-on-NX goes through instruction abort (EC=0x20/0x21), while core's extable
+     * covers only data abort (3-02 §10.4 / the EC decision in irq_fault.c) => jumping there
+     * would necessarily hit a fatal panic rather than "degrade to an error code". NX
+     * end-to-end verification stops at "the descriptor bit takes effect"; that is this
+     * prototype's capability boundary, not a missed test.
      */
     const int rs2 = br_mm_set_attrs(page, BR_PAGE_SIZE,
                                     conf_attrs_kind(BR_MM_CACHED, BR_MM_KIND_RESERVED));
-    conf_report(rs2 == 0, "MM-NXDESC", "恢复可执行(RW 非 NX), 不把 NX 泄漏给后续用例");
+    conf_report(rs2 == 0, "MM-NXDESC", "restore executable (RW non-NX), do not leak NX to later cases");
 }
 
 /*
- * Device 2 MiB 块的 set_attrs 边界(页表在 2 MiB 粒度上表达不了子块属性)。
- * 这条裁定值一条显式用例: 边界若被"顺手放宽"成"按 2 MiB 生效", 一个只想保护 4 KiB
- * 的调用会把整块外设窗口变成只读 —— 症状出现在下一次 ISR 访问寄存器时, 离根因很远。
+ * set_attrs boundary on a Device 2 MiB block (the page tables cannot express sub-block
+ * attributes at 2 MiB granularity).
+ * This ruling is worth an explicit case: if the boundary were "conveniently relaxed" to
+ * "takes effect per 2 MiB", a call that only wants to protect 4 KiB would turn the whole
+ * peripheral window read-only — the symptom shows up on the next ISR register access, far
+ * from the root cause.
  */
 static void conf_mm_devblk(void)
 {
-    /* ① 子块范围(PL011 帧只有 4 KiB, 落在一个 2 MiB 块里)⇒ 明确 -ENOTSUP */
+    /* (1) sub-block range (the PL011 frame is only 4 KiB, inside one 2 MiB block) => explicit -ENOTSUP */
     const int r_sub = br_mm_set_attrs(0x09000000ul, BR_PAGE_SIZE, BR_MM_DEVICE | BR_MM_RO);
 
-    /* ② 整块对齐的范围可以整块改。挑一块**没有任何人在用**的设备窗口
-     *    (0x0E000000: QEMU virt 上既不是 GIC/GICR, 也不是 UART/virtio),
-     *    免得把正在用的寄存器帧改成只读 —— 那会变成下一次 ISR 里的 permission fault。 */
+    /* (2) a whole-block-aligned range can be changed as a block. Pick a device window that
+     *    **nobody is using** (0x0E000000: on QEMU virt that is neither GIC/GICR nor
+     *    UART/virtio), so we do not turn a live register frame read-only — that would become
+     *    a permission fault in the next ISR. */
     const br_uintptr_t blk = 0x0E000000ul;
     br_u32 attrs = 0u;
     const int r_w = br_mm_set_attrs(blk, 0x200000ul, BR_MM_DEVICE | BR_MM_RO);
@@ -405,10 +421,10 @@ static void conf_mm_devblk(void)
     br_log_info("[MEMCONF] info devblk sub=%d whole=%d query=%d attrs=0x%x restore=%d back=0x%x",
                 r_sub, r_w, r_q, attrs, r_r, back);
     conf_report(r_sub == BR_ERR(ENOTSUP), "MM-DEVBLK",
-                "Device 2 MiB 块上的子块 set_attrs(4 KiB)⇒ -ENOTSUP(硬件表达不了就不假装支持)");
+                "sub-block set_attrs (4 KiB) on a Device 2 MiB block => -ENOTSUP (do not pretend to support what the hardware cannot express)");
     conf_report(r_w == 0 && r_q == 0 && (attrs & BR_MM_RO) != 0u && (attrs & BR_MM_DEVICE) != 0u
                 && r_r == 0 && r_b == 0 && (back & BR_MM_RO) == 0u,
-                "MM-DEVBLK", "整块对齐的 Device 2 MiB 范围可整块改 RO 并读回, 随后恢复 RW");
+                "MM-DEVBLK", "a whole-block-aligned Device 2 MiB range can be made RO as a block and read back, then restored to RW");
 }
 
 static void conf_mm_unmap(void)
@@ -416,24 +432,25 @@ static void conf_mm_unmap(void)
     br_uintptr_t pa = 0u;
     br_u32       v  = 0u;
 
-    /* 先确认它真的未映射(翻译失败), 再确认"访问它"取的是可恢复 fault */
+    /* First confirm it is really unmapped (translation fails), then that "accessing it"
+     * takes a recoverable fault */
     const int rt = br_plat_mmu_translate((br_uintptr_t)BR_PLAT_CONF_UNMAPPED, &pa);
     br_log_info("[MEMCONF] info unmap probe va=0x%lx translate=%d", (br_u64)BR_PLAT_CONF_UNMAPPED, rt);
     conf_report(rt == BR_ERR(EFAULT), "MM-UNMAP",
-                "窗口外地址(0x42000000)在页表里 invalid ⇒ 翻译失败(-EFAULT)");
+                "address outside the window (0x42000000) is invalid in the page table => translation fails (-EFAULT)");
 
     const int r1 = conf_probe_read32((br_uintptr_t)BR_PLAT_CONF_UNMAPPED, &v);
     conf_report(r1 == BR_ERR(EFAULT), "MM-UNMAP",
-                "读未映射地址 ⇒ translation fault 被 extable 修复为 -EFAULT, 系统存活");
+                "read of an unmapped address => translation fault fixed up by extable to -EFAULT, system survives");
 
-    /* 第二次: 若 in_fault 没复位, 这一次会被当成 double fault(裸 panic) */
+    /* Second time: if in_fault were not reset, this one would be treated as a double fault (bare panic) */
     const int r2 = conf_probe_read32((br_uintptr_t)BR_PLAT_CONF_UNMAPPED, &v);
     conf_report(r2 == BR_ERR(EFAULT), "MM-UNMAP",
-                "再次读仍为 -EFAULT(in_fault 已复位 ⇒ 故障是可恢复的)");
+                "reading again is still -EFAULT (in_fault was reset => faults are recoverable)");
 }
 
 /* =====================================================================
- * TC-MEM-001..007(6-01 §3.5 在 target 上的最小断言)
+ * TC-MEM-001..007 (minimal assertions of 6-01 §3.5 on target)
  * ===================================================================== */
 static void conf_tc_mem_001(void)
 {
@@ -448,7 +465,7 @@ static void conf_tc_mem_001(void)
                 p, q, (br_u32)BR_MALLOC_ALIGN);
     br_free(p);
     br_free(q);
-    conf_report(ok, "TC-MEM-001", "malloc 返回地址 16 B 对齐(>= BR_MALLOC_ALIGN)");
+    conf_report(ok, "TC-MEM-001", "malloc returns 16 B aligned addresses (>= BR_MALLOC_ALIGN)");
 }
 
 static void conf_tc_mem_002(void)
@@ -458,8 +475,9 @@ static void conf_tc_mem_002(void)
     br_size_t sz[CONF_BLOCKS];
     br_u32    bad = 0u;
 
-    /* 显式清零点: 让"分配失败时 sz[i] 仍是确定的 0"成立, 也让后面的校验循环
-     * 不必依赖"编译器看得懂 blk[i] 与 sz[i] 是同一次迭代一起赋值的"这种推理 */
+    /* Explicit zeroing: makes "sz[i] is still a definite 0 when allocation fails" hold, and
+     * frees the later verification loop from relying on "the compiler can see that blk[i]
+     * and sz[i] are assigned together in the same iteration" */
     for (br_u32 i = 0u; i < (br_u32)CONF_BLOCKS; i++) {
         blk[i] = BR_NULL;
         sz[i]  = 0u;
@@ -479,7 +497,8 @@ static void conf_tc_mem_002(void)
         }
     }
 
-    /* 交错释放一半(偶数号), 校验存活块内容 —— 这就是"碎片压力"的形态 */
+    /* Free every other block (even indices) interleaved with verification of the surviving
+     * blocks — that is the shape of "fragmentation pressure" */
     for (br_u32 i = 0u; i < (br_u32)CONF_BLOCKS; i += 2u) {
         if (blk[i] == BR_NULL) {
             continue;
@@ -516,11 +535,11 @@ static void conf_tc_mem_002(void)
                 dirty, (br_u64)st.used, (br_u64)st.total, (br_u64)st.max_free_block);
 
     conf_report(bad == 0u && dirty == 0u && rs == 0, "TC-MEM-002",
-                "128 次交错 alloc/free 后内容完整且 br_heap_check()==0");
+                "after 128 interleaved alloc/free, contents intact and br_heap_check()==0");
     conf_report(frag_ok, "TC-MEM-002",
-                "最大空闲块 >= 池的 50%(TLSF 有界碎片, 6-01 §3.5)");
+                "largest free block >= 50% of the pool (TLSF bounded fragmentation, 6-01 §3.5)");
 
-    /* 收尾: 释放剩下的一半, 不泄漏 */
+    /* Cleanup: free the other half, no leak */
     for (br_u32 i = 1u; i < (br_u32)CONF_BLOCKS; i += 2u) {
         if (blk[i] != BR_NULL) {
             br_free(blk[i]);
@@ -556,8 +575,8 @@ static void conf_tc_mem_003(void)
     }
 
     br_free(c2);
-    conf_report(zeroed, "TC-MEM-003", "calloc(16,4) 返回的 64 B 全零");
-    conf_report(kept, "TC-MEM-003", "realloc 到 128 B 后前缀 8 B 内容保留");
+    conf_report(zeroed, "TC-MEM-003", "calloc(16,4) returns 64 B of all zeros");
+    conf_report(kept, "TC-MEM-003", "after realloc to 128 B the first 8 B of content are preserved");
 }
 
 static void conf_tc_mem_004(void)
@@ -581,7 +600,7 @@ static void conf_tc_mem_004(void)
     }
 
     br_log_info("[MEMCONF] info contig[0]=%p contig[1]=%p", p, q);
-    conf_report(ok, "TC-MEM-004", "contig align=4096 分配页对齐, free 后可复分配(CA-7)");
+    conf_report(ok, "TC-MEM-004", "contig align=4096 allocations are page-aligned and re-allocatable after free (CA-7)");
 }
 
 static void conf_tc_mem_005(void)
@@ -592,7 +611,8 @@ static void conf_tc_mem_005(void)
 
     br_mem_layout_t lay;
     if (ok && br_mem_layout(&lay) == 0) {
-        /* "连续"在本原型 = 一次分配的一段地址全落在页池内且逐页相邻 */
+        /* "Contiguous" in this prototype = one allocation's address range lies entirely
+         * inside the page pool and is page-adjacent */
         ok = ((br_uintptr_t)p >= lay.page.base)
              && (((br_uintptr_t)p + (n * BR_PAGE_SIZE)) <= (lay.page.base + lay.page.size));
     }
@@ -608,7 +628,7 @@ static void conf_tc_mem_005(void)
     }
 
     br_log_info("[MEMCONF] info page_alloc(3)=%p refill=%p", p, q);
-    conf_report(ok, "TC-MEM-005", "page alloc(3 页) 页对齐且连续, free 后可复分配(CA-8)");
+    conf_report(ok, "TC-MEM-005", "page alloc (3 pages) is page-aligned and contiguous, re-allocatable after free (CA-8)");
 }
 
 static void conf_tc_mem_006(void)
@@ -629,7 +649,7 @@ static void conf_tc_mem_006(void)
     if (r == 0) {
         (void)br_dma_free(&b);
     }
-    conf_report(ok, "TC-MEM-006", "dma_alloc: dma_addr == vaddr(v1 恒等, CA-6/INV-6)");
+    conf_report(ok, "TC-MEM-006", "dma_alloc: dma_addr == vaddr (v1 is identity, CA-6/INV-6)");
 }
 
 static void conf_tc_mem_007(void)
@@ -646,12 +666,12 @@ static void conf_tc_mem_007(void)
                 (br_u64)u0, (br_u64)t0, (br_u64)u1, (br_u64)t1, (br_u64)u2, (br_u64)t2);
 
     conf_report(r0 == 0 && r1 == 0 && r2 == 0 && p != BR_NULL && u1 > u0 && t1 == t0,
-                "TC-MEM-007", "allocate 后 used 上升(total 不变)");
-    conf_report(u2 == u0 && t2 == t0, "TC-MEM-007", "free 后 used/total 回基线(记账增减匹配)");
+                "TC-MEM-007", "after allocate, used rises (total unchanged)");
+    conf_report(u2 == u0 && t2 == t0, "TC-MEM-007", "after free, used/total return to baseline (accounting changes match)");
 }
 
 /* =====================================================================
- * TC-MM-001..003(6-01 §3.6)
+ * TC-MM-001..003 (6-01 §3.6)
  * ===================================================================== */
 static void conf_tc_mm_001(void)
 {
@@ -659,32 +679,33 @@ static void conf_tc_mm_001(void)
 
     int r_dup = BR_ERR(EINVAL);
     if (img != BR_NULL) {
-        r_dup = br_mm_region_add(img);      /* 同 base/size 复用: 表里已有 ⇒ -EEXIST */
+        r_dup = br_mm_region_add(img);      /* same base/size reused: already in the table => -EEXIST */
     }
     conf_report(img != BR_NULL && r_dup == BR_ERR(EEXIST), "TC-MM-001",
-                "复用已存在的 region(同 base/size)⇒ -EEXIST");
+                "re-adding an existing region (same base/size) => -EEXIST");
 
     br_mm_region_t r;
-    r.base  = BR_PLAT_CONF_UNMAPPED + 1u;   /* 未声明区 + 非 4 KiB 对齐 */
+    r.base  = BR_PLAT_CONF_UNMAPPED + 1u;   /* undeclared area + not 4 KiB aligned */
     r.size  = BR_PAGE_SIZE;
     r.attrs = conf_attrs_kind(BR_MM_CACHED, BR_MM_KIND_RESERVED);
 
     const int rc = br_mm_region_add(&r);
     br_log_info("[MEMCONF] info region_add(base=0x%lx unaligned) rc=%d", (br_u64)r.base, rc);
-    conf_report(rc == BR_ERR(EINVAL), "TC-MM-001", "base 非 4 KiB 对齐 ⇒ -EINVAL");
+    conf_report(rc == BR_ERR(EINVAL), "TC-MM-001", "base not 4 KiB aligned => -EINVAL");
 }
 
 static void conf_tc_mm_002(void)
 {
     /*
-     * PL011 UART0 = 已声明的 MMIO(Device, 非 CACHED)。对非缓存区做 cache 维护
-     * **必须是安静的无操作**: 真去 `dc cvac` 一个设备寄存器地址在架构上是不可预测的。
-     * core 按 region 属性短路(见 br_mm.h 的语义), 所以这里判的是"core 真的短路了"。
+     * PL011 UART0 = declared MMIO (Device, non-CACHED). Cache maintenance on a non-cached
+     * region **must be a silent no-op**: really doing `dc cvac` on a device register address
+     * is architecturally unpredictable. core short-circuits per region attribute (see the
+     * semantics in br_mm.h), so what is judged here is "core really short-circuited".
      */
     const int rc = br_mm_cache_flush((void *)(br_uintptr_t)0x09000000ul, 64u);
 
     conf_report(rc == 0, "TC-MM-002",
-                "cache_flush(PL011 MMIO, 64 B) ⇒ 0(DEVICE 非缓存区无操作)");
+                "cache_flush(PL011 MMIO, 64 B) => 0 (no-op on a DEVICE non-cached region)");
 }
 
 static void conf_tc_mm_003(void)
@@ -696,16 +717,16 @@ static void conf_tc_mm_003(void)
         r_map = br_mm_map(res);
     }
     conf_report(r_map == BR_ERR(ENOTSUP), "TC-MM-003",
-                "br_mm_map() 在 v1 ⇒ -ENOTSUP(签名先行, 实现归 v2 重定位)");
+                "br_mm_map() in v1 => -ENOTSUP (signature first, implementation belongs to v2 relocation)");
 
     const br_uintptr_t addr = (res != BR_NULL) ? res->base : (br_uintptr_t)BR_PLAT_CONF_UNMAPPED;
     const int r_unmap = br_mm_unmap(addr, BR_PAGE_SIZE);
     conf_report(r_unmap == BR_ERR(ENOTSUP), "TC-MM-003",
-                "br_mm_unmap() 在 v1 ⇒ -ENOTSUP(主文档风险 R4 的签名先行验证)");
+                "br_mm_unmap() in v1 => -ENOTSUP (signature-first verification of main-doc risk R4)");
 }
 
 /* =====================================================================
- * 入口(由 platform 的 `qemu_aarch64_start()` 在 START 相调用; 见 br_plat.h)
+ * Entry point (called by the platform's `qemu_aarch64_start()` in the START phase; see br_plat.h)
  * ===================================================================== */
 int br_plat_mem_conformance(void)
 {

@@ -32,7 +32,7 @@ app/hello  ──[[dep]] runtime──▶  iface/posix  ──[[dep]] init(late)
 
 命名空间形态让本件与 `runtime/posix` **共享 `name_short = posix`**。缺省的钩子符号前缀由
 short 推导(会撞成同一个 `posix_early_init/init/start` ⇒ 链接期重复定义), 因此本件在
-`plugin.toml` 里**显式覆盖**:
+`brick.toml` 里**显式覆盖**:
 
 ```toml
 [plugin]
@@ -49,12 +49,12 @@ symbol_prefix = "iface_posix_"   # 钩子/描述符用 iface_posix_*, 不是 pos
 ## 目录
 
 ```
-plugin.toml                       人写   ← 插件级唯一真值(skin + reexport_of + symbol_prefix)
+brick.toml                       人写   ← 插件级唯一真值(skin + reexport_of + symbol_prefix)
 include/iface/posix/posix.h       人写   ← 皮肤面 + 三个钩子原型
 src/iface_posix.c                 人写   ← 三个空钩子(皮肤无状态)
 tests/smoke.toml                  人写   ← 用例声明面(骨架)
 ```
 
 接口面快照由 `brickie iface publish iface/posix#posix-skin` 产出到
-`api/iface/iface/posix/posix-skin.toml`(机器拥有); `plugin.toml` 里的 `hash` 由人抄回
+`api/iface/iface/posix/posix-skin.toml`(机器拥有); `brick.toml` 里的 `hash` 由人抄回
 (§9.1.1: 机器不改人写文件)。

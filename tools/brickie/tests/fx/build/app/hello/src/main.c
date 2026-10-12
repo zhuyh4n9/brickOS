@@ -1,3 +1,3 @@
-/* fx/build 的 app/hello 桩。 */
+/* fx/build app/hello stub. */
 int main(void);
 int main(void) { return 0; }

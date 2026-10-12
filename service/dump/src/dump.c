@@ -1,33 +1,47 @@
 /*
- * service/dump — 现场倾倒 + 调试域 conformance 编排者(实现体)
+ * service/dump — snapshot dump + debug-domain conformance orchestrator (impl)
  *
- * 设计出处: `docs/5-debug/5-01-debug.md`
- *   §2 `MEMRD`/`TRACE_READ`/`GETINFO`(debug bridge 的读命令);
- *   §3 mini ramdump 的捕获集("寄存器组、trace 环、**内存 region 表**、arena 统计")
- *      与约束"捕获路径**只用静态缓冲**, 不碰堆/调度器"。
+ * Design source: `docs/5-debug/5-01-debug.md`
+ *   §2 `MEMRD`/`TRACE_READ`/`GETINFO` (debug bridge read commands);
+ *   §3 mini ramdump capture set ("register set, trace ring, **memory region table**,
+ *       arena stats") and constraint "capture path uses **static buffers only**,
+ *       never touches heap/scheduler".
  *
- * 归属边界(`br_dump.h` 抬头, ADR-0003 §2.6): 本插件是**编排者**, 不是又一份实现 ——
- *   呈现原语  → `service/hexdump`(边界判定不归它: 谁读内存谁问 region 表);
- *   栈回溯    → `service/backtrace`(只捕获, 符号化归 host 离线工具);
- *   环的消费  → `service/trace`(环本身在 core, 插件是唯一消费方);
- *   泄漏/红区账 → `service/memleak`(只读 core 的堆观测契约)。
- *   本插件自己只做三件事: ① 按 region 表做边界判定; ② 把上面几件编排成一份现场;
- *   ③ 自身状态的 LATE 相 init + 启动快照。
+ * Ownership boundaries (`br_dump.h` header, ADR-0003 §2.6): this plugin is an
+ * **orchestrator**, not another implementation —
+ *   presentation primitives → `service/hexdump` (bounds check is not its job:
+ *       whoever reads memory asks the region table);
+ *   stack backtrace → `service/backtrace` (capture only; symbolization is for the
+ *       host-side offline tool);
+ *   ring consumption → `service/trace` (the ring lives in core, this plugin is the
+ *       only consumer);
+ *   leak/redzone accounting → `service/memleak` (reads core's heap observation
+ *       contract only).
+ *   This plugin does exactly three things: (1) bounds check against the region
+ *   table; (2) orchestrate the above into one snapshot; (3) LATE-phase init of its
+ *   own state + boot snapshot.
  *
- * ★ 调试域 conformance 的旧编排入口**已不在本文件**(ADR-0010): 拆分前 dump 那个对外发的
- *   conformance 函数
- *   既跑 dump 自己的用例, 又代调 trace/backtrace/hexdump/memleak 四家的 `*_selftest()`
- *   与 `*_init()`(v0.1 没有阶段机时的替身, WORKAROUND(br-wa-boot-001))。现在:
- *     - 各插件的自检入口在各自的 `src/<short>_selftest.c` 里, 由描述符钩子 `.selftest` 挂出,
- *       **core 在一个 pass 里驱动**(`br_plugin_manager_selftest`);
- *     - init 由 plugin_manager 按 `[[dep]]` 拓扑序驱动(本插件**不再**代调别家的 init)。
- *   dump 自己的用例搬到 `src/dump_selftest.c`; 台账口径见该文件抬头。
+ * ★ The old debug-domain conformance entry point is **no longer in this file**
+ *   (ADR-0010): before the split, that exported conformance function both ran
+ *   dump's own cases and called trace/backtrace/hexdump/memleak `*_selftest()` and
+ *   `*_init()` (a stand-in from v0.1 when there was no phase machine,
+ *   WORKAROUND(br-wa-boot-001)). Now:
+ *     - each plugin's selftest entry lives in its own `src/<short>_selftest.c`,
+ *       exposed via the descriptor hook `.selftest`, and **core drives them in one
+ *       pass** (`br_plugin_manager_selftest`);
+ *     - init is driven by plugin_manager in `[[dep]]` topological order (this
+ *       plugin **no longer** calls other plugins' init).
+ *   dump's own cases moved to `src/dump_selftest.c`; ledger conventions are in that
+ *   file's header.
  *
- * ★ 呈现落点欠债: 现在直写早期 console, 未经 `5-01 §2` 的 debug bridge
- *   (COBS + CRC16 成帧 + `MEMRD`/`TRACE_READ` 命令面, M3)。`WORKAROUND(br-wa-debug-002)`
- *   登记的还债动作 = 把呈现层改为经 bridge 成帧输出(内容与边界判定不变, 只换落点)。
+ * ★ Presentation sink debt: currently writes straight to the early console, not
+ *   through the `5-01 §2` debug bridge (COBS + CRC16 framing + `MEMRD`/`TRACE_READ`
+ *   command surface, M3). The repayment action registered under
+ *   `WORKAROUND(br-wa-debug-002)` = route the presentation layer through bridge
+ *   framing (content and bounds checks unchanged, only the sink changes).
  *
- * 线程纪律: 全部 **thread-only**(会打印、会走 region 表与堆观测)。
+ * Threading discipline: all **thread-only** (prints, walks the region table and
+ * heap observation).
  */
 #include <br/debug/br_dump.h>
 
@@ -42,10 +56,11 @@
 #include <br/core/br_mm.h>
 
 /* =====================================================================
- * 小工具: 无 libc 的定长串拼接 + region 属性解码
+ * Helpers: libc-free fixed-size string append + region attribute decode
  *
- * attribute 的可读串按"位串 + 种类"给, 例: `RO|CACHED|kind=heap`;
- * 四个属性位一个都没置 ⇒ 编成 `RW`(RW 不是 attrs 的位, 只是缺省可写可执行的读法)。
+ * The attribute's readable string is given as "flag string + kind", e.g.
+ * `RO|CACHED|kind=heap`; if not one of the four attribute bits is set it encodes
+ * as `RW` (RW is not an attrs bit, just the default readable/writable form).
  * ===================================================================== */
 
 static void dump_buf_add(char *buf, br_size_t cap, br_size_t *len, const char *s)
@@ -71,7 +86,7 @@ static void dump_attr_add(char *buf, br_size_t cap, br_size_t *len,
     dump_buf_add(buf, cap, len, tok);
 }
 
-/* BR_MM_KIND_* → 名字(与设计 3-01 §13.6 的 `regions` 轴取值一一对应) */
+/* BR_MM_KIND_* → name (matches the `regions` axis values in design 3-01 §13.6) */
 static const char *dump_kind_name(br_u32 attrs)
 {
     switch (BR_MM_KIND(attrs)) {
@@ -118,17 +133,19 @@ static void dump_attrs_str(char *buf, br_size_t cap, br_u32 attrs)
 }
 
 /* =====================================================================
- * LATE 相 init
+ * LATE-phase init
  * ===================================================================== */
 
 int br_dump_init(void)
 {
     /*
-     * 注册本插件自己的两个事件名("一次现场倾倒的开/末")。
-     * 返回值可能是负的(trace 服务未 init 时 `br_trace_svc_register` 会拒), 但
-     * **各插件的 init 由调用方按相位顺序负责**, dump 不代它 init(见 README
-     * 「归属边界」)⇒ 这里失败不致命, 继续; id 也丢弃(v1 不在 dump 路径发自有
-     * 事件, 名表只为离线解码可达)。
+     * Register this plugin's two event names ("start/end of one snapshot dump").
+     * The return value may be negative (`br_trace_svc_register` rejects when the
+     * trace service is not initialized), but **each plugin's init is the caller's
+     * responsibility in phase order**, dump does not init it (see README
+     * "ownership boundaries") ⇒ failure here is not fatal, continue; the id is
+     * also discarded (v1 emits no own events on the dump path, the name table
+     * exists only for offline decoding).
      */
     (void)br_trace_svc_register("dump.begin");
     (void)br_trace_svc_register("dump.end");
@@ -136,7 +153,7 @@ int br_dump_init(void)
 }
 
 /* =====================================================================
- * ① region 清单(设计 §3 捕获集的"内存 region 表")
+ * (1) region listing (the "memory region table" of the design §3 capture set)
  * ===================================================================== */
 
 br_u32 br_dump_regions(void)
@@ -148,7 +165,8 @@ br_u32 br_dump_regions(void)
         const br_mm_region_t *region = br_mm_region_get(i);
         char                  attrs[64];
 
-        /* 观测契约: 越界 ⇒ NULL。条数对不上就是 core 的观测面不自洽, 由用例报红 */
+        /* Observation contract: out of range ⇒ NULL. A count mismatch means core's
+         * observation surface is inconsistent; the test case reports it red */
         if (region == BR_NULL) {
             continue;
         }
@@ -164,21 +182,25 @@ br_u32 br_dump_regions(void)
 }
 
 /* =====================================================================
- * ② 边界受检的内存 dump
+ * (2) bounds-checked memory dump
  * ===================================================================== */
 
 /*
- * ★ 关键裁定: `BR_DUMP_F_FORCE` + **未声明地址** ⇒ 只打表头、**不读内存**。
+ * ★ Key ruling: `BR_DUMP_F_FORCE` + **undeclared address** ⇒ print the header
+ * only, **do not read memory**.
  *
- * 理由(ADR-0003 §2.4/§2.5): 页表是按 region 表快照构造的, 表外地址是 invalid;
- * 例如 `0x42000000` 就在 RAM 窗口(`0x40000000 + 8 MiB`)之外 —— 它在
- * `irq_conf.c` 里正是"确定可取 translation fault"的锚点。而 hexdump 是纯呈现原语,
- * **没有** extable 保护的读原语(设计 §2 的 MEMRD 完整形态要它, v1 未交付)⇒
- * 在这里真读一次就是一次不可恢复的 data abort, 把"调试服务"变成"崩溃源"。
+ * Rationale (ADR-0003 §2.4/§2.5): the page tables are built from the region table
+ * snapshot, so addresses outside it are invalid; e.g. `0x42000000` lies outside the
+ * RAM window (`0x40000000 + 8 MiB`) — in `irq_conf.c` it is exactly the anchor that
+ * "reliably takes a translation fault". And hexdump is a pure presentation
+ * primitive with **no** extable-protected read primitive (the full MEMRD form in
+ * design §2 needs it, v1 did not ship it) ⇒ actually reading here is an
+ * unrecoverable data abort, turning the "debug service" into a "crash source".
  *
- * 所以本原型里 FORCE 的语义收敛为: **绕过 region 表判定**(不返回 -EINVAL)、
- * 如实打印表头与"未读取"说明, 返回 0。要让它真读, 需要 extable 保护的 probe
- * (回灌项, 见 README「待回灌」)—— 不是把风险藏进 dump。
+ * So in this prototype FORCE narrows to: **bypass the region table check** (do not
+ * return -EINVAL), faithfully print the header and a "not read" note, return 0.
+ * Making it really read needs an extable-protected probe (backport item, see
+ * README "to backport") — not hiding the risk inside dump.
  */
 int br_dump_memory(br_uintptr_t addr, br_size_t len, br_u32 flags)
 {
@@ -193,21 +215,22 @@ int br_dump_memory(br_uintptr_t addr, br_size_t len, br_u32 flags)
 
     note[0] = '\0';
 
-    /* 缺省(STRICT): 未声明的地址一律拒绝 */
+    /* Default (STRICT): reject any undeclared address */
     if ((region == BR_NULL) && ((flags & BR_DUMP_F_FORCE) == 0u)) {
         return BR_ERR(EINVAL);
     }
 
     kind = (region != BR_NULL) ? dump_kind_name(region->attrs) : "none";
 
-    /* 上界截断: 防"一个 dump 打满 UART" */
+    /* Upper bound truncation: prevents "one dump saturating the UART" */
     if (n > BR_DUMP_MAX_BYTES) {
         n       = BR_DUMP_MAX_BYTES;
         cap_hit = BR_TRUE;
     }
 
     if (region != BR_NULL) {
-        /* 跨出首条 region 尾 ⇒ 截到 region 尾(不碰第二条 region) */
+        /* Past the first region's end ⇒ truncate at the region end (do not touch
+         * the second region) */
         const br_size_t off   = addr - region->base;
         const br_size_t avail = (off < region->size) ? (region->size - off) : 0u;
 
@@ -240,13 +263,15 @@ int br_dump_memory(br_uintptr_t addr, br_size_t len, br_u32 flags)
 }
 
 /* =====================================================================
- * ③ 堆统计 + 池几何(设计 §3 的 "arena 统计")
+ * (3) heap stats + pool geometry (the design §3 "arena stats")
  * ===================================================================== */
 
 /*
- * 返回**打印的行数**(头文件只要求"打印堆统计 + 池几何", 未规定返回值;
- * 这里选行数, 便于 `br_dump_all()` 累计"确实全打了"的判据)。
- * 任一子观测失败时也会打一行说明并计入 —— 返回值恒等于本函数打出的行数。
+ * Returns the **number of printed lines** (the header only requires "print heap
+ * stats + pool geometry", no return value specified; lines are chosen here so
+ * `br_dump_all()` can accumulate a "everything was indeed printed" criterion).
+ * When a sub-observation fails it also prints one explanatory line and counts it —
+ * the return value always equals the number of lines this function printed.
  */
 br_u32 br_dump_heap(void)
 {
@@ -308,12 +333,12 @@ br_u32 br_dump_heap(void)
 }
 
 /* =====================================================================
- * ④ 三个转调口(本插件不重复实现它们)
+ * (4) three forwarding calls (this plugin does not reimplement them)
  * ===================================================================== */
 
 br_u32 br_dump_trace(br_u32 max_events)
 {
-    /* max_events 语义同 `br_trace_svc_report`(0 = 不限, 用尽为止) */
+    /* max_events semantics same as `br_trace_svc_report` (0 = unlimited, report all) */
     return br_trace_svc_report(max_events);
 }
 
@@ -328,22 +353,27 @@ br_u32 br_dump_leaks(void)
 }
 
 /* =====================================================================
- * ⑤ 一份完整现场
+ * (5) one complete snapshot
  * ===================================================================== */
 
 /*
- * 行数累计口径(头文件要求"返回打印的行数, 便于用例断言确实全打了"):
- *   固定标题 2(首/末) + [regions: 条数 + 1(regions=<n> 行)]
- *   + heap 段(br_dump_heap 自报行数)
- *   + leaks 段(折算口径: 1 行 summary + 每存活块折算 1 行)
- *   + trace 段(条数) + backtrace 段(帧数)。
+ * Line accumulation convention (the header requires "return the number of printed
+ * lines so cases can assert everything was printed"):
+ *   fixed titles 2 (first/last) + [regions: count + 1 (the regions=<n> line)]
+ *   + heap section (br_dump_heap reports its own line count)
+ *   + leaks section (approximated: 1 summary line + 1 line per live block)
+ *   + trace section (event count) + backtrace section (frame count).
  *
- * ★ 为什么 leaks 段是"折算口径"而不是精确行数: `br_memleak_report()` 的声明面
- *   只回传**存活块数**; 它的真实输出行数 = 1 + 归属数 + Σ min(8, 每归属存活块),
- *   其中"归属分布"与"每归属 8 条明细上限"都不在回传面上(声明面已冻结, 不许加函数)。
- *   所以折算值与真实行数**同阶但两端都可能偏**(归属多则低估 归属数, 单归属块多则
- *   因 8 条上限而高估)。调用方只用它判"全打了"(>= 阈值), **不做等值断言**。
- *   要精确到行, 需要 memleak 回传行数 —— 记入 README「待回灌」。
+ * ★ Why the leaks section is an "approximation" and not an exact line count:
+ *   `br_memleak_report()`'s declared surface returns only the **live block count**;
+ *   its real output lines = 1 + owner count + Σ min(8, live blocks per owner), and
+ *   neither the "owner distribution" nor the "8 detail lines per owner cap" is on
+ *   the returned surface (the declared surface is frozen, no new functions allowed).
+ *   So the approximation is the **same order** but can be off in both directions
+ *   (many owners undercounts the owner count, many blocks in one owner overcounts
+ *   because of the 8-line cap). Callers only use it to judge "all printed"
+ *   (>= threshold), **never for equality assertions**. Exact per-line accounting
+ *   needs memleak to return a line count — recorded in README "to backport".
  */
 br_u32 br_dump_all(void)
 {
@@ -362,7 +392,7 @@ br_u32 br_dump_all(void)
     lines  += br_dump_heap();
 
     live    = br_dump_leaks();
-    lines  += live + 1u;          /* 折算口径: summary 一行 + 每存活块折算一行 */
+    lines  += live + 1u;          /* approximation: one summary line + one line per live block */
 
     events  = br_dump_trace(0u);
     lines  += events;
@@ -377,50 +407,58 @@ br_u32 br_dump_all(void)
 }
 
 /* =====================================================================
- * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物
- * `build/gen/service/dump/plugin_desc.c` 引用; 设计 1-01 §9 / 3-05 §2)
- * 自带原型满足 -Wmissing-prototypes(钩子名由生成器推导, 不进对外头与 [[export]])。
+ * Plugin lifecycle hooks (name = symbol_prefix(short) + phase; referenced by the
+ * generated `build/gen/service/dump/plugin_desc.c`; design 1-01 §9 / 3-05 §2)
+ * Self-provided prototypes satisfy -Wmissing-prototypes (hook names are derived by
+ * the generator, not in the public header nor in [[export]]).
  *
- * ★ LATE init 只做**本插件自己的**事(自身 init + 启动快照) —— 调试域一致性用例已按
- *   ADR-0010 搬到 `src/dump_selftest.c`, 其驱动者不再是 init, 而是**插件管理器**在全部
- *   START 之后统一调描述符的 `.selftest` 钩子。于是 `app/hello → service/dump` 那条 M0
- *   豁免**已从 `product.toml [lint].allow_edges` 删掉**(删掉后 `brickie check` 仍 0 错误
- *   = 证据), 而 dump 也**不再代调** trace/backtrace/hexdump/memleak 四家的 init:
- *   plugin.toml 的四条 `kind = "init"` 边保证 LATE 相里它们的 init 已由 plugin_manager
- *   按拓扑序调过(相位单调由它执法; 非 0 rc ⇒ `[PLUGIN] FAIL` + 停机, ADR-0005 裁定 G6)。
+ * ★ LATE init only does **this plugin's own** work (its own init + boot snapshot) —
+ *   the debug-domain consistency cases already moved to `src/dump_selftest.c` per
+ *   ADR-0010; their driver is no longer init but the **plugin manager**, which after
+ *   all STARTs uniformly calls the descriptor's `.selftest` hook. Hence the
+ *   `app/hello → service/dump` M0 exemption **was removed from
+ *   `product.toml [lint].allow_edges`** (with it removed `brickie check` is still
+ *   0 errors = evidence), and dump also **no longer calls** the init of
+ *   trace/backtrace/hexdump/memleak: the four `kind = "init"` edges in brick.toml
+ *   guarantee their init already ran in the LATE phase under plugin_manager in
+ *   topological order (phase monotonicity is enforced there; non-zero rc ⇒
+ *   `[PLUGIN] FAIL` + halt, ADR-0005 ruling G6).
  * ===================================================================== */
 int dump_early_init(void);
 int dump_init(void);
 int dump_start(void);
 
-/* EARLY 相: 无动作(不用堆/无线程/关中断; dump 自己要读堆, 必须等 LATE)。 */
+/* EARLY phase: no action (no heap/threads, interrupts off; dump itself reads the
+ * heap, so it must wait for LATE). */
 int dump_early_init(void)
 {
     return 0;
 }
 
-/* LATE 相(Service 类别 ⇒ ② 完成点): 自身 init → 启动快照。
+/* LATE phase (Service category ⇒ (2) completion point): own init → boot snapshot.
  *
- * 这里**没有** conformance 调用: 用例由 core 的自检 pass 驱动(见 dump_selftest.c 抬头)。
- * 也不代调别家 init —— 那正是 ADR-0010 拆掉的编排(四家的 init 由 plugin_manager 在
- * 本函数**之前**按 `[[dep]]` 拓扑序调完)。 */
+ * There is **no** conformance call here: cases are driven by core's selftest pass
+ * (see dump_selftest.c header). It also does not call other plugins' init — that is
+ * exactly the orchestration ADR-0010 removed (the four inits are done by
+ * plugin_manager in `[[dep]]` topological order **before** this function). */
 int dump_init(void)
 {
     const int rc = br_dump_init();
     if (rc != 0) {
-        return rc;   /* 首败即停机由 plugin_manager 执行(裁定 G6) */
+        return rc;   /* fail-fast halt is performed by plugin_manager (ruling G6) */
     }
 
-    /* 启动现场一份(三套门禁截取证据的地方; 行数口径见 br_dump.h) */
+    /* One boot snapshot (where the three gates capture evidence; line conventions in br_dump.h) */
     const br_u32 dump_lines = br_dump_all();
     br_log_info("dbg: boot snapshot lines=%lu", (br_u64)dump_lines);
 
-    /* init 的返回值只表达"本插件的初始化成不成"(见 ADR-0005 §2.5); 用例的红绿由门禁
-     * ([DBGCONF] FAIL 的 forbid)判, 两者不混。 */
+    /* init's return value only expresses "did this plugin initialize" (see ADR-0005
+     * §2.5); case red/green is judged by the gates ([DBGCONF] FAIL forbid), the two
+     * are not mixed. */
     return 0;
 }
 
-/* START 相: 本服务没有需要"中断可用/可建线程"之后才做的事。 */
+/* START phase: this service has nothing that needs interrupts/threads to be available. */
 int dump_start(void)
 {
     return 0;

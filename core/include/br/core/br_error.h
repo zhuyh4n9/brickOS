@@ -1,60 +1,78 @@
 /*
- * brickOS prototype v0.2.0 — core 错误码(errno; **与 Linux 内核逐值对齐**)
+ * brickOS prototype v0.2.0 — core error codes (errno; value-for-value aligned with the
+ * Linux kernel)
  *
- * 设计依据(3-01 §11「错误码」): core 的 int 返回一律用**负 errno**。
- * 各域的**可用子集**分别成文(SD-10: core 域见 3-01 §11; 设备/存储域见 8-01 §4),
- * 本头给的是**值的全集**, 不是"每个域都能返回所有这些码"。
+ * Design basis (3-01 §11 "error codes"): core int returns always use a negative errno.
+ * The usable subset of each domain is documented separately (SD-10: core domain in
+ * 3-01 §11; device/storage domain in 8-01 §4); this header gives the full set of
+ * values, not "every domain can return all of these".
  *
- * ## 真值来源(改本文件前先读这一条)
- *   数值**逐字取自 Linux 内核**(`include/uapi/asm-generic/errno-base.h` 与
- *   `include/uapi/asm-generic/errno.h`)—— 两者在 aarch64 与 x86-64 上同值,
- *   因此宿主 `<errno.h>` 是本表的**可执行对照物**: 宿主门禁 `ft-test`
- *   (`tests/host/ft_test.c`)逐码断言"本表的值 == 宿主的值", 任何一处抄错都会在那里红。
- *   (★ 该用例必须**先**捕获宿主的值、再 `#undef` 宿主同名宏、最后才包含本头 —— 因为
- *    本表的**名字与 POSIX 同名**(见下), 顺序反了就成了"自己跟自己比"。)
- *   ⇒ **新增值只能从内核表里抄, 不许自造编号**; 抄完把对照断言加进该门禁。
+ * ## Source of truth (read this before editing the file)
+ *   Values are taken literally from the Linux kernel
+ *   (`include/uapi/asm-generic/errno-base.h` and `include/uapi/asm-generic/errno.h`)
+ *   —— both are the same on aarch64 and x86-64, so the host `<errno.h>` is an
+ *   executable cross-check for this table: the host gate `ft-test`
+ *   (`tests/host/ft_test.c`) asserts code by code that "this table's value == the
+ *   host's value", so any copy error shows up red there.
+ *   (★ That case must capture the host values FIRST, then `#undef` the host macros of
+ *     the same names, and only then include this header —— because this table uses the
+ *     same names as POSIX (see below); reversed order would be "comparing it with
+ *     itself".)
+ *   ⇒ New values may only be copied from the kernel table, never invented; after
+ *     copying, add the cross-check assertion to that gate.
  *
- * ## 为什么自带一份而不是 <errno.h>
- *   与 br_types.h 同理 —— 本原型是 `-ffreestanding -nostdlib`, 不把宿主 libc 的
- *   错误码表拖进目标镜像。
+ * ## Why ship a copy instead of <errno.h>
+ *   Same reasoning as br_types.h —— this prototype is `-ffreestanding -nostdlib` and
+ *   does not drag the host libc errno table into the target image.
  *
- * ## 收录口径(两段, 与内核头文件的分段一致)
- *   - **第一段 = `errno-base.h` 全集(1–34)**: 整表收录。理由不是"用得到", 而是
- *     "域子集是按语义裁的, 值表是按内核抄的" —— 只抄用到的会让"下一次需要某个码"
- *     变成一次抄写 + 一次对账; 整表收录则一次到位且不可能抄错一半。
- *   - **第二段 = `errno.h` 的 generic 部分, 只取本仓用到的**(35 起): 这一段有 100+
- *     个值, 其中大半属网络/内核模块域(v2 的 socket 面再按需补)。
+ * ## Inclusion policy (two sections, matching the kernel header split)
+ *   - Section one = the full `errno-base.h` set (1–34): included whole. The reason is
+ *     not "we use them" but "domain subsets are cut by semantics, the value table is
+ *     copied from the kernel" —— copying only what is used would turn "next time we
+ *     need a code" into a copy plus a reconciliation; including all is done once and
+ *     for all, and half a table cannot be mis-copied.
+ *   - Section two = the generic part of `errno.h`, only what this repo uses (from 35):
+ *     that part has 100+ values, most of them network/kernel-module domain (the v2
+ *     socket surface will add them as needed).
  *
- * ## 与设计文档的既有差异(仍成立)
- *   8-01 §4 的 SD-10 设备/存储域子集是 `-EIO/-ENODEV/-ENOSPC/-EINVAL/-ENOTSUP/`
- *   `-EBUSY/-EROFS`; 而 D23 的 lookup 链与"名字空间变更"还需要 `-ENOENT`(未命中不是
- *   参数错)、`-ENOTDIR`/`-EISDIR`、`-ENOTEMPTY`(硬塞 -EBUSY 会与"挂载点不可删"撞码)。
- *   这些都不在 SD-10 的枚举里, 但用 -EINVAL 把它们压成一个会让排障与 errno 映射同时
- *   失真, 故按内核编号补入(`docs/decisions/0009-…` §3 裁定 4)。
- *   `runtime/posix` 的 `errno = -ret` 是**零转换**取负(11-01 §2, ADR-0014)⇒ 本表的编号
- *   **就是**用户态看到的编号 —— 这一条是"对齐内核"的最终理由。
+ * ## Known differences from the design docs (still standing)
+ *   8-01 §4's SD-10 device/storage domain subset is `-EIO/-ENODEV/-ENOSPC/-EINVAL/`
+ *   `-ENOTSUP/-EBUSY/-EROFS`; but D23's lookup chain and "namespace change" also need
+ *   `-ENOENT` (a miss is not a bad argument), `-ENOTDIR`/`-EISDIR`, `-ENOTEMPTY`
+ *   (forcing -EBUSY would collide with "mount point not removable").
+ *   These are not in SD-10's enumeration, but squashing them into -EINVAL would distort
+ *   both diagnosis and errno mapping, so they are added with kernel numbers
+ *   (`docs/decisions/0009-…` §3 ruling 4).
+ *   `runtime/posix`'s `errno = -ret` is a zero-conversion negation (11-01 §2, ADR-0014)
+ *   ⇒ this table's numbering IS what user space sees —— the final reason for
+ *   "aligning with the kernel".
  *
- * ## 名字就是 POSIX 原名, 且与数值同处一地(ADR-0027)
- *   本头**同时**给出**名字**与**数值**, 且名字就是 POSIX 原名 —— `#define EIO 5`,
- *   **没有 `BR_` 前缀**。为什么不带前缀(这是本刀的关键):
- *     - 三方件按 ADR-0026 改为**原样编译上游**, 而上游到处是裸的 `-EIO`/`-EFSCORRUPTED`
- *       ⇒ 只有同名同值, 那些代码才**一个字都不用改**; 带前缀时唯一出路是往上游文件里塞
- *       一张 `#define EIO BR_EIO` 映射表 —— 那既是第二处真值, **也是对上游代码的修改**;
- *     - 名字与数值同处一地 ⇒ 不再有"名字表 + 数值表"两张表(ADR-0023 时是分开的)。
- *   `BR_ERR(e)`(`-(int)(e)`)保留: 它是"取负"的宏, 不是 errno 名; `BR_OK` 同理。
- *   `br/core/br_errno.h` 已退化为**转发头**(只 include 本头), 只为不改既有包含点。
- *   ★ `BR_` 前缀从 errno 名字上**撤掉**, 但本仓自有的标识符仍用它(`BR_EC_*` 异常类、
- *     `BR_EMMC_*`、`BR_EROFS_*`、`BR_ERR` 等)—— "编号是人家的, 名字也该是人家的;
- *     `BR_` 留给本仓自己发明的东西"。
+ * ## The names are the POSIX originals, co-located with the values (ADR-0027)
+ *   This header gives BOTH the name and the value, and the name is the POSIX original
+ *   —— `#define EIO 5`, with NO `BR_` prefix. Why no prefix (the crux of this change):
+ *     - third-party code is, per ADR-0026, compiled from upstream as-is, and upstream is
+ *       full of bare `-EIO`/`-EFSCORRUPTED` ⇒ only same-name same-value lets that code
+ *       compile without a single edit; with a prefix the only way out would be stuffing
+ *       a `#define EIO BR_EIO` mapping table into upstream files —— which is both a
+ *       second source of truth and a modification of upstream code;
+ *     - names and values in one place ⇒ no more "name table + value table" pair (they
+ *       were separate at ADR-0023 time).
+ *   `BR_ERR(e)` (`-(int)(e)`) is kept: it is the negation macro, not an errno name;
+ *   likewise `BR_OK`. `br/core/br_errno.h` has degenerated into a forwarding header
+ *   (it only includes this one), just to avoid changing existing include sites.
+ *   ★ The `BR_` prefix is removed from errno names, but this repo's own identifiers
+ *     still use it (`BR_EC_*` exception classes, `BR_EMMC_*`, `BR_EROFS_*`, `BR_ERR`,
+ *     etc.) —— "the numbers are theirs, so the names should be theirs too; `BR_` is
+ *     left for things this repo invents".
  */
 #ifndef BR_CORE_BR_ERROR_H
 #define BR_CORE_BR_ERROR_H
 
-/* 成功 */
+/* success */
 #define BR_OK   0
 
-/* ==================================================================== 第一段
- * errno-base.h 全集(1–34; 逐字取自内核)。 */
+/* ==================================================================== section one
+ * full errno-base.h set (1–34; copied verbatim from the kernel). */
 #define EPERM        1   /* Operation not permitted */
 #define ENOENT       2   /* No such file or directory */
 #define ESRCH        3   /* No such process */
@@ -68,7 +86,7 @@
 #define EAGAIN      11   /* Try again */
 #define ENOMEM      12   /* Out of memory */
 #define EACCES      13   /* Permission denied */
-#define EFAULT      14   /* Bad address(extable fixup 的约定错误码, 3-02 §10.4) */
+#define EFAULT      14   /* Bad address (the agreed error code for extable fixup, 3-02 §10.4) */
 #define ENOTBLK     15   /* Block device required */
 #define EBUSY       16   /* Device or resource busy */
 #define EEXIST      17   /* File exists */
@@ -90,8 +108,8 @@
 #define EDOM        33   /* Math argument out of domain of func */
 #define ERANGE      34   /* Math result not representable */
 
-/* ==================================================================== 第二段
- * errno.h 的 generic 部分(只取本仓用到的; 逐字取自内核)。 */
+/* ==================================================================== section two
+ * generic part of errno.h (only what this repo uses; copied verbatim from the kernel). */
 #define EDEADLK       35   /* Resource deadlock would occur */
 #define ENAMETOOLONG  36   /* File name too long */
 #define ENOLCK        37   /* No record locks available */
@@ -99,20 +117,21 @@
 #define ENOTEMPTY     39   /* Directory not empty */
 #define ELOOP         40   /* Too many symbolic links encountered */
 #define EOVERFLOW     75   /* Value too large for defined data type */
-#define ENOTSUP       95   /* Operation not supported(= EOPNOTSUPP) */
-#define ETIMEDOUT    110   /* Connection timed out(阻塞超时统一, INV-1/CA-4) */
-#define EUCLEAN      117   /* Structure needs cleaning —— EROFS 的 EFSCORRUPTED 用它:
-                               * ADR-0023 D-4 "缺的 POSIX 码从内核表里补", 而不是映射到别的码 */
+#define ENOTSUP       95   /* Operation not supported (= EOPNOTSUPP) */
+#define ETIMEDOUT    110   /* Connection timed out (unified blocking timeout, INV-1/CA-4) */
+#define EUCLEAN      117   /* Structure needs cleaning —— used for EROFS's EFSCORRUPTED:
+                               * ADR-0023 D-4 "add missing POSIX codes from the kernel table",
+                               * rather than mapping onto some other code */
 #define EDQUOT       122   /* Quota exceeded */
 #define ECANCELED    125   /* Operation Canceled */
 #define EOWNERDEAD   130   /* Owner died */
 #define ENOTRECOVERABLE 131 /* State not recoverable */
 
-/* ---- 同值别名(内核里就是两个名字; 保留两套以免消费者改码) ---- */
+/* ---- same-value aliases (the kernel has two names; keep both so consumers need not change) ---- */
 #define EWOULDBLOCK  EAGAIN      /* 11 */
 #define EOPNOTSUPP   ENOTSUP     /* 95 */
 
-/* 负值形式: 设计 3-01 §11 —— core 的 int 返回用负 errno */
+/* negative form: design 3-01 §11 —— core int returns use negative errno */
 #define BR_ERR(e)   (-(int)(e))
 
 #endif /* BR_CORE_BR_ERROR_H */

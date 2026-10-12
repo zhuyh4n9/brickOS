@@ -2,7 +2,7 @@
 
 > ⚠ **本文记的是"改写副本"时代的事实(ADR-0024 的取证底稿), 不是当前结构**。
 > 自 ADR-0026 起 `adapter/<插件>/src/`(上游改写副本)这一层被取消: 上游原件只在
-> `third_party/uboot-imx/`(只读 + sha256 锁), 由各 `plugin.toml` 的 `sources` **直接编译**;
+> `third_party/uboot-imx/`(只读 + sha256 锁), 由各 `brick.toml` 的 `sources` **直接编译**;
 > 适配收进 `adapter/<插件>/{compat,glue}`。所以下表的"行级相似度 / 变更行"现在读作
 > **"当年那份改写副本改了上游多少"** —— 它正是要消灭的东西, 作为历史与对照留在这里。
 > - erofs 的迁移见 ADR-0026(1/3);
@@ -231,7 +231,7 @@ $ diff -u <upstream>/fs/erofs/erofs_fs.h <repo>/adapter/uboot-erofs/src/erofs_fs
 | uboot-fat | `fat_core.c` `fat_write.c` `fat_internal.h` | `fat_compat.h` `fat_vfs.c` `fat_selftest.c` |
 | uboot-erofs | `erofs_{super,namei,data,zmap,decompress}.c` `erofs_fs.h` `erofs_internal.h` | `erofs_compat.h` `erofs_vfs.c` `erofs_selftest.c` |
 
-- 三个 `plugin.toml` 均为 `sources = ["src/*.c", "adapter/*.c"]` + `includes = ["src","adapter"]`;
+- 三个 `brick.toml` 均为 `sources = ["src/*.c", "adapter/*.c"]` + `includes = ["src","adapter"]`;
 - **单向依赖**: `src/` 不出现 `#include <br/...>`(运行环境只经适配层入口头);
 - 判据 = `tools/check-third-party-isolation.sh`(四条机械判据, 注册于 `tests/gates.toml`)。
 

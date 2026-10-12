@@ -1,19 +1,21 @@
-// brickie-gen — C++ 生成器(L2), **只做模板渲染**, 不做任何判定
+// brickie-gen — C++ generator (L2), **template rendering only**, makes no decisions
 //
-// 进程边界(contract §1/§2/§6): 输入输出 = **JSON over stdio**。
-//   stdin  = 请求对象;  stdout = 响应对象(始终是合法 JSON)
-// 退出码: 本进程**只**用 0(协议处理成功, 诊断与业务退出码在响应里)与 2(自身故障:
-// 入参不是 JSON 等)。业务退出码由响应字段 exit_code 承载, 由 Python L5 前端转成
-// 进程退出码 —— 这样"工具故障"与"校验红"不会被混为一谈。
+// Process boundary (contract §1/§2/§6): input and output are **JSON over stdio**.
+//   stdin  = request object;  stdout = response object (always valid JSON)
+// Exit codes: this process uses **only** 0 (protocol handling succeeded; diagnostics and the business
+// exit code live in the response) and 2 (its own failure: input is not JSON, etc.). The business exit
+// code travels in the response field exit_code and is turned into a process exit code by the Python L5
+// front-end — so "tool failure" and "validation failure" are never conflated.
 //
-// 命令面(contract §6): 只有 `render`(模板渲染)。
-//   * 名字契约 / subkind 推导 / 相位 / 路径布局 / 版本分段等**判定**已全部搬去
-//     `brickie-core`(Rust, L0/L1); 本工具只承接 "计划 + 变量 → 文件内容"。
-//   * 旧的 `plan-new` / `new` 已删除(规则与计划归 Rust 的 `plan-new` / `plan-init`)。
+// Command surface (contract §6): only `render` (template rendering).
+//   * Name contract / subkind derivation / phase / path layout / version segmentation — all such
+//     **decisions** have moved to `brickie-core` (Rust, L0/L1); this tool only handles
+//     "plan + variables → file contents".
+//   * The old `plan-new` / `new` are gone (rules and plans belong to Rust's `plan-new` / `plan-init`).
 //
-// `--selftest`: 不读 stdin, 跑内置自检(JSON 往返 / 渲染 / 路径与模式 / 载荷相关
-// 确定性), 供 CI 的"粘合层纯度检查"使用(§9.1: brickie-core --selftest 的生成器侧
-// 对应物)。
+// `--selftest`: does not read stdin; runs the built-in self-check (JSON round-trip / rendering / paths
+// and modes / payload determinism) for CI's "glue-layer purity check" (§9.1: the generator-side
+// counterpart of brickie-core --selftest).
 #include <cstdio>
 #include <iostream>
 #include <sstream>
@@ -29,7 +31,7 @@ namespace {
 
 using brickie::J;
 
-// 响应信封(contract §2)。status 只有 ok / internal_error 两种。
+// Response envelope (contract §2). status is only ever ok / internal_error.
 J makeResponse(int exitCode, J diagnostics, J files, J data) {
     J o = J::obj();
     o.set("protocol", J::num(1));
@@ -66,86 +68,87 @@ int selftest() {
         if (!ok) ++failures;
     };
 
-    // JSON 往返(含转义、嵌套、非 ASCII、代理对)
+    // JSON round-trip (escapes, nesting, non-ASCII, surrogate pairs)
     {
         const std::string src =
-            R"({"a":[1,true,null,"x\n\"\u4e2d\u6587\uD83D\uDE00"],"b":{"c":-1.5e3}})";
+            R"({"a":[1,true,null,"x\n\"\u00e9\u00fc\uD83D\uDE00"],"b":{"c":-1.5e3}})";
         J v;
         std::string err;
         const bool parsed = brickie::parseJson(src, v, err);
-        check(parsed, "parseJson 接受嵌套/转义/非 ASCII: " + err);
+        check(parsed, "parseJson accepts nesting/escapes/non-ASCII: " + err);
         if (parsed) {
             const std::string round = brickie::dumpJson(v, -1);
             J v2;
             std::string err2;
-            check(brickie::parseJson(round, v2, err2), "dumpJson 输出可被重新解析");
-            check(brickie::dumpJson(v2, -1) == round, "JSON 往返逐字节稳定");
+            check(brickie::parseJson(round, v2, err2), "dumpJson output can be re-parsed");
+            check(brickie::dumpJson(v2, -1) == round, "JSON round-trip is byte-stable");
         }
     }
-    // 非法 JSON 必须被拒
+    // Invalid JSON must be rejected
     {
         J v;
         std::string err;
-        check(!brickie::parseJson("{\"a\":}", v, err), "非法 JSON 被拒");
+        check(!brickie::parseJson("{\"a\":}", v, err), "invalid JSON is rejected");
     }
 
-    // 渲染: 新变量契约取小写键; 缺键必须失败(不静默成空串); 无分支语法
+    // Rendering: the new variable contract uses lowercase keys; missing keys must fail (never a silent
+    // empty string); no branch syntax
     {
         brickie::Vars vars;
         vars["name"] = "service/crypto";
         vars["short"] = "crypto";
-        vars["Version"] = "0.1.0.0";  // 大小写敏感: 与 version 不是同一个键
+        vars["Version"] = "0.1.0.0";  // case-sensitive: not the same key as version
         std::string out, err;
         check(brickie::render("x{{name}}y", vars, "t", out, err) && out == "xservice/cryptoy",
-              "render: 基本替换(小写键)");
+              "render: basic substitution (lowercase key)");
         check(brickie::render("{{ name }}", vars, "t", out, err) && out == "service/crypto",
-              "render: 占位符两侧空白容忍");
-        check(!brickie::render("{{missing}}", vars, "t", out, err), "render: 缺键失败");
+              "render: whitespace around the placeholder is tolerated");
+        check(!brickie::render("{{missing}}", vars, "t", out, err), "render: missing key fails");
         check(!brickie::render("{{#if x}}a{{/if}}", vars, "t", out, err),
-              "render: 无条件/分支语法(非法键被拒)");
-        check(!brickie::render("{{short} }", vars, "t", out, err), "render: 未闭合占位符被拒");
+              "render: no conditionals/branches (invalid key rejected)");
+        check(!brickie::render("{{short} }", vars, "t", out, err), "render: unclosed placeholder is rejected");
         check(brickie::render("{{Version}}", vars, "t", out, err) && out == "0.1.0.0",
-              "render: 键名大小写敏感");
+              "render: key names are case-sensitive");
     }
 
-    // 路径安全: 生成物必须落仓库内
+    // Path safety: generated files must stay inside the repo
     {
         std::string err;
-        check(brickie::safeRelPath("service/crypto/plugin.toml", err),
-              "safeRelPath: 正常相对路径");
-        check(!brickie::safeRelPath("/etc/passwd", err), "safeRelPath: 拒绝绝对路径");
-        check(!brickie::safeRelPath("../escape", err), "safeRelPath: 拒绝 ..");
-        check(!brickie::safeRelPath("a/../b", err), "safeRelPath: 拒绝中段 ..");
-        check(!brickie::safeRelPath("a//b", err), "safeRelPath: 拒绝空路径段");
-        check(!brickie::safeRelPath("a/", err), "safeRelPath: 拒绝结尾 /");
-        check(!brickie::safeRelPath("", err), "safeRelPath: 拒绝空串");
+        check(brickie::safeRelPath("service/crypto/brick.toml", err),
+              "safeRelPath: normal relative path");
+        check(!brickie::safeRelPath("/etc/passwd", err), "safeRelPath: rejects absolute paths");
+        check(!brickie::safeRelPath("../escape", err), "safeRelPath: rejects ..");
+        check(!brickie::safeRelPath("a/../b", err), "safeRelPath: rejects a mid-path ..");
+        check(!brickie::safeRelPath("a//b", err), "safeRelPath: rejects empty path segments");
+        check(!brickie::safeRelPath("a/", err), "safeRelPath: rejects a trailing /");
+        check(!brickie::safeRelPath("", err), "safeRelPath: rejects the empty string");
     }
 
-    // 模式位(载荷条目模式与落盘模式都走它)
+    // Mode bits (used for both payload entry modes and on-disk modes)
     {
         std::string mode;
         check(brickie::parseMode("0644", mode) && mode == "0644", "parseMode: 0644");
-        check(brickie::parseMode("755", mode) && mode == "0755", "parseMode: 755 → 0755 规范化");
-        check(!brickie::parseMode("", mode), "parseMode: 拒绝空串");
-        check(!brickie::parseMode("999", mode), "parseMode: 拒绝非八进制");
-        check(!brickie::parseMode("06442", mode), "parseMode: 拒绝过长");
-        check(!brickie::parseMode("0x1", mode), "parseMode: 拒绝十六进制");
+        check(brickie::parseMode("755", mode) && mode == "0755", "parseMode: 755 -> 0755 normalization");
+        check(!brickie::parseMode("", mode), "parseMode: rejects the empty string");
+        check(!brickie::parseMode("999", mode), "parseMode: rejects non-octal");
+        check(!brickie::parseMode("06442", mode), "parseMode: rejects overlong input");
+        check(!brickie::parseMode("0x1", mode), "parseMode: rejects hexadecimal");
     }
 
-    // 生成物标记(contract §6: 首行带 `brickie:generated`)
+    // Generated-file marker (contract §6: first line carries `brickie:generated`)
     {
         const std::string marker = brickie::kGeneratedMarker;
-        check(marker == "brickie:generated", "生成物标记 = brickie:generated");
+        check(marker == "brickie:generated", "generated marker = brickie:generated");
         brickie::Vars vars;
         vars["name"] = "service/crypto";
         std::string out, err;
         check(brickie::render("/* brickie:generated */ {{name}}", vars, "t", out, err) &&
                   out.find("brickie:generated") != std::string::npos,
-              "生成物首行可含标记");
+              "generated first line may carry the marker");
     }
 
-    // 载荷相关自检: 同一输入两次渲染逐字节一致(嵌入载荷逐字节可复现的前提);
-    // 响应信封(含 files[].mode)可稳定往返。
+    // Payload checks: rendering the same input twice is byte-identical (a prerequisite for a
+    // byte-reproducible embedded payload); the response envelope (including files[].mode) round-trips stably.
     {
         brickie::Vars vars;
         vars["name"] = "service/crypto";
@@ -153,11 +156,11 @@ int selftest() {
         std::string a, b, err;
         const bool ok1 = brickie::render("{{name}}:{{short}}\n", vars, "t", a, err);
         const bool ok2 = brickie::render("{{name}}:{{short}}\n", vars, "t", b, err);
-        check(ok1 && ok2 && a == b, "载荷: 渲染逐字节可复现(两次调用相同)");
+        check(ok1 && ok2 && a == b, "payload: rendering is byte-reproducible (two calls agree)");
 
         J files = J::arr();
         J f = J::obj();
-        f.set("path", J::str("service/crypto/plugin.toml"));
+        f.set("path", J::str("service/crypto/brick.toml"));
         f.set("kind", J::str("rendered"));
         f.set("content", J::str(a));
         f.set("mode", J::str("0644"));
@@ -166,24 +169,24 @@ int selftest() {
         J back;
         std::string perr;
         const bool parsedWire = brickie::parseJson(wire, back, perr);
-        check(parsedWire, "载荷: 响应信封是合法 JSON");
+        check(parsedWire, "payload: the response envelope is valid JSON");
         std::string wire2;
         J back2;
         std::string perr2;
         if (parsedWire) wire2 = brickie::dumpJson(back, -1);
         check(parsedWire && brickie::parseJson(wire2, back2, perr2) &&
                   brickie::dumpJson(back2, -1) == wire2,
-              "载荷: 响应信封往返稳定");
+              "payload: the response envelope round-trips stably");
         const J *backFiles = back.find("files");
         check(backFiles != nullptr && backFiles->isArr() && backFiles->a.size() == 1 &&
                   backFiles->a[0].find("mode") != nullptr &&
                   backFiles->a[0].find("mode")->asStr() == "0644" &&
                   backFiles->a[0].find("kind")->asStr() == "rendered",
-              "载荷: files[] 带 kind/mode 且形状稳定");
+              "payload: files[] carries kind/mode with a stable shape");
     }
 
-    // 文件归属(contract §4): `kind=machine` 的内容由 brickie-core 拥有, render 跳过
-    // (不读模板、不算错) —— plan-init 的 `brickie.lock` 就带这个 kind。
+    // File ownership (contract §4): `kind=machine` content is owned by brickie-core, so render skips it
+    // (no template read, not an error) — plan-init's `brickie.lock` carries this kind.
     {
         J args = J::obj();
         J arts = J::arr();
@@ -195,26 +198,26 @@ int selftest() {
         args.set("artifacts", arts);
         const brickie::RenderResult rr = brickie::runRender(args, "/nonexistent-templates");
         check(rr.diags.exitCode() == 0 && rr.files.empty(),
-              "render: kind=machine 跳过(不读模板, 不算用法错)");
+              "render: kind=machine is skipped (no template read, not a usage error)");
     }
 
     if (failures == 0) {
-        std::cout << "brickie-gen selftest: 全部通过\n";
+        std::cout << "brickie-gen selftest: all passed\n";
         return 0;
     }
-    std::cout << "brickie-gen selftest: " << failures << " 项失败\n";
+    std::cout << "brickie-gen selftest: " << failures << " failed\n";
     return 1;
 }
 
-// ---------------------------------------------------------------- 协议分派
+// ---------------------------------------------------------------- protocol dispatch
 
-// 协议握手的失败响应: BRV-PROTO-0001, exit_code 2, status 保持 "ok"
-// (协议处理本身成功, 业务退出码在响应里; contract §2)。
+// Handshake failure response: BRV-PROTO-0001, exit_code 2, status stays "ok"
+// (protocol handling itself succeeded; the business exit code is in the response; contract §2).
 int protoMismatch(const std::string &detail) {
     brickie::Diags diags;
     diags.coded("BRV-PROTO-0001", brickie::Severity::Error, "", "",
-                "子进程 JSON 协议不匹配: " + detail,
-                "本工具 protocol = 1; 请求必须带 {\"protocol\": 1}");
+                "subprocess JSON protocol mismatch: " + detail,
+                "this tool uses protocol = 1; requests must carry {\"protocol\": 1}");
     std::cout << brickie::dumpJson(makeResponse(2, diags.toJson(), J::arr(), J::obj()), 2) << "\n";
     return 0;
 }
@@ -230,35 +233,36 @@ int main(int argc, char **argv) {
             return 0;
         }
         if (a == "--help" || a == "-h") {
-            std::cout << "用法: brickie-gen [--selftest|--version]\n"
-                         "  无参数时从 stdin 读 JSON 请求, 向 stdout 写 JSON 响应。\n"
-                         "  命令: render — 按 brickie-core 给的计划渲染模板(contract §6)。\n";
+            std::cout << "usage: brickie-gen [--selftest|--version]\n"
+                         "  with no arguments, reads a JSON request from stdin and writes a JSON response to stdout.\n"
+                         "  command: render -- render templates from the plan given by brickie-core (contract §6).\n";
             return 0;
         }
-        std::cerr << "brickie-gen: 未知参数 `" << a << "`\n";
+        std::cerr << "brickie-gen: unknown argument `" << a << "`\n";
         return 2;
     }
 
     const std::string input = readStdin();
-    if (input.empty()) return failInternal("stdin 为空: 需要一个 JSON 请求对象");
+    if (input.empty()) return failInternal("stdin is empty: a JSON request object is required");
 
     J req;
     std::string err;
-    if (!brickie::parseJson(input, req, err)) return failInternal("请求不是合法 JSON", err);
-    if (!req.isObj()) return failInternal("请求必须是 JSON 对象");
+    if (!brickie::parseJson(input, req, err)) return failInternal("request is not valid JSON", err);
+    if (!req.isObj()) return failInternal("request must be a JSON object");
 
-    // ---- 协议握手(contract §2)----
+    // ---- protocol handshake (contract §2) ----
     const J *proto = req.find("protocol");
-    if (proto == nullptr) return protoMismatch("请求缺 `protocol` 字段");
+    if (proto == nullptr) return protoMismatch("request is missing the `protocol` field");
     if (!(proto->t == brickie::JType::Num && proto->n == 1.0)) {
-        return protoMismatch("收到 protocol = " + brickie::dumpJson(*proto, -1));
+        return protoMismatch("received protocol = " + brickie::dumpJson(*proto, -1));
     }
 
     const J *cmdJ = req.find("command");
     const std::string command = (cmdJ != nullptr && cmdJ->isStr()) ? cmdJ->s : std::string();
     if (command.empty()) {
         brickie::Diags diags;
-        diags.usage("请求缺 `command` 字段(字符串)", "v0.1 生成器只承接 `render`(contract §6)");
+        diags.usage("request is missing the `command` field (string)",
+                    "the v0.1 generator handles only `render` (contract §6)");
         std::cout << brickie::dumpJson(makeResponse(2, diags.toJson(), J::arr(), J::obj()), 2)
                   << "\n";
         return 0;
@@ -269,14 +273,14 @@ int main(int argc, char **argv) {
 
     if (command != "render") {
         brickie::Diags diags;
-        diags.usage("brickie-gen 不认识命令 `" + command + "`",
-                    "v0.1 的生成器只承接 `render`(模板渲染); 判定与计划由 brickie-core 承接");
+        diags.usage("brickie-gen does not recognize command `" + command + "`",
+                    "the v0.1 generator handles only `render` (template rendering); decisions and plans belong to brickie-core");
         std::cout << brickie::dumpJson(makeResponse(2, diags.toJson(), J::arr(), J::obj()), 2)
                   << "\n";
         return 0;
     }
 
-    // templates_root: 契约 §6 放在 args 里; 兼容顶层字段(旧前端形态)。
+    // templates_root: contract §6 puts it in args; top-level field accepted too (old front-end shape).
     std::string templatesRoot;
     if (const J *t = args.find("templates_root"); t != nullptr && t->isStr()) {
         templatesRoot = t->s;

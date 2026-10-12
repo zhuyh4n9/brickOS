@@ -15,7 +15,7 @@ dentry 预留)+ 逐级 `lookup` 走查 + 目录迭代。
 > 挂载点不可删 / §2.3 走查与所有权规则 / §2.4 四层 ops 与"看得见打不开" / §2.5 自检落点 /
 > §3 裁定 2 `fpriv` 增量、裁定 3 路径级便捷面、裁定 7 `br_open_err`)。
 
-## 声明面(`plugin.toml` 是唯一真值)
+## 声明面(`brick.toml` 是唯一真值)
 
 | 项 | 值 | 依据 |
 |---|---|---|
@@ -25,7 +25,7 @@ dentry 预留)+ 逐级 `lookup` 走查 + 目录迭代。
 | `phase` | `core` | ability 且 subkind ≠ service ⇒ ② 完成点 = CORE |
 | 依赖(init/type/runtime) | **无 `[[dep]]`**(纯 VFS 的设计结果, 不是漏写) | `8-01` §1.3: 依赖 = core; ADR-0009 §2.1"vfs-core 的 deps 为空" |
 | 导出面 | 单元 `vfs`(`sha256:00a441f9…`, `unfrozen`/`experimental`): **20 宏 + 8 类型布局 + 28 函数**(自检入口已移出 `[[export]]`) | `br-vfscore.txt` 的候选面 |
-| `[selftest]` | `cases = 13`; 钩子 `vfs_core_selftest()` 在描述符里, 由 core 在全部 `start()` 之后驱动 | `plugin.toml` `[selftest]`; ADR-0010 |
+| `[selftest]` | `cases = 13`; 钩子 `vfs_core_selftest()` 在描述符里, 由 core 在全部 `start()` 之后驱动 | `brick.toml` `[selftest]`; ADR-0010 |
 | 资源 | `ram` 8 KiB: 挂载表 8 槽(路径 64 B/槽)+ 句柄在 core 堆; 静态部分约 0.6 KiB | `[[res]]` |
 | `sched_class` | `SAFE_PREEMPT` | 无睡眠的纯路径代码 |
 
@@ -98,7 +98,7 @@ rename+truncate / lseek 边界 / unlink+rmdir / 空参健壮性 / 挂载点不�
 ## 目录
 
 ```
-plugin.toml                    人写   ← 插件级唯一真值(本目录不改它)
+brick.toml                    人写   ← 插件级唯一真值(本目录不改它)
 include/br/vfs/br_vfs.h        人写   ← VFS 契约(本件的对外面)
 src/br_vfs.c                   人写   ← 挂载表/走查/文件面/目录面/便捷面(只留机制)
 src/vfs_selftest.c             人写   ← 存储域一致性用例 [VFSCONF](由 core 驱动)

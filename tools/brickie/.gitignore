@@ -1,10 +1,10 @@
-# 构建产物(与仓库根的 build/ 同纪律: 状态目录不进版本库)
+# Build outputs (same discipline as the repo-root build/: state dirs stay out of version control)
 #
-# 宿主工具**出树**构建: 正规落点是 <repo>/build/host/<host-arch>/<host-os>/{bin,lib,obj}
-# (见 ../../mk/host.mk), 由仓库根 .gitignore 的 `build/` 覆盖。
+# Host tools build **out of tree**: the canonical location is <repo>/build/host/<host-arch>/<host-os>/{bin,lib,obj}
+# (see ../../mk/host.mk), covered by the repo root .gitignore's `build/`.
 #
-# 下面三条是**首刀遗留的源码树内产物**(迁移期兜底): 现在的规则不再产生它们,
-# 留着以防旧树 checkout 后混进来。
+# The three lines below are **source-tree artifacts left by the first cut** (migration fallback):
+# today's rules no longer produce them; kept in case an old tree checkout drags them in.
 cxx/*.o
 cxx/*.a
 cxx/brickie-gen

@@ -1,174 +1,206 @@
 /*
- * brickOS prototype v0.2.0 — PL011 UART 字符设备(cdev)驱动(实现体)
+ * brickOS prototype v0.2.0 - PL011 UART character device (cdev) driver (implementation)
  *
- * 设计依据(权威, 逐条对应):
- *   - `1-03-roadmap.md` §1 插件清单: `io/uart-pl011` = "PL011: 早期轮询 console(M0: platform
- *     早期 console, **不注册设备**) → **中断 tty(M2: 注册 cdev)**"。本文件落地的是 M2 的
- *     **形态 A**(`8-01-device.md` §1.2): 把同一个 PL011 注册成 cdev ⇒ `/dev/uart0` 可被
- *     `br_open` 打开。"中断 tty"(RX 中断 + wait-queue)是同一 M2 的下一小步, 见下面 ②。
- *   - `8-01-device.md` §3(cdev 会话式 ops: `open/read/write/ioctl/poll/close` + D22 预留
- *     `suspend/resume`)、§4(SD-6 阻塞语义 / SD-10 负 errno / ISR 禁令)、§5(ioctl 用 Linux
- *     兼容编码, 本器件族魔数 `'u'`)
- *   - `7-01-vfs.md` §1(独占设备策略**归驱动**: uart 类在 `ops->open` 里返回 `-EBUSY`)、
- *     §3(SD-7 poll 分期: v1 = 查询就绪位; 等待侧是"轮询 + sleep")
- *   - 逐条裁定与偏离登记在 `WORKAROUND(br-wa-io-001)`; 一致性用例(TC-IO-*)在
- *     `src/uart_selftest.c`, 由 core 的自检 pass 驱动(ADR-0010); id 自编号登记在
- *     `br-wa-test-001`。
- *
- * ============================================================================
- * ① 与 platform 早期 console 的关系(同一份硬件, 两种形态 —— 设计内)
- * ============================================================================
- *   platform 的 `console_pl011.c` 是 M0 早期 console(轮询 putc, standalone, 不注册设备),
- *   它继续负责**内核日志**与 **panic 通道**。本驱动是 `/dev/uart0` 的**设备语义**面。
- *   两者共用同一个 PL011 寄存器窗口, 因此本文件对寄存器的**写入面**刻意收得很窄:
- *
- *     读: DR(数据) / FR(状态) / RSR(接收状态: overrun) / IBRD,FBRD,CR 的回读
- *     写: DR(数据) / IBRD,FBRD,CR(**仅** SET_BAUD 的"清 CR → 写除数 → 恢复 CR") / ICR(清源)
- *     绝不动: LCR_H(8N1 + FIFO 使能, console 的线路设置) / 探测期(early_init/probe)的 CR
- *
- *   为什么"注册设备"不等于"重新初始化硬件": 镜像里 console 先起来 panic 通道, 而 cdev 的
- *   CORE 相在后。若在这里重写 CR/LCR_H, 就是**第二个主人**改线路设置 —— 一旦两者不一致,
- *   panic 输出会在最需要它的时刻变成乱码。所以本驱动不 bring-up、只复用。
- *   (反过来的做法 —— 让 io/uart-pl011 拥有初始化、console 调它 —— 会让 panic 通道依赖
- *   一个可能没被组合进来的插件; 设计 `1-01` §8 的 console 双形态明确要求早期 console
- *   自持, 故不采。)
+ * Design basis (authoritative, item by item):
+ *   - `1-03-roadmap.md` §1 plugin list: `io/uart-pl011` = "PL011: early polling console (M0:
+ *     platform early console, **does not register a device**) -> **interrupt tty (M2: registers
+ *     cdev)**". This file implements M2 **form A** (`8-01-device.md` §1.2): register the same
+ *     PL011 as a cdev => `/dev/uart0` can be opened by `br_open`. The "interrupt tty" (RX
+ *     interrupt + wait-queue) is the next small step of the same M2, see (2) below.
+ *   - `8-01-device.md` §3 (cdev session ops: `open/read/write/ioctl/poll/close` + D22 reserved
+ *     `suspend/resume`), §4 (SD-6 blocking semantics / SD-10 negative errno / ISR ban), §5
+ *     (ioctl uses Linux-compatible encoding, this device family magic `'u'`)
+ *   - `7-01-vfs.md` §1 (exclusive-device policy **belongs to the driver**: uart class returns
+ *     `-EBUSY` in `ops->open`), §3 (SD-7 poll staged: v1 = query ready bits; the waiting side is
+ *     "poll + sleep")
+ *   - Per-item rulings and deviations are logged in `WORKAROUND(br-wa-io-001)`; conformance cases
+ *     (TC-IO-*) are in `src/uart_selftest.c`, driven by core's selftest pass (ADR-0010); the id
+ *     self-numbering is logged in `br-wa-test-001`.
  *
  * ============================================================================
- * ② 为什么 v1 是"轮询 cdev"而不是"中断 tty"(诚实交代偏离)
+ * (1) Relationship to the platform early console (same hardware, two forms -- by design)
  * ============================================================================
- *   设计目标是中断 tty, 但 SD-7 把事件等待分成两期: **v1 = 轮询 + br_task_sleep**,
- *   v2 才上 wait-queue 精确唤醒(必须与 preempt 同期, 否则抢占产品上轮询延迟毛刺, R-S1)。
- *   于是本文件:
- *     - **不开** UART 中断(不写 IMSC/不注册 ISR)⇒ 没有并发, 也就不需要锁;
- *     - 阻塞 read 用 `br_task_sleep(1ms)` 轮询(见 ⑤);
- *     - poll 只回答"当前就绪位"(SD-7 的 v1 口径), 不做等待。
- *   等 M2 的后半段(中断 tty)落地时, 本文件的 ops 形状**不用改** —— 变的只是 read 的等待
- *   机制(从 sleep 轮询换成 wait-queue)与 IMSC/ISR 的加入。
+ *   The platform's `console_pl011.c` is the M0 early console (polling putc, standalone, no
+ *   device registration); it keeps owning the **kernel log** and the **panic channel**. This
+ *   driver is the **device-semantics** side of `/dev/uart0`.
+ *   Both share one PL011 register window, so this file deliberately keeps its register **write
+ *   surface** narrow:
+ *
+ *     read:  DR (data) / FR (status) / RSR (receive status: overrun) / readback of IBRD,FBRD,CR
+ *     write: DR (data) / IBRD,FBRD,CR (**only** SET_BAUD's "clear CR -> write divisors ->
+ *            restore CR") / ICR (clear source)
+ *     never touch: LCR_H (8N1 + FIFO enable, the console's line settings) / CR during probe
+ *            (early_init/probe)
+ *
+ *   Why "registering a device" is not "reinitializing the hardware": in the image the console
+ *   brings up the panic channel first, while the cdev CORE phase comes later. Rewriting CR/LCR_H
+ *   here would be a **second owner** changing line settings -- once the two disagree, panic
+ *   output turns into garbage exactly when it is needed most. So this driver does not bring-up,
+ *   it reuses.
+ *   (The reverse -- let io/uart-pl011 own initialization and have the console call it -- would
+ *   make the panic channel depend on a plugin that may not be composed in; design `1-01` §8
+ *   requires the early console to be self-contained, so that option is rejected.)
  *
  * ============================================================================
- * ③ 会话与独占性(7-01 §1: 策略归驱动)
+ * (2) Why v1 is a "polling cdev" and not an "interrupt tty" (honest deviation)
  * ============================================================================
- *   会话 = `{flags, rx_dropped}`(本文件私有, 不透明地交给 cdev 适配层)。独占性**不**靠
- *   cdev-core: 谁有权利"第二个打开者被拒"是**策略**, 而 uart 是典型独占设备(两个消费者
- *   交错读同一个 FIFO 谁都不完整)。所以 `open` 在已有会话时直接 `-EBUSY`, `close` 放开。
- *   不采"按 open flags 允许多读者"的方案: v1 只有单 APP, 多读只会带来"谁吃掉这个字节"
- *   的歧义, 而歧义的代价比 -EBUSY 高得多。
+ *   The design goal is an interrupt tty, but SD-7 splits event waiting into two stages:
+ *   **v1 = poll + br_task_sleep**, and only v2 adds wait-queue exact wakeup (which must land
+ *   together with preempt, else polling latency jitters on a preemptible product, R-S1).
+ *   So this file:
+ *     - does **not** enable UART interrupts (no IMSC writes / no ISR registration) => no
+ *       concurrency, hence no lock needed;
+ *     - blocking read polls with `br_task_sleep(1ms)` (see (5));
+ *     - poll answers only "current ready bits" (SD-7 v1 wording) and never waits.
+ *   When the second half of M2 (interrupt tty) lands, the ops shape here **need not change** --
+ *   only read's waiting mechanism (sleep polling -> wait-queue) and the addition of IMSC/ISR.
  *
  * ============================================================================
- * ④ overrun(rx_dropped)的诚实来源(与任务书的差异, 已显式裁定)
+ * (3) Session and exclusivity (7-01 §1: policy belongs to the driver)
  * ============================================================================
- *   任务书建议"FR bit3 = OE, 用 ICR bit3 清"。按 ARM DDI 0183(PrimeCell UART):
- *     - `UARTFR[3]` 是 **BUSY**(发送中), **不是** OE —— 拿它当丢字节计数会把"正在移位输出"
- *       误记成"RX 溢出"; UARTFR 里根本没有 OE 位。
- *     - overrun 的诚实来源是 `UARTRSR[3]`(接收状态寄存器; FIFO 模式下它是接收状态 FIFO 的
- *       读端口, 与 DR 读一一配对弹出), 与 DR 的 `[11]`=OE 同源。
- *     - 中断侧的清源位是 `UARTICR[10]`=OEIC; ICR 的 bit3 在 PL011 上是保留位。
- *   故本文件采样 RSR[3], 计数进会话的 rx_dropped, 并写 ICR.OEIC 尽"设备侧清源"义务
- *   (v1 没开 UART 中断, 这一写是幂等的; 现在写下来, M2 接中断时不必回头补)。
- *   **不采**"FR[3] + ICR[3]"的写法: 那会在真硬件上制造假计数并写保留位, 属于"照抄指令
- *   而违背硬件"的错。
+ *   Session = `{flags, rx_dropped}` (private to this file, handed opaquely to the cdev adapter).
+ *   Exclusivity does **not** rely on cdev-core: the right to reject a second opener is
+ *   **policy**, and uart is a classic exclusive device (two consumers interleaving reads on one
+ *   FIFO both end up incomplete). So `open` returns `-EBUSY` when a session already exists, and
+ *   `close` releases it.
+ *   The "allow multiple readers per open flags" option is rejected: v1 has a single APP, and
+ *   multiple readers only add "who ate this byte" ambiguity, which costs far more than -EBUSY.
  *
  * ============================================================================
- * ⑤ 阻塞语义与"可能永远等下去"(SD-6 / SD-7)
+ * (4) Honest source of overrun (rx_dropped) (differs from the task text, explicitly ruled)
  * ============================================================================
- *   read: FIFO 空时, 非阻塞 ⇒ `-EAGAIN`; 阻塞 ⇒ `br_task_sleep(1ms)` 后重试。
- *         **v1 没有超时** —— 等的是"外部世界给不给字节", 没有期限就是没有期限(不假装
- *         知道对端什么时候打字)。代价是调用线程可能永不返回; 单独阻塞在 uart 上的线程
- *         应由上层(runtime/posix 的 poll/超时)而不是驱动来兜。
- *   write: 逐字节等 `FR.TXFF` 清零。这里是**忙等**而不是 sleep: 等的是"自己刚写进去的数据
- *         往外挪一格", 上界是 FIFO 深度 × 位时间(115200 下 16 字节 ≈ 1.4 ms), 为它睡 1 ms
- *         会把吞吐再砍一半。方向不同, 机制就不同 —— 这不是不一致, 是两种等待的性质不同。
+ *   The task text suggests "FR bit3 = OE, clear with ICR bit3". Per ARM DDI 0183 (PrimeCell
+ *   UART):
+ *     - `UARTFR[3]` is **BUSY** (transmitting), **not** OE -- using it as a dropped-byte count
+ *       would record "shifting out" as "RX overflow"; UARTFR has no OE bit at all.
+ *     - The honest source of overrun is `UARTRSR[3]` (receive status register; in FIFO mode it
+ *       is the read port of the receive status FIFO, popped in lockstep with DR reads), the same
+ *       origin as DR `[11]`=OE.
+ *     - The interrupt-side clear bit is `UARTICR[10]`=OEIC; ICR bit3 is reserved on PL011.
+ *   So this file samples RSR[3], counts into the session's rx_dropped, and writes ICR.OEIC to
+ *   fulfill the "clear the source on the device side" duty (v1 enables no UART interrupts, so
+ *   the write is idempotent; writing it now means M2 need not come back for it).
+ *   The "FR[3] + ICR[3]" form is **rejected**: it would fabricate counts on real hardware and
+ *   write a reserved bit -- copying the instruction against the hardware.
  *
  * ============================================================================
- * ⑥ rx_available 的诚实上限
+ * (5) Blocking semantics and "may wait forever" (SD-6 / SD-7)
  * ============================================================================
- *   PL011 的 FR **没有** RX FIFO 水位字段(没有 16550 那种 level 寄存器), 只有 RXFE(空)/
- *   RXFF(满)。所以 GET_INFO 的 rx_available 只能给一个**下界**:
- *     RXFE ⇒ 0; RXFF ⇒ 16(FIFO 深 16); 其余 ⇒ 1(至少有 1 个, 到底几个读 FR 看不出来)。
- *   报 1 是保守可解释的("至少有 1"), 报一个猜的中间值才是撒谎。
- *   (PL011 的 FR 只有 RXFE/RXFF 两个状态位, **没有** FIFO 深度字段; 头文件已按"诚实的
- *    下界"口径写明 0/1/16 —— 报精确值需要读 FIFO, 而查询语义不该有副作用。)
+ *   read: when the FIFO is empty, non-blocking => `-EAGAIN`; blocking => `br_task_sleep(1ms)`
+ *         then retry. **v1 has no timeout** -- what is awaited is "whether the outside world
+ *         supplies bytes", and no deadline simply means no deadline (we do not pretend to know
+ *         when the peer types). The cost is that the calling thread may never return; a thread
+ *         blocking solely on uart should be covered by the upper layer (runtime/posix poll /
+ *         timeout), not by the driver.
+ *   write: waits byte by byte for `FR.TXFF` to clear. This is a **busy wait**, not sleep: what
+ *         is awaited is "the data just written moving out one slot", bounded by FIFO depth x bit
+ *         time (16 bytes at 115200 ~= 1.4 ms); sleeping 1 ms for it would halve throughput
+ *         again. Different direction, different mechanism -- not an inconsistency but two kinds
+ *         of waiting.
  *
  * ============================================================================
- * ⑦ SET_BAUD 的共享线路风险(为什么要说清楚)
+ * (6) Honest upper bound of rx_available
  * ============================================================================
- *   IBRD/FBRD 是**整条 PL011 线路**的参数, 而 console 与 /dev/uart0 是同一条线: 改波特率
- *   会连带改掉内核日志/panic 通道的速率。v1 仍提供这个 ioctl(设备语义要完整, 且它是
- *   "可表示性校验 + 寄存器和 console 同源常量"的最好载体), 但把风险写在明处:
- *   真产品应经 termios 层协调(console 是线路的主人), 而不是让两个消费者各写各的。
- *   恢复 CR 时用**回读值原样写回**, 不自己拼 `UARTEN|TXE|RXE` —— 线路设置的"真相"在
- *   console 侧, 本驱动只借用除数那一格。
+ *   PL011's FR has **no** RX FIFO level field (no 16550-style level register), only RXFE
+ *   (empty) / RXFF (full). So GET_INFO's rx_available can only give a **lower bound**:
+ *     RXFE => 0; RXFF => 16 (FIFO depth 16); otherwise => 1 (at least 1; the exact count is not
+ *     visible from FR).
+ *   Reporting 1 is conservatively explainable ("at least 1"); reporting a guessed middle value
+ *   would be a lie.
+ *   (PL011's FR has only the RXFE/RXFF status bits and **no** FIFO depth field; the header
+ *    already documents 0/1/16 as the honest lower bound -- an exact value requires FIFO reads,
+ *    and query semantics should have no side effects.)
  *
  * ============================================================================
- * ⑧ ISR 纪律
+ * (7) Shared-line risk of SET_BAUD (why it must be stated)
  * ============================================================================
- *   本文件全部函数都是 **thread-only**(`8-01` §4: 设备/存储域 API 禁止在 ISR 里调用,
- *   白名单为空): 会 `br_malloc`/`br_free`/`br_task_sleep`, 也会自旋等 TX。v1 不开中断,
- *   没有 ISR 会走到这里。
+ *   IBRD/FBRD are parameters of the **whole PL011 line**, and the console and /dev/uart0 are the
+ *   same line: changing the baud rate also changes the rate of the kernel log / panic channel.
+ *   v1 still provides this ioctl (device semantics should be complete, and it is the best carrier
+ *   for "representability check + registers sharing constants with the console"), but states the
+ *   risk plainly: a real product should coordinate through the termios layer (the console owns
+ *   the line) instead of letting two consumers write independently.
+ *   When restoring CR, write the **read-back value back unchanged** rather than assembling
+ *   `UARTEN|TXE|RXE`: the truth of the line settings lives on the console side, and this driver
+ *   only borrows the divisor slot.
+ *
+ * ============================================================================
+ * (8) ISR discipline
+ * ============================================================================
+ *   Every function in this file is **thread-only** (`8-01` §4: device/storage domain APIs must
+ *   not be called from an ISR, whitelist empty): they call `br_malloc`/`br_free`/
+ *   `br_task_sleep` and also spin waiting for TX. v1 enables no interrupts, so no ISR reaches
+ *   here.
  */
 #include <br/io/br_uart_pl011.h>
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>     /* br_malloc / br_free(会话分配) */
-#include <br/core/br_sched.h>   /* br_task_sleep(阻塞 read 的轮询节拍) */
+#include <br/core/br_mem.h>     /* br_malloc / br_free (session allocation) */
+#include <br/core/br_sched.h>   /* br_task_sleep (polling tick of blocking read) */
 #include <br/core/br_time.h>    /* BR_US_PER_MS */
 #include <br/core/br_types.h>
-#include <br/dev/br_cdev.h>     /* br_cdev_ops_t / br_cdev_register(本文件实现与调用) */
-#include <br/dev/br_dev.h>      /* BR_IOC_* 编码宏 */
-#include <br/vfs/br_vfs.h>      /* BR_O_NONBLOCK / BR_POLL*(read/poll 的语义位) */
+#include <br/dev/br_cdev.h>     /* br_cdev_ops_t / br_cdev_register (implemented/called here) */
+#include <br/dev/br_dev.h>      /* BR_IOC_* encoding macros */
+#include <br/vfs/br_vfs.h>      /* BR_O_NONBLOCK / BR_POLL* (read/poll semantic bits) */
 
-#include "pl011_internal.h"    /* 平台数据(base/refclk/baud); 与自检套件同源(见该头) */
+#include "pl011_internal.h"    /* platform data (base/refclk/baud); shared with the selftest suite */
 
-/* 生命周期钩子的原型(名 = symbol_prefix + 相, 生成物引用; 头文件里也有,
- * 这里再写一遍是为了 -Wmissing-prototypes 的读者一眼看到"本文件的对外面就这三个"。) */
+/* Lifecycle hook prototypes (name = symbol_prefix + phase, referenced by generated code; also in
+ * the header. Repeated here so a -Wmissing-prototypes reader sees at a glance that these three
+ * are this file's whole external surface.) */
 int uart_pl011_early_init(void);
 int uart_pl011_init(void);
 int uart_pl011_start(void);
 
 /* =====================================================================
- * 1. 硬件寄存器(平台数据 base/refclk/baud 在 src/pl011_internal.h —— 生产与自检套件
- *    共用**一份真值**; 这里只留"只有本驱动需要"的寄存器偏移与位定义)
+ * 1. Hardware registers (platform data base/refclk/baud live in src/pl011_internal.h --
+ *    production and the selftest suite share **one source of truth**; only the register offsets
+ *    and bit definitions needed by this driver alone remain here)
  *
- *    与 platform/qemu-aarch64/src/console_pl011.c 是同一块硬件的两种形态, 数值各写各的:
- *    它们属于**不同插件**, core 不提供"PL011 寄存器表"这种归属不明的共享头。数值若不一致,
- *    各自的 _Static_assert(在 pl011_internal.h)/ 用例会在编译期与启动日志里报出来。
+ *    Same hardware as platform/qemu-aarch64/src/console_pl011.c in two forms, with values
+ *    written independently: they belong to **different plugins**, and core provides no
+ *    "PL011 register table" header of unclear ownership. If the values disagree, each side's
+ *    _Static_assert (in pl011_internal.h) / test cases report it at compile time and in boot
+ *    logs.
  * ===================================================================== */
 
-/* PL011 寄存器偏移(PrimeCell UART, ARM DDI 0183) */
+/* PL011 register offsets (PrimeCell UART, ARM DDI 0183) */
 #define BR_PL011_DR          0x000u   /* Data Register                    */
-#define BR_PL011_RSR         0x004u   /* Receive Status(读)/ Error Clear(写) */
+#define BR_PL011_RSR         0x004u   /* Receive Status (read) / Error Clear (write) */
 #define BR_PL011_FR          0x018u   /* Flag Register                    */
 #define BR_PL011_IBRD        0x024u   /* Integer Baud Rate Divisor        */
 #define BR_PL011_FBRD        0x028u   /* Fractional Baud Rate Divisor     */
-#define BR_PL011_LCR_H       0x02cu   /* Line Control(★本文件**绝不**写它) */
+#define BR_PL011_LCR_H       0x02cu   /* Line Control (this file **never** writes it) */
 #define BR_PL011_CR          0x030u   /* Control                          */
 #define BR_PL011_ICR         0x044u   /* Interrupt Clear                  */
 
-/* FR 状态位(只用得到这两个 + full) */
+/* FR status bits (only these two + full are needed) */
 #define BR_PL011_FR_RXFE     (1u << 4)   /* RX FIFO empty */
 #define BR_PL011_FR_TXFF     (1u << 5)   /* TX FIFO full  */
-#define BR_PL011_FR_RXFF     (1u << 6)   /* RX FIFO full(16 字节) */
+#define BR_PL011_FR_RXFF     (1u << 6)   /* RX FIFO full (16 bytes) */
 
-/* 接收状态位: overrun(★不是 FR[3] —— FR[3] 是 BUSY, 见抬头 ④) */
+/* Receive status bit: overrun (not FR[3] -- FR[3] is BUSY, see header (4)) */
 #define BR_PL011_RSR_OE      (1u << 3)
 
-/* ICR 清源位: overrun error interrupt clear(★不是 ICR[3], 那是保留位, 见抬头 ④) */
+/* ICR clear bit: overrun error interrupt clear (not ICR[3], that is reserved, see header (4)) */
 #define BR_PL011_ICR_OEIC    (1u << 10)
 
-/* CR 控制位。**只登记不主动拼装**: 恢复 CR 用回读值(抬头 ⑦)。这里列出来是为了让"我们
- * 知道线路由哪几位组成"成为可读的事实, 并在 SET_BAUD 的体检里当掩码用。 */
+/* CR control bits. **Registered only, never assembled by hand**: CR restore uses the read-back
+ * value (header (7)). Listed so "which bits make up the line" is a readable fact, and used as a
+ * mask in SET_BAUD's sanity check. */
 #define BR_PL011_CR_UARTEN   (1u << 0)
 #define BR_PL011_CR_TXE      (1u << 8)
 #define BR_PL011_CR_RXE      (1u << 9)
 
-/* RX FIFO 深度(PL011 固定 16; GET_INFO 的 rx_available 上界) */
+/* RX FIFO depth (PL011 fixed at 16; upper bound of GET_INFO's rx_available) */
 #define BR_PL011_FIFO_DEPTH  16u
 
-/* 参考时钟 / 波特率 / 除数常量与除数公式在 src/pl011_internal.h(生产与套件同源)。 */
+/* Reference clock / baud / divisor constants and the divisor formulas live in
+ * src/pl011_internal.h (shared by production and the suite). */
 
 /* =====================================================================
- * 2. 寄存器访问(volatile; 不做位域/不做 DMA —— 这是 MMIO 不是内存)
+ * 2. Register access (volatile; no bitfields / no DMA -- this is MMIO, not memory)
  * ===================================================================== */
 
 static br_u32 pl011_reg_read(br_u32 off)
@@ -182,21 +214,25 @@ static void pl011_reg_write(br_u32 off, br_u32 value)
 }
 
 /* =====================================================================
- * 3. 驱动状态(单实例 —— v1 静态组合只有一个 PL011; 多实例要等平台数据插件化)
+ * 3. Driver state (single instance -- v1's static composition has one PL011; multiple instances
+ *    must wait for platform data to become pluggable)
  * ===================================================================== */
 
-/* 会话(设计 `8-01` §3 的"不透明 sess"): 只放真正跨调用存活的两件事。
- *   flags      = 打开时的 BR_O_*(v1 只解释 BR_O_NONBLOCK)
- *   rx_dropped = 本会话观察到的 overrun 次数(抬头 ④) */
+/* Session (design `8-01` §3's "opaque sess"): holds only the two things that truly survive
+ * across calls.
+ *   flags      = BR_O_* at open (v1 interprets only BR_O_NONBLOCK)
+ *   rx_dropped = overruns observed by this session (header (4)) */
 typedef struct br_uart_pl011_sess {
     br_u32 flags;
     br_u32 rx_dropped;
 } pl011_sess_t;
 
-/* 设备私有(注册时交给 cdev-core, 之后原样回传给 open 的 dev_priv):
- *   baud   = 当前波特率(GET_INFO 回答; 探测时不该去读硬件 —— 除数寄存器可回读, 但那种
- *            "猜 console 写了什么"的回读会把"我们没改过"变成"我们认领了" —— 所以记自己的)
- *   opened = 独占标志(7-01 §1: 策略归驱动) */
+/* Device private (handed to cdev-core at registration, then passed back verbatim as open's
+ * dev_priv):
+ *   baud   = current baud rate (GET_INFO answer; probe must not read hardware -- divisor
+ *            registers are readable, but such a "guess what the console wrote" readback would
+ *            turn "we never changed it" into "we claim it" -- so track our own)
+ *   opened = exclusivity flag (7-01 §1: policy belongs to the driver) */
 typedef struct br_uart_pl011_dev {
     br_u32  baud;
     br_bool opened;
@@ -208,13 +244,14 @@ static pl011_dev_t s_dev = {
 };
 
 /* =====================================================================
- * 4. 硬件搬运(不涉及会话语义的小工具)
+ * 4. Hardware plumbing (small helpers with no session semantics)
  * ===================================================================== */
 
 /*
- * 采样并清 overrun。**读 RSR 即采样**(FIFO 模式下读它弹出与 DR 配对的状态条目), 因此
- * 调用点只在"确实有数据可读"或 GET_INFO 里 —— 不在空 FIFO 的阻塞循环里空转采样, 免得
- * 把状态 FIFO 的条目与 DR 读错位(见抬头 ④)。
+ * Sample and clear overrun. **Reading RSR is the sample** (in FIFO mode it pops the status
+ * entry paired with a DR read), so call sites are only "there really is data to read" or
+ * GET_INFO -- never spinning in the empty-FIFO blocking loop, which would desynchronize status
+ * FIFO entries from DR reads (see header (4)).
  */
 static void pl011_sample_overrun(pl011_sess_t *s)
 {
@@ -226,12 +263,14 @@ static void pl011_sample_overrun(pl011_sess_t *s)
 
     s->rx_dropped++;
 
-    /* 设备侧清源: ICR.OEIC。v1 没使能 UART 中断 ⇒ 幂等; 但义务留在这里, M2 接中断时
-     * 不必回头补(电平型中断不清源 = 活锁, 设计 3-02 §8.2 的同类纪律)。 */
+    /* Device-side clear: ICR.OEIC. v1 enables no UART interrupts => idempotent; but the duty
+     * stays here so M2 need not come back for it (a level interrupt without clearing = livelock,
+     * the same discipline as design 3-02 §8.2). */
     pl011_reg_write(BR_PL011_ICR, BR_PL011_ICR_OEIC);
 }
 
-/* RX FIFO 当前可读字节数的**下界**(抬头 ⑥: FR 不报水位) */
+/* **Lower bound** on bytes currently readable from the RX FIFO (header (6): FR reports no
+ * level) */
 static br_u32 pl011_rx_available(void)
 {
     const br_u32 fr = pl011_reg_read(BR_PL011_FR);
@@ -242,28 +281,31 @@ static br_u32 pl011_rx_available(void)
     if ((fr & BR_PL011_FR_RXFF) != 0u) {
         return BR_PL011_FIFO_DEPTH;
     }
-    return 1u;   /* 至少有 1 个; 到底几个只有读出来才知道 */
+    return 1u;   /* at least 1; the exact count is only known by reading */
 }
 
-/* 抽干 RX FIFO, 丢弃并计入 rx_dropped(FLUSH_RX 的实现) */
+/* Drain the RX FIFO, discarding and counting into rx_dropped (FLUSH_RX implementation) */
 static void pl011_drain_rx(pl011_sess_t *s)
 {
     while ((pl011_reg_read(BR_PL011_FR) & BR_PL011_FR_RXFE) == 0u) {
-        (void)pl011_reg_read(BR_PL011_DR);   /* 读出来就是扔掉: FLUSH 的语义是"不要了" */
+        (void)pl011_reg_read(BR_PL011_DR);   /* reading it is discarding it: FLUSH means "no longer wanted" */
         s->rx_dropped++;
     }
 }
 
 /* =====================================================================
- * 5. 波特率(SET_BAUD 的全部机制 + 一处 console 共享线路的风险说明)
+ * 5. Baud rate (all of SET_BAUD's mechanics + one note on the console-shared line risk)
  * ===================================================================== */
 
 /*
- * 可表示性判定: 算出 IBRD/FBRD; 不可表示 ⇒ -EINVAL。
- *   baud == 0        ⇒ 除数为 0(不先挡掉就是除零, 不是"参数不好"而是"程序会崩")
- *   IBRD == 0        ⇒ 除数 < 1 ⇒ baud > refclk/16(24MHz 下 1.5Mbaud), PL011 表示不了
- *   IBRD > 0xFFFF    ⇒ 除数寄存器只有 16 位(极低波特率)
- *   FBRD 舍入到 64   ⇒ 进位成 IBRD+1、FBRD=0(否则写进 6 位字段会截断成 0, 速率差 1/64)
+ * Representability check: compute IBRD/FBRD; not representable => -EINVAL.
+ *   baud == 0        => divisor 0 (not filtered first, this is a divide-by-zero: not a "bad
+ *                       argument" but "the program would crash")
+ *   IBRD == 0        => divisor < 1 => baud > refclk/16 (1.5 Mbaud at 24 MHz), PL011 cannot
+ *                       represent it
+ *   IBRD > 0xFFFF    => divisor register is only 16 bits (extremely low baud rates)
+ *   FBRD rounds to 64 => carry into IBRD+1, FBRD=0 (otherwise the 6-bit field truncates to 0, a
+ *                       1/64 rate error)
  */
 static int pl011_divisors_for(br_u32 baud, br_u32 *ibrd_out, br_u32 *fbrd_out)
 {
@@ -288,15 +330,19 @@ static int pl011_divisors_for(br_u32 baud, br_u32 *ibrd_out, br_u32 *fbrd_out)
 }
 
 /*
- * 落盘除数。ARM 的要求(DDI 0183): 改 IBRD/FBRD 前先清 CR.UARTEN, 写完再恢复 CR ——
- * 运行中改除数会让线路上出现一个位宽不确定的字符。
+ * Program the divisors. ARM requirement (DDI 0183): clear CR.UARTEN before changing IBRD/FBRD,
+ * restore CR after -- changing divisors while running puts a character of undefined width on the
+ * line.
  *
- * ★ 恢复值是**回读的 CR**, 不是自己拼 `UARTEN|TXE|RXE`: CR 是 console 与 /dev/uart0 的
- *   共享线路设置(抬头 ⑦)。自己拼常量 = 把 console 的配置悄悄改写成"我以为的样子";
- *   读-改-写连"UARTEN 本来是关的"这种状态也如实保留。
- * ★ 不等 FR.TXFE 再关: v1 的发送者是单线程日志, 调 SET_BAUD 时没有在途数据; 加一个无上界
- *   的等待反而在流控/对端不回读时把 ioctl 挂死 —— 那是在驱动里自造活锁面(与 read 的
- *   无限等待不同: read 等的是外部输入, 那是语义)。
+ * * The restored value is the **read-back CR**, not a hand-assembled `UARTEN|TXE|RXE`: CR is the
+ *   line setting shared by the console and /dev/uart0 (header (7)). Assembling constants would
+ *   silently rewrite the console's configuration into "what I think it is"; read-modify-write
+ *   faithfully preserves even states like "UARTEN was off".
+ * * Do not wait for FR.TXFE before disabling: v1's transmitter is a single-threaded log, so there
+ *   is no data in flight when SET_BAUD is called; adding an unbounded wait would instead hang
+ *   the ioctl when flow control / the peer does not read -- manufacturing a livelock surface
+ *   inside the driver (unlike read's infinite wait: read waits for external input, which is
+ *   semantics).
  */
 static void pl011_program_divisors(br_u32 ibrd, br_u32 fbrd)
 {
@@ -308,35 +354,38 @@ static void pl011_program_divisors(br_u32 ibrd, br_u32 fbrd)
     pl011_reg_write(BR_PL011_FBRD, fbrd);
     pl011_reg_write(BR_PL011_CR, cr);
 
-    /* 体检(不改变行为): 线路三使能位不齐说明 console 还没 bring-up 或有人关了 UART。
-     * 用 debug 级 —— 这不是错误, 是给 -v 排障留的线索, 不该在正常启动里刷屏。 */
+    /* Sanity check (does not change behavior): missing line-enable bits mean the console has not
+     * brought up yet or someone disabled the UART. Debug level -- not an error, just a lead for
+     * -v debugging; it should not spam a normal boot. */
     if ((cr & want) != want) {
-        br_log_debug("uart-pl011: SET_BAUD 时 CR=0x%08x 未含 UARTEN|TXE|RXE 全体; "
-                     "除数已改, 线路使能状态按 console 原样保留", cr);
+        br_log_debug("uart-pl011: CR=0x%08x at SET_BAUD lacks UARTEN|TXE|RXE; "
+                     "divisors changed, line enable kept as the console had it", cr);
     }
 }
 
 /* =====================================================================
- * 6. cdev ops 实现(设计 `8-01` §3 的会话式形状)
+ * 6. cdev ops implementation (design `8-01` §3's session-shaped form)
  * ===================================================================== */
 
 /*
  * open(dev_priv, flags, &sess)
- *   ① 独占执法(先查再分配: 被拒的调用不该产生任何分配);
- *   ② 会话用 br_malloc 分配 —— 不塞进任何静态池: 会话生命周期与"打开"绑定, 而独占保证
- *      同一时刻最多一个 ⇒ 分配次数天然有界(不构成碎片风险)。
- *   错误: -EINVAL(参数/私有不对) / -EBUSY(已被打开) / -ENOMEM(堆尽)。
+ *   (1) enforce exclusivity (check before allocating: a rejected call should allocate nothing);
+ *   (2) session allocated with br_malloc -- not stuffed into any static pool: the session
+ *       lifetime is tied to "open", and exclusivity guarantees at most one at a time => the
+ *       allocation count is naturally bounded (no fragmentation risk).
+ *   Errors: -EINVAL (bad args/private) / -EBUSY (already open) / -ENOMEM (heap exhausted).
  */
 static int pl011_open(void *dev_priv, br_u32 flags, void **sess)
 {
-    /* v1 只有一个实例: CORE 相注册时给的私有必然是 &s_dev。核验而不是静默忽略 ——
-     * 框架送来别的私有, 说明注册/查找配错了对, 早失败比"打开了一个影子设备"好。 */
+    /* v1 has one instance: the private handed in at CORE-phase registration is necessarily
+     * &s_dev. Verify rather than silently ignore -- a different private means registration and
+     * lookup were mismatched; failing early beats "opened a shadow device". */
     if ((dev_priv != (void *)&s_dev) || (sess == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
 
     if (s_dev.opened != BR_FALSE) {
-        return BR_ERR(EBUSY);   /* 独占: 策略在驱动, 见抬头 ③ */
+        return BR_ERR(EBUSY);   /* exclusive: policy in the driver, see header (3) */
     }
 
     pl011_sess_t *s = (pl011_sess_t *)br_malloc(sizeof(pl011_sess_t));
@@ -344,7 +393,7 @@ static int pl011_open(void *dev_priv, br_u32 flags, void **sess)
         return BR_ERR(ENOMEM);
     }
 
-    s->flags      = flags;   /* 原样存: v1 只解释 BR_O_NONBLOCK, 其余留给后续(不假装支持) */
+    s->flags      = flags;   /* stored verbatim: v1 interprets only BR_O_NONBLOCK, the rest later */
     s->rx_dropped = 0u;
 
     s_dev.opened = BR_TRUE;
@@ -353,10 +402,13 @@ static int pl011_open(void *dev_priv, br_u32 flags, void **sess)
 }
 
 /*
- * read(sess, buf, n): 从 RX FIFO 抽最多 n 字节。
- *   非阻塞且一个字节都没有 ⇒ -EAGAIN; 阻塞 ⇒ 每 1ms 醒一次重试(**无超时**, 抬头 ⑤)。
- *   已拿到一些字节后 FIFO 空 ⇒ 立即**短读返回**: "抽干当前可读"比"凑满 n"更符合字符设备
- *   语义(数据什么时候来不由调用方决定), 也让非阻塞读不会因为要凑 n 而变成阻塞读。
+ * read(sess, buf, n): pull at most n bytes from the RX FIFO.
+ *   Non-blocking with zero bytes => -EAGAIN; blocking => wake every 1ms and retry (**no
+ *   timeout**, header (5)).
+ *   After some bytes are obtained, an empty FIFO => immediate **short read**: "drain what is
+ *   readable" fits character-device semantics better than "fill up to n" (when data arrives is
+ *   not the caller's decision), and it keeps a non-blocking read from turning into a blocking one
+ *   just to reach n.
  */
 static br_s64 pl011_read(void *sess, void *buf, br_size_t n)
 {
@@ -372,22 +424,23 @@ static br_s64 pl011_read(void *sess, void *buf, br_size_t n)
         const br_u32 fr = pl011_reg_read(BR_PL011_FR);
 
         if ((fr & BR_PL011_FR_RXFE) == 0u) {
-            pl011_sample_overrun(s);                                   /* 与本次 DR 读配对 */
-            out[got] = (br_u8)(pl011_reg_read(BR_PL011_DR) & 0xffu);        /* DR[7:0] = 数据 */
+            pl011_sample_overrun(s);                                 /* paired with this DR read */
+            out[got] = (br_u8)(pl011_reg_read(BR_PL011_DR) & 0xffu);        /* DR[7:0] = data */
             got++;
             continue;
         }
 
-        /* FIFO 空 */
+        /* FIFO empty */
         if (got > 0u) {
-            break;                                          /* 短读返回 */
+            break;                                          /* short read */
         }
         if ((s->flags & BR_O_NONBLOCK) != 0u) {
-            return BR_ERR(EAGAIN);                       /* SD-7 v1: 非阻塞 = 问一次 */
+            return BR_ERR(EAGAIN);                       /* SD-7 v1: non-blocking = ask once */
         }
 
-        /* 阻塞等: sleep 而不是自旋 —— 等的是外部世界, 可能等很久, 不能占着 CPU 空转
-         * (coop 调度下自旋就是"整机不动")。无超时(抬头 ⑤)。 */
+        /* Blocking wait: sleep rather than spin -- what is awaited is the outside world,
+         * possibly for a long time, and must not burn CPU (under coop scheduling spinning means
+         * "the whole machine stalls"). No timeout (header (5)). */
         (void)br_task_sleep((br_time_t)BR_US_PER_MS);
     }
 
@@ -395,10 +448,11 @@ static br_s64 pl011_read(void *sess, void *buf, br_size_t n)
 }
 
 /*
- * write(sess, buf, n): 逐字节等 TX FIFO 腾位后写入。返回写入字节数(= n)。
- *   忙等 TXFF(抬头 ⑤ 解释了为什么这里不是 sleep)。写 DR 就是"发一个字节", 不做任何
- *   转换 —— '\n' → CRLF 是 console/终端的策略, 设备面必须字节透明, 否则同一份数据经
- *   两条路径出去会不一样。
+ * write(sess, buf, n): wait for TX FIFO space byte by byte, then write. Returns bytes written
+ * (= n).
+ *   Busy-waits on TXFF (header (5) explains why this is not a sleep). Writing DR means "send one
+ *   byte" with no conversion -- '\n' -> CRLF is console/terminal policy; the device side must be
+ *   byte-transparent, otherwise the same data would differ across the two paths out.
  */
 static br_s64 pl011_write(void *sess, const void *buf, br_size_t n)
 {
@@ -410,7 +464,7 @@ static br_s64 pl011_write(void *sess, const void *buf, br_size_t n)
 
     for (br_size_t i = 0u; i < n; i++) {
         while ((pl011_reg_read(BR_PL011_FR) & BR_PL011_FR_TXFF) != 0u) {
-            /* 忙等: TX FIFO 有空位。没有 TX 中断的 v1, 除了等没有别的可做。 */
+            /* Busy wait: TX FIFO has space. With no TX interrupt in v1, waiting is all we can do. */
         }
         pl011_reg_write(BR_PL011_DR, (br_u32)p[i]);
     }
@@ -419,11 +473,14 @@ static br_s64 pl011_write(void *sess, const void *buf, br_size_t n)
 }
 
 /*
- * ioctl(sess, cmd, arg)。
- *   分发维度 = **type(族魔数) + nr**; dir/size 不做强校验: 设计 `8-01` §5 说编码的用途是
- *   "静态查表/生成清单", 而 v1 的调用方是自己人 —— 因为 size 位对不上就拒绝一个语义完全
- *   明确的命令, 只会把"文档里的编码"变成"运行期的地雷"。类型/nr 不认 = -ENOTSUP。
- *   错误: -ENOTSUP(不是本器件的命令/未实现) / -EINVAL(参数缺失或波特率不可表示)。
+ * ioctl(sess, cmd, arg).
+ *   Dispatch dimension = **type (family magic) + nr**; dir/size are not strictly validated:
+ *   design `8-01` §5 says the encoding's purpose is "static table lookup / manifest generation",
+ *   and v1's callers are in-house -- rejecting a semantically unambiguous command just because
+ *   the size bits disagree would turn "the encoding in the docs" into "a runtime landmine".
+ *   Unknown type/nr = -ENOTSUP.
+ *   Errors: -ENOTSUP (not this device's command / unimplemented) / -EINVAL (missing argument or
+ *   unrepresentable baud rate).
  */
 static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
 {
@@ -433,8 +490,9 @@ static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
 
     pl011_sess_t *s = (pl011_sess_t *)sess;
 
-    /* 族魔数不对 ⇒ 这条命令不归本器件管。用 -ENOTSUP 而不是 -EINVAL: 命令本身可能是合法的
-     * (别的器件族), 只是没人实现 —— 与"给我的参数不对"必须分开(SD-10)。 */
+    /* Wrong family magic => this command is not ours. Use -ENOTSUP, not -EINVAL: the command
+     * itself may be legal (another device family), it is just unimplemented -- this must stay
+     * separate from "the argument given to me is wrong" (SD-10). */
     if (BR_IOC_TYPE(cmd) != (br_u32)BR_UART_IOC_MAGIC) {
         return BR_ERR(ENOTSUP);
     }
@@ -445,8 +503,9 @@ static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
             return BR_ERR(EINVAL);
         }
 
-        /* 顺带采样一次 overrun(抬头 ④): 查询时把"上次读之后又丢过字节"如实反映出来。
-         * 代价是可能多弹一个状态条目 —— v1 不暴露逐字符错误状态, 所以不构成信息损失。 */
+        /* Also sample overrun once (header (4)): the query honestly reflects bytes dropped since
+         * the last read. The cost is possibly popping one extra status entry -- v1 exposes no
+         * per-character error status, so no information is lost. */
         pl011_sample_overrun(s);
 
         br_uart_pl011_info_t *info = (br_uart_pl011_info_t *)arg;
@@ -459,7 +518,8 @@ static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
     }
 
     case BR_UART_IOC_FLUSH_RX:
-        /* 无参数命令: arg 可为空, 不校验(将来若加方向/尺寸校验, 也不该在这里要求 arg) */
+        /* No-argument command: arg may be null and is not checked (if direction/size validation
+         * is added later, arg still should not be required here) */
         pl011_drain_rx(s);
         return 0;
 
@@ -468,33 +528,37 @@ static int pl011_ioctl(void *sess, br_u32 cmd, void *arg)
             return BR_ERR(EINVAL);
         }
 
-        /* arg = br_u32 波特率(值传递, 不是结构体)。解引用由调用方保证对齐(vfs 传的是
-         * br_u32 对象; -mstrict-align 只约束编译器生成的访问, 不替调用方对齐指针)。 */
+        /* arg = br_u32 baud rate (by value, not a struct). Alignment is the caller's
+         * responsibility (vfs passes a br_u32 object; -mstrict-align only constrains
+         * compiler-generated accesses, it does not align the caller's pointer). */
         const br_u32 baud = *(const br_u32 *)arg;
         br_u32       ibrd = 0u;
         br_u32       fbrd = 0u;
 
         const int rc = pl011_divisors_for(baud, &ibrd, &fbrd);
         if (rc != 0) {
-            return rc;   /* -EINVAL: 不可表示(含 baud=0), 硬件**一个字节都没动** */
+            return rc;   /* -EINVAL: not representable (incl. baud=0), hardware **untouched** */
         }
 
         pl011_program_divisors(ibrd, fbrd);
-        s_dev.baud = baud;   /* 只在成功落盘后才更新"当前波特率" */
+        s_dev.baud = baud;   /* update "current baud" only after successful programming */
         return 0;
     }
 
     default:
-        /* 未知 nr(wrong magic 已在上面挡掉): 明确地"不支持", 不静默成功 */
+        /* Unknown nr (wrong magic already rejected above): explicitly "not supported", never
+         * silently succeed */
         return BR_ERR(ENOTSUP);
     }
 }
 
 /*
- * poll(sess, events): v1 = **查询**就绪位(SD-7; 没有等待, 也不注册 wait-queue)。
- *   置位规则: RX 有数据 ⇒ BR_POLLIN; TX 不满 ⇒ BR_POLLOUT。
- *   未置位的位**必须清掉** ⇒ 这里用赋值而不是或(调用方的 events 可能是复用缓冲;
- *   "我只回答我看到的状态" —— 沿用旧值会把"没数据"说成"有数据")。
+ * poll(sess, events): v1 = **query** the ready bits (SD-7; no waiting, no wait-queue
+ * registration).
+ *   Set rules: RX has data => BR_POLLIN; TX not full => BR_POLLOUT.
+ *   Unset bits **must be cleared** => assign rather than OR (the caller's events may be a reused
+ *   buffer; "I answer only the state I see" -- keeping old values would report "no data" as "has
+ *   data").
  */
 static int pl011_poll(void *sess, br_u32 *events)
 {
@@ -517,9 +581,10 @@ static int pl011_poll(void *sess, br_u32 *events)
 }
 
 /*
- * close(sess): 释放会话 = 放开独占。
- * 顺序是"先销毁再放开": 反过来的话, 并发场景下第二个 open 可能拿到一个"前一个会话刚被
- * 释放、但还没从设备状态里摘掉"的窗口。v1 是单线程, 这条顺序只是把不变量写在明显处。
+ * close(sess): free the session = release exclusivity.
+ * The order is "destroy first, then release": reversed, under concurrency a second open could
+ * catch a window where the previous session is freed but not yet removed from device state. v1 is
+ * single-threaded; this order merely writes the invariant where it is visible.
  */
 static int pl011_close(void *sess)
 {
@@ -533,11 +598,14 @@ static int pl011_close(void *sess)
 }
 
 /*
- * suspend/resume: **恒 -ENOTSUP**(D22 预留槽位, 设计 `8-01` §4 末段 / O-S6)。
- *   为什么不是"返回 0 假装成功": 返回 0 等于声称"掉电/时钟门控后线路设置与 FIFO 状态由我
- *   保存并恢复" —— v1 既没有 PM 调用方, 也没有保存/恢复任何寄存器状态, 那是谎报能力。
- *   槽位存在(= 非 NULL)是因为 ops 布局入 golden(D14): 后补字段 = 二进制不兼容, 预留即免破坏。
- *   错误码取 -ENOTSUP 而不是 -EINVAL: 命令合法、场合合法, 只是本版本没这个能力(SD-10)。
+ * suspend/resume: **always -ENOTSUP** (D22 reserved slot, design `8-01` §4 last part / O-S6).
+ *   Why not "return 0 pretending success": returning 0 claims "after power-down / clock gating I
+ *   save and restore the line settings and FIFO state" -- v1 has no PM caller and saves/restores
+ *   no register state, so that would misreport capability.
+ *   The slot exists (= non-NULL) because the ops layout is in the golden (D14): adding fields
+ *   later = binary incompatibility, reserving now avoids breaking it.
+ *   The error code is -ENOTSUP rather than -EINVAL: the command is legal and the situation is
+ *   legal, this version simply lacks the capability (SD-10).
  */
 static int pl011_suspend(void *dev_priv)
 {
@@ -551,7 +619,8 @@ static int pl011_resume(void *dev_priv)
     return BR_ERR(ENOTSUP);
 }
 
-/* ops 表(静态 const: 布局与内容都是契约; 全槽位显式给出, 不靠 C 的零初始化) */
+/* ops table (static const: layout and content are contract; every slot given explicitly, not
+ * relying on C zero-init) */
 static const br_cdev_ops_t s_ops = {
     .open    = pl011_open,
     .read    = pl011_read,
@@ -564,13 +633,15 @@ static const br_cdev_ops_t s_ops = {
 };
 
 /* =====================================================================
- * 7. 生命周期钩子(名 = symbol_prefix + 相; 由生成物 plugin_desc.c 引用)
+ * 7. Lifecycle hooks (name = symbol_prefix + phase; referenced by generated plugin_desc.c)
  * ===================================================================== */
 
 /*
- * EARLY 相: **无动作**。此刻无线程(不能 br_task_sleep)、无堆(不能 br_malloc), 而设备的
- * 注册要等 CORE 相(子分类框架先就位, 堆也就位)。更重要的是: PL011 的线路设置此刻归
- * platform 的早期 console —— 在这里"初始化 UART"会把 panic 通道的配置改掉(抬头 ①)。
+ * EARLY phase: **no action**. At this point there are no threads (cannot br_task_sleep) and no
+ * heap (cannot br_malloc), and device registration waits for the CORE phase (the subclass
+ * framework comes up first, then the heap). More importantly, PL011 line settings currently
+ * belong to the platform early console -- "initializing the UART" here would alter the panic
+ * channel's configuration (header (1)).
  */
 int uart_pl011_early_init(void)
 {
@@ -578,36 +649,42 @@ int uart_pl011_early_init(void)
 }
 
 /*
- * CORE 相: 注册 cdev。注册成功即出现在 /dev(devfs 枚举 dev-core 注册表)。
- * rc **原样上抛**: -EINVAL(名/ops 非法)/ -EEXIST(重名)/ -ENOSPC(注册表满)都是启动期
- * 必须炸出来的错; 吞掉它 = "设备看起来在, 其实没注册", 是最难查的一类静默失败。
+ * CORE phase: register the cdev. Successful registration makes it appear in /dev (devfs
+ * enumerates the dev-core registry).
+ * rc is **propagated verbatim**: -EINVAL (bad name/ops) / -EEXIST (duplicate name) / -ENOSPC
+ * (registry full) are all errors that must surface at boot; swallowing one means "the device
+ * looks present but was never registered", the hardest class of silent failure to debug.
  */
 int uart_pl011_init(void)
 {
     const int rc = br_cdev_register(BR_UART_PL011_DEV_NAME, &s_ops, &s_dev);
 
     if (rc != 0) {
-        br_log_error("uart-pl011: cdev 注册失败 rc=%d (name=%s)",
+        br_log_error("uart-pl011: cdev registration failed rc=%d (name=%s)",
                      rc, BR_UART_PL011_DEV_NAME);
         return rc;
     }
 
-    br_log_info("uart-pl011: /dev/%s 已注册 (cdev; PL011 @ 0x%08x, %u baud, %u MHz refclk)",
+    br_log_info("uart-pl011: /dev/%s registered (cdev; PL011 @ 0x%08x, %u baud, %u MHz refclk)",
                 BR_UART_PL011_DEV_NAME, (br_u32)BR_PL011_BASE,
                 BR_PL011_BAUD, BR_PL011_REFCLK_HZ / 1000000u);
     return 0;
 }
 
 /*
- * START 相: 本器件的一致性用例**不在这里跑** —— ADR-0010 之后由 core 的
- * `br_plugin_manager_selftest()` 经描述符的 `.selftest` 钩子统一驱动(见 src/uart_selftest.c)。
- * 这里只留一行设备摘要作启动证据(此时堆/线程/devfs 都在, 设备已在 CORE 相注册)。
- * 返回 0 而**不是**失败数: 红绿由门禁看自检套件打的日志判定(见 src/uart_selftest.c)——
- * 让 start 返回非 0 会把插件管理器判成"启动失败", 后面的相位与别的插件的证据可能一起丢。
+ * START phase: this device's conformance cases **do not run here** -- after ADR-0010 they are
+ * driven uniformly by core's `br_plugin_manager_selftest()` through the descriptor's `.selftest`
+ * hook (see src/uart_selftest.c).
+ * Only one device summary line remains here as boot evidence (heap/threads/devfs are all up now,
+ * and the device was registered in the CORE phase).
+ * Returns 0 and **not** a failure count: pass/fail is decided by the gate reading the log output
+ * of the selftest suite (see src/uart_selftest.c) -- returning non-zero from start would make the
+ * plugin manager treat it as a "boot failure" and could lose the later phases and other plugins'
+ * evidence along with it.
  */
 int uart_pl011_start(void)
 {
-    br_log_info("uart-pl011: /dev/%s 就绪 (PL011 @ 0x%08x, %u baud)",
+    br_log_info("uart-pl011: /dev/%s ready (PL011 @ 0x%08x, %u baud)",
                 BR_UART_PL011_DEV_NAME, (br_u32)BR_PL011_BASE, BR_PL011_BAUD);
     return 0;
 }

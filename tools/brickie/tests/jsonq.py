@@ -1,19 +1,19 @@
 #!/usr/bin/env python3
-"""`--json` 输出的**结构化**查询 / 快照工具(用例的断言后端)。
+"""**Structured** query / snapshot tool for `--json` output (the assertion backend for cases).
 
-为什么不是文本 grep / 全文本 diff:
-  contract §3 规定诊断数组按 ``(code, file, span, target)`` 稳定排序、§2 规定信封字段;
-  验收要锁的是**这些结构**(键集合 / 诊断排序 / 协议版本 / 退出码), 不是某台机器上
-  恰好缩进几个空格的文本。因此本模块只做四件事:
+Why not textual grep / whole-text diff:
+  contract §3 fixes a stable ordering of the diagnostics array by ``(code, file, span, target)``; §2
+  fixes the envelope fields. Acceptance must lock **those structures** (key sets / diagnostic order /
+  protocol version / exit codes), not text indented a few spaces on one machine — exactly four things:
 
-  1. 按键路径取值(``get`` / ``count`` / ``has`` / ``keys``);
-  2. 把诊断数组压成 ``code|severity|file|span|target`` 的规范元组序列(``diags``),
-     供"排序是否稳定""桩替换后诊断集合是否不变"之类的断言使用;
-  3. 断言诊断数组确实按契约键有序(``sorted``);
-  4. 快照: 把整份响应投影成**去掉散文(message/hint)与动态回写正文**的稳定 JSON,
-     与 ``tests/snap/<name>.json`` 逐字节比对(``snapshot``); ``--emit`` 用于重生成。
+  1. fetch values by key path (``get`` / ``count`` / ``has`` / ``keys``);
+  2. compress the diagnostics array into the canonical tuple sequence (``diags``) of
+     ``code|severity|file|span|target``, for "is the order stable" / "is the set unchanged after a stub swap";
+  3. assert that the diagnostics array really is ordered by the contract keys (``sorted``);
+  4. snapshots: project the whole response into stable JSON with **prose (message/hint) and dynamic
+     write-back bodies removed**, compared byte-for-byte with ``tests/snap/<name>.json``; ``--emit`` regenerates.
 
-用法(全部以退出码 0/1 表示断言成立与否, 供 run.sh 直接 check):
+Usage (all express assertion success or failure via exit code 0/1, so run.sh can check directly):
   jsonq.py envelope   <resp.json>
   jsonq.py get        <resp.json> <dotted.path>
   jsonq.py keys       <resp.json> <dotted.path>
@@ -22,7 +22,7 @@
   jsonq.py diags      <resp.json>
   jsonq.py diagcodes  <resp.json>
   jsonq.py sorted     <resp.json>          # yes/no
-  jsonq.py snapshot   <name> <resp.json>   # 与 tests/snap/<name>.json 比对
+  jsonq.py snapshot   <name> <resp.json>   # compare with tests/snap/<name>.json
   jsonq.py snapshot   --emit <name> <resp.json>
 """
 
@@ -35,12 +35,12 @@ import sys
 
 SNAP_DIR = pathlib.Path(__file__).resolve().parent / "snap"
 
-# 快照里**故意丢掉**的字段:
-#   message / hint   —— 人读散文, 不是协议形状; 锁它会锁住措辞而不是锁住契约
-#   expected_snapshot —— `iface status` 不一致时回吐的"应有快照"正文, 属动态回写内容
+# Fields **deliberately dropped** from snapshots:
+#   message / hint    — human prose, not protocol shape; locking it locks wording, not the contract
+#   expected_snapshot — the "expected snapshot" body echoed when `iface status` mismatches (dynamic)
 _DROP_KEYS = {"message", "hint", "expected_snapshot"}
-# `--version --json` 的 `data.languages[].version` 是**构建环境的工具链版本**(如 rustc 1.93.1),
-# 不是协议形状; 换一台工具链就会让快照红, 属假阳性 ⇒ 从投影里去掉(语言名保留)。
+# The `data.languages[].version` of `--version --json` is the **build-environment toolchain version**
+# (e.g. rustc 1.93.1), not protocol shape; another toolchain reddens the snapshot ⇒ dropped (names kept).
 _DROP_TOOLCHAIN = re.compile(r"languages(\[\d+\])?$")
 _LONG_STRING = 200
 
@@ -50,7 +50,7 @@ def load(path: str) -> dict:
 
 
 def walk(node: object, path: str) -> object:
-    """按 ``a.b.0.c`` 取值; 路径为空 ⇒ 取根。"""
+    """Fetch by ``a.b.0.c``; an empty path ⇒ the root."""
     cur = node
     if not path:
         return cur
@@ -67,7 +67,7 @@ def walk(node: object, path: str) -> object:
 
 
 def flat(value: object) -> str:
-    """标量直出; 容器出紧凑 JSON(便于 `check` 比较)。"""
+    """Scalars pass through; containers emit compact JSON (so `check` can compare them)."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if value is None:
@@ -78,7 +78,7 @@ def flat(value: object) -> str:
 
 
 def diag_tuples(resp: dict) -> list[list[str]]:
-    """诊断的规范元组序列(**保持数组原序**, 排序断言才有意义)。"""
+    """Canonical tuple sequence of diagnostics (**array order kept**, so ordering asserts mean something)."""
     out = []
     for d in resp.get("diagnostics", []):
         out.append([
@@ -92,13 +92,13 @@ def diag_tuples(resp: dict) -> list[list[str]]:
 
 
 def sort_key(t: list[str]) -> tuple:
-    # 与 python/brickie/present.sort_diagnostics 同键(contract §3);
-    # 无码诊断以 "" 排最前。
+    # Same keys as python/brickie/present.sort_diagnostics (contract §3);
+    # diagnostics without a code sort first as "".
     return (t[0], t[2], t[3], t[4])
 
 
 def project(node: object, path: str = "") -> object:
-    """稳定投影: 键序固定、丢散文、丢掉构建环境相关的工具链版本、截断超长字符串。"""
+    """Stable projection: fixed key order, prose dropped, build-toolchain version dropped, long strings truncated."""
     if isinstance(node, dict):
         out = {}
         for k, v in sorted(node.items()):
@@ -126,7 +126,7 @@ def cmd_snapshot(args: list[str]) -> int:
         emit = True
         args = args[1:]
     if len(args) != 2:
-        print("用法: jsonq.py [--emit] snapshot <name> <resp.json>", file=sys.stderr)
+        print("usage: jsonq.py [--emit] snapshot <name> <resp.json>", file=sys.stderr)
         return 1
     name, path = args
     proj = render(project(load(path)))
@@ -137,7 +137,7 @@ def cmd_snapshot(args: list[str]) -> int:
         print(f"emit {target}")
         return 0
     if not target.exists():
-        print(f"snapshot 缺失: {target}(用 `jsonq.py --emit snapshot {name} <resp.json>` 生成)")
+        print(f"snapshot missing: {target} (generate with `jsonq.py --emit snapshot {name} <resp.json>`)")
         return 1
     want = target.read_text()
     if want == proj:
@@ -146,7 +146,7 @@ def cmd_snapshot(args: list[str]) -> int:
 
     diff = list(difflib.unified_diff(
         want.splitlines(), proj.splitlines(),
-        fromfile=f"snap/{name}.json(基线)", tofile="本次输出", lineterm=""))
+        fromfile=f"snap/{name}.json (baseline)", tofile="current output", lineterm=""))
     print("\n".join(diff[:60]))
     return 1
 
@@ -161,7 +161,7 @@ def main(argv: list[str]) -> int:
         return cmd_snapshot(rest)
 
     if not rest:
-        print(f"{op} 需要 <resp.json>", file=sys.stderr)
+        print(f"{op} requires <resp.json>", file=sys.stderr)
         return 2
     resp = load(rest[0])
 
@@ -169,7 +169,7 @@ def main(argv: list[str]) -> int:
         print(",".join(sorted(resp.keys())))
         return 0
     if op == "text":
-        # 诊断的文本投影(供用例用同一条 grep 走 text/json 两种模式)
+        # text projection of diagnostics (so a case can use the same grep for both text/json modes)
         for d in resp.get("diagnostics", []):
             print(f'{d.get("severity", "?")}: {d.get("code") or "-"} '
                   f'[{d.get("file") or d.get("target") or ""}] ({d.get("span") or ""}) '
@@ -194,7 +194,7 @@ def main(argv: list[str]) -> int:
     if op == "keys":
         node = walk(resp, path)
         if not isinstance(node, dict):
-            print(f"{path} 不是对象", file=sys.stderr)
+            print(f"{path} is not an object", file=sys.stderr)
             return 1
         print(",".join(sorted(node.keys())))
         return 0
@@ -211,7 +211,7 @@ def main(argv: list[str]) -> int:
     if op == "get":
         print(flat(walk(resp, path)))
         return 0
-    print(f"未知操作: {op}", file=sys.stderr)
+    print(f"unknown operation: {op}", file=sys.stderr)
     return 2
 
 

@@ -1,18 +1,23 @@
 /*
- * brickOS prototype v0.2.0 — 文件控制(fcntl.h; runtime/posix 插件提供)
+ * brickOS prototype v0.2.0 — file control (fcntl.h; provided by the runtime/posix plugin)
  *
- * ★ `O_*` **取 Linux 的数值**(八进制沿用内核口径), 理由有二:
- *   ① 与 errno 同一条纪律 —— 三方代码里常有按 Linux 数值写的条件, 对齐能白捡兼容;
- *   ② 它们是"实现定义"的(POSIX 不管数值), 所以抄一份权威表比自己编号更不容易出错。
- *   注意: 本仓的 native 面用 `BR_O_*`(另一套数值, 见 br_vfs.h), 两者靠 runtime/posix 的
- *   `posix_to_br_flags()` **显式翻译** —— 一侧是标准, 一侧是内核, 中间必然有一层。
+ * ★ `O_*` **take Linux's numeric values** (octal, following the kernel convention), for
+ *   two reasons:
+ *   ① the same discipline as errno — third-party code often has conditions written
+ *     against Linux numbers, so alignment buys compatibility for free;
+ *   ② they are implementation-defined (POSIX does not fix the values), so copying an
+ *     authoritative table is less error-prone than assigning our own numbers.
+ *   Note: the native side of this repo uses `BR_O_*` (a different value set, see
+ *   br_vfs.h); the two are translated **explicitly** by runtime/posix's
+ *   `posix_to_br_flags()` — one side is the standard, the other the kernel, so a layer
+ *   between them is unavoidable.
  */
 #ifndef BR_POSIX_FCNTL_H
 #define BR_POSIX_FCNTL_H
 
 #include <sys/types.h>
 
-/* ---- 打开标志(Linux 数值)---- */
+/* ---- open flags (Linux values) ---- */
 #define O_RDONLY     00000000
 #define O_WRONLY     00000001
 #define O_RDWR       00000002
@@ -25,14 +30,15 @@
 #define O_NONBLOCK   0004000
 #define O_DSYNC      0010000
 #define O_DIRECT     0040000
-#define O_LARGEFILE  0        /* ★ 64 位宿主上就是 0(off_t 本就是 64 位);
-                              *   原写 0100000 是 32 位 Linux 的值, 与宿主不一致 */
+#define O_LARGEFILE  0        /* ★ it is 0 on a 64-bit host (off_t is already 64-bit);
+                              *   the original 0100000 is the 32-bit Linux value, which
+                              *   disagrees with the host */
 #define O_DIRECTORY  0200000
 #define O_NOFOLLOW   0400000
 #define O_NOATIME    01000000
 #define O_CLOEXEC    02000000
 
-/* ---- 文件描述符标志 ---- */
+/* ---- file descriptor flags ---- */
 #define F_DUPFD   0
 #define F_GETFD   1
 #define F_SETFD   2
@@ -44,7 +50,7 @@
 
 #define FD_CLOEXEC  1
 
-/* ---- 记录锁 ---- */
+/* ---- record locks ---- */
 #define F_RDLCK   0
 #define F_WRLCK   1
 #define F_UNLCK   2
@@ -53,8 +59,8 @@ struct flock {
     short l_type;      /* F_RDLCK / F_WRLCK / F_UNLCK */
     short l_whence;    /* SEEK_SET / SEEK_CUR / SEEK_END */
     off_t l_start;
-    off_t l_len;       /* 0 = 到文件末尾 */
-    pid_t l_pid;       /* F_GETLK 的回答 */
+    off_t l_len;       /* 0 = to end of file */
+    pid_t l_pid;       /* answer of F_GETLK */
 };
 
 #define AT_FDCWD  (-100)

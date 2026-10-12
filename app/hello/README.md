@@ -56,7 +56,7 @@ core 头 = 红"在 `brickie check`/`brickie build` 两侧执法。
 ## 目录
 
 ```
-plugin.toml          人写   ← 插件级唯一真值
+brick.toml          人写   ← 插件级唯一真值
 src/main.c           人写   ← 三个钩子(early_init/init/start) + APP 线程体
 tests/smoke.toml     人写   ← 用例声明面(与镜像里 [PLGCONF]/[SVCCONF] 的 id 一一对应)
 ```

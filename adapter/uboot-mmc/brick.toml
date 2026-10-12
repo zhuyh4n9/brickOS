@@ -1,0 +1,76 @@
+schema = 1
+
+[plugin]
+name        = "adapter/uboot-mmc"
+plugin_type = "ability"
+api_type    = "third_party"
+subkind     = "io"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "u-boot MMC 协议核心 + 通用 SDHCI 主机(上游原件原样编译, GPL-2.0+): PCIe INTx 中断驱动, ADMA2/PIO 运行期可选, 多卡(4 实例)经 bdev 注册为 emmc0..emmc3"
+license     = "GPL-2.0-or-later"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+
+used_kib = 16
+notes    = "4 × struct sdhci_host(静态实例表, 约 1 KiB) + 4 × {信号量, pending, IRQ 计数}; 上游 mmc_create 的 struct mmc(4 × ~1.1 KiB)与 ext_csd(4 × 512 B)走 core 堆, ADMA2 描述符表(4 × 8 B)走 DMA 池, 均不计入本项"
+
+[[dep]]
+name  = "framework/bdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/pci-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/dev-core"
+range = ">=0.1.0"
+kind  = "type"
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "type"
+
+[selftest]
+
+cases = 8
+
+[build]
+
+cflags = [
+
+  "-Iadapter/uboot-mmc/compat/std-names",
+  "-Wno-shadow",
+  "-Wno-pointer-arith",
+  "-Wno-missing-prototypes",
+  "-Wno-sign-compare",
+  "-Wno-unused-parameter",
+  "-Wno-int-to-pointer-cast",
+  "-Wno-pointer-to-int-cast",
+  "-Wno-unused-function",
+]
+
+sources = [
+
+  "../../third_party/uboot-imx/drivers/mmc/mmc.c",
+  "../../third_party/uboot-imx/drivers/mmc/mmc_write.c",
+
+  "../../third_party/uboot-imx/drivers/mmc/mmc_legacy.c",
+  "../../third_party/uboot-imx/drivers/mmc/sdhci.c",
+
+  "../../third_party/uboot-imx/drivers/mmc/sdhci-adma.c",
+
+  "glue/*.c",
+]
+includes = [
+  "compat", "glue",
+
+  "../../third_party/uboot-imx/drivers/mmc",
+]

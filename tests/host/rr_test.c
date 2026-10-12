@@ -1,28 +1,29 @@
 /*
- * tests/host/rr_test.c — 宿主侧 **sched/rr**(时间片轮转抢占)语义门禁(不需要 QEMU)
+ * tests/host/rr_test.c — host-side semantics gate for **sched/rr** (time-slice round-robin preemption; no QEMU needed)
  *
- * ## 宿主怎么"造出中断"
+ * ## How the host "manufactures an interrupt"
  *
- * 目标上抢占的驱动链是: timer ISR → `br_sched_on_tick()` → 插件的 `on_tick`(递减时间片)
- * → `br_sched_request_resched()`; 然后 **IRQ 出口** 的 `br_sched_irq_epilogue()` 换栈。
- * 宿主没有真中断, 但这两步都是普通 C 调用 —— 用例只要在**某个线程正在跑的时刻**调用
- * 它们, 就等价于"这次 tick 打断了这个线程":
+ * On target the preemption chain is: timer ISR → `br_sched_on_tick()` → the plugin's `on_tick` (decrements the slice)
+ * → `br_sched_request_resched()`; then the **IRQ exit** path's `br_sched_irq_epilogue()` switches stacks.
+ * The host has no real interrupt, but both steps are ordinary C calls — a case only needs to call them
+ * **while some thread is running**, which is equivalent to "this tick interrupted this thread":
  *
- *     host_tick_from_current():  推进假时钟 → br_sched_on_tick() → br_sched_irq_epilogue()
+ *     host_tick_from_current():  advance the fake clock → br_sched_on_tick() → br_sched_irq_epilogue()
  *
- * 关键性质: 调用者就是"被打断的线程" —— 于是 `resched_from_irq()` 保存的现场真的是
- * 它的, 而它被再次选中时会从这次调用里返回。这与目标上"ISR 在谁的栈上跑"逐点对应。
+ * Key property: the caller *is* the "interrupted thread" — so the context `resched_from_irq()` saves really is
+ * its own, and it returns from this call when scheduled again. This maps point-for-point onto "whose stack does
+ * the ISR run on" on target.
  *
- * ## 判据(report 的 trace 是本节的核心证据)
+ * ## Criteria (the report's trace is the core evidence of this section)
  *
- *   HOST-RR-SLICE      两个不 yield 的忙线程, 各自在自己的循环里"挨 tick";
- *                      时间片 = 2 tick ⇒ 交替序列必须是 AABB AABB(而不是 AAAA BBBB)
- *   HOST-RR-NOTICK     **不发 tick 就绝不抢占**: 忙线程把整段循环跑完, 对手一次都没跑
- *                      —— 与上一条配对, 说明"抢占的唯一来源是 tick"
- *   HOST-RR-RESCHED    need_resched 的置位/消费(含"只有自己可跑时不切栈")
- *   HOST-RR-CONF       core 的 br_sched_selftest()(kind=preempt ⇒ 会跑 TC-TASK-102/103)
+ *   HOST-RR-SLICE      two busy threads that never yield, each "taking ticks" in its own loop;
+ *                      slice = 2 ticks ⇒ the alternation must be AABB AABB (not AAAA BBBB)
+ *   HOST-RR-NOTICK     **no tick ⇒ never preempt**: the busy thread finishes its whole loop and the
+ *                      opponent never runs — paired with the item above, showing "the only source of preemption is a tick"
+ *   HOST-RR-RESCHED    need_resched set/consume (including "do not switch stacks when only self is runnable")
+ *   HOST-RR-CONF       core's br_sched_selftest() (kind=preempt ⇒ runs TC-TASK-102/103)
  *
- * 输出协议: [HOSTTEST] PASS|FAIL … SUMMARY; 有失败 ⇒ 退出码非 0。
+ * Output protocol: [HOSTTEST] PASS|FAIL … SUMMARY; any failure ⇒ non-zero exit code.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -42,7 +43,7 @@
 int br_sched_selftest(void);
 
 /* =====================================================================
- * 用例框架
+ * Case framework
  * ===================================================================== */
 
 static int s_hpass;
@@ -61,7 +62,7 @@ static void host_check(br_bool ok, const char *tag, const char *what)
 
 #define HOST_STACK_BYTES  8192u
 #define HOST_STACK_SLOTS  8u
-#define TICK_US           100000u   /* 宿主用例自己的虚拟 tick(与产品 [kernel].hz 解耦; 判据不依赖这个数) */
+#define TICK_US           100000u   /* this host case's own virtual tick (decoupled from product [kernel].hz; criteria do not depend on it) */
 
 static br_u8 s_stk[HOST_STACK_SLOTS][HOST_STACK_BYTES] BR_ALIGN(16);
 
@@ -77,7 +78,7 @@ static br_task_attr_t host_attr(br_u32 slot, const char *name)
     return a;
 }
 
-/* "打断当前线程的一次 tick"(见文件头)。 */
+/* "one tick that interrupts the current thread" (see file header). */
 static void host_tick_from_current(void)
 {
     host_sched_advance_us(TICK_US);
@@ -85,7 +86,7 @@ static void host_tick_from_current(void)
     br_sched_irq_epilogue();
 }
 
-/* ---- ① 时间片轮转: 忙线程被 tick 抢占 ⇒ AABB AABB ---- */
+/* ---- ① time-slice round-robin: busy threads preempted by tick ⇒ AABB AABB ---- */
 
 #define RR_ITERS 4
 
@@ -102,8 +103,8 @@ static void trace_put(char c)
     }
 }
 
-/* 忙线程: 不 yield(与 TC-TASK-101 的 busy 同型), 只在**自己的循环里**挨 tick。
- * 这正是目标上"timer 打断了正在跑的我"的形态。 */
+/* busy thread: does not yield (same shape as TC-TASK-101's busy), only takes ticks **in its own loop**.
+ * This is exactly the target shape "the timer interrupted the running me". */
 static void host_busy_ticks(void *arg)
 {
     const char c = (char)(br_intptr_t)arg;
@@ -136,7 +137,7 @@ static void host_case_slice(void)
     const int r1 = br_task_create(&ta, &aa, host_busy_ticks, (void *)(br_intptr_t)'A');
     const int r2 = br_task_create(&tb, &ab, host_busy_ticks, (void *)(br_intptr_t)'B');
 
-    /* 自己让出, 让 A/B 去跑(它们在循环里自产 tick); 醒来时两者都已结束。 */
+    /* Yield ourselves so A/B can run (they self-generate ticks in their loops); when we wake, both are done. */
     while ((ta != BR_NULL && br_task_state(ta) != BR_TASK_ZOMBIE) ||
            (tb != BR_NULL && br_task_state(tb) != BR_TASK_ZOMBIE)) {
         br_task_yield();
@@ -149,8 +150,9 @@ static void host_case_slice(void)
     printf("[HOSTTEST] TRACE rr slice seq=%.8s (n=%d, slice=%u ticks)\n",
            p, (int)s_trace_n, (unsigned)RR_SLICE_TICKS);
 
-    /* 判据: 严格 AABB AABB —— 每段同字母**不超过时间片**, 且两者交替。
-     * 反例(CCCD 之类)会立刻红: 那意味着"时间片没生效"或"抢占发生在错误的地方"。 */
+    /* Criterion: strictly AABB AABB — each same-letter run is **no longer than the slice**, and the two alternate.
+     * A counterexample (like CCCD) turns red immediately: it means "the slice did not take effect" or "preemption
+     * happened in the wrong place". */
     const br_bool seq_ok = (s_trace_n == 2 * RR_ITERS) &&
                            (p[0] == 'A') && (p[1] == 'A') &&
                            (p[2] == 'B') && (p[3] == 'B') &&
@@ -159,13 +161,13 @@ static void host_case_slice(void)
 
     host_check((r1 == 0) && (r2 == 0) && (j1 == 0) && (j2 == 0) && seq_ok,
                "HOST-RR-SLICE",
-               "不 yield 的忙线程被时间片抢占: 交替序列 == AABBAABB(每段恰 2 tick)");
+               "busy threads that do not yield are preempted by the slice: alternation == AABBAABB (each run exactly 2 ticks)");
     host_check((s_runs_a == RR_ITERS) && (s_runs_b == RR_ITERS),
                "HOST-RR-SLICE",
-               "两个忙线程各跑满自己的全部迭代(抢占没有吞掉任何一次执行)");
+               "both busy threads complete all their iterations (preemption swallowed no execution)");
 }
 
-/* ---- ② 没有 tick ⇒ 绝不抢占(与 ① 配对: 抢占的唯一来源是 tick) ---- */
+/* ---- ② no tick ⇒ never preempt (paired with ①: the only source of preemption is a tick) ---- */
 
 static volatile int s_notick_victim;
 
@@ -179,13 +181,13 @@ static void host_busy_notick(void *arg)
 {
     (void)arg;
 
-    /* 一整个忙循环**不发 tick** ⇒ 对手不该被切上来(preempt 只在 tick 上发生)。 */
+    /* A whole busy loop that **emits no tick** ⇒ the opponent must not be switched in (preempt only happens on a tick). */
     for (volatile br_u32 i = 0u; i < 200000u; i++) {
         if (s_notick_victim != 0) {
-            s_notick_victim = 99;      /* 标记: 真的被抢占了 */
+            s_notick_victim = 99;      /* marker: truly preempted */
         }
     }
-    br_task_yield();                   /* 显式让出: 此刻对手才该跑 */
+    br_task_yield();                   /* explicit yield: only now may the opponent run */
 }
 
 static void host_case_no_tick(void)
@@ -205,10 +207,10 @@ static void host_case_no_tick(void)
     host_check((r1 == 0) && (r2 == 0) && (j1 == 0) && (j2 == 0) &&
                (s_notick_victim == 1),
                "HOST-RR-NOTICK",
-               "不发 tick ⇒ 忙线程不被抢占(抢占的唯一来源是 tick; 显式 yield 后对手才跑)");
+               "no tick ⇒ the busy thread is not preempted (the only source of preemption is a tick; the opponent runs only after an explicit yield)");
 }
 
-/* ---- ③ need_resched 的置位与消费 ---- */
+/* ---- ③ setting and consuming need_resched ---- */
 
 static void host_case_resched(void)
 {
@@ -217,8 +219,8 @@ static void host_case_resched(void)
     br_sched_request_resched();
     const br_bool set = br_sched_resched_pending();
 
-    /* 此刻只有 main(不在队列)+ supervisor ⇒ pick_next 只会选出自己:
-     * 出口应当"消费掉请求但不切栈"(切给自己没有意义)。 */
+    /* Right now only main (not on the queue) + supervisor exist ⇒ pick_next only picks self:
+     * the exit should "consume the request but not switch stacks" (switching to self is pointless). */
     br_sched_irq_epilogue();
     const br_bool consumed = br_sched_resched_pending();
     const br_bool still_self = (br_task_name(br_task_self()) != NULL) &&
@@ -226,37 +228,38 @@ static void host_case_resched(void)
 
     host_check((before == BR_FALSE) && (set == BR_TRUE) && (consumed == BR_FALSE) && still_self,
                "HOST-RR-RESCHED",
-               "need_resched: 置位可见 → 出口消费 → 无别人可跑时不切栈");
+               "need_resched: set is visible → exit consumes it → no stack switch when nobody else is runnable");
 }
 
 /* =====================================================================
- * 监督线程
+ * Supervisor thread
  * ===================================================================== */
 
 static void host_supervisor(void *arg)
 {
     (void)arg;
 
-    br_log_info("[HOSTTEST] supervisor 开始: self=%s", br_task_name(br_task_self()));
+    br_log_info("[HOSTTEST] supervisor start: self=%s", br_task_name(br_task_self()));
 
     host_case_slice();
     host_case_no_tick();
     host_case_resched();
 
-    /* core 的套件: kind=preempt ⇒ 里面会跑 TC-TASK-102(时间片抢占)与 TC-TASK-103
-     * (抢占与锁/临界区的交互), 而 TC-TASK-101 的那条 coop 判据会被"按 kind 分叉"跳过。
-     * ★ 打开**自动 tick 源**: 那两条用例的忙循环不 yield, 只能靠"它自己读时钟"被打断
-     *   (见 host_sched.h); 本文件前面的三个用例用的是确定性注入, 所以那时它是关的。 */
+    /* core's suite: kind=preempt ⇒ it runs TC-TASK-102 (slice preemption) and TC-TASK-103
+     * (preemption vs lock/critical-section interaction), while TC-TASK-101's coop criterion is skipped
+     * by the "fork by kind". ★ Turn on the **automatic tick source**: those two cases' busy loops do not
+     * yield and can only be interrupted by "it reading the clock itself" (see host_sched.h); the three
+     * cases earlier in this file use deterministic injection, so it was off then. */
     host_sched_auto_tick(BR_TRUE);
     br_sched_selftest();
     host_sched_auto_tick(BR_FALSE);
 
     host_check(host_sched_idle_calls() > 0u, "HOST-RR-IDLE",
-               "pick_next 返回 NULL ⇒ core 进 idle(宿主由钩子代 WFI)并被 tick 唤醒");
+               "pick_next returns NULL ⇒ core goes idle (host hook does WFI for it) and is woken by a tick");
     host_check(br_sched_task_count() == 2u, "HOST-RR-POOL",
-               "测试线程全部被 join 回收(只剩 main + supervisor)");
+               "all test threads reclaimed by join (only main + supervisor remain)");
     host_check(host_sched_watch_hits() == 0u, "HOST-RR-CONF",
-               "br_sched_selftest 无 [TASKCONF] FAIL");
+               "br_sched_selftest had no [TASKCONF] FAIL");
 
     printf("[HOSTTEST] SUMMARY pass=%d fail=%d total=%d (idle_calls=%u)\n",
            s_hpass, s_hfail, s_hpass + s_hfail, (unsigned)host_sched_idle_calls());
@@ -266,7 +269,7 @@ static void host_supervisor(void *arg)
 
 int main(void)
 {
-    printf("[HOSTTEST] ==== sched/rr: 时间片轮转抢占(kind=preempt) ====\n");
+    printf("[HOSTTEST] ==== sched/rr: time-slice round-robin preemption (kind=preempt) ====\n");
 
     host_sched_watch("[TASKCONF] FAIL");
 

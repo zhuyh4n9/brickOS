@@ -1,22 +1,26 @@
 /*
- * brickOS prototype v0.2.0 — service/backtrace 的**自检套件**
+ * brickOS prototype v0.2.0 — **self-test suite** for service/backtrace
  * (service/backtrace/src/backtrace_selftest.c)
  *
- * 设计依据与裁定: `docs/decisions/0010-plugin-selftest.md`(自检与生产代码分离)。
- * 本文件是从 `backtrace.c` **原样搬来**的用例(TC-DBG-010/011): case id、断言与日志串
- * 一字未改 —— 门禁 `tests/gates.toml` 按 `[DBGCONF] PASS/FAIL` 与 require_tags 判红绿。
+ * Design basis and ruling: `docs/decisions/0010-plugin-selftest.md` (self-tests separate from
+ * production code). This file holds the cases (TC-DBG-010/011) **moved verbatim** from
+ * `backtrace.c`: case ids, assertions and log strings unchanged — the gate `tests/gates.toml`
+ * judges red/green by `[DBGCONF] PASS/FAIL` and require_tags.
  *
- * ## 边界
- *   只经 `br/debug/br_bt.h` 的**公开 API** 驱动(capture / capture_from / print /
- *   set_stack_bounds / last / last_count);
- *   **例外只有一处**: TC-DBG-011 收尾要把栈边界复原成"调用前的原样"(可能是未设置的
- *   0/0), 经 `src/backtrace_internal.h` 的访问器读/写生产状态(不复制), 理由见该头文件。
+ * ## Boundary
+ *   Driven only through the **public API** of `br/debug/br_bt.h` (capture / capture_from /
+ *   print / set_stack_bounds / last / last_count);
+ *   **one exception**: TC-DBG-011 must restore the stack bounds to "as before the call"
+ *   (possibly unset 0/0), via the accessors in `src/backtrace_internal.h` that read/write
+ *   production state (no copy); rationale in that header.
  *
- * ## 与插件管理器的契约
- *   返回**失败项数**(0 = 全绿); 日志自己打(`[DBGCONF] PASS/FAIL ...`)。
- *   **失败不停机** —— 红绿由门禁判(`tests/gates.toml` 的 forbid 里有 `[DBGCONF] FAIL`)。
- *   入口名 `backtrace_selftest` 由生成物按 `symbol_prefix` 推导(见 plugin_desc.c 的
- *   `.selftest`), 不是本插件的对外 API。
+ * ## Contract with the plugin manager
+ *   Returns the **number of failures** (0 = all green); it logs itself
+ *   (`[DBGCONF] PASS/FAIL ...`).
+ *   **A failure does not halt** — the gate judges (`[DBGCONF] FAIL` is in tests/gates.toml's
+ *   forbid list).
+ *   The entry name `backtrace_selftest` is derived by the generated artifact from
+ *   `symbol_prefix` (see `.selftest` in plugin_desc.c); it is not this plugin's public API.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -25,28 +29,30 @@
 
 #include "backtrace_internal.h"
 
-/* 入口原型(声明面集中在生成物里; 这里重述只为满足全局函数的原型纪律)。 */
+/* Entry prototype (the declaration surface is centralized in the artifact; repeated here only
+ * to satisfy the global-function prototype discipline). */
 int backtrace_selftest(void);
 
-/* TC-DBG-010 判定"pc 落在探针函数体内"的扫描窗口 */
+/* Scan window used by TC-DBG-010 to decide "pc lies inside the probe function body" */
 #define BT_PROBE_SPAN            512u
 
-/* 记一条 DBGCONF 判据; 返回 0/1 便于累加失败数 */
+/* Record one DBGCONF criterion; returns 0/1 so failures can be accumulated */
 static br_u32 bt_conf(br_bool ok, const char *tag, const char *what)
 {
     br_log_info("[DBGCONF] %s %s %s", ok ? "PASS" : "FAIL", tag, what);
     return ok ? 0u : 1u;
 }
 
-/* 探针: 必须 noinline, 否则它的帧会被折叠, pc 落点判据失去意义 */
+/* Probe: must be noinline, else its frame is folded and the pc-location criterion is meaningless */
 static void __attribute__((noinline))
 bt_probe(br_bt_frame_t *out, br_u32 max, br_u32 *n)
 {
     *n = br_bt_capture(out, max);
 }
 
-/* 是否有某一帧的 pc 落在 [&bt_probe, &bt_probe + BT_PROBE_SPAN) ——
- * 这证明帧链真的穿过了"调用 capture 的那个调用点", 而不只是读到了当前帧。 */
+/* Whether some frame's pc lies in [&bt_probe, &bt_probe + BT_PROBE_SPAN) —
+ * that proves the frame chain really crossed "the call site that called capture", not merely
+ * that the current frame was read. */
 static br_bool bt_probe_covered(const br_bt_frame_t *fr, br_u32 n)
 {
     const br_uintptr_t lo = (br_uintptr_t)&bt_probe;
@@ -65,7 +71,7 @@ int backtrace_selftest(void)
     static br_bt_frame_t frames[BR_BT_MAX_FRAMES];
     br_u32 fails = 0u;
 
-    /* ---- TC-DBG-010: 真栈上的链完整性 + 调用点覆盖 ---- */
+    /* ---- TC-DBG-010: chain integrity on the real stack + call-site coverage ---- */
     br_u32 n = 0u;
     bt_probe(frames, BR_BT_MAX_FRAMES, &n);
 
@@ -80,34 +86,36 @@ int backtrace_selftest(void)
     }
 
     fails += bt_conf(ok10, "TC-DBG-010",
-                     "帧数>=2, pc!=0, fp 16 对齐且严格递增, 且 pc 覆盖探针函数体");
+                     "frames>=2, pc!=0, fp 16-aligned and strictly increasing, pc covers probe body");
 
-    /* ---- TC-DBG-011: 空/非法现场被拒; 边界护栏生效; max 生效 ---- */
-    br_uintptr_t saved_bottom = 0u;   /* 白盒保存, 用例收尾复位 */
+    /* ---- TC-DBG-011: empty/bad context rejected; bounds guard works; max works ---- */
+    br_uintptr_t saved_bottom = 0u;   /* white-box save; the case restores it at the end */
     br_uintptr_t saved_top    = 0u;
     br_bt_internal_read_stack_bounds(&saved_bottom, &saved_top);
     br_bool ok11 = BR_TRUE;
 
-    /* fp == 0 ⇒ 0 帧(无现场); fp 未 16 对齐 ⇒ 0 帧且不解引用(不死) */
+    /* fp == 0 ⇒ 0 frames (no context); fp not 16-aligned ⇒ 0 frames and no dereference (no death) */
     ok11 = ok11 && (br_bt_capture_from(0u, 0u, frames, 8u) == 0u);
     ok11 = ok11 && (br_bt_capture_from(0x1234u, 0x40080000u, frames, 8u) == 0u);
 
-    /* 非法边界被拒(setter 先校验后写入 ⇒ 不改状态, 这里顺带验证不变式) */
+    /* illegal bounds rejected (the setter validates before writing ⇒ state unchanged; this
+     * also checks the invariant) */
     ok11 = ok11 && (br_bt_set_stack_bounds(0u, 0x1000u) == BR_ERR(EINVAL));
     ok11 = ok11 && (br_bt_set_stack_bounds(0x2000u, 0x1000u) == BR_ERR(EINVAL));
 
-    /* 合法但极窄的边界: 当前栈在界外 ⇒ 捕获必须掐成 0 帧(证明边界真的被查) */
+    /* legal but very narrow bounds: the current stack is outside ⇒ capture must truncate to
+     * 0 frames (proves bounds are really checked) */
     ok11 = ok11 && (br_bt_set_stack_bounds(0x1000u, 0x2000u) == 0);
     ok11 = ok11 && (br_bt_capture(frames, 4u) == 0u);
 
-    /* 复位到调用前的边界(可能是 0/0 = "未设置"), 不残留用例里的窄边界 */
+    /* restore the pre-call bounds (possibly 0/0 = "unset"), leaving no narrow case bounds behind */
     br_bt_internal_restore_stack_bounds(saved_bottom, saved_top);
 
-    /* max 生效: 只要 1 帧就只写 1 帧 */
+    /* max takes effect: asking for 1 frame writes only 1 frame */
     ok11 = ok11 && (br_bt_capture(frames, 1u) == 1u);
 
     fails += bt_conf(ok11, "TC-DBG-011",
-                     "capture_from(0/未对齐)=0, 非法 bounds 被拒, 窄 bounds 掐断, max 生效");
+                     "capture_from(0/unaligned)=0, bad bounds rejected, narrow bounds truncate, max works");
 
     return (int)fails;
 }

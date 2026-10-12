@@ -7,7 +7,7 @@
         "from": null,
         "kind": "ADDED",
         "name": "f",
-        "note": "首次发布: 建档",
+        "note": "first publish: record creation",
         "status": "",
         "to": "f"
       }
@@ -45,7 +45,7 @@
     "version_change": {
       "from": "0.1.0.0",
       "reasons": [
-        "首次发布: 建档, 不推进任何段(裁定 S-8)"
+        "first publish: record creation, no segment advanced (ruling S-8)"
       ],
       "to": "0.1.0.0"
     }

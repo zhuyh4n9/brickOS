@@ -1,40 +1,41 @@
 #!/usr/bin/env bash
-# brickOS — 开发环境配置(**source 本文件**)
+# brickOS — dev environment setup (**source this file**)
 #
-#   source setup.sh                # 配置 PATH + 环境变量
-#   source setup.sh --quiet        # 静默(只出错时说话)
-#   source setup.sh --with-make    # 额外把 prebuilts 的 make 放到 PATH 最前(会遮蔽宿主 make)
-#   source setup.sh --unset        # 撤销, 恢复到 source 之前
-#   bash   setup.sh --print        # 不 source, 只打印可 eval 的片段(CI 用)
+#   source setup.sh                # configure PATH + environment variables
+#   source setup.sh --quiet        # quiet (only speak on errors)
+#   source setup.sh --with-make    # also put prebuilts make first on PATH (shadows host make)
+#   source setup.sh --unset        # undo, restore the pre-source state
+#   bash   setup.sh --print        # no sourcing; just print an eval-able snippet (for CI)
 #
-# ## 为什么必须 source
-# 子进程改不了父 shell 的环境 —— `./setup.sh` 只能是"假装成功"。本脚本检测到
-# 被直接执行时会明确拒绝并给出正确写法, 而不是静默无效。
+# ## Why sourcing is required
+# A child process cannot change the parent shell's environment — `./setup.sh` could only "pretend
+# to succeed". When executed directly, this script refuses outright and shows the correct form
+# instead of silently doing nothing.
 #
-# ## 配置了什么(每一项都有真实消费者, 不设空转变量)
+# ## What is configured (every item has a real consumer; no idle variables)
 #
-#   PATH                     ← 见下「PATH 追加顺序」
-#   BRICKOS_ROOT             = 本仓根
-#   BRICKOS_HOST_TRIPLE      = <host-arch>/<host-os>(来自 tools/host-detect.sh, 唯一真值)
-#   BRICKIE_REPO_ROOT        → tools/brickie/python/brickie/native.py 读
-#   BRICKIE_TOOL_ROOT        → tools/brickie/python/brickie/native.py 读
-#   CROSS_COMPILE            → 顶层 Makefile 读(交叉编译器前缀)
+#   PATH                     <- see "PATH prepend order" below
+#   BRICKOS_ROOT             = this repo root
+#   BRICKOS_HOST_TRIPLE      = <host-arch>/<host-os> (from tools/host-detect.sh, single source of truth)
+#   BRICKIE_REPO_ROOT        -> read by tools/brickie/python/brickie/native.py
+#   BRICKIE_TOOL_ROOT        -> read by tools/brickie/python/brickie/native.py
+#   CROSS_COMPILE            -> read by the top-level Makefile (cross compiler prefix)
 #
-# ## PATH 追加顺序(左 = 优先, 与砖具前端的查找顺序一致)
+# ## PATH prepend order (left = higher priority, matching the brickie front-end lookup order)
 #
-#   build/host/<triple>/bin            本机新编的 brickie / brickie-gen(**优先于种子**)
-#   prebuilts/seed/brickie/<triple>/bin 自举种子(没有 build/ 时兜底)
-#   prebuilts/toolchain/<arm…>/bin      交叉工具链 aarch64-none-elf-*(锁版本)
-#   prebuilts/toolchain/ninja/bin       构建后端 ninja(BR-D4 备选 B)
-#   prebuilts/toolchain/make/bin        **仅 --with-make** —— 它会遮蔽宿主 make, 故不默认加
+#   build/host/<triple>/bin             locally built brickie / brickie-gen (**ahead of the seed**)
+#   prebuilts/seed/brickie/<triple>/bin bootstrap seed (fallback when there is no build/)
+#   prebuilts/toolchain/<arm...>/bin    cross toolchain aarch64-none-elf-* (version-locked)
+#   prebuilts/toolchain/ninja/bin       build backend ninja (BR-D4 option B)
+#   prebuilts/toolchain/make/bin        **only with --with-make** — it shadows host make, so not added by default
 #
-# 刻意**不设** BRICKIE_GEN: 它的语义是"钉死生成器", 设了就会盖掉"本机新编优先"
-# 那条查找规则(native.py 的顺序)。需要钉死时请自己显式 export。
+# BRICKIE_GEN is deliberately **not set**: its meaning is "pin the generator", and setting it would
+# override the "locally built first" lookup rule (native.py's order). Export it yourself to pin.
 #
-# ## 幂等
-# 重复 source 安全: 每次先剔除 PATH 里**属于本仓**的全部条目再重排, 不会重复堆积。
+# ## Idempotence
+# Repeated sourcing is safe: every run first drops all **repo-owned** PATH entries, then re-prepends.
 
-# ------------------------------------------------------------------ 参数
+# ------------------------------------------------------------------ arguments
 _brickos_mode="apply"
 _brickos_quiet=0
 _brickos_with_make=0
@@ -47,22 +48,22 @@ for _brickos_arg in "$@"; do
         -h|--help)
             sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
             return 0 2>/dev/null || exit 0 ;;
-        *) echo "setup.sh: 未知参数 '$_brickos_arg'(试 --help)" >&2; return 2 2>/dev/null || exit 2 ;;
+        *) echo "setup.sh: unknown argument '$_brickos_arg' (try --help)" >&2; return 2 2>/dev/null || exit 2 ;;
     esac
 done
 unset _brickos_arg
 
-# ------------------------------------------------------------------ 定位与自检
+# ------------------------------------------------------------------ locate and self-check
 _brickos_self="${BASH_SOURCE[0]}"
 _brickos_root="$(cd "$(dirname "$_brickos_self")" && pwd -P)"
 unset _brickos_self
 
 if [ "$_brickos_mode" != "print" ] && [ "${BASH_SOURCE[0]}" = "${0}" ]; then
     cat >&2 <<EOF
-setup.sh: **必须 source**, 不能直接执行 —— 子进程改不了父 shell 的环境。
+setup.sh: **must be sourced**, not executed directly — a child process cannot change the parent shell's environment.
 
-    source setup.sh            # 或:  . setup.sh
-    bash   setup.sh --print    # CI 里要片段时用这个
+    source setup.sh            # or:  . setup.sh
+    bash   setup.sh --print    # use this when CI needs a snippet
 
 EOF
     unset _brickos_mode _brickos_quiet _brickos_with_make _brickos_root
@@ -72,13 +73,13 @@ fi
 _brickos_banner() { [ "$_brickos_quiet" = "1" ] || echo "$@"; }
 _brickos_warn()   { echo "setup.sh: $*" >&2; }
 
-# ------------------------------------------------------------------ 变量清单
-# 我们管理的变量(apply 时保存原值, unset 时还原)
+# ------------------------------------------------------------------ variable list
+# Variables we manage (their values are saved on apply and restored on unset)
 _brickos_vars="BRICKOS_ROOT BRICKOS_HOST_TRIPLE BRICKIE_REPO_ROOT BRICKIE_TOOL_ROOT CROSS_COMPILE"
 
 # ------------------------------------------------------------------ --unset
 if [ "$_brickos_mode" = "unset" ]; then
-    # 剔掉 PATH 里属于本仓的条目
+    # Drop the PATH entries owned by this repo
     _brickos_newpath=""
     _brickos_oldifs="$IFS"; IFS=:
     for _brickos_p in $PATH; do
@@ -101,25 +102,25 @@ if [ "$_brickos_mode" = "unset" ]; then
     done
     unset _brickos_v _brickos_newpath _brickos_oldifs _brickos_p _brickos_saved
 
-    _brickos_banner "brickOS: 环境已撤销(本仓条目已从 PATH 移除, 变量已还原)"
+    _brickos_banner "brickOS: environment undone (repo entries removed from PATH, variables restored)"
     unset _brickos_mode _brickos_quiet _brickos_with_make _brickos_root _brickos_vars
     unset -f _brickos_banner _brickos_warn 2>/dev/null
     return 0 2>/dev/null || exit 0
 fi
 
-# ------------------------------------------------------------------ 宿主三元组
-# 唯一真值 = tools/host-detect.sh(与 mk/host.mk / check-build.sh / 用例同源)。
+# ------------------------------------------------------------------ host triple
+# Single source of truth = tools/host-detect.sh (same origin as mk/host.mk / check-build.sh / the test cases).
 _brickos_triple_raw="$("$_brickos_root/tools/host-detect.sh" 2>/dev/null)"
 _brickos_arch="$(printf '%s' "$_brickos_triple_raw" | cut -d' ' -f1)"
 _brickos_os="$(printf '%s' "$_brickos_triple_raw" | cut -d' ' -f2)"
 if [ -z "$_brickos_arch" ] || [ -z "$_brickos_os" ]; then
-    _brickos_warn "tools/host-detect.sh 没给出宿主三元组; 退回 uname"
+    _brickos_warn "tools/host-detect.sh gave no host triple; falling back to uname"
     _brickos_arch="$(uname -m)"; _brickos_os="$(uname -s | tr 'A-Z' 'a-z')"
 fi
 _brickos_triple="$_brickos_arch/$_brickos_os"
 
-# ------------------------------------------------------------------ 工具链路径
-# 路径真值 = 锁文件(经 fetch-prebuilt.py --print-env 导出), **不在 shell 里重算**。
+# ------------------------------------------------------------------ toolchain paths
+# Path truth = the lock file (exported by fetch-prebuilt.py --print-env), **not recomputed in shell**.
 _brickos_cross=""
 _brickos_make_dir=""
 _brickos_bin_dirs=""
@@ -130,16 +131,16 @@ if command -v python3 >/dev/null 2>&1; then
     _brickos_make_dir="$PREBUILT_MAKE_BIN_DIR"
     _brickos_bin_dirs="$PREBUILT_BIN_DIRS"
 else
-    _brickos_warn "找不到 python3 —— 无法从锁文件解析工具链路径(brickie 本身也要求 python3)"
+    _brickos_warn "python3 not found — cannot resolve toolchain paths from the lock file (brickie itself needs python3 too)"
 fi
 
-# 组装要前置的目录(左 → 右 = 优先级由高到低)
+# Assemble the directories to prepend (left -> right = priority high to low)
 _brickos_prepend="$_brickos_root/build/host/$_brickos_triple/bin"
 _brickos_prepend="$_brickos_prepend:$_brickos_root/prebuilts/seed/brickie/$_brickos_triple/bin"
 [ "$_brickos_with_make" = "1" ] && [ -n "$_brickos_make_dir" ] && \
     _brickos_prepend="$_brickos_prepend:$_brickos_root/$_brickos_make_dir"
 for _brickos_d in $_brickos_bin_dirs; do
-    # 默认跳过 make 目录(遮蔽宿主 make); 只有 --with-make 才收
+    # Skip the make directory by default (it shadows host make); only --with-make takes it
     if [ "$_brickos_d" = "$_brickos_make_dir" ] && [ "$_brickos_with_make" != "1" ]; then
         continue
     fi
@@ -147,7 +148,7 @@ for _brickos_d in $_brickos_bin_dirs; do
 done
 unset _brickos_d
 
-# 缺失提示(只提示, 不阻断 —— PATH 里放一个不存在的目录无害)
+# Missing-directory notice (notice only, never blocking — a nonexistent dir on PATH is harmless)
 _brickos_missing=""
 for _brickos_d in $(printf '%s' "$_brickos_prepend" | tr ':' ' '); do
     [ -d "$_brickos_d" ] || _brickos_missing="$_brickos_missing $_brickos_d"
@@ -156,7 +157,7 @@ unset _brickos_d
 
 # ------------------------------------------------------------------ --print
 if [ "$_brickos_mode" = "print" ]; then
-    echo "# brickOS 开发环境 —— 用法: eval \"\$(bash setup.sh --print)\""
+    echo "# brickOS dev environment -- usage: eval \"\$(bash setup.sh --print)\""
     echo "export BRICKOS_ROOT='$_brickos_root'"
     echo "export BRICKOS_HOST_TRIPLE='$_brickos_triple'"
     echo "export BRICKIE_REPO_ROOT='$_brickos_root'"
@@ -170,8 +171,8 @@ if [ "$_brickos_mode" = "print" ]; then
     return 0 2>/dev/null || exit 0
 fi
 
-# ------------------------------------------------------------------ 应用
-# 先剔除本仓旧条目(幂等), 再整体前置
+# ------------------------------------------------------------------ apply
+# First drop old repo entries (idempotence), then prepend the whole set
 _brickos_newpath=""
 _brickos_oldifs="$IFS"; IFS=:
 for _brickos_p in $PATH; do
@@ -183,7 +184,7 @@ done
 IFS="$_brickos_oldifs"
 export PATH="$_brickos_prepend${_brickos_newpath:+:$_brickos_newpath}"
 
-# 保存原值(仅首次; 避免二次 source 把"我们设的"当原值存下来)
+# Save original values (first time only; avoid a second source storing "our" values as the original)
 for _brickos_v in $_brickos_vars; do
     _brickos_saved="_BRICKOS_SAVED_$_brickos_v"
     [ -n "${!_brickos_saved+x}" ] || eval "_BRICKOS_SAVED_$_brickos_v=\"\${$_brickos_v-}\""
@@ -196,29 +197,29 @@ export BRICKIE_REPO_ROOT="$_brickos_root"
 export BRICKIE_TOOL_ROOT="$_brickos_root/tools/brickie"
 [ -n "$_brickos_cross" ] && export CROSS_COMPILE="$_brickos_root/$_brickos_cross"
 
-# ------------------------------------------------------------------ 汇报
+# ------------------------------------------------------------------ report
 if [ "$_brickos_quiet" != "1" ]; then
-    echo "brickOS 开发环境已配置  [$_brickos_triple]"
-    echo "  PATH 前置(左优先):"
+    echo "brickOS dev environment configured  [$_brickos_triple]"
+    echo "  PATH prepended (left first):"
     printf '%s' "$_brickos_prepend" | tr ':' '\n' | sed "s|^$_brickos_root/||" | sed 's/^/    /'
     echo
-    echo "  环境变量:"
-    printf '    %-22s %s\n' CROSS_COMPILE "${CROSS_COMPILE:-(未设)}"
+    echo "  environment variables:"
+    printf '    %-22s %s\n' CROSS_COMPILE "${CROSS_COMPILE:-(unset)}"
     printf '    %-22s %s\n' BRICKOS_ROOT "$BRICKOS_ROOT"
     printf '    %-22s %s\n' BRICKIE_REPO_ROOT "$BRICKIE_REPO_ROOT"
     printf '    %-22s %s\n' BRICKIE_TOOL_ROOT "$BRICKIE_TOOL_ROOT"
     if [ -n "$_brickos_missing" ]; then
-        echo "  ⚠ 以下目录还不存在(未取件/未构建, 无害):"
+        echo "  ! these directories do not exist yet (not fetched/built; harmless):"
         printf '%s' "$_brickos_missing" | tr ' ' '\n' | sed '/^$/d' | sed "s|^$_brickos_root/||" | sed 's/^/      /'
-        echo "    → 取外部工具链:  make prebuilt"
-        echo "    → 编本机工具:    make tools"
-        echo "    → 构建镜像:      brickie build   (镜像的入口是 brickie, 不是 make; 见 ADR-0004)"
+        echo "    -> fetch the external toolchain:  make prebuilt"
+        echo "    -> build host tools:              make tools"
+        echo "    -> build images:                  brickie build   (images enter via brickie, not make; see ADR-0004)"
     fi
 fi
 [ "$_brickos_with_make" = "1" ] && [ -n "$_brickos_make_dir" ] && \
-    _brickos_banner "  注意: prebuilts 的 make 已在 PATH 最前, 它会遮蔽宿主 make"
+    _brickos_banner "  note: prebuilts make is first on PATH and will shadow host make"
 
-# 清理临时变量, 只留下导出项(避免污染调用者的 shell 命名空间)
+# Clean up temporary variables, leaving only the exported ones (avoid polluting the caller's shell namespace)
 unset _brickos_mode _brickos_quiet _brickos_with_make _brickos_root _brickos_triple
 unset _brickos_arch _brickos_os _brickos_triple_raw _brickos_cross _brickos_make_dir
 unset _brickos_bin_dirs _brickos_prepend _brickos_missing _brickos_newpath _brickos_oldifs

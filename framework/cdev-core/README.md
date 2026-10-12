@@ -15,7 +15,7 @@
 > 逐条裁定与偏离: `docs/decisions/0009-vfs-storage-stack.md`(§2.1 依赖边 / §2.4 "看得见打不开" /
 > §3 裁定 6 flash 的 `open_file = BR_NULL`)。
 
-## 声明面(`plugin.toml` 是唯一真值)
+## 声明面(`brick.toml` 是唯一真值)
 
 | 项 | 值 | 依据 |
 |---|---|---|
@@ -26,7 +26,7 @@
 | 依赖(init) | `framework/dev-core` `>=0.1.0` | 注册要走它的注册表(`8-01` §1.3 依赖表); 拓扑序保证 dev-core 先就绪 |
 | 依赖(type) | `framework/vfs-core` `>=0.1.0` | 适配层返回 `br_file_ops_t`(O-S7 的类型成本); type 边**不进闭包** |
 | 导出面 | 单元 `cdev`(`sha256:e2922485…`, `unfrozen`/`experimental`): **3 类型布局 + 5 函数**(无宏; 自检入口已移出 `[[export]]`) | `br-cdevcore.txt` 的候选面 |
-| `[selftest]` | `cases = 8`; 钩子 `cdev_core_selftest()` 在描述符里, 由 core 在全部 `start()` 之后驱动 | `plugin.toml` `[selftest]`; ADR-0010 |
+| `[selftest]` | `cases = 8`; 钩子 `cdev_core_selftest()` 在描述符里, 由 core 在全部 `start()` 之后驱动 | `brick.toml` `[selftest]`; ADR-0010 |
 | 资源 | `ram` 2 KiB: cdev 槽 8 + flash 槽 4(约 0.5 KiB); 每文件会话 `cdev_file_t` 在 core 堆上(16 B/打开) | `[[res]]` |
 | `sched_class` | `SAFE_PREEMPT` | 注册与适配层不睡眠(阻塞语义在驱动 ops 里) |
 
@@ -101,7 +101,7 @@ TC-CDEV-004/005/006 的被测对象是内部机制本身, 经 `src/cdev_internal
 ## 目录
 
 ```
-plugin.toml                    人写   ← 插件级唯一真值(本目录不改它)
+brick.toml                    人写   ← 插件级唯一真值(本目录不改它)
 include/br/dev/br_cdev.h       人写   ← 字符设备契约(cdev 形状 / flash 子型)
 src/cdev_core.c                人写   ← 注册前置校验 + 会话适配层 + flash 子型(只留机制)
 src/cdev_selftest.c            人写   ← [CDEVCONF] 用例(由 core 驱动)

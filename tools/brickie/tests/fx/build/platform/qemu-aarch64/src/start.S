@@ -1,4 +1,4 @@
-/* fx/build 的汇编源桩(只用于让 ninja 后端渲染出 asm rule; 不参与真编译)。 */
+/* fx/build asm-source stub (only so the ninja backend renders an asm rule; not really compiled). */
 .section .text
 .globl fx_start
 fx_start:

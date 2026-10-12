@@ -1,6 +1,6 @@
 # service/trace
 
-> 实现态(不再是骨架)。声明面以 `plugin.toml` 为唯一真值, **本目录不改它**。
+> 实现态(不再是骨架)。声明面以 `brick.toml` 为唯一真值, **本目录不改它**。
 
 trace 观测服务: **core 16 B 事件环的唯一消费方** —— 取走(drain)、id→名字解码、
 按 id 计数、成行呈现;另提供"动态事件名注册 + marker 打点"。
@@ -78,10 +78,10 @@ ISR/fault 路径只允许直接调 core 的 `br_trace_emit`。
 
 ## `[[dep]]`(结构依赖)
 
-依赖的**唯一真值**在 `service/trace/plugin.toml`, 本目录不改动它。当前:
+依赖的**唯一真值**在 `service/trace/brick.toml`, 本目录不改动它。当前:
 
 - 入边: `service/dump → service/trace`(kind = runtime, symbol =
-  `br_trace_svc_report`), 声明在 `service/dump/plugin.toml`。
+  `br_trace_svc_report`), 声明在 `service/dump/brick.toml`。
 - 出边: 无。本插件只依赖 core 的 `br/core/br_trace.h`、`br_clock_now()`、`br_log`。
 
 ## 如何被调用
@@ -104,6 +104,6 @@ ISR/fault 路径只允许直接调 core 的 `br_trace_emit`。
 ## 已知欠账(不在本插件目录可修)
 
 - `build/gen/service/trace/plugin_desc.c` 仍引用骨架符号 `trace_early_init`/`trace_init`/
-  `trace_start`(生成物; v0.1 不编译它 —— V-9)。plugin.toml 的导出面里并没有这三个
-  符号, 改 `plugin.toml` 是禁区, 故此处按导出面实现 `br_trace_svc_*`;
+  `trace_start`(生成物; v0.1 不编译它 —— V-9)。brick.toml 的导出面里并没有这三个
+  符号, 改 `brick.toml` 是禁区, 故此处按导出面实现 `br_trace_svc_*`;
   描述符重建时需要对账。

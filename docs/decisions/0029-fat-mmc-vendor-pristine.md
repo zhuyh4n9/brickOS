@@ -11,7 +11,7 @@
 
 ## 1. 背景: 迁移只做了 1/3
 
-ADR-0026 定了新架构并落地了 erofs(1/3): `plugin.toml` 的 `sources` **直接编译**
+ADR-0026 定了新架构并落地了 erofs(1/3): `brick.toml` 的 `sources` **直接编译**
 `third_party/uboot-imx/fs/erofs/**` 的上游原件, 适配收进 `adapter/uboot-erofs/{compat,glue}`。
 fat 与 mmc 当时仍是旧形态 —— 插件目录里躺着 `src/fat_core.c`(与上游 `fs/fat/fat.c`
 行级相似度 **0.58**)、`src/fat_write.c`(0.60)、`src/mmc_core.c` / `src/sdhci_host.c`

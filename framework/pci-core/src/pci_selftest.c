@@ -1,25 +1,27 @@
 /*
- * brickOS prototype v0.2.0 — framework/pci-core 的**自检套件**(src/pci_selftest.c)
+ * brickOS prototype v0.2.0 — the **selftest suite** of framework/pci-core (src/pci_selftest.c)
  *
- * 设计依据与裁定: `docs/decisions/0021-bdev-pci-emmc.md`(D-2 PCIe 归属与 highmem=off;
- * D-4 INTx 走中断)。
+ * Design basis and rulings: `docs/decisions/0021-bdev-pci-emmc.md` (D-2 PCIe ownership and
+ * highmem=off; D-4 INTx over interrupts).
  *
- * ## 它测什么
- *   枚举结果与分配结果的**可观测事实**(自编号 `TC-PCI-*`):
- *     - 设备表非空且不越上界;
- *     - 目标端点 `1b36:0007`(QEMU 的 sdhci-pci, class 0x0805)被找到;
- *     - 它的 **BAR0 真的被分配**(非 0、在平台 MMIO 窗口内、按尺寸对齐)⇒ 后面驱动能写寄存器;
- *     - 端点的**命令寄存器**开了 Memory Space + Bus Master 且 INTx 未被禁用 ⇒ DMA 与中断可用;
- *     - **INTx 线的 swizzle** 与平台事实一致(`(pin_index + slot) % 4`);
- *     - 公共配置空间读写口的往返与参数校验(错对齐 ⇒ -EINVAL)。
+ * ## What it tests
+ *   **Observable facts** of the enumeration and allocation results (self-numbered `TC-PCI-*`):
+ *     - the device table is non-empty and does not exceed the upper bound;
+ *     - the target endpoint `1b36:0007` (QEMU's sdhci-pci, class 0x0805) is found;
+ *     - its **BAR0 is really allocated** (non-zero, inside the platform MMIO window, size-aligned) ⇒ a driver can write registers later;
+ *     - the endpoint's **command register** has Memory Space + Bus Master set and INTx not disabled ⇒ DMA and interrupts are usable;
+ *     - the **INTx line swizzle** matches the platform fact (`(pin_index + slot) % 4`);
+ *     - round trip and argument validation of the public config-space read/write port (misaligned ⇒ -EINVAL).
  *
- * ## 为什么这些值得在真机上判(而不是只在宿主)
- *   BAR 探测/分配是**写硬件再读回**的动作: 写错一位(比如把 ROM 挂钩当 BAR)会静默改坏
- *   别的功能。真 QEMU 上的往返是唯一能证明"分配没把别人踩掉"的判据。宿主测不了 ECAM。
+ * ## Why these are worth judging on the real machine (not only on the host)
+ *   BAR probing/allocation is a **write-hardware-then-read-back** action: one wrong bit (e.g. treating
+ *   a ROM hook as a BAR) silently breaks other functions. A round trip on real QEMU is the only
+ *   evidence that "the allocation did not step on someone else". The host cannot test ECAM.
  *
- * ## 与 br_plugin_manager_selftest() 的契约
- *   返回**失败项数**(0 = 全绿); 日志自己打(`[PCICONF] PASS/FAIL ...` + `SUMMARY`)。
- *   失败不停机 —— 红绿由门禁判(forbid 里有 `[PCICONF] FAIL`)。
+ * ## Contract with br_plugin_manager_selftest()
+ *   Returns the **number of failing items** (0 = all green); it prints its own logs
+ *   (`[PCICONF] PASS/FAIL ...` + `SUMMARY`). A failure does not halt — red/green is judged by the
+ *   gate (forbid contains `[PCICONF] FAIL`).
  */
 #include <br/pci/br_pci.h>
 
@@ -28,11 +30,12 @@
 #include <br/core/br_types.h>
 #include <br/platform/br_plat_pci.h>
 
-/* 自检入口原型(定义在本文件末尾; 生成物 `plugin_desc.c` 的 `.selftest` 钩子引用它)。 */
+/* Selftest entry prototype (defined at the end of this file; referenced by the generated `plugin_desc.c` `.selftest` hook). */
 int pci_core_selftest(void);
 
-/* QEMU `-device sdhci-pci` 的身份(实测 `info pci`: 1b36:0007, class 2053 = 0x0805)。
- * 这两个数是**被测目标**的标识,不是"内部机制" —— 写在用例里就是要它红。 */
+/* Identity of QEMU `-device sdhci-pci` (measured via `info pci`: 1b36:0007, class 2053 = 0x0805).
+ * These two numbers identify the **target under test**, not an "internal mechanism" — they are
+ * written in the case precisely so that it turns red. */
 #define PCI_CONF_SDHCI_VENDOR  0x1b36u
 #define PCI_CONF_SDHCI_DEVICE  0x0007u
 
@@ -60,15 +63,15 @@ int pci_core_selftest(void)
     const br_u32 n = br_pci_dev_count();
     const br_pci_dev_t *sdhci = br_pci_find(PCI_CONF_SDHCI_VENDOR, PCI_CONF_SDHCI_DEVICE);
 
-    /* ---- TC-PCI-001: 设备表非空且不越上界 ---- */
+    /* ---- TC-PCI-001: device table non-empty and within bounds ---- */
     pc_conf((n > 0u) && (n <= (br_u32)BR_PCI_MAX_DEVS), "TC-PCI-001",
-            "枚举到 >= 1 个功能且 <= BR_PCI_MAX_DEVS");
+            "enumerated >= 1 function and <= BR_PCI_MAX_DEVS");
 
-    /* ---- TC-PCI-002: 目标端点被发现且 class 正确 ---- */
+    /* ---- TC-PCI-002: target endpoint found and class correct ---- */
     pc_conf((sdhci != BR_NULL) && (sdhci->class_code == (br_u16)BR_PCI_CLASS_SDHCI),
-            "TC-PCI-002", "br_pci_find(1b36:0007) 命中且 class = 0x0805 (System SDHCI)");
+            "TC-PCI-002", "br_pci_find(1b36:0007) hit and class = 0x0805 (System SDHCI)");
 
-    /* ---- TC-PCI-003: BAR0 已分配且在平台 MMIO 窗口内、按尺寸对齐 ---- */
+    /* ---- TC-PCI-003: BAR0 allocated, inside the platform MMIO window, size-aligned ---- */
     {
         br_bool ok = BR_FALSE;
         if (sdhci != BR_NULL && sdhci->bar[0] != 0u && sdhci->bar_size[0] >= 256u) {
@@ -81,10 +84,10 @@ int pci_core_selftest(void)
             }
         }
         pc_conf(ok, "TC-PCI-003",
-                "sdhci BAR0 非 0、落在 mmio 窗口内、按尺寸对齐");
+                "sdhci BAR0 non-zero, inside the mmio window, size-aligned");
     }
 
-    /* ---- TC-PCI-004: 命令寄存器 = Memory Space + Bus Master, 且 INTx 未禁用 ---- */
+    /* ---- TC-PCI-004: command register = Memory Space + Bus Master, INTx not disabled ---- */
     {
         br_bool ok = BR_FALSE;
         if (sdhci != BR_NULL) {
@@ -93,10 +96,10 @@ int pci_core_selftest(void)
                 ok = ((cmd & 0x2u) != 0u) && ((cmd & 0x4u) != 0u) && ((cmd & 0x400u) == 0u);
             }
         }
-        pc_conf(ok, "TC-PCI-004", "命令寄存器: Memory Space|Bus Master 置位, INTx Disable 清位");
+        pc_conf(ok, "TC-PCI-004", "command register: Memory Space|Bus Master set, INTx Disable clear");
     }
 
-    /* ---- TC-PCI-005: INTx swizzle 与平台事实一致(pin A ⇒ virq_a + (slot % 4)) ---- */
+    /* ---- TC-PCI-005: INTx swizzle matches the platform fact (pin A ⇒ virq_a + (slot % 4)) ---- */
     {
         br_bool ok = BR_FALSE;
         if (sdhci != BR_NULL && sdhci->intx_pin == 1u) {
@@ -105,10 +108,10 @@ int pci_core_selftest(void)
                 ok = (sdhci->intx_virq == (h.intx_virq_a + ((br_u32)sdhci->dev % 4u)));
             }
         }
-        pc_conf(ok, "TC-PCI-005", "pin A 的 virq == 平台 intx_virq_a + (slot % 4)");
+        pc_conf(ok, "TC-PCI-005", "pin A virq == platform intx_virq_a + (slot % 4)");
     }
 
-    /* ---- TC-PCI-006: 公共配置空间口: 往返 + 参数校验 ---- */
+    /* ---- TC-PCI-006: public config-space port: round trip + argument validation ---- */
     {
         br_bool ok = BR_FALSE;
         if (sdhci != BR_NULL) {
@@ -120,18 +123,18 @@ int pci_core_selftest(void)
                  (r_bad == BR_ERR(EINVAL)) && (r_nul == BR_ERR(EINVAL));
         }
         pc_conf(ok, "TC-PCI-006",
-                "cfg_read32 vendor 往返正确; 错对齐/空出参 ⇒ -EINVAL");
+                "cfg_read32 vendor round trip correct; misaligned/null out-param ⇒ -EINVAL");
     }
 
-    /* ---- TC-PCI-007: 未命中与越界 ---- */
+    /* ---- TC-PCI-007: miss and out of range ---- */
     {
         const br_bool ok = (br_pci_find(0xFFFFu, 0xFFFFu) == BR_NULL) &&
                            (br_pci_dev_at(n) == BR_NULL) &&
                            (br_pci_dev_at(n + 1u) == BR_NULL);
-        pc_conf(ok, "TC-PCI-007", "find(不存在) 与 dev_at(越界) ⇒ NULL");
+        pc_conf(ok, "TC-PCI-007", "find(nonexistent) and dev_at(out of range) ⇒ NULL");
     }
 
-    /* ---- TC-PCI-008: BAR 分配互不重叠 ---- */
+    /* ---- TC-PCI-008: BAR allocations do not overlap ---- */
     {
         br_bool ok = BR_TRUE;
         for (br_u32 i = 0u; i < n && ok == BR_TRUE; i++) {
@@ -154,7 +157,7 @@ int pci_core_selftest(void)
                 }
             }
         }
-        pc_conf(ok, "TC-PCI-008", "所有已分配 BAR 的地址区间两两不重叠");
+        pc_conf(ok, "TC-PCI-008", "all allocated BAR address ranges are pairwise non-overlapping");
     }
 
     br_log_info("[PCICONF] SUMMARY pass=%u fail=%u total=%u",

@@ -1,7 +1,7 @@
 {
  "$schema": "http://json-schema.org/draft-07/schema#",
- "title": "plugin.toml — brickie v0.1 插件声明面(BRV-D2: 单条记录形状)",
- "description": "只表达**单条记录形状**(字段名/类型/取值域/必填)。跨字段不变量(api_iface == api_type)、版本串段数、range 语义、名字全局唯一一律**不在这里** —— 那些由 brickie-core 报 BRV-* 码(contract §7/§8)。校验器是本仓库自带的**最小子集**(contract §8 的'更小的允许集', 零第三方依赖)。",
+ "title": "brick.toml - brickie v0.1 plugin declaration surface (BRV-D2: single-record shape)",
+ "description": "Expresses single-record shape only (field names/types/value domains/required). Cross-field invariants (api_iface == api_type), version segment count, range semantics and global name uniqueness are NOT here - brickie-core reports them as BRV-* codes (contract §7/§8). The validator is this repo's minimal subset (contract §8 'smaller allowed set', zero third-party dependencies).",
  "type": "object",
  "required": [
   "schema",
@@ -77,7 +77,7 @@
     },
     "symbol_prefix": {
      "type": "string",
-     "description": "钩子/描述符符号前缀覆盖(可选)。缺省按 name_short 推导; 不同命名空间共享 short 时(如 iface/posix 与 runtime/posix)必须显式给出唯一前缀。"
+     "description": "Hook/descriptor symbol-prefix override (optional). Default is derived from name_short; when different namespaces share a short name (e.g. iface/posix and runtime/posix) a unique prefix must be given explicitly."
     },
     "sched_class": {
      "type": "string",
@@ -592,13 +592,13 @@
   },
   "selftest": {
    "type": "object",
-   "description": "ADR-0010: **表在场 = 本插件有自检** ⇒ 生成器发 `.selftest = <prefix>selftest`。不写 = 无自检(不发钩子)。",
+   "description": "ADR-0010: table present = this plugin has a selftest; the generator emits .selftest = <prefix>selftest. Omitted = no selftest (no hook emitted).",
    "additionalProperties": true,
    "properties": {
     "cases": {
      "type": "integer",
      "minimum": 0,
-     "description": "自称的用例条数(**只作呈现/诊断**, 不参与判定; 真值是 selftest 钩子的返回值)。"
+     "description": "Self-declared case count (presentation/diagnostics only, not used for decisions; the real value is the selftest hook return value)."
     }
    }
   }

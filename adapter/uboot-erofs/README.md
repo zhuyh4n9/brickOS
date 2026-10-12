@@ -12,7 +12,7 @@
 把 u-boot(NXP 分支)的 **EROFS 只读压缩文件系统**接进 brickOS, 出口是 `framework/vfs-core`
 的 `br_fs_ops` / `br_inode_ops` / `br_file_ops` 契约。
 
-**架构口径(ADR-0026)**: 上游 `.c` **原样参与编译, 没有副本** —— [plugin.toml](plugin.toml) 的
+**架构口径(ADR-0026)**: 上游 `.c` **原样参与编译, 没有副本** —— [brick.toml](brick.toml) 的
 `[build].sources` 直接指向 `third_party/uboot-imx/` 下的原件(于是"副本与原件漂移"这件事
 在结构上不可能发生); 我们只提供两样东西 —— `compat/`(上游依赖的**运行环境**)与
 `glue/`(上游需要的**块层与 VFS 出口**)。旧结构(`src/` 上游改写副本 + `adapter/` 适配层)
@@ -48,7 +48,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 
 | 路径 | 归属 | 内容 |
 |---|---|---|
-| `plugin.toml` | 本项目的声明面 | `[build].sources` 直指 vendor 原件 + `glue/*.c`; `[build].includes = ["compat", "glue", "<vendor>/fs/erofs"]`; `[build].cflags` = vendor 告警口径; `[selftest].cases = 8` |
+| `brick.toml` | 本项目的声明面 | `[build].sources` 直指 vendor 原件 + `glue/*.c`; `[build].includes = ["compat", "glue", "<vendor>/fs/erofs"]`; `[build].cflags` = vendor 告警口径; `[selftest].cases = 8` |
 | `compat/` | 本项目(适配层) | `erofs_env.h`(运行环境实现)+ 每个 u-boot 头名一个薄壳头 |
 | `glue/` | 本项目(适配层) | `erofs_glue.h`(适配层内部契约)、`erofs_vfs.c`(块层 shim + VFS 四层 ops + `sbi` 存储 + on-disk 静态判据)、`erofs_selftest.c`(TC-EROFS-*) |
 | `LICENSE.GPL-2.0` `NOTICE` `README.md` `ADAPTER-NOTES.md` | 本项目文档 | 许可全文 / 来源归属 / 本文件 / 适配层设计史 |
@@ -61,7 +61,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 | 项 | 值 |
 |---|---|
 | 块设备 | `emmc3`(16 MiB 镜像从**扇区 0** 开始; 镜像由宿主 `tools/mk-fs-images.sh` 造) |
-| 挂载点 | `/assets`(只读; `plugin.toml` 的 `[[mount]]` 与 `glue/erofs_glue.h` 的 `BR_EROFS_MOUNT_PATH` 两处真值) |
+| 挂载点 | `/assets`(只读; `brick.toml` 的 `[[mount]]` 与 `glue/erofs_glue.h` 的 `BR_EROFS_MOUNT_PATH` 两处真值) |
 | 块大小 | 4096 B(`glue/erofs_vfs.c` 挂载期要求 `erofs_blksiz() == EROFS_MAX_BLOCK_SIZE`, 否则 `-ENOTSUP`) |
 | 支持的数据布局 | 0 `FLAT_PLAIN` / 2 `FLAT_INLINE`(未压缩) · 3 `COMPRESSED_COMPACT` / 1 `COMPRESSED_FULL`(压缩) · 4 `CHUNK_BASED`(走上游 `data.c` 的 chunk 映射) |
 | 支持的算法 | LZ4(含 0padding、SHIFTED、INTERLACED 的未压缩面); LZMA/DEFLATE 在 `z_erofs_decompress()` 处 `-EOPNOTSUPP` |
@@ -134,7 +134,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 | `framework/bdev-core` | init | `br_bdev_get("emmc3")` 取块设备 |
 | `adapter/uboot-mmc` | init | 它注册 `emmc3`; 这条**init 边**保证拓扑序在本插件之前 |
 
-编译面由 [plugin.toml](plugin.toml) 声明, 三件事值得点名:
+编译面由 [brick.toml](brick.toml) 声明, 三件事值得点名:
 
 - **`[build].sources`** = vendor 的 `fs/erofs/{super,namei,data,zmap,decompress}.c` +
   `lib/lz4.c`(**原样编译, 无副本**) + `glue/*.c`(本项目);
@@ -181,7 +181,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 4. **超级块 checksum 不校验**: 上游 `super.c` 只把 `checksum` 读进 `sbi.checksum`, 不验
    (`sb_csum` 特性位存在时同样不验)—— 少一次 crc32c 与一次重读。
 5. **`emmc3` 这个设备名是约定**: 本插件按 `br_bdev_get("emmc3")` 取设备。平台侧
-   (`platform/qemu-aarch64/plugin.toml` 的 `[build.target.qemu].extra`)挂了**四块**
+   (`platform/qemu-aarch64/brick.toml` 的 `[build.target.qemu].extra`)挂了**四块**
    `-device sdhci-pci` + `-device emmc`(`emmc0/1/2` = 三卷 FAT, `emmc3` = EROFS 卡),
    后备文件与分工见 `tools/mk-fs-images.sh` 与 ADR-0022。**设备不在 ⇒ 挂载失败 ⇒ 首败即
    停机**(刻意的): 没有 `/assets` 的产品不该在半残命名空间里继续跑。这条与 `br-wa-fs-001`

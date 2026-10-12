@@ -1,31 +1,31 @@
-//! L1 闭包求解(§7.6)+ `dep` 族命令。
+//! L1 closure solving (§7.6) + the `dep` command family.
 //!
-//! `solve` 是**纯函数**(除入参 `TreeLoad` 外无 IO): 产品选择集 → init/runtime/type
-//! 三类边闭包 → `compat_gen` 精确匹配 → `range` 交集(单版本)→ 拓扑 + init 环检测
-//! → 相位单调 → 分类学禁则 → 预算合计 → profile 判定(§7.5)。
+//! `solve` is a **pure function** (no IO besides the `TreeLoad` argument): product selection set → init/runtime/type
+//! three-kind edge closure → exact `compat_gen` match → `range` intersection (single version) → topo + init cycle detection
+//! → phase monotonicity → taxonomy prohibitions → budget totals → profile decision (§7.5).
 //!
-//! 命令面:
-//! - `closure`   —— 闭包 + 拓扑序 + 预算合计(contract §5.1 的 `data`);
-//! - `dep-tree`  —— 依赖树(`{roots, nodes, kind}`);
-//! - `dep-graph` —— `dot` / `mermaid` / `json`(`json` 时 `data.text` 是规范化 JSON 串);
-//! - `dep-why`   —— 最短依赖路径(找不到 ⇒ `data.found = false`, 仍 exit 0);
-//! - `dep-index` —— `build/index/dependents.json`(确定性序列化)。
+//! Command surface:
+//! - `closure`   -- closure + topological order + budget totals (contract §5.1 `data`);
+//! - `dep-tree`  -- dependency tree (`{roots, nodes, kind}`);
+//! - `dep-graph` -- `dot` / `mermaid` / `json` (for `json`, `data.text` is a canonical JSON string);
+//! - `dep-why`   -- shortest dependency path (not found ⇒ `data.found = false`, still exit 0);
+//! - `dep-index` -- `build/index/dependents.json` (deterministic serialization).
 //!
-//! 诊断码: `BRV-DEP-0009/0010/0011` / `BRV-VER-0001/0002/0004` /
-//! `BRV-MF-0001`(缺口代用: 环 / 缺依赖 / 预算超限 / 依赖方向禁则 —— 裁定 R-9;
-//! 消息里必须点名**冲突双方 / 差值 / 完整环路径**)。
+//! Diagnostic codes: `BRV-DEP-0009/0010/0011` / `BRV-VER-0001/0002/0004` /
+//! `BRV-MF-0001` (gap substitute: cycle / missing dependency / budget overrun / dependency-direction prohibition -- ruling R-9;
+//! messages must name the **two conflicting sides / the delta / the full cycle path**).
 //!
-//! ## 实现期裁定(已登记 rust/README.md §10)
-//! - **S-1**: `requires_iface` 的版本校验只在 `check` 里做(`scan_iface = true`);
-//!   `closure` **完全不看**该字段 ⇒ `dep closure --json` 在加/去 `requires_iface`
-//!   时逐字节相同(§10 V-10②)。这与 V-7 的"`compat_gen` 冲突可构造"不矛盾:
-//!   冲突在 `check --deps` 里报。
-//! - **S-2**: 结构依赖 `[[dep]].range` 与**提供方插件的四段版本**的
-//!   `MAJOR.MINOR.REVISE` 比对(结构依赖不钉代, 依 F3)⇒ 越界 `BRV-VER-0002`。
-//! - **S-3**: `range` 约束的**交集为空** ⇒ `BRV-DEP-0011`(单版本政策下"同插件
-//!   多版本共存"在 v0.1 唯一可构造的形式: 两个依赖方要求互斥的区间)。
-//! - **S-4**: `type` 边只把提供方拉进闭包, **不**沿其 `init`/`runtime` 边继续扩张
-//!   (§7.1 "闭包参与 ✅(但不拉入运行期依赖)")。
+//! ## Implementation-time rulings (registered in rust/README.md §10)
+//! - **S-1**: `requires_iface` version checking happens only in `check` (`scan_iface = true`);
+//!   `closure` **ignores** the field entirely ⇒ `dep closure --json` is byte-identical with or without `requires_iface`
+//!   (§10 V-10②). This does not contradict V-7's "`compat_gen` conflicts are constructible":
+//!   conflicts are reported in `check --deps`.
+//! - **S-2**: structural dependency `[[dep]].range` is compared against the **provider plugin's four-part version**
+//!   `MAJOR.MINOR.REVISE` (structural deps do not pin a generation, per F3) ⇒ out of range `BRV-VER-0002`.
+//! - **S-3**: an **empty intersection** of `range` constraints ⇒ `BRV-DEP-0011` (under the single-version policy, the only
+//!   constructible form of "same plugin, multiple coexisting versions" in v0.1: two consumers demanding disjoint ranges).
+//! - **S-4**: a `type` edge pulls the provider into the closure but does **not** expand along its `init`/`runtime` edges
+//!   (§7.1 "closure participation ✅ (but does not pull in runtime deps)").
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
@@ -39,56 +39,56 @@ use crate::proto::{Request, Response};
 use crate::rules;
 use crate::version::{self, Range};
 
-/// 域标签(contract §5.1 的 `scopes`)。
+/// Domain labels (contract §5.1 `scopes`).
 pub const SCOPE_DEPS: &str = "deps";
 pub const SCOPE_IFACE: &str = "iface";
 pub const SCOPE_TAX: &str = "tax";
 pub const SCOPE_PRIV: &str = "priv";
 
-// ------------------------------------------------------------------ 结构
+// ------------------------------------------------------------------ structures
 
-/// 已声明的一条结构依赖边(消费者 → 提供者)。
+/// One declared structural dependency edge (consumer → provider).
 #[derive(Clone, Debug, Default)]
 pub struct Edge {
     pub from: String,
     pub to: String,
-    /// `init` | `runtime` | `type`。
+    /// `init` | `runtime` | `type`.
     pub kind: String,
-    /// 规范化 `range`(展开后)。
+    /// Canonical `range` (after expansion).
     pub range: String,
-    /// `[[dep]].phase` 断言(**仅 init 边**; §7.2 R2)。
+    /// `[[dep]].phase` assertion (**init edges only**; §7.2 R2).
     pub phase: Option<String>,
     pub symbol: Option<String>,
-    /// `[[dep]]` 在该插件声明里的下标(诊断 span 用)。
+    /// Index of the `[[dep]]` in that plugin's declaration (for diagnostic spans).
     pub index: usize,
 }
 
-/// 一个环(结构化: `path` = 节点闭合路径, `edges` = 逐条边)。
+/// A cycle (structured: `path` = closed node path, `edges` = edge by edge).
 #[derive(Clone, Debug, Default)]
 pub struct Cycle {
     pub path: Vec<String>,
     pub edges: Vec<Edge>,
 }
 
-/// 求解得到的闭包。
+/// The closure produced by solving.
 #[derive(Clone, Debug, Default)]
 pub struct Closure {
-    /// 闭包内的插件名(字典序)。
+    /// Plugin names in the closure (lexicographic).
     pub selected: BTreeSet<String>,
-    /// 选择集(产品 manifest 的根; 无 product ⇒ 全树)。
+    /// Selection set (roots of the product manifest; no product ⇒ whole tree).
     pub seeds: Vec<String>,
     pub init_edges: Vec<Edge>,
     pub runtime_edges: Vec<Edge>,
     pub type_edges: Vec<Edge>,
-    /// init 边的拓扑序(有环时: 无环部分在前, 其余按字典序补尾)。
+    /// Topological order of init edges (with cycles: acyclic part first, rest appended in lexicographic order).
     pub topo_order: Vec<String>,
-    /// init 环(结构化; V-3)。
+    /// init cycles (structured; V-3).
     pub cycles: Vec<Cycle>,
     pub totals_ram: i64,
     pub totals_stack: i64,
     pub capacity_ram: i64,
     pub capacity_stack: i64,
-    /// 树里是否存在 `plugin_type = "platform"`(容量是否有意义)。
+    /// Whether the tree contains `plugin_type = "platform"` (whether capacity is meaningful).
     pub has_platform: bool,
 }
 
@@ -102,7 +102,7 @@ impl Closure {
     }
 }
 
-/// `solve` 的结果: 闭包 + **带域标签**的诊断。
+/// Result of `solve`: closure + **domain-tagged** diagnostics.
 pub struct SolveResult {
     pub closure: Closure,
     pub diags: Vec<(&'static str, Diag)>,
@@ -150,7 +150,7 @@ fn info(
         .hint(hint)
 }
 
-/// profile 相关的严重度(`BRV-VER-0004`: dev ⇒ info / release ⇒ error; §7.5)。
+/// Profile-dependent severity (`BRV-VER-0004`: dev ⇒ info / release ⇒ error; §7.5).
 fn sev_for_profile(profile: &str) -> Severity {
     if profile == "release" {
         Severity::Error
@@ -159,19 +159,19 @@ fn sev_for_profile(profile: &str) -> Severity {
     }
 }
 
-// ------------------------------------------------------------------ 求解
+// ------------------------------------------------------------------ solving
 
 const REACH_TYPE_ONLY: u8 = 1;
 const REACH_FULL: u8 = 2;
 
-/// 纯函数闭包求解(§7.6)。
+/// Pure-function closure solving (§7.6).
 pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
     let by_name: BTreeMap<&str, &Plugin> =
         tree.plugins.iter().map(|p| (p.name.as_str(), p)).collect();
     let mut diags: Vec<(&'static str, Diag)> = Vec::new();
     let mut closure = Closure::default();
 
-    // ---- 1. 产品选择集(裁定 R-1: 无 product ⇒ 整棵树) ----
+    // ---- 1. product selection set (ruling R-1: no product ⇒ whole tree) ----
     let mut seeds: Vec<String> = Vec::new();
     if let Some(prod) = &tree.product {
         if !prod.app.is_empty() {
@@ -183,7 +183,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
             }
         }
         if seeds.is_empty() {
-            // product 存在但选择集为空 ⇒ 退回"整棵树"(R-1 的精神: 有声明就该被校验)
+            // product exists but the selection set is empty ⇒ fall back to "whole tree" (spirit of R-1: anything declared should be checked)
             for p in &tree.plugins {
                 seeds.push(p.name.clone());
             }
@@ -211,14 +211,14 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     s,
                     &file,
                     "select.plugins",
-                    format!("选择集里的插件 `{s}` 不在插件树里(缺 `{s}/plugin.toml`)"),
-                    "缺口代用(R-9): 选择/依赖引用完整性无专属码; 补上插件或从选择集删除",
+                    format!("plugin `{s}` in the selection set is not in the plugin tree (missing `{s}/brick.toml`)"),
+                    "gap substitute (R-9): selection/dependency reference integrity has no dedicated code; add the plugin or drop it from the selection set",
                 ),
             ));
         }
     }
 
-    // ---- 2. 三类边闭包(type 边不拉入运行期依赖, 见 S-4) ----
+    // ---- 2. three-kind edge closure (type edges do not pull in runtime deps, see S-4) ----
     let mut reach: BTreeMap<String, u8> = BTreeMap::new();
     let mut queue: VecDeque<String> = VecDeque::new();
     for s in &seeds {
@@ -257,7 +257,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
     }
     closure.selected = reach.keys().cloned().collect();
 
-    // ---- 3. 边集合 + 缺依赖 ----
+    // ---- 3. edge sets + missing dependencies ----
     let mut all_edges: Vec<Edge> = Vec::new();
     for name in &closure.selected {
         let p = by_name[name.as_str()];
@@ -272,10 +272,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                             &p.file,
                             format!("dep[{i}].name"),
                             format!(
-                                "`{}` 依赖 `{}`({})但插件树里没有它(缺 `{}/plugin.toml`)",
+                                "`{}` depends on `{}` ({}) but it is not in the plugin tree (missing `{}/brick.toml`)",
                                 p.name, d.name, d.kind, d.name
                             ),
-                            "§7.6: 缺失报'依赖名 + 哪条边引入'; 缺口代用(R-9)",
+                            "§7.6: missing deps report 'dependency name + which edge pulled it in'; gap substitute (R-9)",
                         ),
                     ));
                 }
@@ -300,7 +300,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // ---- 4. `range` 越界(BRV-VER-0002)+ 单版本交集(BRV-DEP-0011) ----
+    // ---- 4. `range` out of bounds (BRV-VER-0002) + single-version intersection (BRV-DEP-0011) ----
     let mut constraints: BTreeMap<String, (Range, Vec<String>)> = BTreeMap::new();
     for e in &all_edges {
         let prov = by_name[e.to.as_str()];
@@ -314,10 +314,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     &by_name[e.from.as_str()].file,
                     format!("dep[{}].range", e.index),
                     format!(
-                        "同代内 range 越界: `{}` 要求 `{}` 满足 `{}`, 但提供方当前版本是 {}",
+                        "range out of bounds within the same generation: `{}` requires `{}` to satisfy `{}`, but the provider's current version is {}",
                         e.from, e.to, e.range, prov.version
                     ),
-                    "§7.4: range 只比较 MAJOR.MINOR.REVISE(缺段右补 0); 修 range 或推进提供方",
+                    "§7.4: range compares only MAJOR.MINOR.REVISE (missing segments right-padded with 0); fix the range or advance the provider",
                 ),
             ));
         }
@@ -328,14 +328,14 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         slot.1.push(e.from.clone());
     }
 
-    // ---- 5. `requires_iface` 的版本校验(仅 check; 见 S-1) ----
+    // ---- 5. `requires_iface` version checking (check only; see S-1) ----
     if scan_iface {
         for name in &closure.selected {
             let p = by_name[name.as_str()];
             for (ri, r) in p.compat.requires_iface.iter().enumerate() {
                 let span = format!("compat.requires_iface[{ri}]");
                 let Some((prov_name, unit)) = r.id.split_once('#') else {
-                    continue; // 形状错已在加载期报
+                    continue; // shape errors are already reported at load time
                 };
                 let Some(prov) = by_name.get(prov_name) else {
                     diags.push((
@@ -346,10 +346,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                             &p.file,
                             format!("{span}.id"),
                             format!(
-                                "`requires_iface` 指向的提供方 `{prov_name}` 不在插件树里(单元 `{}`)",
+                                "the provider `{prov_name}` referenced by `requires_iface` is not in the plugin tree (unit `{}`)",
                                 r.id
                             ),
-                            "缺口代用(R-9): 接口引用完整性无专属码",
+                            "gap substitute (R-9): interface reference integrity has no dedicated code",
                         ),
                     ));
                     continue;
@@ -362,8 +362,8 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                             &p.name,
                             &p.file,
                             format!("{span}.id"),
-                            format!("`requires_iface` 指向的接口单元 `{}` 不存在", r.id),
-                            "缺口代用(R-9): 接口引用完整性无专属码",
+                            format!("the interface unit `{}` referenced by `requires_iface` does not exist", r.id),
+                            "gap substitute (R-9): interface reference integrity has no dedicated code",
                         ),
                     ));
                     continue;
@@ -379,10 +379,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                             &p.file,
                             format!("{span}.compat_gen"),
                             format!(
-                                "compat_gen 不匹配: `{}` 钉 `{}` 的 compat_gen={}, 而提供方当前在 {}",
+                                "compat_gen mismatch: `{}` pins `{}`'s compat_gen={}, but the provider is currently at {}",
                                 p.name, r.id, r.compat_gen, prov_cg
                             ),
-                            "§5.5/§7.4: compat_gen 精确匹配, 跨代比较无意义",
+                            "§5.5/§7.4: compat_gen matches exactly; cross-generation comparison is meaningless",
                         ),
                     ));
                 }
@@ -395,10 +395,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                             &p.file,
                             format!("{span}.range"),
                             format!(
-                                "同代内 range 越界: `{}` 要求 `{}` 满足 `{}`, 但提供方版本是 {}",
+                                "range out of bounds within the same generation: `{}` requires `{}` to satisfy `{}`, but the provider version is {}",
                                 p.name, r.id, r.range_raw, prov_ver
                             ),
-                            "§7.4: range 只比较 MAJOR.MINOR.REVISE",
+                            "§7.4: range compares only MAJOR.MINOR.REVISE",
                         ),
                     ));
                 }
@@ -413,7 +413,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                         Diag::new(
                             sev_for_profile(profile),
                             format!(
-                                "接口消费 `{}`: 单元 `{}` 尚未冻结(compat_gen = 0), 未受保护(profile={profile})",
+                                "interface consumption `{}`: unit `{}` is not yet frozen (compat_gen = 0), unprotected (profile={profile})",
                                 p.name, r.id
                             ),
                         )
@@ -421,7 +421,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                         .target(&p.name)
                         .file(&p.file)
                         .span(span.clone())
-                        .hint("§7.5: dev 允许(info)/ release 禁止(error)"),
+                        .hint("§7.5: dev allows (info) / release forbids (error)"),
                     ));
                 }
             }
@@ -441,17 +441,17 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                         .unwrap_or_default(),
                     "dep[].range",
                     format!(
-                        "单版本政策下区间交集为空: 插件 `{prov}` 被 {} 以互斥区间要求(`{}`)",
+                        "empty range intersection under the single-version policy: plugin `{prov}` is required with disjoint ranges by {} (`{}`)",
                         consumers.join(", "),
                         r.canonical()
                     ),
-                    "§7.4: 同一插件名在闭包内只允许一个版本 ⇒ BRV-DEP-0011",
+                    "§7.4: a plugin name may have only one version in the closure ⇒ BRV-DEP-0011",
                 ),
             ));
         }
     }
 
-    // ---- 6. skin 再导出边的 profile 门禁(V-14; 不看 requires_iface) ----
+    // ---- 6. profile gating of skin re-export edges (V-14; ignores requires_iface) ----
     for name in &closure.selected {
         let p = by_name[name.as_str()];
         for (ei, exp) in p.exports.iter().enumerate() {
@@ -472,7 +472,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                         Diag::new(
                             sev_for_profile(profile),
                             format!(
-                                "皮肤 `{}`(export[{ei}])再导出的单元 `{r}` 尚未冻结(compat_gen = 0)(profile={profile})",
+                                "skin `{}` (export[{ei}]) re-exports unit `{r}`, which is not yet frozen (compat_gen = 0) (profile={profile})",
                                 p.name
                             ),
                         )
@@ -480,14 +480,14 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                         .target(&p.name)
                         .file(&p.file)
                         .span(format!("export[{ei}].reexport_of"))
-                        .hint("§7.5: 接口消费在 release 下不允许未冻结接口"),
+                        .hint("§7.5: interface consumption must not use unfrozen interfaces under release"),
                     ));
                 }
             }
         }
     }
 
-    // ---- 7. 相位单调(R1/R2; 仅已声明的 init 边) ----
+    // ---- 7. phase monotonicity (R1/R2; declared init edges only) ----
     for e in &closure.init_edges {
         let a = by_name[e.from.as_str()];
         let b = by_name[e.to.as_str()];
@@ -502,10 +502,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                         &a.file,
                         format!("dep[{}].phase", e.index),
                         format!(
-                            "相位单调违例(R1): `{}` 在 `{}` 完成(rank {}), 晚于依赖方 `{}` 的 `{}`(rank {}), 但 `{}` 依赖 `{}`",
+                            "phase monotonicity violation (R1): `{}` completes in `{}` (rank {}), later than consumer `{}`'s `{}` (rank {}), but `{}` depends on `{}`",
                             b.name, b.phase, rb, a.name, a.phase, ra, a.name, b.name
                         ),
-                        "§7.2: rank(complete(B)) ≤ rank(complete(A)); 只覆盖已声明的 init 边",
+                        "§7.2: rank(complete(B)) ≤ rank(complete(A)); covers declared init edges only",
                     ),
                 ));
             }
@@ -513,7 +513,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         if let Some(assert) = &e.phase {
             let rank_assert = rules::phase_rank(assert);
             if let (Some(rank_assert), Some(rb)) = (rank_assert, rb) {
-                // §8.1 口径: "提供方自述晚于依赖方断言 ⇒ 红"(见 README §10 S-6)。
+                // §8.1 convention: "provider self-declares later than the consumer's assertion ⇒ red" (see README §10 S-6).
                 if rb > rank_assert {
                     diags.push((
                         SCOPE_DEPS,
@@ -523,7 +523,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                             &a.file,
                             format!("dep[{}].phase", e.index),
                             format!(
-                                "`[[dep]].phase` 断言与提供方自述冲突: `{}` 断言 `{}` 在 `{assert}` 完成, 但提供方自述 `{}`",
+                                "`[[dep]].phase` assertion conflicts with the provider's self-declaration: `{}` asserts `{}` completes in `{assert}`, but the provider self-declares `{}`",
                                 a.name, b.name, b.phase
                             ),
                             "§7.2 R2 / §8.1: rank(complete(B)) ≤ rank(assertion)",
@@ -534,7 +534,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // ---- 8. 分类学禁则(依赖方向; 裁定 R-9 ⇒ BRV-MF-0001) ----
+    // ---- 8. taxonomy prohibitions (dependency direction; ruling R-9 ⇒ BRV-MF-0001) ----
     let allow = tree.allow_edges();
     for e in &all_edges {
         let a = by_name[e.from.as_str()];
@@ -546,12 +546,12 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     .any(|r| r.starts_with(&format!("{}#", b.name)))
         });
         let violation = if skin_exempt {
-            // §3.5 消费方 3: `form = skin` 的再导出边**豁免 api_type 禁则**(方向表仍适用)。
+            // §3.5 consumer 3: a `form = skin` re-export edge is **exempt from the api_type prohibition** (the direction table still applies).
             let prov_is_tp = b.api_type == "third_party";
             let whitelisted = allow.iter().any(|(c, p)| c == &a.name && p == &b.name);
             if !whitelisted && !rules::dep_direction_ok(&a.plugin_type, &b.plugin_type, prov_is_tp) {
                 Some(format!(
-                    "依赖方向禁则(§7.3): `plugin_type = {}` 的 `{}` 不得依赖 `plugin_type = {}` 的 `{}`",
+                    "dependency-direction prohibition (§7.3): `{}` with `plugin_type = {}` must not depend on `{}` with `plugin_type = {}`",
                     a.plugin_type, a.name, b.plugin_type, b.name
                 ))
             } else {
@@ -577,16 +577,16 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     &a.name,
                     &a.file,
                     format!("dep[{}]", e.index),
-                    format!("消费者 `{}` → 提供者 `{}`: {msg}", a.name, b.name),
-                    "缺口代用(R-9): 依赖方向禁则无专属码; allow_edges 只豁免方向表",
+                    format!("consumer `{}` → provider `{}`: {msg}", a.name, b.name),
+                    "gap substitute (R-9): dependency-direction prohibitions have no dedicated code; allow_edges exempts only the direction table",
                 ),
             ));
         }
     }
 
-    // ---- 9. 预算合计(R-6: platform 的 [[res]] 是**容量**) ----
-    // 见 README §10 S-14: `plugin_type = platform` 的 `[[res]]` 作容量, **不**计入
-    // 消费者侧的 Σ —— 否则"platform 自身耗用"会让物理上限恒红(§8.1 注①失去意义)。
+    // ---- 9. budget totals (R-6: platform's [[res]] is **capacity**) ----
+    // See README §10 S-14: for `plugin_type = platform`, `[[res]]` is capacity and is **not** counted into the
+    // consumer-side Σ — otherwise "platform's own usage" would make the physical limit permanently red (§8.1 note ① loses meaning).
     let mut used_ram = 0i64;
     let mut used_stack = 0i64;
     for name in &closure.selected {
@@ -622,10 +622,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     &platform_file,
                     "res",
                     format!(
-                        "Σ ram_kib = {used_ram} 超出 platform 容量 {cap_ram}, 差值 {} KiB(物理上限, 无豁免)",
+                        "Σ ram_kib = {used_ram} exceeds the platform capacity {cap_ram}, delta {} KiB (physical limit, no exemption)",
                         used_ram - cap_ram
                     ),
-                    "§8.1: Σ [[res]] ≤ platform 提供量; 缺口代用(R-9)",
+                    "§8.1: Σ [[res]] ≤ what platform provides; gap substitute (R-9)",
                 ),
             ));
         }
@@ -638,10 +638,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     &platform_file,
                     "res",
                     format!(
-                        "Σ stack_kib = {used_stack} 超出 platform 容量 {cap_stack}, 差值 {} KiB",
+                        "Σ stack_kib = {used_stack} exceeds the platform capacity {cap_stack}, delta {} KiB",
                         used_stack - cap_stack
                     ),
-                    "§8.1: Σ [[res]] ≤ platform 提供量; 缺口代用(R-9)",
+                    "§8.1: Σ [[res]] ≤ what platform provides; gap substitute (R-9)",
                 ),
             ));
         }
@@ -657,10 +657,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                         &prod.file,
                         "budget.ram_kib",
                         format!(
-                            "Σ ram_kib = {used_ram} 超出产品预算 {b}, 差值 {} KiB",
+                            "Σ ram_kib = {used_ram} exceeds the product budget {b}, delta {} KiB",
                             used_ram - b
                         ),
-                        "§8.1: Σ [[res]] ≤ [budget]; 可评审地放宽 [budget]; 缺口代用(R-9)",
+                        "§8.1: Σ [[res]] ≤ [budget]; [budget] may be relaxed reviewably; gap substitute (R-9)",
                     ),
                 ));
             }
@@ -675,17 +675,17 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                         &prod.file,
                         "budget.stack_kib",
                         format!(
-                            "Σ stack_kib = {used_stack} 超出产品预算 {b}, 差值 {} KiB",
+                            "Σ stack_kib = {used_stack} exceeds the product budget {b}, delta {} KiB",
                             used_stack - b
                         ),
-                        "§8.1: Σ [[res]] ≤ [budget]; 缺口代用(R-9)",
+                        "§8.1: Σ [[res]] ≤ [budget]; gap substitute (R-9)",
                     ),
                 ));
             }
         }
     }
 
-    // ---- 10. 环检测(init ⇒ 硬错误 + 完整路径; runtime/type ⇒ 只报 info) ----
+    // ---- 10. cycle detection (init ⇒ hard error + full path; runtime/type ⇒ info only) ----
     closure.topo_order = topo_order(&closure.selected, &closure.init_edges);
     closure.cycles = find_cycles(&closure.selected, &closure.init_edges);
     for cyc in &closure.cycles {
@@ -701,8 +701,8 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                 &head,
                 &file,
                 "dep",
-                format!("init 依赖成环: {}", cyc.path.join(" → ")),
-                "§7.1: init 环禁止(拓扑硬错误); 缺口代用(R-9), V-3 要求完整路径",
+                format!("init dependency cycle: {}", cyc.path.join(" → ")),
+                "§7.1: init cycles are forbidden (topological hard error); gap substitute (R-9), V-3 requires the full path",
             ),
         ));
     }
@@ -724,10 +724,10 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     &file,
                     "dep",
                     format!(
-                        "`{kind}` 依赖成环(允许, 仅登记): {}",
+                        "`{kind}` dependency cycle (allowed, recorded only): {}",
                         cyc.path.join(" → ")
                     ),
-                    "§7.1: runtime/type 环只报 info",
+                    "§7.1: runtime/type cycles report info only",
                 ),
             ));
         }
@@ -736,7 +736,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
     SolveResult { closure, diags }
 }
 
-// ------------------------------------------------------------------ 环 / 拓扑
+// ------------------------------------------------------------------ cycles / topo
 
 fn adjacency(nodes: &BTreeSet<String>, edges: &[Edge]) -> BTreeMap<String, Vec<String>> {
     let mut adj: BTreeMap<String, Vec<String>> =
@@ -751,7 +751,7 @@ fn adjacency(nodes: &BTreeSet<String>, edges: &[Edge]) -> BTreeMap<String, Vec<S
     adj
 }
 
-/// 找全部初等环(以"回溯栈上的节点"为准; 去重按旋转后的最小字典序)。
+/// Find all elementary cycles (based on nodes on the backtracking stack; dedup by the rotated minimal lexicographic form).
 pub fn find_cycles(nodes: &BTreeSet<String>, edges: &[Edge]) -> Vec<Cycle> {
     let adj = adjacency(nodes, edges);
     let mut out: Vec<Cycle> = Vec::new();
@@ -817,12 +817,12 @@ fn dfs_cycles(
     stack.pop();
 }
 
-/// init 边的**初始化**拓扑序: 提供方在前、消费者在后(Kahn; 就绪集按字典序 ⇒ 确定性)。
+/// **Initialization** topological order of init edges: provider first, consumer later (Kahn; ready set in lexicographic order ⇒ deterministic).
 ///
-/// 边的方向是 `消费者 → 提供方`(A 依赖 B), 而"初始化顺序"要求 B 先于 A ⇒
-/// Kahn 用**反向**邻接表。有环时剩余节点按字典序补尾。
+/// Edge direction is `consumer → provider` (A depends on B), while "initialization order" requires B before A ⇒
+/// Kahn uses the **reverse** adjacency. With cycles, remaining nodes are appended in lexicographic order.
 pub fn topo_order(nodes: &BTreeSet<String>, edges: &[Edge]) -> Vec<String> {
-    // 去重(同一对 (from,to) 只算一条边)。
+    // Deduplicate (a given (from,to) pair counts as one edge).
     let mut pairs: BTreeSet<(String, String)> = BTreeSet::new();
     for e in edges {
         if nodes.contains(&e.from) && nodes.contains(&e.to) {
@@ -833,7 +833,7 @@ pub fn topo_order(nodes: &BTreeSet<String>, edges: &[Edge]) -> Vec<String> {
     let mut adj: BTreeMap<String, Vec<String>> =
         nodes.iter().map(|n| (n.clone(), Vec::new())).collect();
     for (from, to) in &pairs {
-        // 初始化顺序的边: 提供方(`to`)→ 消费者(`from`)。
+        // Initialization-order edges: provider (`to`) → consumer (`from`).
         adj.get_mut(to).unwrap().push(from.clone());
         *indeg.get_mut(from).unwrap() += 1;
     }
@@ -871,7 +871,7 @@ pub fn topo_order(nodes: &BTreeSet<String>, edges: &[Edge]) -> Vec<String> {
     order
 }
 
-// ------------------------------------------------------------------ JSON 视图
+// ------------------------------------------------------------------ JSON views
 
 fn edges_json(edges: &[Edge]) -> Value {
     Value::Array(
@@ -882,7 +882,7 @@ fn edges_json(edges: &[Edge]) -> Value {
     )
 }
 
-/// `closure` 命令的 `data`(contract §5.1)。
+/// `data` of the `closure` command (contract §5.1).
 pub fn closure_json(tree: &TreeLoad, c: &Closure, profile: &str) -> Value {
     let plugins: Vec<Value> = tree
         .plugins
@@ -935,7 +935,7 @@ pub fn closure_json(tree: &TreeLoad, c: &Closure, profile: &str) -> Value {
     })
 }
 
-/// 取 `args.profile`(缺省 = product.stage / dev)。
+/// Read `args.profile` (default = product.stage / dev).
 pub fn profile_of(req: &Request, tree: &TreeLoad) -> String {
     req.arg_str("profile")
         .filter(|s| !s.is_empty())
@@ -943,9 +943,9 @@ pub fn profile_of(req: &Request, tree: &TreeLoad) -> String {
         .unwrap_or_else(|| "dev".to_string())
 }
 
-// ------------------------------------------------------------------ 命令入口
+// ------------------------------------------------------------------ command entry points
 
-/// `closure` / `dep-tree` / `dep-graph` / `dep-why` / `dep-index` 的统一入口。
+/// Unified entry point for `closure` / `dep-tree` / `dep-graph` / `dep-why` / `dep-index`.
 pub fn run(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
     let tree = model::load_tree(&root);
@@ -958,8 +958,8 @@ pub fn run(req: &Request) -> Response {
         other => {
             let mut d = tree.diags.clone();
             d.usage(
-                format!("solver 不认识命令 `{other}`"),
-                "见 contract §5.1 的命令表",
+                format!("solver does not recognize command `{other}`"),
+                "see the command table in contract §5.1",
             );
             Response::ok(d, json!({}))
         }
@@ -968,7 +968,7 @@ pub fn run(req: &Request) -> Response {
 
 fn cmd_closure(req: &Request, tree: &TreeLoad) -> Response {
     let profile = profile_of(req, tree);
-    // S-1: `closure` **不**扫描 `requires_iface` ⇒ V-10② 的逐字节可复现成立。
+    // S-1: `closure` does **not** scan `requires_iface` ⇒ V-10② byte-for-byte reproducibility holds.
     let sol = solve(tree, &profile, false);
     let mut d = tree.diags.clone();
     for (_, diag) in sol.diags {
@@ -984,8 +984,8 @@ fn cmd_tree(req: &Request, tree: &TreeLoad) -> Response {
     if !rules::in_list(&["init", "runtime", "type", "all"], &kind) {
         let mut d = tree.diags.clone();
         d.usage(
-            format!("`--kind {kind}` 越界"),
-            "合法值: init | runtime | type | all(§7.7)",
+            format!("`--kind {kind}` out of range"),
+            "valid values: init | runtime | type | all (§7.7)",
         );
         return Response::ok(d, json!({}));
     }
@@ -994,7 +994,7 @@ fn cmd_tree(req: &Request, tree: &TreeLoad) -> Response {
 
     let mut nodes = serde_json::Map::new();
     for name in selected {
-        let p = tree.by_name(name).expect("闭包内插件必在树里");
+        let p = tree.by_name(name).expect("plugins in the closure are always in the tree");
         let deps: Vec<Value> = p
             .deps
             .iter()
@@ -1027,7 +1027,7 @@ fn cmd_tree(req: &Request, tree: &TreeLoad) -> Response {
     )
 }
 
-/// 按 `kind` 取边, 稳定排序 + 去重。
+/// Take edges by `kind`, stable-sorted + deduplicated.
 pub fn sorted_edges(c: &Closure, kind: &str) -> Vec<Edge> {
     let mut out: Vec<Edge> = match kind {
         "init" => c.init_edges.clone(),
@@ -1047,8 +1047,8 @@ fn cmd_graph(req: &Request, tree: &TreeLoad) -> Response {
     if !rules::in_list(&["dot", "mermaid", "json"], &format) {
         let mut d = tree.diags.clone();
         d.usage(
-            format!("`--format {format}` 越界"),
-            "合法值: dot | mermaid | json(§7.7)",
+            format!("`--format {format}` out of range"),
+            "valid values: dot | mermaid | json (§7.7)",
         );
         return Response::ok(d, json!({}));
     }
@@ -1089,7 +1089,7 @@ fn cmd_graph(req: &Request, tree: &TreeLoad) -> Response {
             s
         }
         _ => serde_json::to_string(&json!({"nodes": nodes, "edges": edges_json_v}))
-            .expect("JSON 必可序列化"),
+            .expect("JSON is always serializable"),
     };
     let mut d = tree.diags.clone();
     for (_, diag) in sol.diags {
@@ -1114,7 +1114,7 @@ fn cmd_why(req: &Request, tree: &TreeLoad) -> Response {
     let to = req.arg_str("to").unwrap_or_default();
     let mut d = tree.diags.clone();
 
-    // BFS(消费者 → 提供者方向, 最短路径)。
+    // BFS (consumer → provider direction, shortest path).
     let mut adj: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for e in sol.closure.all_edges() {
         adj.entry(e.from.clone())
@@ -1126,7 +1126,7 @@ fn cmd_why(req: &Request, tree: &TreeLoad) -> Response {
     }
 
     if from.is_empty() || to.is_empty() {
-        d.usage("`dep why` 需要 `from` 与 `to`", "contract §5.1: {from,to}");
+        d.usage("`dep why` requires `from` and `to`", "contract §5.1: {from,to}");
         return Response::ok(d, json!({"found": false, "path": [], "edges": []}));
     }
 

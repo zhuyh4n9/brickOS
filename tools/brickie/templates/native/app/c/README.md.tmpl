@@ -1,37 +1,37 @@
 # {{name}}
 
-> 插件骨架, 由 `brickie new` 生成一次。之后**由人维护**。
+> Plugin skeleton, generated once by `brickie new`. Afterwards **maintained by hand**.
 
-> APP 的入口形态由 `9-01` 定稿; 本骨架只保证声明面完整。
+> The APP entry form is finalized by `9-01`; this skeleton only guarantees a complete declaration surface.
 
-## 声明面(唯一真值)
+## Declaration surface (single source of truth)
 
-| 项 | 值 |
+| Item | Value |
 |---|---|
-| 插件类别 `plugin_type` | `app` |
+| Plugin category `plugin_type` | `app` |
 | `api_type` | `{{api_type}}` |
-| 语言 `lang` | `{{lang}}`(v0.1 只交付 c) |
-| 初始相位 `phase` | `{{phase}}`(由 plugin_type/subkind 推导, `1-01` §6.2) |
-| 初始版本 | `{{version}}` = `COMPAT_GEN.MAJOR.MINOR.REVISE` |
+| Language `lang` | `{{lang}}` (v0.1 ships c only) |
+| Initial phase `phase` | `{{phase}}` (derived from plugin_type/subkind, `1-01` §6.2) |
+| Initial version | `{{version}}` = `COMPAT_GEN.MAJOR.MINOR.REVISE` |
 
-字段语义见 `docs/4-plugin/4-03-plugin-manifest.md`; v0.1 schema 见
-`docs/2-toolchain/brickie/brickie-v0.1.md` §8.1。
+Field semantics: `docs/4-plugin/4-03-plugin-manifest.md`; v0.1 schema:
+`docs/2-toolchain/brickie/brickie-v0.1.md` §8.1.
 
-## 接下来(v0.1 闭环)
+## Next steps (v0.1 loop)
 
-> 工具本身仍在开发中 —— 当前进度与各命令的排期见
-> `docs/2-toolchain/brickie/checklist.md` §5.2。
+> The tool itself is still under development — for current progress and per-command schedules see
+> `docs/2-toolchain/brickie/checklist.md` §5.2.
 
 ```sh
-brickie check                       # 声明面完备性检查(组合期校验)
-brickie dep add {{name}} <dep>       # 声明结构依赖
-brickie iface publish {{name}}       # 发布接口面 → hash + 版本推进
-brickie gen                         # 从 plugin.toml 重建 build/gen/**; --check 只比对
+brickie check                       # declaration-surface completeness check (composition-time validation)
+brickie dep add {{name}} <dep>       # declare a structural dependency
+brickie iface publish {{name}}       # publish the interface surface → hash + version bump
+brickie gen                         # rebuild build/gen/** from brick.toml; --check only compares
 ```
 
-`build/gen/{{name}}/plugin_desc.c` 是**生成物**, 不要手改 —— 改 `plugin.toml`, 再重建。
+`build/gen/{{name}}/plugin_desc.c` is a **generated file**, do not edit by hand — change `brick.toml`, then rebuild.
 
-## 边界
+## Scope limits
 
-v0.1 的 `check` 是**声明面完备性检查器** —— 保证"这个组合在逻辑上自洽",
-**不**保证"编得过 / 跑得对"(无编译器、无符号表、无 QEMU)。
+v0.1 `check` is a **declaration-surface completeness checker** — it guarantees "this composition is logically consistent",
+**not** that "it compiles / runs correctly" (no compiler, no symbol table, no QEMU).

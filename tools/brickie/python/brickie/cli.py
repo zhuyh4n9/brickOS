@@ -1,31 +1,33 @@
-"""brickie 的 CLI(L5 前端)。
+"""brickie CLI (L5 front-end).
 
-## 分工(contract §8 / checklist V-18c)
+## Division of labor (contract §8 / checklist V-18c)
 
-本模块**只做**: 参数解析(用法错 ⇒ 退出码 2)、调 ``brickie-core``/``brickie-gen``、
-编排(schema 形状校验 → core → gen render → 落盘 → 呈现)、退出码汇总。
-**所有判定与码都来自 core** —— 这里不写闭包/版本/分类学/特权/hash 的任何规则。
+This module **only**: parses arguments (usage error ⇒ exit 2), calls
+``brickie-core``/``brickie-gen``, orchestrates (schema shape check → core → gen render →
+write → present), and aggregates exit codes. **All decisions and codes come from core** —
+no closure/version/taxonomy/privilege/hash rules live here.
 
-## 编排形状
+## Orchestration shape
 
-每条命令都是同一条流水线:
+Every command is the same pipeline:
 
-    可选 schema 形状校验(BRV-MF-0001 / 退出码 2)
-      → brickie-core <命令>(判定 + data + files)
-      → 若 data.artifacts: brickie-gen render(渲染内容)
-      → 落盘(幂等; --check 时只比对 ⇒ 不一致退出码 1)
-      → 呈现(文本与 --json 同源)
+    optional schema shape check (BRV-MF-0001 / exit code 2)
+      → brickie-core <command> (judgment + data + files)
+      → if data.artifacts: brickie-gen render (render content)
+      → write (idempotent; --check compares only ⇒ mismatch exits 1)
+      → present (text and --json share one source)
 
-## 命令面(29 叶子 + 2 全局开关, 两条族)
+## Command surface (29 leaves + 2 global flags, two families)
 
-**组合期族**(23 叶子): ``new`` / ``init`` / ``gen`` / ``dep {add,rm,tree,graph,why,index,closure}`` /
+**Composition family** (23 leaves): ``new`` / ``init`` / ``gen`` / ``dep {add,rm,tree,graph,why,index,closure}`` /
 ``check`` / ``ver {show,bump}`` / ``iface {list,show,diff,status,publish,freeze,deprecate,
-undeprecate,unfreeze,refreeze}`` / ``--version [--deps]`` / ``--json``。
+undeprecate,unfreeze,refreeze}`` / ``--version [--deps]`` / ``--json``.
 
-**构建族**(6 叶子, ADR-0004): ``build`` / ``clean`` / ``run`` / ``size`` / ``disasm`` / ``test``。
+**Build family** (6 leaves, ADR-0004): ``build`` / ``clean`` / ``run`` / ``size`` / ``disasm`` / ``test``.
 
-checklist §5.4 明确**不做**的命令一条都不在这里(未交付的命令不得出现在 ``--help`` 里,
-§5.5 的反向验收); ``build``/``test``/``run`` 已由 ADR-0004 交付, 故从禁名名单移除。
+Commands checklist §5.4 explicitly excludes appear nowhere here (undelivered commands must
+not show up in ``--help``, §5.5 reverse acceptance); ``build``/``test``/``run`` are delivered
+by ADR-0004, so they left the forbidden-name list.
 """
 
 from __future__ import annotations
@@ -40,30 +42,32 @@ from . import PROTOCOL, __version__
 from . import native, present, runner, schema, writer
 from .native import NativeError
 
-# argparse 的用法错与 BRV-D9 的退出码 2 是同一档
+# argparse usage errors share the exit code 2 of BRV-D9
 _EXIT_OK = 0
-_EXIT_RED = 1        # 校验红(环 / 冲突 / 版本 / 分类学 / 特权 / --check 不一致)
-_EXIT_USAGE = 2      # 用法或环境错(参数非法 / 形状不符 / 路径不存在 / 原生件缺失)
+_EXIT_RED = 1        # validation red (cycle / conflict / version / taxonomy / privilege / --check mismatch)
+_EXIT_USAGE = 2      # usage or environment error (bad args / shape mismatch / missing path / missing native build)
 
 _EPILOG = """\
-v0.1 的边界: 组合期命令(check / dep / iface / gen / new)是**声明面完备性检查器** ——
-保证组合在逻辑上自洽, 不保证"编得过 / 跑得对"; 这一族**不要求** cc / cargo / nm 在场
-(brickie-v0.1 §0 的边界纪律, 也是 CI 零编译依赖作业的前提)。
+v0.1 boundary: composition commands (check / dep / iface / gen / new) are **declaration-surface
+completeness checkers** — they guarantee a composition is logically self-consistent, not that it
+"compiles / runs right"; this family does **not** require cc / cargo / nm to be present
+(brickie-v0.1 §0 boundary discipline, and the premise of CI jobs with zero build dependencies).
 
-构建族(build / run / test / size / disasm / clean)是**后来长出来的第二族**(ADR-0004):
-它按**同一个声明面**组合镜像并驱动交叉工具链 —— "要求编译器在场"是它的职责, 不是
-纪律的例外条款。判定与错误码一律来自 brickie-core; 本前端只做参数解析 / 编排 /
-落盘 / 执行 / 呈现。
+The build family (build / run / test / size / disasm / clean) is the **second family that grew
+later** (ADR-0004): it composes images from the **same declaration surface** and drives the cross
+toolchain — "requiring the compiler to be present" is its job, not an exception to the discipline.
+Judgments and error codes always come from brickie-core; this front-end only parses args /
+orchestrates / writes / executes / presents.
 """
 
 
 class UsageError(Exception):
-    """CLI 用法错(参数域不合法 / 位置参数形态不对) —— 退出码 2。"""
+    """CLI usage error (invalid argument domain / wrong positional shape) — exit code 2."""
 
 
 @dataclass
 class Result:
-    """一次命令执行的完整结果(呈现与退出码的唯一来源)。"""
+    """The full result of one command run (sole source of presentation and exit code)."""
 
     command: str
     exit_code: int
@@ -73,30 +77,30 @@ class Result:
     extra: dict = field(default_factory=dict)
 
 
-# ------------------------------------------------------------------ 解析器
+# ------------------------------------------------------------------ parser
 
 
 def _add_common(parser: argparse.ArgumentParser, *, with_defaults: bool) -> None:
-    """``--json`` 与 ``--root`` 同时挂在根、命令组与各叶子命令上。
+    """``--json`` and ``--root`` are attached to the root, command groups and each leaf.
 
-    理由: checklist §5.3 的 **X-8**(``--json`` 是全局旗标还是逐命令旗标)尚未裁定 ——
-    两种写法都接受。子命令上必须用 ``SUPPRESS`` 默认值, 否则"根上给了 ``--json``、
-    叶子又把默认 False 写回"会把全局旗标吃掉。
+    Rationale: checklist §5.3 **X-8** (is ``--json`` a global flag or per-command) is not yet
+    decided — both spellings are accepted. Subcommands must use the ``SUPPRESS`` default,
+    otherwise "root got ``--json``, leaf writes back the False default" swallows the global flag.
     """
     if with_defaults:
         parser.add_argument("--json", action="store_true", default=False,
-                            help="机器可读输出(JSON 到 stdout; 诊断在同源信封里)")
+                            help="machine-readable output (JSON to stdout; diagnostics in the same envelope)")
         parser.add_argument("--root", default=".", metavar="DIR",
-                            help="仓库根目录(默认当前目录); 插件树与状态目录都相对它解析")
+                            help="repository root (default: current dir); plugin tree and state dir resolve against it")
     else:
         parser.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
-                            help="机器可读输出(JSON 到 stdout; 诊断在同源信封里)")
+                            help="machine-readable output (JSON to stdout; diagnostics in the same envelope)")
         parser.add_argument("--root", default=argparse.SUPPRESS, metavar="DIR",
-                            help="仓库根目录(默认当前目录); 插件树与状态目录都相对它解析")
+                            help="repository root (default: current dir); plugin tree and state dir resolve against it")
 
 
 def _leaf(sub: argparse._SubParsersAction, name: str, help_: str, description: str | None = None):
-    """加一个带公共旗标的叶子命令解析器。"""
+    """Add a leaf command parser carrying the common flags."""
     parser = sub.add_parser(name, help=help_, description=description or help_)
     _add_common(parser, with_defaults=False)
     return parser
@@ -105,215 +109,216 @@ def _leaf(sub: argparse._SubParsersAction, name: str, help_: str, description: s
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="brickie",
-        description="brickie — brickOS 组合期工具(host 侧, 零编译依赖)",
+        description="brickie — brickOS composition-time tool (host side, zero build dependencies)",
         epilog=_EPILOG,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     _add_common(parser, with_defaults=True)
-    parser.add_argument("--version", action="store_true", help="打印版本后退出")
+    parser.add_argument("--version", action="store_true", help="print version and exit")
     parser.add_argument("--deps", dest="version_deps", action="store_true",
-                        help="与 --version 连用: 打印语言/依赖指纹(G-01)")
+                        help="with --version: print language/dependency fingerprint (G-01)")
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
-    # ---------------------------------------------------------- 骨架生成
-    new = _leaf(sub, "new", "生成插件骨架(§8.4)",
-                "生成插件骨架: plugin.toml + 实现/头文件/用例/作者说明 + 描述符生成物。")
+    # ---------------------------------------------------------- skeleton generation
+    new = _leaf(sub, "new", "generate a plugin skeleton (§8.4)",
+                "Generate a plugin skeleton: brick.toml + impl/headers/tests/author notes + descriptor artifacts.")
     new.add_argument("plugin_type", metavar="<plugin_type>",
                      help="app | interface | ability | platform")
-    new.add_argument("name", metavar="<name>", help="插件名, 推荐 <namespace>/<short>(§8.3)")
+    new.add_argument("name", metavar="<name>", help="plugin name, recommended <namespace>/<short> (§8.3)")
     new.add_argument("--api", default="native", metavar="<api_type>",
-                     help="native(默认) | runtime_adapter | third_party")
-    new.add_argument("--lang", default="c", metavar="<lang>", help="c(v0.1 只交付 c)")
+                     help="native (default) | runtime_adapter | third_party")
+    new.add_argument("--lang", default="c", metavar="<lang>", help="c (v0.1 delivers c only)")
     new.add_argument("--subkind", default=None, metavar="<subkind>",
-                     help="ability 细分; 裸名必须显式给")
-    new.add_argument("--force", action="store_true", help="只对生成物目录生效(§8.4)")
+                     help="ability subkind; a bare name must be given explicitly")
+    new.add_argument("--force", action="store_true", help="affects the generated-artifacts dir only (§8.4)")
 
-    init = _leaf(sub, "init", "生成产品骨架(§8.4)",
-                 "生成产品骨架: product.toml + app/<name>/ + brickie.lock 初版。")
-    init.add_argument("product", metavar="<product>", help="产品名")
+    init = _leaf(sub, "init", "generate a product skeleton (§8.4)",
+                 "Generate a product skeleton: product.toml + app/<name>/ + initial brickie.lock.")
+    init.add_argument("product", metavar="<product>", help="product name")
     init.add_argument("--app", default=None, metavar="<app_name>",
-                      help="app 名(缺省 = 产品名)")
+                      help="app name (default = product name)")
 
-    gen = _leaf(sub, "gen", "重建生成物(--check 只比对)",
-                "重建生成物(描述符 + 头文件); --check 逐字节比对不写盘。")
+    gen = _leaf(sub, "gen", "rebuild generated artifacts (--check compares only)",
+                "Rebuild generated artifacts (descriptors + headers); --check compares byte-wise, writes nothing.")
     gen.add_argument("--check", action="store_true",
-                     help="只比对不写盘; 与重算不一致 ⇒ 退出码 1")
+                     help="compare only, write nothing; mismatch with recomputation ⇒ exit code 1")
 
-    # ---------------------------------------------------------- build 族(ADR-0004)
-    # 边界纪律的一处**显式偏离**: v0.1 的"任何命令不得要求 cc/cargo/nm 在场"指的是
-    # **组合期**命令(见 contract §9 的 R-13); build 族就是"要求交叉编译器在场"的那一族。
-    build = _leaf(sub, "build", "构建镜像(声明面驱动; 替代 make 的组合段)",
-                  "构建 aarch64 镜像: 组合期 check → 生成物 → 编译/链接 → 构建后门禁。")
+    # ---------------------------------------------------------- build family (ADR-0004)
+    # One **explicit deviation** from the boundary discipline: v0.1's "no command may require
+    # cc/cargo/nm to be present" means **composition-time** commands (contract §9 R-13); the
+    # build family is precisely the one that requires the cross compiler to be present.
+    build = _leaf(sub, "build", "build the image (declaration-surface driven; replaces make's composition part)",
+                  "Build an aarch64 image: composition check → artifacts → compile/link → post-build gates.")
     build.add_argument("--profile", default=None, metavar="<profile>",
-                       help="dev | release(缺省 = product.toml 的 [product].stage)")
+                       help="dev | release (default = product.toml's [product].stage)")
     build.add_argument("--jobs", "-j", type=int, default=0, metavar="N",
-                       help="并发步骤数(0 = CPU 数)")
+                       help="number of concurrent steps (0 = CPU count)")
     build.add_argument("--backend", default="direct", metavar="<backend>",
-                       help="direct(默认, brickie 自己编排) | make | ninja(BR-D4 的 A/B)")
+                       help="direct (default, brickie orchestrates) | make | ninja (BR-D4 A/B)")
     build.add_argument("--tag", default=None, metavar="<tag>",
-                       help="产物后缀(后端对比门禁用: build/brick-<tag>.elf)")
-    build.add_argument("--dry-run", action="store_true", help="只打印计划, 不执行")
-    build.add_argument("--force", action="store_true", help="忽略增量状态, 全量重建")
+                       help="artifact suffix (for backend-comparison gates: build/brick-<tag>.elf)")
+    build.add_argument("--dry-run", action="store_true", help="print the plan only, do not execute")
+    build.add_argument("--force", action="store_true", help="ignore incremental state, rebuild everything")
     build.add_argument("--emit-backends", action="store_true",
-                       help="只产出 build/gen/{build.mk,build.ninja}, 不执行")
+                       help="only emit build/gen/{build.mk,build.ninja}, do not execute")
     build.add_argument("--no-post", action="store_true",
-                       help="跳过 tests/gates.toml 的 [build].post 门禁")
+                       help="skip the [build].post gates in tests/gates.toml")
 
-    clean = _leaf(sub, "clean", "清掉镜像产物(不动 build/host 的工具)")
+    clean = _leaf(sub, "clean", "remove image artifacts (leaves build/host tools alone)")
     clean.add_argument("--all", action="store_true",
-                       help="连 build/gen 与 build/index 一起清")
+                       help="also clean build/gen and build/index")
 
-    run = _leaf(sub, "run", "在 QEMU 上跑镜像(Ctrl-A X 退出)")
-    run.add_argument("--no-build", action="store_true", help="不先构建, 直接跑现有镜像")
+    run = _leaf(sub, "run", "run the image on QEMU (Ctrl-A X to quit)")
+    run.add_argument("--no-build", action="store_true", help="do not build first, run the existing image")
     run.add_argument("--timeout-s", type=int, default=0, metavar="N",
-                     help="限时跑(0 = 不限时, 交互式)")
+                     help="time-limited run (0 = unlimited, interactive)")
 
-    size = _leaf(sub, "size", "段体积(size -A -x)")
+    size = _leaf(sub, "size", "section sizes (size -A -x)")
     size.add_argument("--no-build", action="store_true")
 
-    disasm = _leaf(sub, "disasm", "反汇编前 N 行")
+    disasm = _leaf(sub, "disasm", "disassemble the first N lines")
     disasm.add_argument("--head", type=int, default=120, metavar="N")
     disasm.add_argument("--no-build", action="store_true")
 
-    test = _leaf(sub, "test", "跑门禁(宿主用例 + QEMU 日志判据 + 脚本门禁)",
-                 "跑 tests/gates.toml 声明的门禁; 不给名字 = 全跑。")
+    test = _leaf(sub, "test", "run gates (host cases + QEMU log criteria + script gates)",
+                 "Run the gates declared in tests/gates.toml; no name = run all.")
     test.add_argument("name", nargs="?", default=None, metavar="[name]")
-    test.add_argument("--list", action="store_true", help="列出全部门禁名")
+    test.add_argument("--list", action="store_true", help="list all gate names")
     test.add_argument("--jobs", "-j", type=int, default=0, metavar="N")
-    test.add_argument("--no-build", action="store_true", help="不先构建, 直接跑门禁")
+    test.add_argument("--no-build", action="store_true", help="do not build first, run gates directly")
 
-    # ---------------------------------------------------------- dep 族
-    dep = sub.add_parser("dep", help="依赖管理与分析(§7.7)",
-                         description="依赖管理与分析: 片段 / 树 / 图 / 路径 / 索引 / 闭包。")
+    # ---------------------------------------------------------- dep family
+    dep = sub.add_parser("dep", help="dependency management and analysis (§7.7)",
+                         description="Dependency management and analysis: snippet / tree / graph / path / index / closure.")
     _add_common(dep, with_defaults=False)
     dep_sub = dep.add_subparsers(dest="group_cmd", metavar="<subcommand>")
 
-    dep_add = _leaf(dep_sub, "add", "打印 [[dep]] 片段(不写盘 —— 裁定 R-2)")
-    dep_add.add_argument("plugin", metavar="<plugin>", help="目标插件名")
-    dep_add.add_argument("dep", metavar="<dep>", help="依赖插件名, 可带 @<range> 后缀")
+    dep_add = _leaf(dep_sub, "add", "print a [[dep]] snippet (writes nothing — ruling R-2)")
+    dep_add.add_argument("plugin", metavar="<plugin>", help="target plugin name")
+    dep_add.add_argument("dep", metavar="<dep>", help="dependency plugin name, may carry an @<range> suffix")
     dep_add.add_argument("--kind", default=None, metavar="<kind>",
-                         help="init | runtime | type(缺省由 core 定)")
+                         help="init | runtime | type (default decided by core)")
     dep_add.add_argument("--phase", default=None, metavar="<phase>",
-                         help="early | core | late | app(仅 init 边的相位断言)")
+                         help="early | core | late | app (phase assertion for init edges only)")
 
-    dep_rm = _leaf(dep_sub, "rm", "打印待删除块定位(不写盘 —— 裁定 R-2)")
-    dep_rm.add_argument("plugin", metavar="<plugin>", help="目标插件名")
-    dep_rm.add_argument("dep", metavar="<dep>", help="依赖插件名")
+    dep_rm = _leaf(dep_sub, "rm", "print the block to delete (writes nothing — ruling R-2)")
+    dep_rm.add_argument("plugin", metavar="<plugin>", help="target plugin name")
+    dep_rm.add_argument("dep", metavar="<dep>", help="dependency plugin name")
     dep_rm.add_argument("--kind", default=None, metavar="<kind>", help="init | runtime | type")
 
-    dep_tree = _leaf(dep_sub, "tree", "依赖树(§7.7)")
+    dep_tree = _leaf(dep_sub, "tree", "dependency tree (§7.7)")
     dep_tree.add_argument("--kind", default=None, metavar="<kind>", help="init | runtime | type | all")
 
-    dep_graph = _leaf(dep_sub, "graph", "依赖图导出(§7.7)")
+    dep_graph = _leaf(dep_sub, "graph", "dependency graph export (§7.7)")
     dep_graph.add_argument("--format", default="dot", metavar="<format>",
-                           help="dot(默认) | mermaid | json")
+                           help="dot (default) | mermaid | json")
 
-    dep_why = _leaf(dep_sub, "why", "最短依赖路径解释(§7.7)")
-    dep_why.add_argument("a", metavar="<a>", help="起点插件")
-    dep_why.add_argument("b", metavar="<b>", help="终点插件")
+    dep_why = _leaf(dep_sub, "why", "shortest dependency path explanation (§7.7)")
+    dep_why.add_argument("a", metavar="<a>", help="source plugin")
+    dep_why.add_argument("b", metavar="<b>", help="target plugin")
 
-    _leaf(dep_sub, "index", "重建反向依赖索引(§6.3)")
+    _leaf(dep_sub, "index", "rebuild the reverse dependency index (§6.3)")
 
-    _leaf(dep_sub, "closure", "产品闭包 + 拓扑序 + 预算合计(§7.6)")
+    _leaf(dep_sub, "closure", "product closure + topological order + budget totals (§7.6)")
 
     # ---------------------------------------------------------- check
-    check = _leaf(sub, "check", "组合期校验(§7.7)",
-                  "组合期校验: 依赖闭包 / 接口 / 分类学 / 特权与预算, 含 profile 门禁(§7.5)。")
-    check.add_argument("--deps", dest="scope_deps", action="store_true", help="只查依赖域")
-    check.add_argument("--iface", dest="scope_iface", action="store_true", help="只查接口域")
-    check.add_argument("--tax", dest="scope_tax", action="store_true", help="只查分类学域")
-    check.add_argument("--priv", dest="scope_priv", action="store_true", help="只查特权/资源域")
-    check.add_argument("--all", dest="scope_all", action="store_true", help="全部四域(缺省)")
-    check.add_argument("--profile", default="dev", metavar="<profile>", help="dev(默认) | release")
+    check = _leaf(sub, "check", "composition-time validation (§7.7)",
+                  "Composition-time validation: dependency closure / interface / taxonomy / privilege and budget, incl. profile gates (§7.5).")
+    check.add_argument("--deps", dest="scope_deps", action="store_true", help="check the dependency domain only")
+    check.add_argument("--iface", dest="scope_iface", action="store_true", help="check the interface domain only")
+    check.add_argument("--tax", dest="scope_tax", action="store_true", help="check the taxonomy domain only")
+    check.add_argument("--priv", dest="scope_priv", action="store_true", help="check the privilege/resource domain only")
+    check.add_argument("--all", dest="scope_all", action="store_true", help="all four domains (default)")
+    check.add_argument("--profile", default="dev", metavar="<profile>", help="dev (default) | release")
 
-    # ---------------------------------------------------------- ver 族
-    ver = sub.add_parser("ver", help="版本管理(§5 / §7.7)",
-                         description="版本管理: 展示四段版本与 COMPAT_GEN 来源 / 人工声明推进。")
+    # ---------------------------------------------------------- ver family
+    ver = sub.add_parser("ver", help="version management (§5 / §7.7)",
+                         description="Version management: show the four-part version and COMPAT_GEN source / manual declaration advance.")
     _add_common(ver, with_defaults=False)
     ver_sub = ver.add_subparsers(dest="group_cmd", metavar="<subcommand>")
 
-    ver_show = _leaf(ver_sub, "show", "展示四段版本 + COMPAT_GEN 来源(§7.7)")
-    ver_show.add_argument("id", metavar="<id>", help="插件名或 <provider>#<unit>")
+    ver_show = _leaf(ver_sub, "show", "show the four-part version + COMPAT_GEN source (§7.7)")
+    ver_show.add_argument("id", metavar="<id>", help="plugin name or <provider>#<unit>")
 
-    ver_bump = _leaf(ver_sub, "bump", "人工声明 MAJOR/MINOR/REVISE(§5.2)")
+    ver_bump = _leaf(ver_sub, "bump", "manually declare MAJOR/MINOR/REVISE (§5.2)")
     ver_bump.add_argument("id", metavar="<id>",
-                          help="插件名(恰一个 export)或 <provider>#<unit>")
+                          help="plugin name (exactly one export) or <provider>#<unit>")
     ver_bump.add_argument("--rule", required=True, metavar="<rule>",
-                          help="major | minor | revise(COMPAT_GEN 不在其中)")
+                          help="major | minor | revise (COMPAT_GEN is not among them)")
 
-    # ---------------------------------------------------------- iface 族
-    iface = sub.add_parser("iface", help="接口发布与冻结状态(§6.5)",
-                           description="接口单元: 查看 / 变更集 / 一致性 / 发布 / 冻结与解冻窗口。")
+    # ---------------------------------------------------------- iface family
+    iface = sub.add_parser("iface", help="interface publication and freeze state (§6.5)",
+                           description="Interface units: inspect / change set / consistency / publish / freeze and unfreeze window.")
     _add_common(iface, with_defaults=False)
     iface_sub = iface.add_subparsers(dest="group_cmd", metavar="<subcommand>")
 
-    _leaf(iface_sub, "list", "列出接口单元与状态(§6.5)")
+    _leaf(iface_sub, "list", "list interface units and states (§6.5)")
 
-    iface_show = _leaf(iface_sub, "show", "展示接口面(条目 + 状态 + 版本 + hash; §6.5)")
+    iface_show = _leaf(iface_sub, "show", "show the interface surface (entries + state + version + hash; §6.5)")
     iface_show.add_argument("id", metavar="<id>", help="<provider>#<unit>")
 
-    iface_diff = _leaf(iface_sub, "diff", "旧快照 vs 当前声明的变更集(§6.3)")
+    iface_diff = _leaf(iface_sub, "diff", "old snapshot vs current declaration change set (§6.3)")
     iface_diff.add_argument("id", metavar="<id>", help="<provider>#<unit>")
     iface_diff.add_argument("--strict-params", action="store_true",
-                            help="IFACE-IR 规则 3: 形参名也进 hash(默认只留类型与顺序)")
+                            help="IFACE-IR rule 3: parameter names enter the hash too (default keeps types and order only)")
 
-    iface_status = _leaf(iface_sub, "status", "独立重算 hash 与快照比对(§6.5)")
+    iface_status = _leaf(iface_sub, "status", "independently recompute hash and compare with the snapshot (§6.5)")
     iface_status.add_argument("id", metavar="<id>", help="<provider>#<unit>")
-    iface_status.add_argument("--check", action="store_true", help="只比对不写盘")
+    iface_status.add_argument("--check", action="store_true", help="compare only, write nothing")
     iface_status.add_argument("--strict-params", action="store_true",
-                              help="独立重算时按严格形参名(§6.2 规则 3)")
+                              help="use strict parameter names when recomputing (§6.2 rule 3)")
 
-    iface_publish = _leaf(iface_sub, "publish", "发布接口面(§6.5 / §5.4)")
+    iface_publish = _leaf(iface_sub, "publish", "publish the interface surface (§6.5 / §5.4)")
     iface_publish.add_argument("id", metavar="<id>", help="<provider>#<unit>")
-    iface_publish.add_argument("--check", action="store_true", help="只比对不写盘")
-    iface_publish.add_argument("--note", default=None, metavar="<path>", help="决策记录路径")
+    iface_publish.add_argument("--check", action="store_true", help="compare only, write nothing")
+    iface_publish.add_argument("--note", default=None, metavar="<path>", help="decision-record path")
     iface_publish.add_argument("--set", default=None, metavar="<ver>",
-                               help="覆盖本次写入的单元版本(4 段)")
+                               help="override the unit version written this time (4 parts)")
     iface_publish.add_argument("--profile", default=None, metavar="<profile>",
-                               help="dev | release(release 跑发布前门钩)")
+                               help="dev | release (release runs the pre-publish gate hooks)")
     iface_publish.add_argument("--strict-params", action="store_true",
-                               help="IFACE-IR 规则 3: 形参名也进 hash(存进快照)")
+                               help="IFACE-IR rule 3: parameter names enter the hash too (stored in the snapshot)")
 
     for name, summary in (
-        ("freeze", "冻结承诺: 输出待升格提案(§6.4 A-26 例外)"),
-        ("deprecate", "弃用单元或条目(§6.5)"),
-        ("undeprecate", "取消弃用(§6.5)"),
+        ("freeze", "freeze a commitment: emit the pending-promotion proposal (§6.4 A-26 exception)"),
+        ("deprecate", "deprecate a unit or entry (§6.5)"),
+        ("undeprecate", "cancel a deprecation (§6.5)"),
     ):
         leaf = _leaf(iface_sub, name, summary)
         leaf.add_argument("id_or_entry", metavar="<id>[#entry]",
-                          help="<provider>#<unit> 或 <provider>#<unit>#<entry>")
-        leaf.add_argument("--note", required=True, metavar="<path>", help="决策记录路径(必填)")
+                          help="<provider>#<unit> or <provider>#<unit>#<entry>")
+        leaf.add_argument("--note", required=True, metavar="<path>", help="decision-record path (required)")
 
-    iface_unfreeze = _leaf(iface_sub, "unfreeze", "进入解冻窗口(§5.3.4)")
+    iface_unfreeze = _leaf(iface_sub, "unfreeze", "enter the unfreeze window (§5.3.4)")
     iface_unfreeze.add_argument("id", metavar="<id>", help="<provider>#<unit>")
-    iface_unfreeze.add_argument("--note", required=True, metavar="<path>", help="决策记录路径(必填)")
+    iface_unfreeze.add_argument("--note", required=True, metavar="<path>", help="decision-record path (required)")
 
-    iface_refreeze = _leaf(iface_sub, "refreeze", "退出解冻窗口(§5.3.4)")
+    iface_refreeze = _leaf(iface_sub, "refreeze", "exit the unfreeze window (§5.3.4)")
     iface_refreeze.add_argument("id", metavar="<id>", help="<provider>#<unit>")
-    iface_refreeze.add_argument("--note", default=None, metavar="<path>", help="决策记录路径(可选)")
+    iface_refreeze.add_argument("--note", default=None, metavar="<path>", help="decision-record path (optional)")
 
     return parser
 
 
-# ------------------------------------------------------------------ 通用编排
+# ------------------------------------------------------------------ common orchestration
 
 
 def _enum(value: str, allowed: tuple[str, ...], flag: str) -> str:
-    """旗标取值域校验(CLI 自身的旗标域, 不是业务判定) —— 不合法 ⇒ 用法错 2。"""
+    """Flag value-domain check (the CLI's own flag domain, not a business judgment) — invalid ⇒ usage error 2."""
     if value not in allowed:
-        raise UsageError(f"{flag} 只能是 {' | '.join(allowed)}(实际 {value!r})")
+        raise UsageError(f"{flag} must be one of {' | '.join(allowed)} (got {value!r})")
     return value
 
 
 def _split_entry(raw: str) -> tuple[str, str | None]:
-    """``<provider>#<unit>[#<entry>]`` → ``(id, entry|None)``(§6.5 的 ``<id>[#entry]``)。"""
+    """``<provider>#<unit>[#<entry>]`` → ``(id, entry|None)`` (§6.5's ``<id>[#entry]``)."""
     parts = raw.split("#")
     if len(parts) == 2 and all(parts):
         return f"{parts[0]}#{parts[1]}", None
     if len(parts) == 3 and all(parts):
         return f"{parts[0]}#{parts[1]}", parts[2]
-    raise UsageError(f"`{raw}` 不是 <provider>#<unit>[#<entry>] 形态")
+    raise UsageError(f"`{raw}` is not of the form <provider>#<unit>[#<entry>]")
 
 
 def _command_path(ns: argparse.Namespace) -> str:
@@ -326,7 +331,7 @@ def _command_path(ns: argparse.Namespace) -> str:
 def _root_of(ns: argparse.Namespace) -> Path:
     root = Path(str(ns.root)).expanduser()
     if not root.is_dir():
-        raise UsageError(f"--root 指向的目录不存在或不是目录: {root}")
+        raise UsageError(f"--root points to a path that does not exist or is not a directory: {root}")
     return root.resolve()
 
 
@@ -338,7 +343,7 @@ def _call_core(command: str, root: Path, args: dict, context: dict | None = None
 
 
 def _shape_gate(root: Path, kinds: tuple[str, ...]) -> list[dict]:
-    """可选的单条记录形状校验(BRV-D2 / BRV-MF-0001)。"""
+    """Optional single-record shape check (BRV-D2 / BRV-MF-0001)."""
     if not kinds:
         return []
     if not schema.any_schema_available():
@@ -354,7 +359,7 @@ def _has_error(diagnostics: list[dict]) -> bool:
 
 
 def _combine(*codes: int) -> int:
-    """退出码汇总: 2(用法/环境) > 1(校验红) > 0(BRV-D9)。"""
+    """Aggregate exit codes: 2 (usage/environment) > 1 (validation red) > 0 (BRV-D9)."""
     return max(codes) if codes else _EXIT_OK
 
 
@@ -367,7 +372,7 @@ def _plan_artifacts(response: dict) -> list[dict]:
 
 
 def _kinds_of(artifacts: list[dict]) -> dict[str, str]:
-    """计划里的 ``kind``(human/generated)按路径索引 —— 落盘层要靠它保护人写文件。"""
+    """Index the plan's ``kind`` (human/generated) by path — the write layer uses it to protect human-written files."""
     return {
         a["path"]: str(a.get("kind") or "rendered")
         for a in artifacts
@@ -376,7 +381,7 @@ def _kinds_of(artifacts: list[dict]) -> dict[str, str]:
 
 
 def _render(root: Path, artifacts: list[dict]) -> tuple[list[dict], list[dict], int]:
-    """调 ``brickie-gen render``(§6)把计划渲染成文件内容。"""
+    """Call ``brickie-gen render`` (§6) to render the plan into file contents."""
     if not artifacts:
         return [], [], _EXIT_OK
     response = native.render(artifacts, root=root)
@@ -391,8 +396,8 @@ def _human_skip_diagnostics(skipped: list[str]) -> list[dict]:
             "target": "",
             "file": rel,
             "span": "",
-            "message": "已存在的人写文件未覆盖(contract §4: 永不改写人写文件)",
-            "hint": "需要改动请手工编辑这个文件",
+            "message": "existing human-written file not overwritten (contract §4: never rewrite human-written files)",
+            "hint": "edit this file by hand if you need changes",
         }
         for rel in skipped
     ]
@@ -405,26 +410,48 @@ def _check_mismatch_diagnostic(path: str, why: str) -> dict:
         "target": "",
         "file": path,
         "span": "",
-        "message": f"--check 不一致: {path} {why}",
-        "hint": "重跑 `brickie gen` 落盘; --check 不写盘",
+        "message": f"--check mismatch: {path} {why}",
+        "hint": "rerun `brickie gen` to write to disk; --check writes nothing",
     }
 
 
-#: ``plan-init`` 等"机器文件"的正文直传通道: contract §5.2 只给计划(`template` 为空),
-#: 正文由 core 放在 ``data.<键>`` 里(见 rust/README 的"与 contract 的偏差"表)。
-#: L5 只把它落到计划里的路径上 —— 内容仍是 core 产出的(§8 禁止 L5 拼接机器文件内容)。
+def _orphan_pruned_diagnostics(pruned: list[str]) -> list[dict]:
+    """**Trace** of pruned stale artifacts (info: this is a fix, not a defect).
+
+    Why report instead of deleting silently: the file names get swept into the image by
+    `[build].gen_sources` globs, and "on disk but not in the plan" is itself a second source
+    of truth worth seeing (leftovers of a renamed/deleted plugin).
+    """
+    return [
+        {
+            "code": None,
+            "severity": "info",
+            "target": "",
+            "file": rel,
+            "span": "",
+            "message": "pruned stale artifact (belongs to no plugin in the plugin tree): otherwise it would be compiled into the image as a ghost plugin",
+            "hint": "if this is a plugin you still want, restore its brick.toml and rerun `brickie gen`",
+        }
+        for rel in pruned
+    ]
+
+
+#: Direct-transfer channel for the body of "machine files" such as ``plan-init``: contract §5.2
+#: gives the plan only (``template`` empty); core puts the body in ``data.<key>`` (see the
+#: "deviations from contract" table in rust/README). L5 only writes it to the planned path —
+#: the content still comes from core (§8 forbids L5 assembling machine-file content).
 _CORE_CONTENT_KEYS = {"brickie.lock": "lock_content"}
 
 
 def _collect_files(
     root: Path, data: dict, artifacts: list[dict]
 ) -> tuple[list[dict], list[dict], int, dict[str, str]]:
-    """把 core 的计划变成待落盘的 ``files``。
+    """Turn core's plan into ``files`` ready to be written.
 
-    * 有非空 ``template`` 的产物 → 交 ``brickie-gen render``(它只渲染, 不判定);
-    * 没有 ``template`` 的产物(**机器文件**)→ 只接受 core 直传的正文
-      (``artifact.content`` 或 ``data.<_CORE_CONTENT_KEYS>``);
-    * 两者都没有 ⇒ 一条 info 诊断(既不静默吞掉, 也不把 L5 变成内容生产者)。
+    * artifacts with a non-empty ``template`` → hand to ``brickie-gen render`` (renders only, no judgment);
+    * artifacts without ``template`` (**machine files**) → accept only a body handed over by core
+      (``artifact.content`` or ``data.<_CORE_CONTENT_KEYS>``);
+    * neither ⇒ one info diagnostic (not swallowed silently, and L5 does not become a content producer).
     """
     kinds = _kinds_of(artifacts)
     files: list[dict] = []
@@ -457,8 +484,8 @@ def _collect_files(
                 "target": "",
                 "file": rel,
                 "span": "",
-                "message": "core 的计划里这个产物既无 template 也无直传正文, 已跳过落盘",
-                "hint": "机器文件的正文必须由 core 给(contract §4); 见 rust/README 的偏差表",
+                "message": "this artifact in core's plan has neither a template nor a directly passed body; skipped writing",
+                "hint": "machine-file bodies must come from core (contract §4); see the deviation table in rust/README",
             })
     return files, diagnostics, exit_code, kinds
 
@@ -472,7 +499,7 @@ def _readonly(
     shape: tuple[str, ...] = (),
     extra: dict | None = None,
 ) -> Result:
-    """只读命令: 形状校验 → core → 呈现(**不落盘**, 即使 core 回了 files)。"""
+    """Read-only command: shape check → core → present (**writes nothing**, even if core returned files)."""
     root = _root_of(ns)
     gate = _shape_gate(root, shape)
     extra = dict(extra or {})
@@ -499,7 +526,7 @@ def _writing(
     write: bool = True,
     extra: dict | None = None,
 ) -> Result:
-    """写入命令: 形状校验 → core → 落盘(幂等; ``write=False`` 时只呈现)。"""
+    """Writing command: shape check → core → write (idempotent; with ``write=False`` only present)."""
     root = _root_of(ns)
     gate = _shape_gate(root, shape)
     extra = dict(extra or {})
@@ -520,7 +547,7 @@ def _writing(
 
 
 def _finish_plan(command: str, root: Path, response: dict, extra: dict) -> Result:
-    """``new`` / ``init`` 的收尾: core 的计划数据 + gen 渲染 + 落盘。"""
+    """Wrap-up for ``new`` / ``init``: core's plan data + gen render + write."""
     exit_code = response["exit_code"]
     data = response["data"]
     diagnostics = list(response["diagnostics"])
@@ -539,7 +566,7 @@ def _finish_plan(command: str, root: Path, response: dict, extra: dict) -> Resul
     return Result(command, exit_code, diagnostics, data, written, extra)
 
 
-# ------------------------------------------------------------------ 命令实现
+# ------------------------------------------------------------------ command implementations
 
 
 def _cmd_new(ns: argparse.Namespace) -> Result:
@@ -554,7 +581,8 @@ def _cmd_new(ns: argparse.Namespace) -> Result:
     }
     extra = {"args": args}
 
-    # 两段式(§4): 先探"会写哪些路径"(规则在 core), 据此扫已存在文件, 再正式请求。
+    # Two-phase (§4): first probe "which paths would be written" (rules live in core), scan
+    # existing files accordingly, then make the real request.
     probe = _call_core("plan-new", root, args)
     artifacts = _plan_artifacts(probe)
     paths = [a["path"] for a in artifacts]
@@ -596,6 +624,7 @@ def _cmd_gen(ns: argparse.Namespace) -> Result:
     diagnostics = gate + response["diagnostics"]
     exit_code = response["exit_code"]
     artifacts = _plan_artifacts(response)
+    planned = {a["path"] for a in artifacts}
     written: list[str] = []
 
     if exit_code == _EXIT_OK and artifacts:
@@ -608,9 +637,9 @@ def _cmd_gen(ns: argparse.Namespace) -> Result:
                 extra["stale"] = outcome.stale
                 extra["missing"] = outcome.missing
                 for path in outcome.stale:
-                    diagnostics.append(_check_mismatch_diagnostic(path, "内容与重算不同"))
+                    diagnostics.append(_check_mismatch_diagnostic(path, "content differs from recomputation"))
                 for path in outcome.missing:
-                    diagnostics.append(_check_mismatch_diagnostic(path, "不存在"))
+                    diagnostics.append(_check_mismatch_diagnostic(path, "does not exist"))
                 if outcome.stale or outcome.missing:
                     exit_code = _combine(exit_code, _EXIT_RED)
             else:
@@ -619,22 +648,40 @@ def _cmd_gen(ns: argparse.Namespace) -> Result:
             extra["unchanged"] = outcome.unchanged
             extra["skipped"] = outcome.skipped_human
 
+    # Stale artifacts (old descriptors left in `build/gen/` after a plugin rename/delete): the
+    # other half of "write the new descriptor" — writing without deleting makes the next build
+    # compile the old descriptor into the image as a "ghost plugin".
+    if exit_code == _EXIT_OK:
+        if check:
+            orphans = writer.prune_orphan_descriptors(root, planned, check=True)
+            extra["orphan"] = orphans
+            for path in orphans:
+                diagnostics.append(
+                    _check_mismatch_diagnostic(path, "belongs to no plugin in the plugin tree (stale artifact)")
+                )
+            if orphans:
+                exit_code = _combine(exit_code, _EXIT_RED)
+        else:
+            pruned = writer.prune_orphan_descriptors(root, planned)
+            extra["pruned"] = pruned
+            diagnostics += _orphan_pruned_diagnostics(pruned)
+
     extra["written"] = written
     return Result("gen", exit_code, diagnostics, response["data"], written, extra)
 
 
 
-# ------------------------------------------------------------------ build 族(ADR-0004)
+# ------------------------------------------------------------------ build family (ADR-0004)
 
 
 def _out(ns: argparse.Namespace):
-    """人读进度的落点: ``--json`` 时一律走 stderr(否则 stdout 不是合法 JSON)。"""
+    """Where human-readable progress goes: always stderr under ``--json`` (else stdout is not valid JSON)."""
     return sys.stderr if getattr(ns, "json", False) else sys.stdout
 
 
 def _note(message: str, hint: str = "", *, severity: str = "error",
           code: str | None = None) -> dict:
-    """L5 侧的编排级诊断(不是业务判定): 步骤失败 / 环境错。"""
+    """L5-side orchestration-level diagnostic (not a business judgment): step failure / environment error."""
     return {
         "code": code, "severity": severity, "target": "", "file": "", "span": "",
         "message": message, "hint": hint,
@@ -642,7 +689,7 @@ def _note(message: str, hint: str = "", *, severity: str = "error",
 
 
 def _judge_callback(root: Path):
-    """把 core 的 ``judge`` 命令包成执行器要的回调(判据仍在 core)。"""
+    """Wrap core's ``judge`` command as the callback the executor wants (criteria still live in core)."""
     def judge(name: str, text: str) -> dict:
         response = native.call_core(
             native.make_request("judge", root, {"name": name}, {"log": text})
@@ -656,11 +703,11 @@ def _judge_callback(root: Path):
 
 
 def _compose(root: Path, profile: str | None) -> tuple[list[dict], int, dict]:
-    """组合期三段: ``check`` → ``gen-plan`` → 渲染并落盘生成物。
+    """Three composition phases: ``check`` → ``gen-plan`` → render and write artifacts.
 
-    这是 ``brickie build`` 的**前半段**(设计 ADR-0003 的 S3 判据: "``brickie build``
-    覆盖 check + 生成 + 编译")。退出码非 0 ⇒ 调用方必须停下 —— 声明面不自洽时编出来的
-    镜像没有意义。
+    This is the **first half** of ``brickie build`` (design ADR-0003 S3 criterion: "``brickie
+    build`` covers check + generation + compilation"). A non-zero exit code ⇒ the caller must
+    stop — an image compiled from an inconsistent declaration surface is meaningless.
     """
     diagnostics: list[dict] = []
     check_args: dict = {}
@@ -683,11 +730,17 @@ def _compose(root: Path, profile: str | None) -> tuple[list[dict], int, dict]:
             return diagnostics, gen_exit, plan["data"]
         outcome = writer.write_files(root, files, kinds=kinds)
         diagnostics += _human_skip_diagnostics(outcome.skipped_human)
+    # Stale artifacts (leftovers of a plugin rename/delete) must also be collected **on the build
+    # path**: the composition surface of the image is the output of `brickie build`, so writing
+    # without deleting ⇒ old descriptors get compiled in by the `build/gen/**` glob and become
+    # "ghost plugins" (observed: the same driver registered twice ⇒ panic at startup; see writer).
+    planned = {a["path"] for a in artifacts}
+    diagnostics += _orphan_pruned_diagnostics(writer.prune_orphan_descriptors(root, planned))
     return diagnostics, _EXIT_OK, check["data"]
 
 
 def _persist(root: Path, files: list[dict]) -> tuple[list[str], list[dict]]:
-    """落 core 给的机器文件(后端文件 / 增量状态), 幂等。"""
+    """Write the machine files core handed over (backend files / incremental state), idempotently."""
     if not files:
         return [], []
     kinds = {f["path"]: str(f.get("kind") or "machine") for f in files if isinstance(f.get("path"), str)}
@@ -696,7 +749,7 @@ def _persist(root: Path, files: list[dict]) -> tuple[list[str], list[dict]]:
 
 
 def _post_gate_names(root: Path) -> list[str]:
-    """``tests/gates.toml [build].post`` —— 构建成功后自动跑的门禁名。"""
+    """``tests/gates.toml [build].post`` — gate names run automatically after a successful build."""
     response = _call_core("test", root, {"list": True})
     return list((response.get("data") or {}).get("build_post") or [])
 
@@ -741,10 +794,11 @@ def _cmd_build(ns: argparse.Namespace) -> Result:
             root, steps, jobs=ns.jobs, judge=_judge_callback(root), out=_out(ns)
         )
 
-    # 构建后门禁(短名单; 缺省跑 `[build].post` 声明的那些)
+    # Post-build gates (short list; by default the ones declared in `[build].post`)
     post: list[str] = []
-    # 带 `--tag` 的是**诊断性构建**(后端对比 / 双份产物): 门禁的 argv 里写的是默认
-    # 落点(`build/obj/...`), 对带 tag 的构建不成立 —— 所以 tag 构建不跑构建后门禁。
+    # `--tag` builds are **diagnostic builds** (backend comparison / duplicate artifacts): gate
+    # argv names the default output path (`build/obj/...`), which does not hold for tagged
+    # builds — so tagged builds skip the post-build gates.
     if ok and not ns.dry_run and not ns.emit_backends and not ns.no_post and not ns.tag:
         post = _post_gate_names(root)
         for name in post:
@@ -763,8 +817,8 @@ def _cmd_build(ns: argparse.Namespace) -> Result:
     }
     if not ok:
         diagnostics.append(_note(
-            "构建失败: 有步骤未通过(见上面的步骤输出)",
-            "先看第一个 FAIL 的步骤输出; 退出码 1 = 校验/构建红, 2 = 用法或环境错",
+            "build failed: some steps did not pass (see step output above)",
+            "look at the output of the first FAIL step; exit 1 = validation/build red, 2 = usage or environment error",
         ))
     return Result("build", exit_code, gate + diagnostics, data, written, extra)
 
@@ -784,7 +838,7 @@ def _result_summary(result) -> dict:
 
 def _run_test(root: Path, name: str | None, *, jobs: int, diagnostics: list[dict],
               out=None) -> dict:
-    """跑一组(或一个)门禁; 返回 ``{diagnostics, exit_code, data, results}``。"""
+    """Run a group (or a single) of gates; returns ``{diagnostics, exit_code, data, results}``."""
     args: dict = {"jobs": int(jobs or 0)}
     if name:
         args["name"] = name
@@ -801,8 +855,8 @@ def _run_test(root: Path, name: str | None, *, jobs: int, diagnostics: list[dict
         diagnostics += result.diagnostics
         if not result.ok and not result.judged:
             diagnostics.append(_note(
-                f"门禁步骤失败: {result.label}",
-                f"退出码 {result.rc}" + ("(超时)" if result.timed_out else ""),
+                f"gate step failed: {result.label}",
+                f"exit code {result.rc}" + ("(timed out)" if result.timed_out else ""),
                 code=step.get("fail_code"),
             ))
     return {
@@ -841,7 +895,7 @@ def _cmd_test(ns: argparse.Namespace) -> Result:
             judge=_judge_callback(root), out=_out(ns),
         )
         if not built:
-            diagnostics.append(_note("门禁前置的构建未通过", "先修 `brickie build`"))
+            diagnostics.append(_note("the build preceding the gates did not pass", "fix `brickie build` first"))
             return Result("test", _EXIT_RED, diagnostics, build["data"], [])
 
     outcome = _run_test(root, ns.name, jobs=ns.jobs, diagnostics=diagnostics, out=_out(ns))
@@ -864,7 +918,7 @@ def _cmd_run(ns: argparse.Namespace) -> Result:
     steps = list(data.get("steps") or [])
     if steps and not ns.json:
         print(f"QEMU: {' '.join(steps[0]['argv'])}")
-        print("      (Ctrl-A X 退出)")
+        print("      (Ctrl-A X to quit)")
     results, ok = runner.run_steps(root, steps, jobs=1, out=_out(ns))
     return Result(
         "run", _EXIT_OK if ok else _EXIT_RED, response["diagnostics"], data, [],
@@ -909,7 +963,7 @@ def _tool_command(ns: argparse.Namespace, which: str) -> Result:
 
 
 def _build_for_tools(ns: argparse.Namespace) -> Result:
-    """``run`` / ``size`` / ``disasm`` 的"先构建"复用 ``build`` 的流水线。"""
+    """The "build first" path of ``run`` / ``size`` / ``disasm`` reuses the ``build`` pipeline."""
     root = _root_of(ns)
     diagnostics, exit_code, _ = _compose(root, None)
     if exit_code != _EXIT_OK:
@@ -925,7 +979,7 @@ def _build_for_tools(ns: argparse.Namespace) -> Result:
         jobs=int(getattr(ns, "jobs", 0) or 0), judge=_judge_callback(root), out=_out(ns),
     )
     if not ok:
-        diagnostics.append(_note("构建未通过: run/size/disasm 被挡住", "先修 `brickie build`"))
+        diagnostics.append(_note("build did not pass: run/size/disasm is blocked", "fix `brickie build` first"))
     return Result(
         "build", _EXIT_OK if ok else _EXIT_RED, diagnostics, response["data"], written,
         {"args": {"build": True, "quiet": True}},
@@ -943,11 +997,12 @@ def _cmd_clean(ns: argparse.Namespace) -> Result:
     for rel in (response.get("data") or {}).get("paths") or []:
         target = (root / str(rel)).resolve()
         root_resolved = root.resolve()
-        # 守卫: 只删 root 之内的相对路径, 且不删 root 本身(路径来自声明面, 仍要防手抖)。
+        # Guard: only delete relative paths inside root, and never root itself (paths come from
+        # the declaration surface, but a slip must still be ruled out).
         if target == root_resolved or root_resolved not in target.parents:
             diagnostics.append(_note(
-                f"拒绝删除 root 之外的路径: {rel}",
-                "`clean` 只清声明面给出的、落在仓库内的派生路径",
+                f"refusing to delete a path outside root: {rel}",
+                "`clean` only removes derived paths given by the declaration surface that fall inside the repo",
             ))
             continue
         if target.is_dir():
@@ -1017,7 +1072,7 @@ def _cmd_dep(ns: argparse.Namespace, group: str) -> Result:
         return _writing(ns, "dep index", "dep-index", {}, shape=("plugin", "product"))
     if group == "closure":
         return _readonly(ns, "dep closure", "closure", {}, shape=("plugin", "product"))
-    raise UsageError(f"未实现的命令 `dep {group}`")
+    raise UsageError(f"unimplemented command `dep {group}`")
 
 
 def _cmd_ver(ns: argparse.Namespace, group: str) -> Result:
@@ -1028,7 +1083,7 @@ def _cmd_ver(ns: argparse.Namespace, group: str) -> Result:
         rule = _enum(ns.rule, ("major", "minor", "revise"), "--rule")
         return _writing(ns, "ver bump", "ver-bump", {"id": ns.id, "rule": rule},
                         shape=("plugin",), extra={"id": ns.id})
-    raise UsageError(f"未实现的命令 `ver {group}`")
+    raise UsageError(f"unimplemented command `ver {group}`")
 
 
 def _cmd_iface(ns: argparse.Namespace, group: str) -> Result:
@@ -1078,7 +1133,7 @@ def _cmd_iface(ns: argparse.Namespace, group: str) -> Result:
             args["note"] = ns.note
         return _writing(ns, "iface refreeze", "iface-refreeze", args, shape=("plugin",),
                         extra={"id": ns.id})
-    raise UsageError(f"未实现的命令 `iface {group}`")
+    raise UsageError(f"unimplemented command `iface {group}`")
 
 
 def _dispatch(ns: argparse.Namespace) -> Result:
@@ -1109,14 +1164,15 @@ def _dispatch(ns: argparse.Namespace) -> Result:
         return _cmd_ver(ns, group)
     if ns.command == "iface":
         return _cmd_iface(ns, group)
-    raise UsageError(f"未实现的命令 `{ns.command}`")
+    raise UsageError(f"unimplemented command `{ns.command}`")
 
 
 def _cmd_version(ns: argparse.Namespace) -> int:
-    """``--version [--deps]``(G-01): 版本与依赖指纹来自 core 的 ``version`` 命令。
+    """``--version [--deps]`` (G-01): version and dependency fingerprint come from core's ``version``.
 
-    core 缺席时**降级**打印 L5 自身版本(``--version`` 不该因为原生件还没编出来而
-    卡住 make/CI 的自检); 但 ``--deps`` 拿不到指纹时按环境错(退出码 2)报出。
+    When core is absent, **degrade** to printing L5's own version (``--version`` must not stall
+    make/CI self-checks just because the native build is not ready yet); but when ``--deps``
+    cannot get a fingerprint, report it as an environment error (exit code 2).
     """
     root = Path(".").resolve()
     try:
@@ -1125,8 +1181,8 @@ def _cmd_version(ns: argparse.Namespace) -> int:
         data = {"version": __version__, "protocol": PROTOCOL}
         diagnostic = {
             "code": exc.code, "severity": "info", "target": "", "file": "", "span": "",
-            "message": f"降级为 L5 前端版本: {exc}",
-            "hint": "编出 brickie-core 后 `--version` 会带语言/依赖指纹",
+            "message": f"degraded to the L5 front-end version: {exc}",
+            "hint": "once brickie-core is built, `--version` carries the language/dependency fingerprint",
         }
         fallback_exit = _EXIT_OK if not ns.version_deps else _EXIT_USAGE
         if ns.json:
@@ -1153,7 +1209,7 @@ def _cmd_version(ns: argparse.Namespace) -> int:
     return exit_code
 
 
-# ------------------------------------------------------------------ 呈现/入口
+# ------------------------------------------------------------------ presentation/entry
 
 
 def _error_diagnostic(message: str, code: str | None = None, severity: str = "error") -> dict:
@@ -1190,7 +1246,7 @@ def _present(ns: argparse.Namespace, result: Result) -> None:
 
 
 def _report_failure(ns: argparse.Namespace, command: str, diagnostic: dict) -> int:
-    """用法错 / 环境错(NativeError / WriteError)的统一出口: 退出码 2。"""
+    """Single exit point for usage/environment errors (NativeError / WriteError): exit code 2."""
     if ns.json:
         print(present.emit_json(present.json_payload(
             command=command, exit_code=_EXIT_USAGE,
@@ -1207,7 +1263,7 @@ def main(argv: list[str] | None = None) -> int:
     ns.root = getattr(ns, "root", ".") or "."
 
     if not getattr(ns, "version", False) and getattr(ns, "version_deps", False):
-        parser.error("--deps 只能与 --version 一起使用")
+        parser.error("--deps can only be used together with --version")
     if getattr(ns, "version", False):
         return _cmd_version(ns)
 
@@ -1220,8 +1276,9 @@ def main(argv: list[str] | None = None) -> int:
     except UsageError as exc:
         return _report_failure(ns, _command_path(ns), _error_diagnostic(str(exc)))
     except runner.StepError as exc:
-        # 步骤**起不来**(可执行不在场 / 工具太旧这类环境错)。不接住的话它会以 Python
-        # 回溯的形式漏出去 —— 而这类话是给人看的修法, 不是栈。
+        # A step **could not start** (environment errors such as a missing executable or a tool
+        # that is too old). Uncaught, it would leak out as a Python traceback — and such text is
+        # a human-readable fix, not a stack.
         return _report_failure(ns, _command_path(ns), _error_diagnostic(str(exc), exc.code))
     except NativeError as exc:
         return _report_failure(ns, _command_path(ns), _error_diagnostic(str(exc), exc.code))

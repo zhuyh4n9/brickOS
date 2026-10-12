@@ -1,7 +1,7 @@
-// 构建期指纹: 把 `rustc --version` 的版本号写进环境变量, 供 `version` 命令的
-// `languages[*].version` 使用(option_env! 读取; 取不到就是 "unknown")。
+// Build-time fingerprint: write the `rustc --version` number into an env var for
+// the `version` command's `languages[*].version` (read via option_env!; "unknown" if absent).
 //
-// 这里只用 std, 不引入任何 crate(§9.3 依赖纪律)。
+// std only, no crates (§9.3 dependency discipline).
 use std::process::Command;
 
 fn main() {
@@ -11,7 +11,7 @@ fn main() {
         .ok()
         .filter(|o| o.status.success())
         .and_then(|o| String::from_utf8(o.stdout).ok())
-        // "rustc 1.93.1 (hash date)" ⇒ 取第二段
+        // "rustc 1.93.1 (hash date)" ⇒ take the second field
         .and_then(|s| s.split_whitespace().nth(1).map(|v| v.to_string()))
         .unwrap_or_else(|| "unknown".to_string());
 

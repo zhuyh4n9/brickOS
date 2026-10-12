@@ -1,26 +1,37 @@
 /*
- * brickOS prototype v0.2.0 — POSIX 运行时的一致性套件(runtime/posix/src/posix_selftest.c)
+ * brickOS prototype v0.2.0 - POSIX runtime conformance suite
+ * (runtime/posix/src/posix_selftest.c)
  *
- * 设计依据与裁定: `docs/decisions/0010-plugin-selftest.md`(自检与核心代码分离)、
- *                 `docs/decisions/0014-svc-posix-posix-runtime.md`(覆盖范围与欠账)。
+ * Design basis and rulings: `docs/decisions/0010-plugin-selftest.md` (selftest kept
+ *                          separate from core code),
+ *                          `docs/decisions/0014-svc-posix-posix-runtime.md` (coverage
+ *                          and outstanding debt).
  *
- * ## 本套件有一条与其他插件不同的纪律: **只经 POSIX 头文件驱动**
- *   它 `#include <unistd.h>` / `<fcntl.h>` / `<sys/stat.h>` … —— 被测代码一律走 POSIX 名字,
- *   只有 `br_log_info`(观测)与 `br_clock_now`(计时参考)是 native 的。理由: 本插件的产出
- *   就是"POSIX 面", 若用例走 native API 去测, 那么**面本身**(名字、签名、错误通道)就没被
- *   测过 —— 而那正是最容易出错的地方(pthread 返回错误号 vs 系统调用返回 -1 + errno 是
- *   两套通道, 用错了症状极隐蔽)。
+ * ## This suite has one discipline unlike other plugins: **drive everything through
+ * ## POSIX headers**
+ *   It `#include <unistd.h>` / `<fcntl.h>` / `<sys/stat.h>` ... - the code under test
+ *   always uses POSIX names; only `br_log_info` (observation) and `br_clock_now`
+ *   (timing reference) are native. Reason: this plugin's product **is** the "POSIX
+ *   surface", so if cases were tested through the native API the **surface itself**
+ *   (names, signatures, error channel) would never be tested - and that is where
+ *   mistakes are likeliest (pthread returning an error number vs a syscall returning
+ *   -1 + errno are two different channels; using the wrong one is very hard to spot).
  *
- * ## 用 tmpfs 当介质, 但不依赖它的实现细节
- *   用例在 "/" 上建自己的临时目录(`/posixconf.d`), 只用 POSIX 面的行为做断言。于是
- *   "rootfs 是 tmpfs"对套件不可见 —— 换掉 FS 这套用例照跑(vfs 的 `[VFSCONF]` 守同一条纪律)。
+ * ## tmpfs is the medium, but no reliance on its implementation details
+ *   Cases create their own temp directory ("/posixconf.d") under "/" and assert only
+ *   on POSIX-surface behavior. So "rootfs is tmpfs" is invisible to the suite -
+ *   swapping the FS still runs these cases (vfs's `[VFSCONF]` keeps the same
+ *   discipline).
  *
- * ## 与 br_plugin_manager_selftest() 的契约
- *   返回**失败项数**(0 = 全绿); 日志自己打(`[POSIXCONF] PASS/FAIL ...` + `SUMMARY`)。
- *   **失败不停机** —— 红绿由门禁判(`tests/gates.toml` 的 `posix-test`)。
+ * ## Contract with br_plugin_manager_selftest()
+ *   Returns the number of **failures** (0 = all green); it logs for itself
+ *   (`[POSIXCONF] PASS/FAIL ...` + `SUMMARY`).
+ *   **A failure does not stop the run** - red/green is decided by the gate
+ *   (`posix-test` in `tests/gates.toml`).
  *
- * WORKAROUND(br-wa-test-001): `TC-POSIX-*` 是**自编号**(设计 `6-01` 没有这一组);
- * 自述文字才是判据内容。设计侧需先决定"POSIX 用例归 `6-01` 的哪一节"。
+ * WORKAROUND(br-wa-test-001): `TC-POSIX-*` are **self-assigned numbers** (design
+ * `6-01` has no such group); the descriptive text is the actual criterion. The
+ * design side must first decide "which section of `6-01` POSIX cases belong to".
  */
 #include <dirent.h>
 #include <errno.h>
@@ -41,10 +52,11 @@
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
-/* 自检入口原型(定义在本文件末尾; 生成物 `plugin_desc.c` 的 `.selftest` 钩子引用它)。 */
+/* Selftest entry prototype (defined at the end of this file; the generated
+ * `plugin_desc.c` references it as its `.selftest` hook). */
 int posix_selftest(void);
 
-/* ==================================================================== 装置 */
+/* ==================================================================== fixtures */
 
 #define PT_BASE   "/posixconf.d"
 #define PT_PATH   128u
@@ -82,7 +94,7 @@ static void pt_path(char *dst, unsigned cap, const char *name)
     dst[n] = '\0';
 }
 
-/* 造一个文件并写满内容(后续用例共用)。返回 0 / -1。 */
+/* Create a file and write its full content (shared by later cases). Returns 0 / -1. */
 static int pt_make(const char *path, const char *content, unsigned len)
 {
     const int fd = open(path, O_WRONLY | O_CREAT | O_TRUNC);
@@ -97,7 +109,7 @@ static int pt_make(const char *path, const char *content, unsigned len)
     return (w == (ssize_t)len) ? 0 : -1;
 }
 
-/* 读回全部内容(不超过 cap), 返回字节数或 -1。 */
+/* Read back the whole content (at most cap bytes); returns the byte count or -1. */
 static long pt_read_all(const char *path, char *buf, unsigned cap)
 {
     const int fd = open(path, O_RDONLY);
@@ -109,7 +121,7 @@ static long pt_read_all(const char *path, char *buf, unsigned cap)
     return (long)r;
 }
 
-/* ---- pthread 用例的共享装置 ---- */
+/* ---- shared fixtures for the pthread cases ---- */
 static sem_t       s_sem_req;
 static sem_t       s_sem_done;
 static int         s_worker_value;
@@ -124,10 +136,10 @@ static void *pt_worker(void *arg)
     s_worker_value = 42;
     s_worker_ran   = BR_TRUE;
     (void)sem_post(&s_sem_done);
-    return (void *)7L;                     /* 这个值必须经由 pthread_join 回到调用方 */
+    return (void *)7L;                     /* this value must travel back to the caller via pthread_join */
 }
 
-/* ---- 021: 每线程 errno + barrier ---- */
+/* ---- 021: per-thread errno + barrier ---- */
 static pthread_barrier_t s_bar21;
 static int               s_err21[2];
 
@@ -136,12 +148,12 @@ static void *pt_errno_worker(void *arg)
     const int idx = (int)(br_intptr_t)arg;
     errno = (idx == 0) ? ENOENT : EACCES;
     (void)pthread_barrier_wait(&s_bar21);
-    s_err21[idx] = errno;              /* 另一线程已写过它的槽位 ⇒ 读到的必须还是自己的 */
+    s_err21[idx] = errno;              /* the other thread already wrote its slot => must still read our own */
     (void)pthread_barrier_wait(&s_bar21);
     return BR_NULL;
 }
 
-/* ---- 022: ERRORCHECK 的非属主解锁 ---- */
+/* ---- 022: ERRORCHECK unlock by a non-owner ---- */
 static pthread_mutex_t s_m22;
 
 static void *pt_eperm_worker(void *arg)
@@ -150,7 +162,7 @@ static void *pt_eperm_worker(void *arg)
     return (void *)(br_intptr_t)pthread_mutex_unlock(&s_m22);
 }
 
-/* ---- 023: once(多线程只跑一次) ---- */
+/* ---- 023: once (runs exactly once across threads) ---- */
 static pthread_once_t  *s_once23_p;
 static int              s_once23_count;
 static void s_once23_fn(void) { s_once23_count++; }
@@ -161,7 +173,7 @@ static void *pt_once_worker(void *arg)
     return BR_NULL;
 }
 
-/* ---- 024: rwlock(读者并发 / 写者独占) ---- */
+/* ---- 024: rwlock (concurrent readers / exclusive writer) ---- */
 static pthread_rwlock_t s_rw24 = PTHREAD_RWLOCK_INITIALIZER;
 static pthread_mutex_t  s_rw24_stats = PTHREAD_MUTEX_INITIALIZER;
 static int              s_rw24_value;
@@ -183,7 +195,7 @@ static void *pt_reader_worker(void *arg)
             s_rw24_active_max = s_rw24_active;
         }
         (void)pthread_mutex_unlock(&s_rw24_stats);
-        usleep(10000u);                          /* 持读锁睡 ⇒ 另一个读者应能同时进来 */
+        usleep(10000u);                          /* sleep holding the read lock => another reader should get in too */
         (void)pthread_mutex_lock(&s_rw24_stats);
         s_rw24_active--;
         (void)pthread_mutex_unlock(&s_rw24_stats);
@@ -202,7 +214,7 @@ static void *pt_writer_worker(void *arg)
         }
         (void)pthread_mutex_lock(&s_rw24_stats);
         if (s_rw24_active != 0) {
-            s_rw24_bad = 1;          /* 写者持锁时不许有活跃读者 */
+            s_rw24_bad = 1;          /* no active readers allowed while the writer holds the lock */
         }
         s_rw24_value++;
         (void)pthread_mutex_unlock(&s_rw24_stats);
@@ -211,7 +223,7 @@ static void *pt_writer_worker(void *arg)
     return BR_NULL;
 }
 
-/* ---- 025: TLS key(隔离 + 析构) ---- */
+/* ---- 025: TLS key (isolation + destructor) ---- */
 static pthread_key_t s_key25;
 static int           s_key25_dtors;
 
@@ -228,11 +240,11 @@ static void *pt_key_worker(void *arg)
     return (void *)(br_intptr_t)((got == (br_intptr_t)(idx + 1)) ? 0 : -2);
 }
 
-/* ---- 026: detach(惰性回收) ---- */
+/* ---- 026: detach (lazy reclamation) ---- */
 static int   s_det26_ran;
 static sem_t s_det26_gate;
 static void *pt_det_worker(void *arg) { (void)arg; s_det26_ran++; return BR_NULL; }
-/* 先卡在 sem 上 ⇒ 记录一定还在(不是 ZOMBIE), 于是"join detached ⇒ EINVAL"可判。 */
+/* Block on the sem first => the record must still exist (not ZOMBIE), so "join detached => EINVAL" is testable. */
 static void *pt_det_gated(void *arg) { (void)arg; (void)sem_wait(&s_det26_gate); s_det26_ran++; return BR_NULL; }
 
 /* ---- 027: attr / name ---- */
@@ -253,7 +265,7 @@ static void *pt_name_worker(void *arg)
 }
 
 
-/* ==================================================================== 用例 */
+/* ==================================================================== cases */
 
 int posix_selftest(void)
 {
@@ -264,7 +276,7 @@ int posix_selftest(void)
     char p2[PT_PATH];
     char p3[PT_PATH];
 
-    br_log_info("[POSIXCONF] runtime/posix conformance (fd / 元数据 / 目录 / 链接 / 线程 / stdio)");
+    br_log_info("[POSIXCONF] runtime/posix conformance (fd / metadata / dir / link / thread / stdio)");
 
     (void)chdir("/");
     (void)unlink(PT_BASE "/a.txt");
@@ -279,7 +291,7 @@ int posix_selftest(void)
     pt_path(p2, PT_PATH, "b.txt");
     pt_path(p3, PT_PATH, "c.txt");
 
-    /* ---- TC-POSIX-001: open/close/read/write/lseek 往返 ---- */
+    /* ---- TC-POSIX-001: open/close/read/write/lseek round trip ---- */
     {
         const int fd = open(p1, O_RDWR | O_CREAT | O_TRUNC);
         br_bool ok = (fd >= 0);
@@ -289,50 +301,50 @@ int posix_selftest(void)
             char buf[16];
             ok = ok && (read(fd, buf, 7u) == 7) && (buf[0] == 'b') && (buf[6] == 'S');
             ok = ok && (lseek(fd, 0, SEEK_END) == 7);
-            ok = ok && (read(fd, buf, 4u) == 0);            /* 到 EOF ⇒ 0, 不是错误 */
+            ok = ok && (read(fd, buf, 4u) == 0);            /* at EOF => 0, not an error */
             ok = ok && (close(fd) == 0);
-            ok = ok && (close(fd) == -1) && (errno == EBADF);   /* 二次 close ⇒ EBADF */
+            ok = ok && (close(fd) == -1) && (errno == EBADF);   /* second close => EBADF */
         }
-        pc(ok, "TC-POSIX-001", "open/read/write/lseek/close 往返; EOF ⇒ 0; 二次 close ⇒ EBADF");
+        pc(ok, "TC-POSIX-001", "open/read/write/lseek/close round trip; EOF => 0; second close => EBADF");
     }
 
-    /* ---- TC-POSIX-002: 最小可用 fd / dup 共享偏移 / dup2 顶替 ---- */
+    /* ---- TC-POSIX-002: lowest free fd / dup shares offset / dup2 replaces target ---- */
     {
         const int fd = open(p1, O_RDWR);
         const int d1 = dup(fd);
         int       d2 = -1;
         br_bool   ok = (fd >= 0) && (d1 >= 0) && (d1 != fd);
 
-        /* dup 出来的两个 fd 共享同一个 open file description ⇒ 偏移共享 */
+        /* the two fds from dup share one open file description => shared offset */
         ok = ok && (lseek(fd, 3, SEEK_SET) == 3) && (lseek(d1, 0, SEEK_CUR) == 3);
 
-        /* dup2 到已占用的号: 旧句柄被顶掉 */
+        /* dup2 onto an occupied number: the old handle is displaced */
         d2 = open(p1, O_RDONLY);
         ok = ok && (d2 >= 0) && (dup2(fd, d2) == d2);
         ok = ok && (lseek(d2, 0, SEEK_CUR) == 3);
 
-        /* 关掉 d2 不影响 fd/d1(还有其它引用) */
+        /* closing d2 does not affect fd/d1 (other references remain) */
         ok = ok && (close(d2) == 0) && (lseek(fd, 0, SEEK_CUR) == 3);
 
         ok = ok && (close(d1) == 0) && (close(fd) == 0);
-        pc(ok, "TC-POSIX-002", "dup 共享偏移; dup2 顶替目标; 关一个引用不影响其它");
+        pc(ok, "TC-POSIX-002", "dup shares offset; dup2 replaces target; closing one reference leaves the others");
     }
 
-    /* ---- TC-POSIX-003: 访问模式执法(**本服务的职责**: vfs 刻意不做) ---- */
+    /* ---- TC-POSIX-003: access-mode enforcement (**this service's job**: vfs deliberately does not) ---- */
     {
         char    buf[8];
         const int ro = open(p1, O_RDONLY);
         const int wo = open(p1, O_WRONLY);
         br_bool   ok = (ro >= 0) && (wo >= 0);
 
-        ok = ok && (write(ro, "x", 1u) == -1) && (errno == EBADF);   /* 只读 fd 上写 */
-        ok = ok && (read(wo, buf, 1u) == -1) && (errno == EBADF);    /* 只写 fd 上读 */
-        ok = ok && (ftruncate(ro, 1) == -1);                          /* 只读 fd 上截断 */
+        ok = ok && (write(ro, "x", 1u) == -1) && (errno == EBADF);   /* write on a read-only fd */
+        ok = ok && (read(wo, buf, 1u) == -1) && (errno == EBADF);    /* read on a write-only fd */
+        ok = ok && (ftruncate(ro, 1) == -1);                          /* truncate on a read-only fd */
         ok = ok && (close(ro) == 0) && (close(wo) == 0);
-        pc(ok, "TC-POSIX-003", "只读 fd 上 write/ftruncate ⇒ EBADF; 只写 fd 上 read ⇒ EBADF");
+        pc(ok, "TC-POSIX-003", "write/ftruncate on a read-only fd => EBADF; read on a write-only fd => EBADF");
     }
 
-    /* ---- TC-POSIX-004: pread/pwrite 不动偏移; readv/writev 拼接 ---- */
+    /* ---- TC-POSIX-004: pread/pwrite keep the offset; readv/writev gather/scatter ---- */
     {
         const int fd = open(p1, O_RDWR | O_TRUNC);
         br_bool   ok = (fd >= 0);
@@ -344,10 +356,10 @@ int posix_selftest(void)
 
         const ssize_t pw = pwrite(fd, "0123", 4u, 0);
         ok = ok && (pw == 4);
-        ok = ok && (lseek(fd, 0, SEEK_CUR) == 0);          /* pwrite 不动偏移 */
+        ok = ok && (lseek(fd, 0, SEEK_CUR) == 0);          /* pwrite does not move the offset */
         const ssize_t pr = pread(fd, buf, 4u, 0);
         ok = ok && (pr == 4) && (buf[0] == '0') && (buf[3] == '3');
-        ok = ok && (lseek(fd, 0, SEEK_CUR) == 0);          /* pread 不动偏移 */
+        ok = ok && (lseek(fd, 0, SEEK_CUR) == 0);          /* pread does not move the offset */
 
         wi[0].iov_base = (void *)"AB";
         wi[0].iov_len  = 2u;
@@ -355,9 +367,9 @@ int posix_selftest(void)
         wi[1].iov_len  = 2u;
         const off_t sk = lseek(fd, 4, SEEK_SET);
         ok = ok && (sk == 4);
-        const ssize_t wv = writev(fd, wi, 2);              /* 追加到 4..8(不是覆盖 0..4) */
+        const ssize_t wv = writev(fd, wi, 2);              /* appends at 4..8 (not overwriting 0..4) */
         ok = ok && (wv == 4);
-        ok = ok && (lseek(fd, 4, SEEK_SET) == 4);          /* 回到刚写的开头再读回 */
+        ok = ok && (lseek(fd, 4, SEEK_SET) == 4);          /* back to the start of what was just written, then read it back */
 
         ri[0].iov_base = b1;
         ri[0].iov_len  = 2u;
@@ -366,10 +378,10 @@ int posix_selftest(void)
         const ssize_t rv = readv(fd, ri, 2);
         ok = ok && (rv == 4) && (b1[0] == 'A') && (b2[1] == 'D');
         ok = ok && (close(fd) == 0);
-        pc(ok, "TC-POSIX-004", "pread/pwrite 保持偏移; readv/writev 按 iovec 拼接");
+        pc(ok, "TC-POSIX-004", "pread/pwrite keep the offset; readv/writev gather by iovec");
     }
 
-    /* ---- TC-POSIX-005: stat / fstat / lstat 与类型位 ---- */
+    /* ---- TC-POSIX-005: stat / fstat / lstat and type bits ---- */
     {
         struct stat st;
         struct stat fs;
@@ -380,23 +392,23 @@ int posix_selftest(void)
         ok = ok && (st.st_nlink == 1);
         ok = ok && (stat(PT_BASE, &st) == 0) && S_ISDIR(st.st_mode);
         ok = ok && (fd >= 0) && (close(fd) == 0);
-        pc(ok, "TC-POSIX-005", "stat/fstat/lstat 一致; S_ISREG/S_ISDIR; st_nlink = 1");
+        pc(ok, "TC-POSIX-005", "stat/fstat/lstat agree; S_ISREG/S_ISDIR; st_nlink = 1");
     }
 
-    /* ---- TC-POSIX-006: 名字空间操作与 errno 映射 ---- */
+    /* ---- TC-POSIX-006: namespace operations and errno mapping ---- */
     {
         br_bool ok = (mkdir(PT_BASE, 0777) == -1) && (errno == EEXIST);
         ok = ok && (rename(p1, p2) == 0);
         ok = ok && (access(p1, F_OK) == -1) && (errno == ENOENT);
         ok = ok && (access(p2, F_OK) == 0);
         ok = ok && (unlink(p1) == -1) && (errno == ENOENT);
-        ok = ok && (rmdir(PT_BASE) == -1) && (errno == ENOTEMPTY);   /* 目录非空 */
+        ok = ok && (rmdir(PT_BASE) == -1) && (errno == ENOTEMPTY);   /* directory not empty */
         ok = ok && (mkdir(p3, 0777) == 0) && (rmdir(p3) == 0);
         ok = ok && (remove(p2) == 0) && (access(p2, F_OK) == -1);
-        pc(ok, "TC-POSIX-006", "mkdir/rename/unlink/rmdir/remove; EEXIST/ENOENT/ENOTEMPTY 映射");
+        pc(ok, "TC-POSIX-006", "mkdir/rename/unlink/rmdir/remove; EEXIST/ENOENT/ENOTEMPTY mapping");
     }
 
-    /* ---- TC-POSIX-007: 符号链接(lstat 看链接, stat 跟随, readlink 读目标) ---- */
+    /* ---- TC-POSIX-007: symlinks (lstat sees the link, stat follows, readlink reads the target) ---- */
     {
         char      tgt[64];
         struct stat lst;
@@ -411,18 +423,18 @@ int posix_selftest(void)
         const ssize_t n = readlink(p1, tgt, sizeof(tgt));
         ok = ok && (n == 5) && (tgt[0] == 'b') && (tgt[4] == 't');
 
-        /* 经链接读 = 读目标 */
+        /* reading through the link = reading the target */
         char buf[8];
         ok = ok && (pt_read_all(p1, buf, sizeof(buf)) == 6) && (buf[0] == 'l');
 
-        /* O_NOFOLLOW 看链接本身 ⇒ ELOOP */
+        /* O_NOFOLLOW looks at the link itself => ELOOP */
         ok = ok && (open(p1, O_RDONLY | O_NOFOLLOW) == -1) && (errno == ELOOP);
         ok = ok && (readlink(p2, tgt, sizeof(tgt)) == -1) && (errno == EINVAL);
         ok = ok && (unlink(p1) == 0);
-        pc(ok, "TC-POSIX-007", "symlink/readlink/lstat/stat; EEXIST/ELOOP/EINVAL; 经链接读写目标");
+        pc(ok, "TC-POSIX-007", "symlink/readlink/lstat/stat; EEXIST/ELOOP/EINVAL; read/write through the link");
     }
 
-    /* ---- TC-POSIX-008: 硬链接共享同一份数据 ---- */
+    /* ---- TC-POSIX-008: hard links share the same data ---- */
     {
         struct stat st;
         pt_path(p1, PT_PATH, "h1");
@@ -433,19 +445,19 @@ int posix_selftest(void)
         ok = ok && (link(p2, PT_BASE) == -1) && (errno == EEXIST || errno == EPERM ||
                                                  errno == EISDIR || errno == ENOENT);
 
-        /* 经一个名字改内容, 另一个名字必须看见 */
+        /* change content through one name; the other name must see it */
         const int fd = open(p1, O_WRONLY);
         ok = ok && (fd >= 0) && (write(fd, "SHARED", 6u) == 6) && (close(fd) == 0);
         char buf[8];
         ok = ok && (pt_read_all(p2, buf, sizeof(buf)) == 6) && (buf[0] == 'S');
 
-        /* 删一个名字: 数据还在 */
+        /* delete one name: the data is still there */
         ok = ok && (unlink(p2) == 0) && (stat(p1, &st) == 0) && (st.st_nlink == 1);
         ok = ok && (pt_read_all(p1, buf, sizeof(buf)) == 6) && (buf[3] == 'R');
         ok = ok && (unlink(p1) == 0);
-        /* 下一个用例还要用 b.txt ⇒ 这里补回来(用例之间不靠"上一个人没收尾") */
+        /* the next case still needs b.txt => restore it here (cases do not rely on the previous one cleaning up) */
         ok = ok && (pt_make(p2, "shared", 6u) == 0);
-        pc(ok, "TC-POSIX-008", "link 共享数据体; nlink 计数; 删一个名字数据仍在");
+        pc(ok, "TC-POSIX-008", "link shares the data body; nlink counting; data survives deleting one name");
     }
 
     /* ---- TC-POSIX-009: opendir/readdir/closedir ---- */
@@ -471,55 +483,55 @@ int posix_selftest(void)
             }
             ok = ok && (closedir(d) == 0);
         }
-        /* "." + ".." + x.bin = 3 条, 其中 REG 恰 1 条 */
+        /* "." + ".." + x.bin = 3 entries, exactly 1 of them REG */
         ok = ok && (n_all == 3) && (n_reg == 1) && (n_dir == 2);
         ok = ok && (opendir("/posixconf_no_such_dir") == BR_NULL);
         ok = ok && (unlink(pf) == 0) && (rmdir(p4) == 0);
-        pc(ok, "TC-POSIX-009", "opendir/readdir/closedir: '.'+'..'+1 文件; d_type 正确");
+        pc(ok, "TC-POSIX-009", "opendir/readdir/closedir: '.'+'..'+1 file; d_type correct");
     }
 
-    /* ---- TC-POSIX-010: chdir / getcwd / 相对路径 ---- */
+    /* ---- TC-POSIX-010: chdir / getcwd / relative paths ---- */
     {
         char cwd[PT_PATH];
         br_bool ok = (getcwd(cwd, sizeof(cwd)) != BR_NULL) && (cwd[0] == '/');
         ok = ok && (chdir(PT_BASE) == 0);
         ok = ok && (getcwd(cwd, sizeof(cwd)) != BR_NULL) && (cwd[0] == '/' );
-        /* 相对路径落到新 cwd 上 */
+        /* a relative path lands in the new cwd */
         ok = ok && (pt_make("rel.txt", "rel", 3u) == 0);
         struct stat st;
         ok = ok && (stat(PT_BASE "/rel.txt", &st) == 0) && (st.st_size == 3);
         ok = ok && (chdir("..") == 0);
         char cwd2[PT_PATH];
-        ok = ok && (getcwd(cwd2, sizeof(cwd2)) != BR_NULL) && (cwd2[1] == '\0'); /* 回到 "/" */
+        ok = ok && (getcwd(cwd2, sizeof(cwd2)) != BR_NULL) && (cwd2[1] == '\0'); /* back at "/" */
         ok = ok && (chdir("/posixconf_no_such_dir") == -1) && (errno == ENOENT);
         ok = ok && (unlink(PT_BASE "/rel.txt") == 0);
-        ok = ok && (getcwd(cwd, 1u) == BR_NULL) && (errno == ERANGE);   /* 缓冲太小 */
-        pc(ok, "TC-POSIX-010", "chdir/getcwd 往返; 相对路径落到新 cwd; 小缓冲 ⇒ ERANGE");
+        ok = ok && (getcwd(cwd, 1u) == BR_NULL) && (errno == ERANGE);   /* buffer too small */
+        pc(ok, "TC-POSIX-010", "chdir/getcwd round trip; relative path lands in the new cwd; small buffer => ERANGE");
     }
 
-    /* ---- TC-POSIX-011: 权限面 = 空操作返回 0(用户裁定) + 存在性照查 ---- */
+    /* ---- TC-POSIX-011: permission surface = no-op returning 0 (user ruling) + existence still checked ---- */
     {
         br_bool ok = (chmod(p2, 0600) == 0) && (chown(p2, 100, 100) == 0);
         const mode_t old = umask(0022);
         ok = ok && (umask(old) == 0022);
         const int fd = open(p2, O_RDONLY);
         ok = ok && (fd >= 0) && (fchmod(fd, 0700) == 0) && (fchown(fd, 0, 0) == 0) && (close(fd) == 0);
-        ok = ok && (access(p2, R_OK | W_OK | X_OK) == 0);           /* 一律放行 */
+        ok = ok && (access(p2, R_OK | W_OK | X_OK) == 0);           /* always allowed */
         ok = ok && (access("/posixconf_no_such_file", F_OK) == -1) && (errno == ENOENT);
-        pc(ok, "TC-POSIX-011", "chmod/chown/fchmod/fchown/umask ⇒ 0; access 查存在性但恒放行");
+        pc(ok, "TC-POSIX-011", "chmod/chown/fchmod/fchown/umask => 0; access checks existence but always allows");
     }
 
-    /* ---- TC-POSIX-012: openat(AT_FDCWD) 可用; 其它 dirfd 如实 -ENOTSUP ---- */
+    /* ---- TC-POSIX-012: openat(AT_FDCWD) works; any other dirfd honestly -ENOTSUP ---- */
     {
         const int fd = openat(AT_FDCWD, p2, O_RDONLY);
         br_bool ok = (fd >= 0) && (close(fd) == 0);
         ok = ok && (openat(0, p2, O_RDONLY) == -1) && (errno == ENOTSUP);
-        /* O_DIRECTORY 用错 ⇒ ENOTDIR */
+        /* misusing O_DIRECTORY => ENOTDIR */
         ok = ok && (open(p2, O_RDONLY | O_DIRECTORY) == -1) && (errno == ENOTDIR);
-        pc(ok, "TC-POSIX-012", "openat(AT_FDCWD) 可用; 真 dirfd ⇒ ENOTSUP; O_DIRECTORY 用错 ⇒ ENOTDIR");
+        pc(ok, "TC-POSIX-012", "openat(AT_FDCWD) works; real dirfd => ENOTSUP; O_DIRECTORY misuse => ENOTDIR");
     }
 
-    /* ---- TC-POSIX-013: fcntl(F_GETFL/F_SETFL/F_DUPFD/记录锁) ---- */
+    /* ---- TC-POSIX-013: fcntl(F_GETFL/F_SETFL/F_DUPFD/record locks) ---- */
     {
         const int fa = open(p2, O_RDWR);
         const int fb = open(p2, O_RDWR);
@@ -536,7 +548,7 @@ int posix_selftest(void)
         fl.l_pid    = 0;
         ok = ok && (fcntl(fa, F_SETLK, &fl) == 0);
 
-        /* 别的 open file description 看得见这把锁 */
+        /* another open file description can see this lock */
         struct flock q;
         q.l_type   = F_WRLCK;
         q.l_whence = SEEK_SET;
@@ -545,7 +557,7 @@ int posix_selftest(void)
         q.l_pid    = 0;
         ok = ok && (fcntl(fb, F_GETLK, &q) == 0) && (q.l_type == F_WRLCK);
 
-        /* 冲突的写锁 ⇒ EAGAIN */
+        /* conflicting write lock => EAGAIN */
         struct flock c;
         c.l_type   = F_WRLCK;
         c.l_whence = SEEK_SET;
@@ -554,14 +566,14 @@ int posix_selftest(void)
         c.l_pid    = 0;
         ok = ok && (fcntl(fb, F_SETLK, &c) == -1) && (errno == EAGAIN);
 
-        /* 解锁后不再冲突 */
+        /* no conflict after unlocking */
         fl.l_type = F_UNLCK;
         ok = ok && (fcntl(fa, F_SETLK, &fl) == 0);
         ok = ok && (fcntl(fb, F_GETLK, &q) == 0) && (q.l_type == F_UNLCK);
 
         ok = ok && (fcntl(fa, F_SETLKW, &fl) == -1) && (errno == ENOTSUP);
         ok = ok && (close(fa) == 0) && (close(fb) == 0);
-        pc(ok, "TC-POSIX-013", "F_GETFL/F_SETFL; F_SETLK/F_GETLK 冲突与解锁; F_SETLKW ⇒ ENOTSUP");
+        pc(ok, "TC-POSIX-013", "F_GETFL/F_SETFL; F_SETLK/F_GETLK conflict and unlock; F_SETLKW => ENOTSUP");
     }
 
     /* ---- TC-POSIX-014: poll / select ---- */
@@ -573,7 +585,7 @@ int posix_selftest(void)
         pf.fd      = fd;
         pf.events  = POLLIN;
         pf.revents = 0;
-        /* 内存文件恒可读(驱动没有 poll 槽位 ⇒ 本服务按"恒就绪"回答) */
+        /* memory files are always readable (the driver has no poll slot => this service answers "always ready") */
         ok = ok && (poll(&pf, 1u, 0) == 1) && ((pf.revents & POLLIN) != 0);
 
         struct pollfd bad;
@@ -586,7 +598,7 @@ int posix_selftest(void)
         neg.fd      = -1;
         neg.events  = POLLIN;
         neg.revents = 0x7fff;
-        ok = ok && (poll(&neg, 1u, 0) == 0) && (neg.revents == 0);      /* 负 fd 被忽略 */
+        ok = ok && (poll(&neg, 1u, 0) == 0) && (neg.revents == 0);      /* negative fd is ignored */
 
         fd_set rd;
         FD_ZERO(&rd);
@@ -596,10 +608,10 @@ int posix_selftest(void)
         tv.tv_usec = 0;
         ok = ok && (select(fd + 1, &rd, BR_NULL, BR_NULL, &tv) >= 1) && (FD_ISSET(fd, &rd) != 0ul);
         ok = ok && (close(fd) == 0);
-        pc(ok, "TC-POSIX-014", "poll: 就绪计数 / POLLNVAL / 负 fd 忽略; select 复用同一实现");
+        pc(ok, "TC-POSIX-014", "poll: ready count / POLLNVAL / negative fd ignored; select reuses the same implementation");
     }
 
-    /* ---- TC-POSIX-015: 时间(单调可用, 墙钟如实 -ENOTSUP) ---- */
+    /* ---- TC-POSIX-015: time (monotonic works, wall clock honestly -ENOTSUP) ---- */
     {
         struct timespec t1;
         struct timespec t2;
@@ -616,12 +628,12 @@ int posix_selftest(void)
         req.tv_nsec = 1000L * 1000L;                       /* 1 ms */
         ok = ok && (nanosleep(&req, BR_NULL) == 0);
         const br_time_t after = br_clock_now();
-        ok = ok && (after >= before) && ((after - before) >= 1000u);    /* 不早醒 */
+        ok = ok && (after >= before) && ((after - before) >= 1000u);    /* no early wakeup */
         ok = ok && (usleep(1000u) == 0) && (sleep(0u) == 0u);
-        pc(ok, "TC-POSIX-015", "MONOTONIC 单调; REALTIME ⇒ ENOTSUP; getres = 1/HZ(一拍); nanosleep 不早醒");
+        pc(ok, "TC-POSIX-015", "MONOTONIC monotonic; REALTIME => ENOTSUP; getres = 1/HZ (one tick); nanosleep does not wake early");
     }
 
-    /* ---- TC-POSIX-016: pthread 线程 + retval 搬运 ---- */
+    /* ---- TC-POSIX-016: pthread threads + retval handoff ---- */
     {
         pthread_t t = BR_NULL;
         s_worker_value = 0;
@@ -634,24 +646,24 @@ int posix_selftest(void)
 
         void *ret = BR_NULL;
         ok = ok && (pthread_join(t, &ret) == 0);
-        ok = ok && (ret == (void *)7L);                    /* 入口的返回值经 join 回来 */
+        ok = ok && (ret == (void *)7L);                    /* the entry point's return value comes back through join */
         ok = ok && (s_worker_ran == BR_TRUE) && (s_worker_value == 42);
         ok = ok && (pthread_equal(pthread_self(), pthread_self()) != 0);
         ok = ok && (pthread_yield() == 0);
-        ok = ok && (pthread_detach(t) == ESRCH);            /* 已 join 的线程: 记录已回收 ⇒ ESRCH */
+        ok = ok && (pthread_detach(t) == ESRCH);            /* already-joined thread: record reclaimed => ESRCH */
         ok = ok && (sem_destroy(&s_sem_req) == 0) && (sem_destroy(&s_sem_done) == 0);
-        pc(ok, "TC-POSIX-016", "pthread_create/join 带回 retval; sem 配对唤醒; join 后 detach ⇒ ESRCH");
+        pc(ok, "TC-POSIX-016", "pthread_create/join brings retval back; sem paired wakeup; detach after join => ESRCH");
     }
 
-    /* ---- TC-POSIX-017: pthread 互斥量 / 条件变量(**错误号通道**: 不设 errno) ---- */
+    /* ---- TC-POSIX-017: pthread mutex / condition variable (**error-number channel**: errno untouched) ---- */
     {
-        pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;     /* 静态初始化: 直接用 core 的初值 */
+        pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;     /* static init: uses core's initial value directly */
         pthread_cond_t  c = PTHREAD_COND_INITIALIZER;
         br_bool ok = (pthread_mutex_lock(&m) == 0);
-        ok = ok && (pthread_mutex_trylock(&m) == EBUSY);   /* 忙 ⇒ **返回** EBUSY(不是 -1) */
+        ok = ok && (pthread_mutex_trylock(&m) == EBUSY);   /* busy => **returns** EBUSY (not -1) */
         ok = ok && (pthread_mutex_unlock(&m) == 0);
         ok = ok && (pthread_mutex_trylock(&m) == 0) && (pthread_mutex_unlock(&m) == 0);
-        ok = ok && (pthread_cond_signal(&c) == 0);         /* 无等待者: no-op */
+        ok = ok && (pthread_cond_signal(&c) == 0);         /* no waiters: no-op */
         ok = ok && (pthread_cond_broadcast(&c) == 0);
         ok = ok && (pthread_mutex_destroy(&m) == 0) && (pthread_cond_destroy(&c) == 0);
 
@@ -659,10 +671,10 @@ int posix_selftest(void)
         ok = ok && (pthread_mutex_init(&m2, BR_NULL) == 0);
         ok = ok && (pthread_mutex_lock(&m2) == 0) && (pthread_mutex_unlock(&m2) == 0);
         ok = ok && (pthread_mutex_destroy(&m2) == 0);
-        pc(ok, "TC-POSIX-017", "pthread 错误号通道(trylock ⇒ EBUSY); 静态初始化器可用; destroy ⇒ 0");
+        pc(ok, "TC-POSIX-017", "pthread error-number channel (trylock => EBUSY); static initializers work; destroy => 0");
     }
 
-    /* ---- TC-POSIX-018: stdio 流层(无 printf: TR-C) ---- */
+    /* ---- TC-POSIX-018: stdio stream layer (no printf: TR-C) ---- */
     {
         pt_path(p3, PT_PATH, "c.txt");
         (void)unlink(p3);
@@ -676,18 +688,18 @@ int posix_selftest(void)
         ok = ok && (fgets(line, (int)sizeof(line), f) != BR_NULL) && (line[0] == 'h') && (line[5] == '\n');
         ok = ok && (fgets(line, (int)sizeof(line), f) != BR_NULL) && (line[0] == 'w');
         ok = ok && (feof(f) == 0);
-        ok = ok && (fgetc(f) == EOF) && (feof(f) != 0);     /* 读到尽头 ⇒ EOF 标志 */
+        ok = ok && (fgetc(f) == EOF) && (feof(f) != 0);     /* read to the end => EOF flag */
         clearerr(f);
         ok = ok && (feof(f) == 0);
         ok = ok && (fseek(f, 6L, SEEK_SET) == 0);
         ok = ok && (fread(line, 1u, 5u, f) == 5u) && (line[0] == 'w');
         ok = ok && (fclose(f) == 0);
 
-        /* 写→读: 内容真的落到了文件里 */
+        /* write -> read: the content really landed in the file */
         char buf[16];
         ok = ok && (pt_read_all(p3, buf, sizeof(buf)) == 12) && (buf[11] == '\n');
         ok = ok && (unlink(p3) == 0);
-        pc(ok, "TC-POSIX-018", "fopen/fwrite/fflush/fseek/ftell/fgets/fread/feof/fclose 往返");
+        pc(ok, "TC-POSIX-018", "fopen/fwrite/fflush/fseek/ftell/fgets/fread/feof/fclose round trip");
     }
 
     /* ---- TC-POSIX-019: string / stdlib ---- */
@@ -712,10 +724,10 @@ int posix_selftest(void)
         ok = ok && (z != BR_NULL) && (((unsigned char *)z)[31] == 0u);
         free(z);
         ok = ok && (getenv("PATH") == BR_NULL);
-        pc(ok, "TC-POSIX-019", "str*/mem*/atoi/abs/malloc/calloc/realloc/free 语义");
+        pc(ok, "TC-POSIX-019", "str*/mem*/atoi/abs/malloc/calloc/realloc/free semantics");
     }
 
-    /* ---- TC-POSIX-020: errno 值域与 strerror ---- */
+    /* ---- TC-POSIX-020: errno value range and strerror ---- */
     {
         br_bool ok = (ENOENT == 2) && (EBADF == 9) && (EEXIST == 17) && (EINVAL == 22) &&
                      (ENOSPC == 28) && (ENOTEMPTY == 39) && (ELOOP == 40) &&
@@ -723,16 +735,16 @@ int posix_selftest(void)
         ok = ok && (strcmp(strerror(ENOENT), "ENOENT") == 0);
         ok = ok && (strcmp(strerror(EBADF), "EBADF") == 0);
         ok = ok && (strcmp(strerror(9999), "UNKNOWN") == 0);
-        /* 健壮性: 空参数/非法 fd 一律给契约错误码, 不崩 */
+        /* robustness: null arguments / invalid fd always give the contract error code, never crash */
         ok = ok && (open(BR_NULL, O_RDONLY) == -1) && (errno == EINVAL);
         ok = ok && (read(999, BR_NULL, 1u) == -1) && (errno == EBADF);
         ok = ok && (close(999) == -1) && (errno == EBADF);
         ok = ok && (stat("/posixconf_no_such_file", BR_NULL) == -1);
         ok = ok && (unlink(BR_NULL) == -1);
-        pc(ok, "TC-POSIX-020", "errno 编号 = 内核; strerror; 空参/非法 fd 的契约错误码");
+        pc(ok, "TC-POSIX-020", "errno numbers = kernel; strerror; contract error codes for null args / invalid fd");
     }
 
-    /* ---- TC-POSIX-021: barrier + 每线程 errno ---- */
+    /* ---- TC-POSIX-021: barrier + per-thread errno ---- */
     {
         pthread_t a = BR_NULL;
         pthread_t b = BR_NULL;
@@ -745,10 +757,10 @@ int posix_selftest(void)
         ok = ok && (pthread_join(b, BR_NULL) == 0);
         ok = ok && (s_err21[0] == ENOENT) && (s_err21[1] == EACCES);
         ok = ok && (pthread_barrier_destroy(&s_bar21) == 0);
-        pc(ok, "TC-POSIX-021", "barrier 两方同步 + 每线程 errno 隔离(各写各的槽位)");
+        pc(ok, "TC-POSIX-021", "barrier syncs both parties + per-thread errno isolation (each writes its own slot)");
     }
 
-    /* ---- TC-POSIX-022: RECURSIVE / ERRORCHECK / 非属主解锁 ---- */
+    /* ---- TC-POSIX-022: RECURSIVE / ERRORCHECK / unlock by a non-owner ---- */
     {
         pthread_mutexattr_t ma;
         pthread_mutex_t     rec;
@@ -770,17 +782,17 @@ int posix_selftest(void)
         ok = ok && (pthread_mutexattr_settype(&ea, PTHREAD_MUTEX_ERRORCHECK) == 0);
         ok = ok && (pthread_mutex_init(&ec, &ea) == 0);
         ok = ok && (pthread_mutex_lock(&ec) == 0);
-        ok = ok && (pthread_mutex_lock(&ec) == EDEADLK);        /* 同线程重锁 */
-        s_m22 = ec;                                            /* 借一个线程做"非属主解锁" */
+        ok = ok && (pthread_mutex_lock(&ec) == EDEADLK);        /* same thread relocks */
+        s_m22 = ec;                                            /* borrow a thread to do the "non-owner unlock" */
         ok = ok && (pthread_create(&w, BR_NULL, pt_eperm_worker, BR_NULL) == 0);
         ok = ok && (pthread_join(w, &r) == 0) && ((br_intptr_t)r == EPERM);
         ok = ok && (pthread_mutex_unlock(&ec) == 0);
         ok = ok && (pthread_mutex_destroy(&ec) == 0);
         ok = ok && (pthread_mutexattr_destroy(&ea) == 0);
-        pc(ok, "TC-POSIX-022", "RECURSIVE 重入计数; ERRORCHECK 自锁 EDEADLK + 非属主解锁 EPERM");
+        pc(ok, "TC-POSIX-022", "RECURSIVE reentrant counting; ERRORCHECK self-lock EDEADLK + non-owner unlock EPERM");
     }
 
-    /* ---- TC-POSIX-023: once(多线程只跑一次) ---- */
+    /* ---- TC-POSIX-023: once (runs exactly once across threads) ---- */
     {
         pthread_once_t once = PTHREAD_ONCE_INIT;
         pthread_t t1 = BR_NULL;
@@ -794,10 +806,10 @@ int posix_selftest(void)
         ok = ok && (pthread_join(t1, BR_NULL) == 0) && (pthread_join(t2, BR_NULL) == 0) &&
              (pthread_join(t3, BR_NULL) == 0);
         ok = ok && (s_once23_count == 1);
-        pc(ok, "TC-POSIX-023", "pthread_once: 三个线程并发 ⇒ init 恰一次");
+        pc(ok, "TC-POSIX-023", "pthread_once: three concurrent threads => init runs exactly once");
     }
 
-    /* ---- TC-POSIX-024: rwlock(读者并发 / 写者独占) ---- */
+    /* ---- TC-POSIX-024: rwlock (concurrent readers / exclusive writer) ---- */
     {
         pthread_t r1 = BR_NULL;
         pthread_t r2 = BR_NULL;
@@ -812,11 +824,11 @@ int posix_selftest(void)
         ok = ok && (pthread_join(r1, BR_NULL) == 0) && (pthread_join(r2, BR_NULL) == 0) &&
              (pthread_join(wr, BR_NULL) == 0);
         ok = ok && (s_rw24_bad == 0) && (s_rw24_value == 4);
-        ok = ok && (s_rw24_active_max >= 2);            /* 两个读者确实同时持锁 */
-        pc(ok, "TC-POSIX-024", "rwlock: 读者并发(active_max>=2)、写者独占、4 次写全部生效");
+        ok = ok && (s_rw24_active_max >= 2);            /* two readers really held the lock concurrently */
+        pc(ok, "TC-POSIX-024", "rwlock: readers concurrent (active_max>=2), writer exclusive, all 4 writes take effect");
     }
 
-    /* ---- TC-POSIX-025: TLS key(隔离 + 退出析构) ---- */
+    /* ---- TC-POSIX-025: TLS key (isolation + destructor on exit) ---- */
     {
         pthread_key_t key;
         pthread_t     a = BR_NULL;
@@ -832,10 +844,10 @@ int posix_selftest(void)
         ok = ok && ((br_intptr_t)ra == 0) && ((br_intptr_t)rb == 0);
         ok = ok && (s_key25_dtors == 3);                /* (0+1) + (1+1) */
         ok = ok && (pthread_key_delete(key) == 0);
-        pc(ok, "TC-POSIX-025", "pthread_key_*: 每线程值隔离; 线程退出跑析构(值 1+2)");
+        pc(ok, "TC-POSIX-025", "pthread_key_*: per-thread values isolated; destructor runs on thread exit (values 1+2)");
     }
 
-    /* ---- TC-POSIX-026: detach(惰性回收) ---- */
+    /* ---- TC-POSIX-026: detach (lazy reclamation) ---- */
     {
         pthread_t      t = BR_NULL;
         pthread_t      normal = BR_NULL;
@@ -846,26 +858,26 @@ int posix_selftest(void)
         br_bool ok = (sem_init(&s_det26_gate, 0, 0u) == 0);
         ok = ok && (pthread_attr_init(&da) == 0);
         ok = ok && (pthread_attr_setdetachstate(&da, PTHREAD_CREATE_DETACHED) == 0);
-        ok = ok && (pthread_create(&t, &da, pt_det_gated, BR_NULL) == 0);   /* 卡在 gate 上 */
+        ok = ok && (pthread_create(&t, &da, pt_det_gated, BR_NULL) == 0);   /* stuck on the gate */
         ok = ok && (pthread_attr_destroy(&da) == 0);
-        ok = ok && (pthread_join(t, &r) == EINVAL);     /* join detached ⇒ EINVAL(记录还在) */
-        ok = ok && (sem_post(&s_det26_gate) == 0);      /* 放它跑完并退出 */
+        ok = ok && (pthread_join(t, &r) == EINVAL);     /* join detached => EINVAL (the record still exists) */
+        ok = ok && (sem_post(&s_det26_gate) == 0);      /* let it finish and exit */
         for (int i = 0; i < 3; i++) {
             ok = ok && (pthread_create(&d[i], BR_NULL, pt_det_worker, BR_NULL) == 0);
             ok = ok && (pthread_detach(d[i]) == 0);
         }
         for (int i = 0; i < 8; i++) {
-            (void)pthread_yield();                      /* 让 detached 线程跑完退出 */
+            (void)pthread_yield();                      /* let the detached threads run to completion and exit */
         }
         usleep(20000u);
         ok = ok && (pthread_create(&normal, BR_NULL, pt_det_worker, BR_NULL) == 0);
         ok = ok && (pthread_join(normal, BR_NULL) == 0);
-        ok = ok && (s_det26_ran == 5);                  /* gated + 3 detached + normal 都跑过 */
+        ok = ok && (s_det26_ran == 5);                  /* gated + 3 detached + normal all ran */
         ok = ok && (sem_destroy(&s_det26_gate) == 0);
-        pc(ok, "TC-POSIX-026", "attr DETACHED / detach ⇒ 0、join detached ⇒ EINVAL; 后续 pthread 调用惰性回收不耗尽 TCB");
+        pc(ok, "TC-POSIX-026", "attr DETACHED / detach => 0, join detached => EINVAL; later pthread calls reclaim lazily without exhausting TCBs");
     }
 
-    /* ---- TC-POSIX-027: attr(stack/detachstate/guardsize) + 线程名 ---- */
+    /* ---- TC-POSIX-027: attr (stack/detachstate/guardsize) + thread name ---- */
     {
         pthread_attr_t a;
         pthread_t      t = BR_NULL;
@@ -891,10 +903,10 @@ int posix_selftest(void)
         char self_name[BR_PTHREAD_NAME_MAX];
         ok = ok && (pthread_getname_np(BR_NULL, self_name, sizeof(self_name)) == 0);
         ok = ok && (pthread_attr_destroy(&a) == 0) && (sem_destroy(&s_name27_gate) == 0);
-        pc(ok, "TC-POSIX-027", "attr get/set(stack/detachstate/guardsize) + setname/getname_np 往返");
+        pc(ok, "TC-POSIX-027", "attr get/set (stack/detachstate/guardsize) + setname/getname_np round trip");
     }
 
-    /* ---- TC-POSIX-028: condattr 时基 + timed* 超时 ---- */
+    /* ---- TC-POSIX-028: condattr clock base + timed* timeouts ---- */
     {
         pthread_condattr_t ca;
         pthread_cond_t     c;
@@ -905,7 +917,7 @@ int posix_selftest(void)
         past.tv_sec  = 0;
         past.tv_nsec = 0;
         br_bool ok = (pthread_condattr_init(&ca) == 0);
-        ok = ok && (pthread_condattr_setclock(&ca, CLOCK_REALTIME) == EINVAL);   /* 无墙钟 */
+        ok = ok && (pthread_condattr_setclock(&ca, CLOCK_REALTIME) == EINVAL);   /* no wall clock */
         ok = ok && (pthread_condattr_setclock(&ca, CLOCK_MONOTONIC) == 0);
         ok = ok && (pthread_condattr_getclock(&ca, &clk) == 0) && (clk == CLOCK_MONOTONIC);
         ok = ok && (pthread_condattr_setpshared(&ca, PTHREAD_PROCESS_PRIVATE) == 0);
@@ -913,14 +925,14 @@ int posix_selftest(void)
         ok = ok && (pthread_cond_init(&c, &ca) == 0) && (pthread_mutex_init(&m, BR_NULL) == 0);
         ok = ok && (pthread_mutex_lock(&m) == 0);
         ok = ok && (pthread_cond_timedwait(&c, &m, &past) == ETIMEDOUT);
-        ok = ok && (pthread_mutex_timedlock(&m, &past) == ETIMEDOUT);   /* 已被自己持有 */
+        ok = ok && (pthread_mutex_timedlock(&m, &past) == ETIMEDOUT);   /* already held by ourselves */
         ok = ok && (pthread_mutex_unlock(&m) == 0);
         ok = ok && (pthread_cond_destroy(&c) == 0) && (pthread_mutex_destroy(&m) == 0);
         ok = ok && (pthread_condattr_destroy(&ca) == 0);
-        pc(ok, "TC-POSIX-028", "condattr clock(MONOTONIC 唯一) + cond/mutex timed* 超时 ⇒ ETIMEDOUT");
+        pc(ok, "TC-POSIX-028", "condattr clock (MONOTONIC only) + cond/mutex timed* timeout => ETIMEDOUT");
     }
 
-    /* 收尾: 清掉自己造的东西(下一个用例从这里开始是干净的) */
+    /* wrap up: remove what we created (the next case starts from a clean slate) */
     (void)unlink(PT_BASE "/a.txt");
     (void)unlink(PT_BASE "/b.txt");
     (void)unlink(PT_BASE "/c.txt");

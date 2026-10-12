@@ -1,56 +1,60 @@
 /*
- * brickOS prototype v0.1.0 — TLSF 堆(纯算法; caller 提供 arena, 本文件**不打日志**)
+ * brickOS prototype v0.1.0 — TLSF heap (pure algorithm; caller provides the arena, this file **logs nothing**)
  *
- * 权威设计: `docs/3-os-core/3-01-core-api-list.md` §6(br-mem 组的字节堆)+ §14 CA-7
- * (连续内存独立成池, 不走本堆)+ `docs/3-os-core/3-04-memory.md` §3(堆的启动时序:
- * 初始化点 = core.init)。本文件只实现"两级隔离适配"这一算法本体, 不含 region 表、
- * 不含红区/记账 —— 那些在 mem.c(§6 的实现设计), 这里必须能在宿主上单独压测。
+ * Authoritative design: `docs/3-os-core/3-01-core-api-list.md` §6 (byte heap of the br-mem group)
+ * + §14 CA-7 (contiguous memory is a separate pool, not on this heap) + `docs/3-os-core/3-04-memory.md`
+ * §3 (heap boot timing: init point = core.init). This file implements only the "two-level segregated
+ * fit" algorithm itself, with no region table and no red zones/accounting — those live in mem.c
+ * (§6 implementation design); this file must be stress-testable standalone on the host.
  *
- * 一、二级隔离(TLSF)
- *   一级 32 类(2^5)+ 二级每类 32 细分(2^5); `fl_bitmap`/`sl_bitmap` 用位扫描
- *   定位最小可用类 ⇒ 分配/释放 O(1)。映射规则(参数字典见 tlsf_internal.h):
- *     - 块大小 ∈ [32, 63] : fl = 0, sl = size - 32(1 B 粒度)
- *     - 块大小 ∈ [2^k, 2^(k+1)) : fl = k - 5, sl = (size >> (k-5)) - 32
- *   `mapping_search` 在查找前把请求**上取整到所属 sl 槽的上界**, 否则同槽里
- *   可能挑到比请求小的块(这是 TLSF 映射最常见的 off-by-one, 见 br_tlsf_check
- *   对"size 一致性"的校验)。
+ * 1. Two-level segregation (TLSF)
+ *   Level 1 has 32 classes (2^5) + level 2 subdivides each class by 32 (2^5); `fl_bitmap`/`sl_bitmap`
+ *   use bit scans to locate the smallest usable class ⇒ alloc/free are O(1). Mapping rules (parameter
+ *   dictionary in tlsf_internal.h):
+ *     - block size ∈ [32, 63] : fl = 0, sl = size - 32 (1 B granularity)
+ *     - block size ∈ [2^k, 2^(k+1)) : fl = k - 5, sl = (size >> (k-5)) - 32
+ *   `mapping_search` rounds the request **up to the upper bound of its sl slot** before searching,
+ *   otherwise the same slot could yield a block smaller than the request (the most common TLSF
+ *   mapping off-by-one; see br_tlsf_check's "size consistency" validation).
  *
- * 二、块结构
- *   块头 16 B: {size | FREE 位, prev_phys}(prev_phys = 前一个物理块总字节,
- *   首个块为 0)。分裂/立即合并; 空闲块双向链。
+ * 2. Block layout
+ *   Block header is 16 B: {size | FREE bit, prev_phys} (prev_phys = total bytes of the previous
+ *   physical block, 0 for the first block). Split/immediate coalesce; free blocks are doubly linked.
  *
- * ★ 空闲链存**块尾**(link_of), 不存块首 —— 这是本实现与教科书 TLSF 的唯一形态差异:
- *   块首 16 B 载荷被上层 mem.c 用作**冻结的 32 B 块头**的前半部分, 而
- *   `docs/5-debug/5-01-debug.md` §4 的"重复释放拦截"要求块头在 free 之后仍可读
- *   (magic/state 判定)。若链存块首, TLSF 会在 free 里把 next/prev 写进块头,
- *   第二次 free 就只能看到垃圾而无法区分"重复释放"与"野指针"。
- *   代价: 最小块 = 16(头) + 16(链), 与教科书一致, 无额外开销。
+ * ★ Free links are stored at the **block tail** (link_of), not the block head — the only shape
+ *   difference from textbook TLSF: the 16 B payload at the block head is used by upper-layer mem.c
+ *   as the first half of a **frozen 32 B block header**, and `docs/5-debug/5-01-debug.md` §4's
+ *   "double-free interception" requires the header to stay readable after free (magic/state check).
+ *   If links lived at the block head, TLSF would write next/prev into the header on free and a
+ *   second free could only see garbage, unable to distinguish "double free" from "wild pointer".
+ *   Cost: min block = 16 (header) + 16 (links), same as the textbook, no extra cost.
  *
- * 三、单实例
- *   原型只有一个堆(§6: "v1 只有全局堆"), 控制块是文件内 static; 接口不接收句柄。
- *   本文件不取锁: v0.1 单核 + 调用方保证串行(thread-only, §11 的 ISR 白名单不含内存)。
+ * 3. Single instance
+ *   The prototype has one heap only (§6: "v1 has only the global heap"); the control block is
+ *   file-static and the interface takes no handle. This file takes no lock: v0.1 is single-core
+ *   and the caller guarantees serialization (thread-only; §11's ISR whitelist excludes memory).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_types.h>
 
 #include "tlsf_internal.h"
 
-/* ---------------------------------------------------------------- 块结构 */
+/* ---------------------------------------------------------------- block layout */
 
 typedef struct tlsf_hdr {
-    br_size_t size;       /* 总字节(含本头)| FREE 位 */
-    br_size_t prev_phys;  /* 前一物理块总字节; 首个 = 0 */
+    br_size_t size;       /* total bytes (including this header) | FREE bit */
+    br_size_t prev_phys;  /* total bytes of previous physical block; first = 0 */
 } tlsf_hdr_t;
 
 #define BR_TLSF_F_FREE   ((br_size_t)1u)
 
-/* 空闲链节点: 只对**空闲块**有效, 落在块尾 16 B。 */
+/* Free-list node: valid only for **free blocks**, stored in the 16 B block tail. */
 typedef struct tlsf_link {
     tlsf_hdr_t *prev;
     tlsf_hdr_t *next;
 } tlsf_link_t;
 
-/* ---------------------------------------------------------------- 控制块 */
+/* ---------------------------------------------------------------- control block */
 
 static struct {
     br_u8       *arena;
@@ -58,13 +62,13 @@ static struct {
     br_u32       fl_bitmap;
     br_u32       sl_bitmap[BR_TLSF_FL_COUNT];
     tlsf_hdr_t  *blocks[BR_TLSF_FL_COUNT][BR_TLSF_SL_COUNT];
-    br_size_t    used;        /* 已分配块的总足迹(含块头) */
-    br_size_t    free_bytes;  /* 空闲块的总足迹(含块头); used + free == bytes */
+    br_size_t    used;        /* total footprint of allocated blocks (incl. headers) */
+    br_size_t    free_bytes;  /* total footprint of free blocks (incl. headers); used + free == bytes */
     br_bool      init;
-    br_u32       bad_free;    /* TLSF 层拦下的野指针/重复释放(仅供自检参考) */
+    br_u32       bad_free;    /* wild pointers/double frees caught at TLSF level (for self-test reference only) */
 } s_tlsf;
 
-/* ---------------------------------------------------------------- 小工具 */
+/* ---------------------------------------------------------------- helpers */
 
 static br_size_t blk_size(const tlsf_hdr_t *b)
 {
@@ -107,7 +111,7 @@ static br_bool pos_in_arena(const br_u8 *p)
     return ((p >= s_tlsf.arena) && (p < (s_tlsf.arena + s_tlsf.bytes))) ? BR_TRUE : BR_FALSE;
 }
 
-/* 无 libc: 自持的位扫描(调用者保证 v != 0)。 */
+/* No libc: own bit scan (caller guarantees v != 0). */
 static br_u32 ctz32(br_u32 v)
 {
     br_u32 n = 0u;
@@ -128,12 +132,12 @@ static br_u32 log2_floor(br_size_t v)
     return k;
 }
 
-/* ---------------------------------------------------------------- 映射 */
+/* ---------------------------------------------------------------- mapping */
 
 static void mapping_insert(br_size_t size, br_u32 *fl, br_u32 *sl)
 {
     if (size < (br_size_t)(2u * BR_TLSF_MIN_BLOCK)) {
-        /* 小类: [32, 63] 一字节粒度。低于最小块的尺寸归 0(不该出现)。 */
+        /* Small class: [32, 63] at 1-byte granularity. Sizes below the min block map to 0 (should not occur). */
         *fl = 0u;
         *sl = (size >= (br_size_t)BR_TLSF_MIN_BLOCK)
                   ? (br_u32)(size - (br_size_t)BR_TLSF_MIN_BLOCK) : 0u;
@@ -144,7 +148,7 @@ static void mapping_insert(br_size_t size, br_u32 *fl, br_u32 *sl)
     }
 }
 
-/* 查找用映射: 把请求上取整到所属 sl 槽的上界, 保证被选中的块 >= 请求。 */
+/* Mapping used for search: round the request up to the upper bound of its sl slot, ensuring the selected block >= request. */
 static void mapping_search(br_size_t size, br_u32 *fl, br_u32 *sl)
 {
     if (size >= (br_size_t)(2u * BR_TLSF_MIN_BLOCK)) {
@@ -159,7 +163,7 @@ static void mapping_search(br_size_t size, br_u32 *fl, br_u32 *sl)
     mapping_insert(size, fl, sl);
 }
 
-/* ---------------------------------------------------------------- 空闲链 */
+/* ---------------------------------------------------------------- free list */
 
 static void fl_insert(tlsf_hdr_t *b)
 {
@@ -205,7 +209,7 @@ static void fl_remove(tlsf_hdr_t *b)
     lk->next = BR_NULL;
 }
 
-/* ---------------------------------------------------------------- 公开面 */
+/* ---------------------------------------------------------------- public surface */
 
 br_size_t br_tlsf_overhead(void)
 {
@@ -220,7 +224,7 @@ int br_tlsf_init(void *arena, br_size_t bytes)
     if (((br_uintptr_t)arena & (br_uintptr_t)(BR_TLSF_ALIGN - 1u)) != 0u) {
         return BR_ERR(EINVAL);
     }
-    /* 一级索引上界: fl = log2(size) - 5 必须 < 32 ⇒ arena <= 2^36(64 GiB)。 */
+    /* Level-1 index upper bound: fl = log2(size) - 5 must be < 32 ⇒ arena <= 2^36 (64 GiB). */
     if (bytes > ((br_size_t)1u << 36)) {
         return BR_ERR(EINVAL);
     }
@@ -241,7 +245,7 @@ int br_tlsf_init(void *arena, br_size_t bytes)
         }
     }
 
-    /* 整个 arena 一块空闲。链存块尾 ⇒ 必须至少 MIN_BLOCK(上面已校验)。 */
+    /* Whole arena as one free block. Links live at the block tail ⇒ must be at least MIN_BLOCK (checked above). */
     tlsf_hdr_t *b = (tlsf_hdr_t *)(void *)s_tlsf.arena;
     b->size      = s_tlsf.bytes | BR_TLSF_F_FREE;
     b->prev_phys = 0u;
@@ -291,7 +295,7 @@ void *br_tlsf_alloc(br_size_t n)
 
     const br_size_t bsz = blk_size(b);
     if (bsz >= (req + (br_size_t)BR_TLSF_MIN_BLOCK)) {
-        /* 分裂: [b, req) 分配给调用者, [rest, bsz-req) 回空闲链。 */
+        /* Split: [b, req) goes to the caller, [rest, bsz-req) returns to the free list. */
         tlsf_hdr_t *rest = (tlsf_hdr_t *)(void *)((br_u8 *)b + req);
         rest->size      = bsz - req;
         rest->prev_phys = req;
@@ -304,7 +308,7 @@ void *br_tlsf_alloc(br_size_t n)
         rest->size |= BR_TLSF_F_FREE;
         fl_insert(rest);
     } else {
-        b->size = bsz;   /* 整块给出(内部碎片) */
+        b->size = bsz;   /* hand out the whole block (internal fragmentation) */
     }
 
     const br_size_t footprint = blk_size(b);
@@ -335,23 +339,23 @@ void br_tlsf_free(void *p)
     s_tlsf.used       -= sz;
     s_tlsf.free_bytes += sz;
 
-    /* 与前一个物理块合并(prev_phys 由每次分裂/合并维护, 恒等于前块总字节)。 */
+    /* Coalesce with the previous physical block (prev_phys maintained by every split/coalesce, always equal to the previous block's total bytes). */
     if (b->prev_phys != 0u) {
         tlsf_hdr_t *prev = (tlsf_hdr_t *)(void *)((br_u8 *)b - b->prev_phys);
         if ((blk_in_arena(prev) == BR_TRUE) && (blk_is_free(prev) == BR_TRUE) &&
             (blk_size(prev) == b->prev_phys)) {
             fl_remove(prev);
-            b = prev;   /* 合并后 sz 在下面统一重算 */
+            b = prev;   /* sz is recomputed uniformly below after coalescing */
         }
     }
 
-    /* 合并区域总大小(不变量: used + free == bytes 由 sz 的加减维持)。 */
+    /* Total size of the merged region (invariant: used + free == bytes is maintained by the sz adds/subs). */
     br_size_t merged = blk_size(b);
     if (b != blk_from_user(p)) {
-        merged = blk_size(b) + sz;   /* b = prev, sz 是刚释放块的干净大小 */
+        merged = blk_size(b) + sz;   /* b = prev, sz is the clean size of the just-freed block */
     }
 
-    /* 与后一个物理块合并。 */
+    /* Coalesce with the next physical block. */
     tlsf_hdr_t *next = (tlsf_hdr_t *)(void *)((br_u8 *)b + merged);
     if ((pos_in_arena((br_u8 *)next) == BR_TRUE) && (blk_is_free(next) == BR_TRUE)) {
         fl_remove(next);
@@ -413,12 +417,12 @@ br_size_t br_tlsf_max_free(void)
 }
 
 /*
- * 全堆自检(TC-DBG-041 的堆侧; 返回违约数, 0 = 干净)。校验面:
- *   ① 物理链: size 一致性(prev_phys 对齐)、最小块、16 对齐、arena 边界;
- *   ② 相邻块不双空闲;
- *   ③ 空闲链完整性: 反向链接、节点确在 arena 内、size 与所在类一致、无环;
- *   ④ 位图 vs 链: 位有链空/链有位空都算违约;
- *   ⑤ 记账一致性: used + free == bytes。
+ * Whole-heap self-check (the heap side of TC-DBG-041; returns violation count, 0 = clean). Checked:
+ *   ① physical chain: size consistency (prev_phys alignment), min block, 16-byte alignment, arena bounds;
+ *   ② no two adjacent free blocks;
+ *   ③ free-list integrity: back links, nodes really inside the arena, size matches its class, no cycles;
+ *   ④ bitmap vs lists: bit set with empty list / list non-empty with bit clear are both violations;
+ *   ⑤ accounting consistency: used + free == bytes.
  */
 br_u32 br_tlsf_check(void)
 {
@@ -429,7 +433,7 @@ br_u32 br_tlsf_check(void)
     br_u32 v = 0u;
     const br_u8 *end = s_tlsf.arena + s_tlsf.bytes;
 
-    /* ①/② 物理链。 */
+    /* ①/② physical chain. */
     tlsf_hdr_t *b      = (tlsf_hdr_t *)(void *)s_tlsf.arena;
     br_size_t   prev   = 0u;
     br_bool     pfree  = BR_FALSE;
@@ -454,9 +458,9 @@ br_u32 br_tlsf_check(void)
         }
         if (blk_is_free(b) == BR_TRUE) {
             if (pfree == BR_TRUE) {
-                v++;   /* 相邻双空闲: 合并漏了 */
+                v++;   /* adjacent double free: coalescing missed one */
             }
-            /* ② 必须在它应属的类里 */
+            /* ② must be in the class it belongs to */
             br_u32 fl;
             br_u32 sl;
             mapping_insert(sz, &fl, &sl);
@@ -483,7 +487,7 @@ br_u32 br_tlsf_check(void)
         v++;
     }
 
-    /* ③/④ 空闲链与位图。 */
+    /* ③/④ free lists and bitmaps. */
     for (br_u32 fl = 0u; fl < BR_TLSF_FL_COUNT; fl++) {
         for (br_u32 sl = 0u; sl < BR_TLSF_SL_COUNT; sl++) {
             const br_bool has = (s_tlsf.blocks[fl][sl] != BR_NULL) ? BR_TRUE : BR_FALSE;
@@ -508,16 +512,16 @@ br_u32 br_tlsf_check(void)
                 br_u32 s2;
                 mapping_insert(blk_size(it), &f2, &s2);
                 if ((f2 != fl) || (s2 != sl)) {
-                    v++;   /* 块在不属于它的类里 */
+                    v++;   /* block is in a class it does not belong to */
                 }
                 if (link_of(it)->prev != pv) {
-                    v++;   /* 反向链接断裂 */
+                    v++;   /* back link broken */
                 }
                 pv = it;
                 it = link_of(it)->next;
             }
             if ((it != BR_NULL) && (g >= guard_max)) {
-                v++;   /* 疑似成环 */
+                v++;   /* suspected cycle */
             }
         }
         const br_bool fbit = ((s_tlsf.fl_bitmap >> fl) & 1u) != 0u ? BR_TRUE : BR_FALSE;
@@ -527,7 +531,7 @@ br_u32 br_tlsf_check(void)
         }
     }
 
-    /* ⑤ 记账一致性(元数据自洽, 不属结构破坏, 但同样是"两处真值对不上")。 */
+    /* ⑤ accounting consistency (metadata self-consistency, not structural corruption, but still "two truths disagree"). */
     if ((s_tlsf.used + s_tlsf.free_bytes) != s_tlsf.bytes) {
         v++;
     }

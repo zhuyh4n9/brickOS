@@ -1,20 +1,20 @@
-//! 组合期校验 `check`(§7.7 / §7.5; V-3/V-8/V-12/V-14/V-19)。
+//! Composition-time check `check` (§7.7 / §7.5; V-3/V-8/V-12/V-14/V-19).
 //!
-//! `check` 是**跨记录 / 跨文件**的校验收口: 单记录内的形状与不变量已由
-//! [`crate::model::load_tree`] 在加载期报出(见 rust/README.md §5.3 的清单),
-//! 本模块**不重复报**那些码。
+//! `check` is the **cross-record / cross-file** validation choke point: single-record shapes and
+//! invariants are already reported at load time by [`crate::model::load_tree`] (see the list in
+//! rust/README.md §5.3); this module **does not re-report** those codes.
 //!
-//! 域(`scopes`)与覆盖:
-//! - `deps`  —— 闭包 / init 环(完整路径)/ `compat_gen` 精确 + `range` 交集 /
-//!              单版本政策 / 相位单调(R1/R2)/ profile 门禁(`BRV-VER-0004`);
-//! - `iface` —— 导出分类不变量 3 的**跨文件**部分 / 单元级与符号族碰撞 /
-//!              `requires_iface` 只报 info(V-10③)/ release 下 `unfreezing`
+//! Scopes and coverage:
+//! - `deps`  —— closure / init cycle (full path) / `compat_gen` exact + `range` intersection /
+//!              single-version policy / phase monotonicity (R1/R2) / profile gate (`BRV-VER-0004`);
+//! - `iface` —— the **cross-file** part of export-classification invariant 3 / unit-level and symbol-family collisions /
+//!              `requires_iface` info only (V-10③) / `unfreezing` under release
 //!              (`BRV-IFACE-0009`);
-//! - `tax`   —— 依赖方向禁则(复用 solver)/ `sched_class` 组合合法性;
-//! - `priv`  —— 预算合计(复用 solver)/ IRQ·DMA·引脚·设备名**独占冲突**(报双方)。
+//! - `tax`   —— dependency-direction prohibitions (reuses solver) / `sched_class` combination legality;
+//! - `priv`  —— budget totals (reuses solver) / IRQ·DMA·pin·device-name **exclusive conflicts** (report both sides).
 //!
-//! `data.summary` 形状(contract §5.1):
-//! `{errors, warnings, infos, profile, closure:{plugins, ram_kib, stack_kib}}`。
+//! `data.summary` shape (contract §5.1):
+//! `{errors, warnings, infos, profile, closure:{plugins, ram_kib, stack_kib}}`.
 
 use serde_json::{json, Value};
 
@@ -56,7 +56,7 @@ fn info(
         .hint(hint)
 }
 
-/// `sched_kind`(裁定 R-5: 显式字段优先, 缺省按调度器插件名推断)。
+/// `sched_kind` (ruling R-5: explicit field first, otherwise inferred from the scheduler plugin name).
 pub fn sched_kind(p: &Plugin) -> Option<&'static str> {
     if let Some(k) = &p.sched_kind {
         return match k.as_str() {
@@ -81,11 +81,11 @@ pub fn sched_kind(p: &Plugin) -> Option<&'static str> {
     }
 }
 
-/// `check` 的入口。
+/// `check` entry point.
 pub fn run(req: &Request) -> Response {
     let root = std::path::PathBuf::from(&req.root);
     let tree = model::load_tree(&root);
-    // V-16: 解冻窗口也可能只记在快照里(`unfreeze` 不写 `plugin.toml`)⇒ 两处都看。
+    // V-16: the unfreeze window may exist only in a snapshot (`unfreeze` does not write `brick.toml`) ⇒ check both.
     let mut snap_diags = crate::diag::Diags::new();
     let snaps = model::load_snapshots(&root, &mut snap_diags);
     let mut base_diags = tree.diags.clone();
@@ -98,8 +98,8 @@ pub fn run(req: &Request) -> Response {
     if !rules::in_list(&["dev", "release"], &profile) {
         let mut d = base_diags.clone();
         d.usage(
-            format!("`--profile {profile}` 越界"),
-            "合法值: dev | release(§7.5)",
+            format!("`--profile {profile}` out of range"),
+            "legal values: dev | release (§7.5)",
         );
         return Response::ok(d, json!({}));
     }
@@ -126,8 +126,8 @@ pub fn run(req: &Request) -> Response {
         if !rules::in_list(&[SCOPE_DEPS, SCOPE_IFACE, SCOPE_TAX, SCOPE_PRIV], s) {
             let mut d = base_diags.clone();
             d.usage(
-                format!("未知校验域 `{s}`"),
-                "合法域: deps | iface | tax | priv(§7.7)",
+                format!("unknown check scope `{s}`"),
+                "legal scopes: deps | iface | tax | priv (§7.7)",
             );
             return Response::ok(d, json!({}));
         }
@@ -136,7 +136,7 @@ pub fn run(req: &Request) -> Response {
     let sol = solver::solve(&tree, &profile, true);
     let closure = &sol.closure;
 
-    // ---- 域内诊断(带域标签) ----
+    // ---- in-scope diagnostics (with scope tag) ----
     let mut scoped: Vec<(&'static str, Diag)> = sol.diags;
 
     if scopes.iter().any(|s| s == SCOPE_DEPS) {
@@ -152,7 +152,7 @@ pub fn run(req: &Request) -> Response {
         scoped.extend(priv_checks(&tree, closure));
     }
 
-    // `plugin?` 过滤(按诊断的 target; 语义见 README §10 S-7)
+    // `plugin?` filter (by diagnostic target; semantics in README §10 S-7)
     let only = req.arg_str("plugin").filter(|s| !s.is_empty());
 
     let mut summary_diags = base_diags.clone();
@@ -220,13 +220,13 @@ pub fn run(req: &Request) -> Response {
     Response::ok(summary_diags, data)
 }
 
-// ------------------------------------------------------------------ deps 域: 声明 ↔ 使用
+// ------------------------------------------------------------------ deps scope: declaration ↔ use
 
-/// 源码 `#include` 了别家插件的头, 但 `plugin.toml` 没声明依赖(直接或传递)。
+/// Source `#include`s another plugin's header, but `brick.toml` declares no dependency (direct or transitive).
 ///
-/// 与 `build` 用**同一份扫描**(`model::cross_plugin_includes`)—— 两处口径不能分叉。
-/// 为什么单靠 `-I` 收窄不够: 目标工具链的 glibc 头会兜住 `unistd.h` 这类常见名,
-/// 收窄后不是"找不到头"而是静默改用 glibc 声明(ADR-0018)。
+/// Uses the **same scan** as `build` (`model::cross_plugin_includes`) — the two must not diverge.
+/// Why narrowing with `-I` alone is not enough: the target toolchain's glibc headers shadow common
+/// names like `unistd.h`, so narrowing silently falls back to glibc declarations (ADR-0018).
 fn deps_usage_checks(
     root: &std::path::Path,
     tree: &TreeLoad,
@@ -234,8 +234,8 @@ fn deps_usage_checks(
 ) -> Vec<(&'static str, Diag)> {
     let mut out: Vec<(&'static str, Diag)> = Vec::new();
     for u in model::cross_plugin_includes(root, tree, &closure.selected) {
-        // A-2(设计 1-01 §7.3 / D18; ADR-0020): **APP 不许直连 core 头**。core 是内核面,
-        // 其它插件本来就用它并直接 include `<br/core/...>`, 所以只有消费者是 app 才判违规。
+        // A-2 (design 1-01 §7.3 / D18; ADR-0020): **APP must not include core headers directly**. core is the kernel surface,
+        // other plugins already use it and include `<br/core/...>` directly, so only an app consumer is a violation.
         if u.provider == "core" {
             let is_app = tree
                 .plugins
@@ -252,10 +252,10 @@ fn deps_usage_checks(
                     &u.file,
                     "include",
                     format!(
-                        "`{}`(APP)直接 include 了 core 头 `{}`: APP 不许依赖 iface 层以下的接口",
+                        "`{}` (APP) directly includes core header `{}`: APP must not depend on interfaces below the iface layer",
                         u.consumer, u.header
                     ),
-                    "ADR-0020 / A-2: 经 Interface 皮肤取用(如 `<iface/min/min.h>` 转出 br_log_*/br_clock_*), 或为该 core 面在皮肤里追加条目",
+                    "ADR-0020 / A-2: use it via an Interface skin (e.g. `<iface/min/min.h>` re-exporting br_log_*/br_clock_*), or add an entry for this core surface to a skin",
                 ),
             ));
             continue;
@@ -271,17 +271,17 @@ fn deps_usage_checks(
                 &u.file,
                 "include",
                 format!(
-                    "`{}` include 了 `{}` 的头 `{}`, 但 `plugin.toml` 没有声明依赖(直接或传递)",
+                    "`{}` includes `{}`'s header `{}`, but `brick.toml` declares no dependency (direct or transitive)",
                     u.consumer, u.provider, u.header
                 ),
-                "ADR-0018: 编译期包含面 = 声明依赖闭包; 补 `[[dep]]` 或删掉这个 include(缺口代用 R-9: 无专属码)",
+                "ADR-0018: compile-time include surface = declared dependency closure; add a `[[dep]]` or drop this include (gap workaround R-9: no dedicated code)",
             ),
         ));
     }
     out
 }
 
-// ------------------------------------------------------------------ iface 域
+// ------------------------------------------------------------------ iface scope
 
 fn iface_checks(
     tree: &TreeLoad,
@@ -296,7 +296,7 @@ fn iface_checks(
         .filter(|p| closure.selected.contains(&p.name))
         .collect();
 
-    // ---- ① 导出分类不变量 3 的**跨文件**部分(§3.5 / V-12) ----
+    // ---- ① **cross-file** part of export-classification invariant 3 (§3.5 / V-12) ----
     for p in &selected {
         for (ei, exp) in p.exports.iter().enumerate() {
             if exp.form != "skin" {
@@ -304,7 +304,7 @@ fn iface_checks(
             }
             for r in &exp.reexport_of {
                 let Some((pn, un)) = r.split_once('#') else {
-                    continue; // 形状错已在加载期报
+                    continue; // bad shape already reported at load time
                 };
                 match tree.by_name(pn).and_then(|prov| prov.find_export(un)) {
                     None => out.push((
@@ -315,9 +315,9 @@ fn iface_checks(
                             &p.file,
                             format!("export[{ei}].reexport_of"),
                             format!(
-                                "`form = \"skin\"` 再导出的单元 `{r}` 不存在(提供方 `{pn}` 或单元 `{un}` 缺失, 不变量 3)"
+                                "`form = \"skin\"` re-exports unit `{r}`, which does not exist (provider `{pn}` or unit `{un}` missing, invariant 3)"
                             ),
-                            "§3.5: 列表里每一个被再导出单元都必须存在",
+                            "§3.5: every re-exported unit in the list must exist",
                         ),
                     )),
                     Some(pe) => {
@@ -330,10 +330,10 @@ fn iface_checks(
                                     &p.file,
                                     format!("export[{ei}].reexport_of"),
                                     format!(
-                                        "皮肤 `{}` 的 `api_iface = {}`, 但被再导出单元 `{r}` 是 `{}` —— 分类必须相等(不变量 3)",
+                                        "skin `{}` has `api_iface = {}`, but re-exported unit `{r}` is `{}` — classifications must be equal (invariant 3)",
                                         p.name, exp.api_iface, pe.api_iface
                                     ),
-                                    "§3.5: 皮肤只再导出同类单元(跨文件判定)",
+                                    "§3.5: a skin may only re-export units of the same class (cross-file decision)",
                                 ),
                             ));
                         }
@@ -343,7 +343,7 @@ fn iface_checks(
         }
     }
 
-    // ---- ② 单元级碰撞(同 `name` 的单元在两个插件里) ----
+    // ---- ② unit-level collision (same unit `name` in two plugins) ----
     let mut by_unit: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for p in &selected {
@@ -368,16 +368,16 @@ fn iface_checks(
                     &file,
                     "export.name",
                     format!(
-                        "单元名 `{unit}` 在闭包内被多个插件导出: {}(接口单元 id 必须唯一)",
+                        "unit name `{unit}` is exported by multiple plugins in the closure: {} (interface unit ids must be unique)",
                         providers.join(", ")
                     ),
-                    "缺口代用(R-9): 单元级碰撞无专属码; §2 第 4 项只要求单元级可查",
+                    "gap workaround (R-9): no dedicated code for unit-level collision; §2 item 4 only requires unit-level checking",
                 ),
             ));
         }
     }
 
-    // ---- ③ 符号族碰撞(`symbols` 重叠) ----
+    // ---- ③ symbol-family collision (overlapping `symbols`) ----
     let mut sym_owner: std::collections::BTreeMap<String, (String, String)> =
         std::collections::BTreeMap::new();
     for p in &selected {
@@ -392,10 +392,10 @@ fn iface_checks(
                             &p.file,
                             "export.symbols",
                             format!(
-                                "符号族 `{s}` 被 `{owner}`({file})与 `{}`({})同时声明(碰撞)",
+                                "symbol family `{s}` is declared by both `{owner}` ({file}) and `{}` ({}) (collision)",
                                 p.name, p.file
                             ),
-                            "缺口代用(R-9): 符号族碰撞无专属码; §2 第 4 项",
+                            "gap workaround (R-9): no dedicated code for symbol-family collision; §2 item 4",
                         ),
                     ));
                 } else {
@@ -405,7 +405,7 @@ fn iface_checks(
         }
     }
 
-    // ---- ④ `requires_iface` 只报 info(V-10③; 绝不参与闭包) ----
+    // ---- ④ `requires_iface` reports info only (V-10③; never part of the closure) ----
     for p in &selected {
         for (ri, r) in p.compat.requires_iface.iter().enumerate() {
             out.push((
@@ -416,18 +416,18 @@ fn iface_checks(
                     &p.file,
                     format!("compat.requires_iface[{ri}]"),
                     format!(
-                        "声明面接口依赖 `{}`(compat_gen={}, range={}): v0.1 不扫描声明面接口依赖, 仅登记(V-10③)",
+                        "declared-surface interface dependency `{}` (compat_gen={}, range={}): v0.1 does not scan declared-surface interface dependencies, it only records them (V-10③)",
                         r.id, r.compat_gen, r.range_raw
                     ),
-                    "§5.6/§10 V-10: requires_iface 不参与闭包求解",
+                    "§5.6/§10 V-10: requires_iface does not participate in closure solving",
                 ),
             ));
         }
     }
 
-    // ---- ⑤ release 下 `unfreezing` 阻断(BRV-IFACE-0009, §5.3.4 规则 3) ----
+    // ---- ⑤ `unfreezing` blocks under release (BRV-IFACE-0009, §5.3.4 rule 3) ----
     if profile == "release" {
-        // `unfreeze` 只写快照(不改 `plugin.toml`)⇒ 两处都算(V-16 的端到端观测点)。
+        // `unfreeze` only writes a snapshot (does not change `brick.toml`) ⇒ count both (end-to-end observation point for V-16).
         let snapshot_unfreezing: std::collections::BTreeSet<String> = snaps
             .iter()
             .filter(|s| s.freeze_state.as_deref() == Some("unfreezing"))
@@ -446,9 +446,9 @@ fn iface_checks(
                             &p.file,
                             format!("export[{ei}].freeze_state"),
                             format!(
-                                "release 不允许接口单元停在解冻窗口: `{id}` 处于 `unfreezing`(声明或快照)"
+                                "release does not allow an interface unit to stay in the unfreeze window: `{id}` is `unfreezing` (declaration or snapshot)"
                             ),
-                            "§5.3.4 规则 3: release 必须在冻结态; 跑 `iface refreeze` 退出窗口",
+                            "§5.3.4 rule 3: release must be frozen; run `iface refreeze` to leave the window",
                         ),
                     ));
                 }
@@ -459,7 +459,7 @@ fn iface_checks(
     out
 }
 
-// ------------------------------------------------------------------ tax 域
+// ------------------------------------------------------------------ tax scope
 
 fn tax_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, Diag)> {
     let mut out: Vec<(&'static str, Diag)> = Vec::new();
@@ -469,9 +469,9 @@ fn tax_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, 
         .filter(|p| closure.selected.contains(&p.name))
         .collect();
 
-    // ---- `sched_class` 组合合法性(§2 第 3 项 / §8.1) ----
+    // ---- `sched_class` combination legality (§2 item 3 / §8.1) ----
     for p in &selected {
-        // TT_SAFE 必须同时有 [sched.tt]
+        // TT_SAFE must also have [sched.tt]
         if p.sched_class == "TT_SAFE" && p.sched_tt.is_none() {
             out.push((
                 SCOPE_TAX,
@@ -481,10 +481,10 @@ fn tax_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, 
                     &p.file,
                     "sched_class",
                     format!(
-                        "`sched_class = \"TT_SAFE\"` 必须同时声明 `[sched.tt]`(period_us/deadline_us/wcet_us); `{}` 缺该表",
+                        "`sched_class = \"TT_SAFE\"` must also declare `[sched.tt]` (period_us/deadline_us/wcet_us); `{}` lacks that table",
                         p.name
                     ),
-                    "§8.1: TT_SAFE 须同时给周期元数据; 缺口代用(R-9)",
+                    "§8.1: TT_SAFE must also provide period metadata; gap workaround (R-9)",
                 ),
             ));
         }
@@ -511,10 +511,10 @@ fn tax_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, 
                         &p.file,
                         "sched_class",
                         format!(
-                            "`sched_class = \"COOP_ONLY\"` 的 `{}` 与调度器 `{}`(sched_kind = `{kind}`)同组合: 需要 `coop` 调度器",
+                            "`{}` with `sched_class = \"COOP_ONLY\"` is combined with scheduler `{}` (sched_kind = `{kind}`): a `coop` scheduler is required",
                             p.name, s.name
                         ),
-                        "§2 第 3 项 / §8.1; sched_kind 见裁定 R-5(显式字段优先, 缺省按名字推断); 缺口代用(R-9)",
+                        "§2 item 3 / §8.1; sched_kind per ruling R-5 (explicit field first, else inferred from name); gap workaround (R-9)",
                     ),
                 ));
             }
@@ -524,7 +524,7 @@ fn tax_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, 
     out
 }
 
-// ------------------------------------------------------------------ priv 域
+// ------------------------------------------------------------------ priv scope
 
 fn priv_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, Diag)> {
     let mut out: Vec<(&'static str, Diag)> = Vec::new();
@@ -534,7 +534,7 @@ fn priv_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str,
         .filter(|p| closure.selected.contains(&p.name))
         .collect();
 
-    // 独占资源冲突(IRQ / DMA 通道 / 引脚 / 设备名)⇒ 报**双方**(R-9 / V-19④)。
+    // Exclusive-resource conflict (IRQ / DMA channel / pin / device name) ⇒ report **both sides** (R-9 / V-19④).
     let mut owners: std::collections::BTreeMap<(String, String), (String, String)> =
         std::collections::BTreeMap::new();
     for p in &selected {
@@ -566,10 +566,10 @@ fn priv_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str,
                         &p.file,
                         "privileged.resources",
                         format!(
-                            "资源独占冲突: {kind} `{val}` 被 `{owner}`({file})与 `{}`({})同时声明",
+                            "exclusive-resource conflict: {kind} `{val}` is declared by both `{owner}` ({file}) and `{}` ({})",
                             p.name, p.file
                         ),
-                        "§2 第 5 项 / §8.1: [privileged.resources] 只做冲突检测; 缺口代用(R-9), 报双方",
+                        "§2 item 5 / §8.1: [privileged.resources] is only checked for conflicts; gap workaround (R-9), report both sides",
                     ),
                 ));
             } else {

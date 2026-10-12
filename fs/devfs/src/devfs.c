@@ -1,26 +1,36 @@
 /*
- * brickOS prototype v0.2.0 — 设备文件系统(fs/devfs): 把 dev-core 注册表投影成 /dev 节点
+ * brickOS prototype v0.2.0 — device file system (fs/devfs): projects the dev-core
+ * registry into /dev nodes
  *
- * 设计依据: `docs/7-storage/7-03-concrete-fs.md` §3(devfs: "所有设备经 devfs 接入 VFS
- * 管理" —— Linux devtmpfs / rCore DeviceFS 同型)与 `docs/8-device/8-01-device.md`
- * §2/§3(D21/D23 的 open_file 钩子 + cdev-core 的通用会话适配)。
- * 逐条裁定见 `docs/decisions/0009-vfs-storage-stack.md`。
+ * Design basis: `docs/7-storage/7-03-concrete-fs.md` §3 (devfs: "all devices enter
+ * VFS management through devfs" — same shape as Linux devtmpfs / rCore DeviceFS) and
+ * `docs/8-device/8-01-device.md` §2/§3 (D21/D23 open_file hook + cdev-core's generic
+ * session adaptation).
+ * Case-by-case rulings in `docs/decisions/0009-vfs-storage-stack.md`.
  *
- * ## 三条硬边界(这个插件的全部内容就是守住它们)
- *   ① **只投影, 不拥有设备**: 节点 = dev-core 注册表的**实时枚举**(注册即上线);
- *      devfs 没有"设备表", 也没有生命周期 API —— 设备的存在与否由驱动注册决定。
- *   ② **不认识任何子分类形状**(设计 SD-13/D21): 本文件**不 include** `br_cdev.h`,
- *      也不出现 `br_cdev_ops` —— 打开设备只经条目里的 `open_file` 钩子拿 {fops, fpriv}。
- *      这正是 D21 撤销 "vfs-core→dev-core" 之后留给 devfs 的位置。
- *   ③ **名字空间变更一律 -ENOTSUP**(设计 `7-03` §3: "unlink/mkdir → -ENOTSUP"):
- *      设备的上线/下线归驱动注册, 不归文件系统 —— 于是那些 iops 槽位**留空**(NULL),
- *      由 vfs-core 翻译成 -ENOTSUP(不需要在这里写一行"返回不支持")。
+ * ## Three hard boundaries (this plugin is entirely about holding them)
+ *   (1) **project only, do not own devices**: a node = a **live enumeration** of the
+ *       dev-core registry (registering puts it online); devfs has no "device table"
+ *       and no lifecycle API — whether a device exists is decided by driver
+ *       registration.
+ *   (2) **knows no subclass shape** (design SD-13/D21): this file does **not
+ *       include** `br_cdev.h`, nor does `br_cdev_ops` appear — opening a device only
+ *       goes through the entry's `open_file` hook to get {fops, fpriv}. This is
+ *       exactly the slot D21 left to devfs after revoking "vfs-core→dev-core".
+ *   (3) **all namespace changes are -ENOTSUP** (design `7-03` §3: "unlink/mkdir →
+ *       -ENOTSUP"): bringing devices up/down belongs to driver registration, not the
+ *       file system — so those iops slots are **left empty** (NULL), and vfs-core
+ *       translates them to -ENOTSUP (no need to write a "return unsupported" line
+ *       here).
  *
- * ## inode 的形态(D23 的"根 inode = 注册表投影")
- *   根: 一个**静态**目录 inode(挂载表持有, 永不释放——`free_inode` 对它特判)。
- *   设备节点: `lookup` 时**现造**一个瞬态 inode(`br_malloc`), 携带 {fops, fpriv};
- *   打开它的会话由 cdev-core 的适配层建/销, devfs 只管把二元组塞进 inode。
- *   ⇒ 设备节点 inode 的 `free_inode` 是 `br_free`(与 tmpfs 的"节点即 inode"不同)。
+ * ## inode shape (D23's "root inode = registry projection")
+ *   root: one **static** directory inode (held by the mount table, never freed —
+ *   `free_inode` special-cases it).
+ *   device node: `lookup` **creates** a transient inode on the spot (`br_malloc`)
+ *   carrying {fops, fpriv}; the session for opening it is built/destroyed by
+ *   cdev-core's adapter layer, devfs only stuffs the pair into the inode.
+ *   ⇒ a device node inode's `free_inode` is `br_free` (unlike tmpfs's "node is the
+ *   inode").
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -30,17 +40,19 @@
 #include <br/dev/br_dev.h>
 #include <br/vfs/br_vfs.h>
 
-/* 生命周期钩子原型(名 = symbol_prefix + 相; 生成物引用; 不进 [[export]]) */
+/* Lifecycle hook prototypes (name = symbol_prefix + phase; referenced by generated code; not in [[export]]) */
 int devfs_early_init(void);
 int devfs_init(void);
 int devfs_start(void);
 
-/* 挂载点常量 —— **仅供自检当夹具名**。
- * ★ ADR-0030 起"挂在哪"由 **APP 的 `[[mount]]`** 决定(devfs 只登记驱动 `"devfs"`);
- *   从前它是"代码常量 + manifest 声明"两处真值(欠债 br-wa-fs-001), 生成链路落地后已还清。 */
+/* Mount path constant — **used only as the self-test fixture name**.
+ * ★ Since ADR-0030 "where to mount" is decided by the **APP's `[[mount]]`** (devfs only
+ *   registers the driver `"devfs"`); it used to be two sources of truth (a code
+ *   constant + a manifest declaration, debt br-wa-fs-001), repaid once the generation
+ *   pipeline landed. */
 #define BR_DEVFS_MOUNT_PATH   "/dev"
 
-/* ==================================================================== 小工具(无 libc) */
+/* ==================================================================== helpers (no libc) */
 
 static br_bool devfs_str_eq(const char *a, const char *b)
 {
@@ -63,30 +75,33 @@ static void devfs_str_copy(char *dst, const char *src, br_size_t cap)
     dst[i] = '\0';
 }
 
-/* ==================================================================== inode 形态 */
+/* ==================================================================== inode shape */
 
-/* 设备节点 inode 的公共头之后的私有尾: devfs 只需要"它投影的是哪个名字"。
- * (fops/fpriv 已经在公共头里 —— 那是 vfs 必须能读到的东西, 见 br_vfs.h 的说明。) */
+/* Private tail after the common header of a device-node inode: devfs only needs
+ * "which name it projects".
+ * (fops/fpriv are already in the common header — vfs must be able to read them, see
+ * the notes in br_vfs.h.) */
 typedef struct devfs_node {
     br_inode_t head;
     char       name[BR_DEV_NAME_MAX];
 } devfs_node_t;
 
-static br_inode_t s_root;   /* 根目录(挂载表持有; free_inode 对它特判) */
+static br_inode_t s_root;   /* root directory (held by the mount table; free_inode special-cases it) */
 
-/* 前向声明: 两张 iops 表在下面定义, 但 `make_dev_node` 先用到它们(表里的 getattr 也在
- * 后面)。C 的单遍声明规则要求这里给一行 —— 比"把整个 inode 段落上下翻转"更少扰动。 */
+/* Forward declarations: the two iops tables are defined below, but `make_dev_node`
+ * uses them first (their getattr is also defined later). C's single-pass declaration
+ * rules require this line — less churn than flipping the whole inode section. */
 static const br_inode_ops_t s_node_iops;
 static const br_inode_ops_t s_root_iops;
 static int devfs_getattr(br_inode_t *ino, br_stat_t *st);
 
-/* 读取目录迭代游标(每次 open 一份, 放在 fpriv 里) */
+/* Directory iteration cursor (one per open, stored in fpriv) */
 typedef struct devfs_iter {
-    br_u32 cursor;   /* 下一个要枚举的注册表下标(0 = 还没产出过设备) */
-    br_u32 phase;    /* 0 = 还没给 "."; 1 = 还没给 ".."; 2 = 正在枚举设备 */
+    br_u32 cursor;   /* next registry index to enumerate (0 = no device emitted yet) */
+    br_u32 phase;    /* 0 = "." not emitted yet; 1 = ".." not emitted yet; 2 = enumerating devices */
 } devfs_iter_t;
 
-/* ==================================================================== 目录面 */
+/* ==================================================================== directory surface */
 
 static br_inode_t *make_dev_node(const char *name, const br_dev_class_entry_t *e)
 {
@@ -97,24 +112,29 @@ static br_inode_t *make_dev_node(const char *name, const br_dev_class_entry_t *e
     devfs_str_copy(n->name, name, (br_size_t)sizeof(n->name));
 
     n->head.type    = BR_INODE_FILE;
-    /* ★ 设备节点**不是** iops = BR_NULL: `getattr/setattr` 属 inode 层(D23 的四层里
-     *   inode 级管属性, file 级管读写), 而每个 inode 都需要属性面 —— Linux 的
-     *   `i_op`/`f_op` 分工正是如此(文件 inode 的 i_op 只填 getattr/setattr)。
-     *   给 BR_NULL 的后果实测过: `br_stat("/dev/uart0")` 得 -ENOTSUP(TC-IO-001 红),
-     *   因为 vfs 的 br_stat 走 `iops->getattr`。
-     *   名字空间变更(create/unlink/mkdir/rename)仍**全部留空** ⇒ 由 vfs 翻成 -ENOTSUP
-     *   (设计 `7-03` §3: "unlink/mkdir → -ENOTSUP, 设备生命周期归驱动注册")。 */
+    /* ★ A device node's iops is **not** BR_NULL: `getattr/setattr` belong to the
+     *   inode layer (in D23's four layers, inode level handles attributes, file level
+     *   handles read/write), and every inode needs an attribute surface — Linux's
+     *   `i_op`/`f_op` split is exactly this (a file inode's i_op fills only
+     *   getattr/setattr).
+     *   The consequence of BR_NULL was measured: `br_stat("/dev/uart0")` returns
+     *   -ENOTSUP (TC-IO-001 red), because vfs's br_stat goes through
+     *   `iops->getattr`.
+     *   Namespace changes (create/unlink/mkdir/rename) are still **all empty** ⇒ vfs
+     *   turns them into -ENOTSUP (design `7-03` §3: "unlink/mkdir → -ENOTSUP, device
+     *   lifecycle belongs to driver registration"). */
     n->head.iops    = &s_node_iops;
-    n->head.fops    = BR_NULL;          /* 由钩子给(没有文件面就是 NULL ⇒ open 得 -ENOTSUP) */
+    n->head.fops    = BR_NULL;          /* given by the hook (no file surface ⇒ NULL ⇒ open gets -ENOTSUP) */
     n->head.fpriv   = BR_NULL;
 
-    /* ★ 唯一的"设备知识"入口: 条目自带的钩子。
-     * 钩子缺失 = 本子分类不提供文件面(v1 的 raw flash/bdev)⇒ 节点照样在, 打不开。 */
+    /* ★ The only "device knowledge" entry: the entry's own hook.
+     * A missing hook = this subclass provides no file surface (v1 raw flash/bdev) ⇒
+     * the node still exists, just cannot be opened. */
     if (e->open_file != BR_NULL) {
         const br_file_ops_t *fops = BR_NULL;
         void                *fpriv = BR_NULL;
         if (e->open_file(e->dev_priv, &fops, &fpriv) != BR_OK) {
-            fops  = BR_NULL;            /* 钩子报错 ⇒ 退化成"看得见打不开", 不编造文件面 */
+            fops  = BR_NULL;            /* hook error ⇒ degrade to "visible but not openable", do not invent a file surface */
             fpriv = BR_NULL;
         }
         n->head.fops  = fops;
@@ -125,20 +145,22 @@ static br_inode_t *make_dev_node(const char *name, const br_dev_class_entry_t *e
 
 static br_inode_t *devfs_lookup(br_inode_t *dir, const char *name)
 {
-    (void)dir;      /* devfs 只有一层: 任何 dir 都是根 */
+    (void)dir;      /* devfs has a single level: any dir is the root */
 
     if (name == BR_NULL) {
         return BR_NULL;
     }
     if (devfs_str_eq(name, ".") == BR_TRUE || devfs_str_eq(name, "..") == BR_TRUE) {
-        /* 根的上层还是根(设备树不挂到别处去)。返回根指针本身 —— 它是**非瞬态**的,
-         * `free_inode` 会特判它, 所以调用方照常"谁拿谁放"也不会把它释放掉。 */
+        /* The root's parent is still the root (the device tree is not mounted
+         * elsewhere). Return the root pointer itself — it is **non-transient**,
+         * `free_inode` special-cases it, so callers doing "whoever takes it releases
+         * it" will still not free it. */
         return &s_root;
     }
 
     const br_dev_class_entry_t *e = br_dev_lookup(name);
     if (e == BR_NULL) {
-        return BR_NULL;     /* 未注册 ⇒ 未命中(vfs 翻成 -ENOENT) */
+        return BR_NULL;     /* unregistered ⇒ miss (vfs turns it into -ENOENT) */
     }
     return make_dev_node(name, e);
 }
@@ -150,13 +172,15 @@ static int devfs_getattr(br_inode_t *ino, br_stat_t *st)
     }
     st->valid = BR_STAT_SIZE;
     st->type  = ino->type;
-    st->size  = 0u;         /* 设备节点没有"字节数"这回事(尺寸语义属会话, 不属节点) */
+    st->size  = 0u;         /* a device node has no "byte count" (size semantics belong to the session, not the node) */
     return BR_OK;
 }
 
-/* 设备节点 inode 的 iops: **只有 getattr**(属性面); 名字空间变更全空。
- * 与根 iops 分开是刻意的 —— 两个对象的**能力面**不同, 合成一张表会让
- * "能否在设备节点上 mkdir" 这类问题在代码里看不出答案。 */
+/* Device-node inode iops: **getattr only** (attribute surface); all namespace changes
+ * empty.
+ * Keeping it separate from the root iops is deliberate — the two objects have
+ * different **capability surfaces**, and merging them into one table would make
+ * questions like "can you mkdir on a device node" unanswerable from the code. */
 static const br_inode_ops_t s_node_iops = {
     .lookup  = BR_NULL,
     .create  = BR_NULL,
@@ -165,12 +189,12 @@ static const br_inode_ops_t s_node_iops = {
     .rmdir   = BR_NULL,
     .rename  = BR_NULL,
     .getattr = devfs_getattr,
-    .setattr = BR_NULL,     /* 设备节点的属性不可改(尺寸语义属会话, 不属节点) */
+    .setattr = BR_NULL,     /* device-node attributes are immutable (size semantics belong to the session, not the node) */
 };
 
-/* 根 inode 的 iops: **只有 lookup + getattr** —— mkdir/unlink/rmdir/rename/create 全部
- * 留空 ⇒ vfs 回 -ENOTSUP(设计 `7-03` §3 的原话:"unlink/mkdir → -ENOTSUP,
- * 设备生命周期归驱动注册")。 */
+/* Root inode iops: **lookup + getattr only** — mkdir/unlink/rmdir/rename/create all
+ * left empty ⇒ vfs returns -ENOTSUP (design `7-03` §3, verbatim: "unlink/mkdir →
+ * -ENOTSUP, device lifecycle belongs to driver registration"). */
 static const br_inode_ops_t s_root_iops = {
     .lookup  = devfs_lookup,
     .create  = BR_NULL,
@@ -182,7 +206,7 @@ static const br_inode_ops_t s_root_iops = {
     .setattr = BR_NULL,
 };
 
-/* ---- 根目录的"文件面" = 目录项流(设计 `7-01` §2: 目录 inode 的 file 面) ---- */
+/* ---- the root directory's "file surface" = directory entry stream (design `7-01` §2: the file surface of a directory inode) ---- */
 
 static int devfs_dir_open(br_file_t *f, br_u32 flags)
 {
@@ -225,10 +249,13 @@ static br_s64 devfs_dir_read(br_file_t *f, void *buf, br_size_t n)
         return (br_s64)sizeof(*de);
     }
 
-    /* 设备枚举:**每次调用都问一遍注册表**(实时投影, 设计 `7-03` §3)。
-     * v1 无注销 ⇒ 表只增不减 ⇒ 用下标游标不会漏项也不会重项; 若将来有注销,
-     * 这里必须改成"按名字续读"(届时注册表要给出稳定的迭代键)。
-     * (ADR-0009 §5 的遗留项清单里还没有这一条 —— 它属于"设备注销 API 落地时"的伴生工作。) */
+    /* Device enumeration: **query the registry on every call** (live projection,
+     * design `7-03` §3).
+     * v1 has no unregister ⇒ the table only grows ⇒ an index cursor neither misses
+     * nor repeats entries; if unregistration appears later, this must change to
+     * "resume by name" (the registry would then need a stable iteration key).
+     * (This is not yet in ADR-0009 §5's leftover list — it is companion work for
+     * "when the device unregister API lands".) */
     const br_u32 total = br_dev_count();
     while (it->cursor < total) {
         const char *name = br_dev_name_at(it->cursor);
@@ -245,7 +272,7 @@ static br_s64 devfs_dir_read(br_file_t *f, void *buf, br_size_t n)
         de->name_len = (br_u32)len;
         return (br_s64)sizeof(*de);
     }
-    return 0;       /* 穷尽 */
+    return 0;       /* exhausted */
 }
 
 static int devfs_dir_close(br_file_t *f)
@@ -261,8 +288,8 @@ static int devfs_dir_close(br_file_t *f)
 static const br_file_ops_t s_root_fops = {
     .open        = devfs_dir_open,
     .read        = devfs_dir_read,
-    .write       = BR_NULL,     /* 设备树只读(设备的上线走驱动注册) */
-    .lseek       = BR_NULL,     /* 目录项流不支持定位 */
+    .write       = BR_NULL,     /* the device tree is read-only (devices come online via driver registration) */
+    .lseek       = BR_NULL,     /* the directory entry stream does not support seeking */
     .ioctl       = BR_NULL,
     .fsync       = BR_NULL,
     .poll        = BR_NULL,
@@ -270,7 +297,7 @@ static const br_file_ops_t s_root_fops = {
     .close       = devfs_dir_close,
 };
 
-/* ==================================================================== 层 1: super */
+/* ==================================================================== layer 1: super */
 
 static int devfs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root)
 {
@@ -279,10 +306,12 @@ static int devfs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root)
         return BR_ERR(EINVAL);
     }
     if (devfs_str_eq(cfg->path, BR_DEVFS_MOUNT_PATH) == BR_FALSE) {
-        /* 挂载点与代码里的常量不符 ⇒ 拒挂。为什么不是"按 cfg 走":
-         * 那会让 devfs 的节点前缀(它自己不关心)与用例/文档里的 /dev 漂移;
-         * v1 的挂载点是编译期事实, 对不上就是接线错误(等生成链路落地后这条会自然消失)。 */
-        br_log_error("devfs: 挂载点 %s 与预期 %s 不符", cfg->path, BR_DEVFS_MOUNT_PATH);
+        /* Mount point disagrees with the code constant ⇒ refuse the mount. Why not
+         * "follow cfg": that would let devfs's node prefix (which it does not care
+         * about) drift from /dev in cases/docs; the v1 mount point is a compile-time
+         * fact, a mismatch is a wiring error (this will disappear once the generation
+         * pipeline lands). */
+        br_log_error("devfs: mount point %s != expected %s", cfg->path, BR_DEVFS_MOUNT_PATH);
         return BR_ERR(EINVAL);
     }
 
@@ -297,7 +326,7 @@ static int devfs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root)
 static void devfs_free_inode(br_inode_t *ino)
 {
     if (ino == BR_NULL || ino == &s_root) {
-        return;     /* 根是静态对象(挂载表持有); lookup("."/"..") 也会把它交出去 */
+        return;     /* the root is a static object (held by the mount table); lookup("."/"..") also hands it out */
     }
     br_free(ino);
 }
@@ -305,36 +334,39 @@ static void devfs_free_inode(br_inode_t *ino)
 static const br_fs_ops_t s_fs_ops = {
     .mount      = devfs_mount,
     .free_inode = devfs_free_inode,
-    .unmount    = BR_NULL,      /* v2/v3(运行时卸载属 O-S3) */
-    .sync       = BR_NULL,      /* 无持久化状态, 没有"落介质"这回事 */
+    .unmount    = BR_NULL,      /* v2/v3 (runtime unmount is O-S3) */
+    .sync       = BR_NULL,      /* no persistent state, there is no "write to media" */
 };
 
-/* ==================================================================== 生命周期 */
+/* ==================================================================== lifecycle */
 
 int devfs_early_init(void)
 {
-    return 0;       /* EARLY: 无线程无堆; 挂载在 CORE(那时堆已就绪) */
+    return 0;       /* EARLY: no threads, no heap; mounting is at CORE (by then the heap is ready) */
 }
 
 /*
- * CORE 相: 把 devfs 登记为**驱动**(不挂载)。
+ * CORE phase: register devfs as a **driver** (does not mount).
  *
- * ★ ADR-0030: **挂载由 APP 决定**。本件只说"我叫 devfs"; APP 用 POSIX
- *   `mount(NULL, "/dev", "devfs", 0, NULL)` 把它挂到 /dev。
- *   顺序前提也随之归 APP: "/" 必须先挂(tmpfs), 否则 /dev 这个挂载点没有父 FS 承接
- *   —— `br_vfs_mount` 会返回 -ENODEV(挂载点的自动 mkdir 由 vfs-core 做)。
+ * ★ ADR-0030: **mounting is decided by the APP**. This file only says "my name is
+ *   devfs"; the APP mounts it at /dev with the POSIX call
+ *   `mount(NULL, "/dev", "devfs", 0, NULL)`.
+ *   The ordering prerequisite also moves to the APP: "/" must be mounted first
+ *   (tmpfs), otherwise the /dev mount point has no parent FS to attach to —
+ *   `br_vfs_mount` returns -ENODEV (the automatic mkdir of the mount point is done
+ *   by vfs-core).
  */
 int devfs_init(void)
 {
     const int rc = br_fs_driver_register("devfs", &s_fs_ops, BR_NULL);
     if (rc != BR_OK) {
         br_log_error("devfs: register driver failed rc=%d", rc);
-        return rc;      /* 首败即停机由插件管理器执行(裁定 G6) */
+        return rc;      /* fail-fast halt is performed by the plugin manager (ruling G6) */
     }
     return 0;
 }
 
-/* START 相: 设备注册全部完成后, 报一行"看得见几个设备"(启动证据, 不是判据)。 */
+/* START phase: after all device registration is done, report "how many devices are visible" (boot evidence, not a criterion). */
 int devfs_start(void)
 {
     br_log_info("devfs: %u node(s) in %s (registry is live, not a snapshot)",

@@ -1,33 +1,33 @@
 /*
- * brickOS prototype v0.2.0 — platform 插件的自检聚合(platform/qemu-aarch64/src/selftest.c)
+ * brickOS prototype v0.2.0 — selftest aggregation for the platform plugin (platform/qemu-aarch64/src/selftest.c)
  *
- * 设计依据与裁定: `docs/decisions/0010-plugin-selftest.md`(自检与核心代码分离,
- * 由 core 在"全部 start 之后、调度器接管之前"统一驱动)。
+ * Design basis and ruling: `docs/decisions/0010-plugin-selftest.md` (selftest kept separate from core code, driven
+ * uniformly by core "after all starts, before the scheduler takes over").
  *
- * ## 为什么这个文件是"聚合"而不是"实现"
- *   platform 的两套用例**早就**与生产代码分离了 —— 它们分别在:
- *     `src/irq_conf.c`  `br_plat_irq_conformance()`  中断子系统逐用例(TC-IRQ-… / GIC-*)
- *     `src/mm_conf.c`   `br_plat_mem_conformance()`  内存映射逐用例(TC-MEM-… / TC-MM-…)
- *   而这两个文件里**没有**生产代码(生产在 `board_irq.c`/`gicv3.c`/`memmap.c`/`mmu.c`)。
- *   所以本刀对 platform 要做的不是"搬测试", 而是**给它们一个描述符钩子** ——
- *   于是 core 能像驱动别的插件一样驱动它, 而不是靠 platform 在自己的 start 里代跑。
+ * ## Why this file is an "aggregate" and not an "implementation"
+ *   platform's two case suites were **already** separated from production code -- they live in:
+ *     `src/irq_conf.c`  `br_plat_irq_conformance()`  interrupt subsystem cases (TC-IRQ-... / GIC-*)
+ *     `src/mm_conf.c`   `br_plat_mem_conformance()`  memory map cases (TC-MEM-... / TC-MM-...)
+ *   and those two files contain **no** production code (production is in `board_irq.c`/`gicv3.c`/`memmap.c`/`mmu.c`).
+ *   So what this cut must do for platform is not "move tests" but **give them a descriptor hook** -- so core can
+ *   drive it like any other plugin, instead of platform running the suites itself inside its own start.
  *
- *   ★ 文件名/函数名的历史包袱: 两个文件叫 `*_conf.c`、入口叫 `*_conformance()`,
- *     与新的 `selftest` 词汇不完全一致。本刀**不改它们** —— 重命名会让
- *     `git log`/外部引用/门禁 tag 一起漂, 而它们已经是"测试与核心分离"的形态;
- *     两者的关系在本注释里说清即可(ADR-0010 §3 裁定 8)。
+ *   * Historical baggage in file/function names: the two files are called `*_conf.c` and their entries
+ *     `*_conformance()`, which does not fully match the new `selftest` vocabulary. This cut **does not rename
+ *     them** -- renaming would drift `git log`/external references/gate tags together, and they are already in
+ *     the "tests separated from core" shape; stating the relation in this comment is enough (ADR-0010 §3 ruling 8).
  *
- * ## 失败计数怎么合
- *   两个入口都返回**各自的失败项数**, 本函数返回两者之和 —— 与 core 的
- *   `br_plugin_manager_selftest()` 对插件所做的一致(它把每个钩子的返回值相加)。
- *   日志不动: 两套用例自己打 `[IRQCONF]`/`[MEMCONF]` 的 PASS/FAIL 与 SUMMARY,
- *   门禁(gates.toml)按那些行判红绿; 本函数只补一行"platform 自检合计"。
+ * ## How failure counts are combined
+ *   Both entries return **their own failure count**, and this function returns the sum of the two -- consistent
+ *   with what core's `br_plugin_manager_selftest()` does for plugins (it adds up each hook's return value).
+ *   Logging is untouched: the two suites print their own `[IRQCONF]`/`[MEMCONF]` PASS/FAIL and SUMMARY lines,
+ *   the gates (gates.toml) judge red/green on those lines; this function only adds one "platform selftest total" line.
  */
 #include <br/core/br_log.h>
 #include <br/core/br_types.h>
 #include <br/platform/br_plat.h>
 
-/* 与生产文件一致的钩子原型约定(名 = symbol_prefix + 相; 生成物引用本函数)。 */
+/* Hook prototype convention matching the production files (name = symbol_prefix + phase; generated code refers to this function). */
 int qemu_aarch64_selftest(void);
 
 int qemu_aarch64_selftest(void)

@@ -42,7 +42,7 @@ prototype/
 └── adapter/
     ├── third-party-upstream.lock   ← vendor 的 sha256 只读锁
     └── uboot-{mmc,fat,erofs}/
-        ├── plugin.toml      ← 插件声明面; sources **直接指向 third_party 的上游 .c**
+        ├── brick.toml      ← 插件声明面; sources **直接指向 third_party 的上游 .c**
         ├── compat/          ← u-boot 运行环境(我们写的适配层: 类型/宏/头名适配壳)
         └── glue/            ← 块层 + VFS 对接 + 自检(本项目代码)
 ```
@@ -51,7 +51,7 @@ prototype/
 `adapter/<插件>/compat/` 兑现上游需要的**环境**; `glue/` 兑现上游需要的**行为**
 (块读、`sbi` 的存储、VFS 出口)。
 
-> ★ 为什么 `plugin.toml` 的 `sources` 直接写 `../../third_party/uboot-imx/fs/erofs/*.c`:
+> ★ 为什么 `brick.toml` 的 `sources` 直接写 `../../third_party/uboot-imx/fs/erofs/*.c`:
 > 这是"上游源码原样参与编译"的落地形态 —— **没有副本**, 所以不可能有副本与原件漂移。
 
 ### D-3 三种东西, 三种归属(判据清晰)
@@ -69,7 +69,7 @@ prototype/
 
 上游按 u-boot 的告警集合写(不含本项目的 `-Wshadow`/`-Wpointer-arith`/
 `-Wmissing-prototypes`/`-Wsign-compare`/`-Wunused-parameter`)。为了不改上游,
-`adapter/*/plugin.toml` 声明 `[build].cflags = ["-Wno-shadow", …]`。
+`adapter/*/brick.toml` 声明 `[build].cflags = ["-Wno-shadow", …]`。
 
 为此**修了工具链**: `[build].cflags` 以前被解析但**被丢掉**(`Unit` 无该字段)⇒
 单元级标志根本没到编译器。已在 `model.rs`(BuildDecl.cflags + 解析)与
@@ -84,7 +84,7 @@ prototype/
 2. **vendor 逐字节等于锁**(任一字节被改 ⇒ 红);
 3. 锁里每条都在磁盘上(丢了也红);
 4. vendor 里没有锁外的文件(塞东西也红);
-5. `third_party/` 下没有 `plugin.toml`(三方件不是 brickOS 插件);
+5. `third_party/` 下没有 `brick.toml`(三方件不是 brickOS 插件);
 6. 无人 include 三方件的头(vendor 只作参照, 参与编译的是被 sources 点名的 .c)。
 
 **负例已实测**: 往 `mmc.c` 尾加一个空格 ⇒ 红; 塞一个空文件 ⇒ 红。
@@ -98,7 +98,7 @@ prototype/
 
 ## 3. 落地(erofs): 上游原样编译
 
-`adapter/uboot-erofs/plugin.toml` 的 sources 是上游的
+`adapter/uboot-erofs/brick.toml` 的 sources 是上游的
 `fs/erofs/{super,namei,data,zmap,decompress}.c` + `lib/lz4.c`(注意源码**没有副本**)。
 
 **证据**(不是"看起来像"):

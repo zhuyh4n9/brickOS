@@ -304,13 +304,13 @@ SIGNAL_ENABLE`, 而上游 `sdhci_send_command()` 在**每次命令结束时**都
 |---|---|---|
 | `br-wa-emmc-001` | `glue/emmc_bdev.c::emmc_flush()` 的注释 | flush 只"等卡不忙", 未发 EXT_CSD `CACHE_FLUSH`(CMD6 SET_BIT[32]); 未做 boot/GP/RPMB 分区。★ 本标记从已删除的 `src/mmc_core.c` **搬来**(语义不变), 否则 `tools/check-workarounds.sh` 的双向绑定会红 |
 | `br-wa-test-001` | `glue/emmc_selftest.c` 的文件头 | `TC-EMMC-*` 是**自编号**(设计 `6-01` 的用例表里没有 eMMC 族) |
-| `br-wa-tp-001` | `plugin.toml` 的文件头 | 第三方模块的许可残余风险 + 工具链的 `third_party` 描述符模板缺口 |
+| `br-wa-tp-001` | `brick.toml` 的文件头 | 第三方模块的许可残余风险 + 工具链的 `third_party` 描述符模板缺口 |
 
 ## 8. 判据在哪(全部机械, 都能跑)
 
 | 判据 | 命令 | 它钉住什么 |
 |---|---|---|
-| vendor 只读 | `bash tools/check-third-party-pristine.sh` | ① 锁元数据齐 ② vendor 逐字节 = 锁 ③ 锁里每条都在磁盘上 ④ vendor 无锁外文件 ⑤ `third_party/` 下无 `plugin.toml` ⑥ 无人**直连**三方件的头 |
+| vendor 只读 | `bash tools/check-third-party-pristine.sh` | ① 锁元数据齐 ② vendor 逐字节 = 锁 ③ 锁里每条都在磁盘上 ④ vendor 无锁外文件 ⑤ `third_party/` 下无 `brick.toml` ⑥ 无人**直连**三方件的头 |
 | errno 单一真值 | `bash tools/check-errno.sh` | 除 `br_error.h` 外无第二处 errno 定义(§6 偏离 11 的边界) |
 | WORKAROUND 双向绑定 | `bash tools/check-workarounds.sh` | §7 的三个标记与 `WORKAROUNDS.md` 登记表一一对应 |
 | 上游真在编译 | `brickie build` 后 `ls build/obj/third_party/uboot-imx/drivers/mmc/` | 5 个上游 `.o`(证明编的是 vendor 原件) |

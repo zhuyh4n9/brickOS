@@ -49,7 +49,7 @@
   "diagnostics": [
     {
       "code": "BRV-MF-0001",
-      "file": "service/a/plugin.toml",
+      "file": "service/a/brick.toml",
       "severity": "error",
       "span": "dep",
       "target": "service/a"

@@ -1,16 +1,17 @@
 /*
- * brickOS prototype v0.1.0 — 中断子系统内部真值(core 私有; **不导出**, CA-10)
+ * brickOS prototype v0.1.0 — IRQ subsystem internal truth (core private; **not exported**, CA-10)
  *
- * 这里放的是 3-02 §3.3 / §14.4 的关键数据结构与 core 内部函数。
- * 布局约束来自设计(`_Static_assert` 把它钉住):
- *   br_irq_desc_t  = 32 B(字段顺序"按宽度降序", 消除填充; §3.3 的尺寸推导)
+ * Key data structures and core-internal functions from 3-02 §3.3 / §14.4.
+ * Layout constraints come from the design (`_Static_assert` pins them):
+ *   br_irq_desc_t  = 32 B (fields ordered by decreasing width, no padding; §3.3 size derivation)
  *   br_irq_rt_t    =  8 B
- *   br_irq_binding_t = 16 B(在 br_irq.h, platform 数据)
+ *   br_irq_binding_t = 16 B (in br_irq.h, platform data)
  *
- * ★ 描述符与运行期计数是**两个平行数组、同一 virq 下标**(§3.3):
- *   前者 = "配置与身份"(布局入 golden, 长期不动), 后者 = "运行期计数"(可增删)。
- *   分开后加计数器不会破 golden; 且**风暴检测是安全特性**(§8.3), 不能挂在
- *   诊断开关后面 ⇒ 两个池都恒在。
+ * ★ Descriptors and runtime counters are **two parallel arrays with the same virq index** (§3.3):
+ *   the former = "configuration and identity" (layout in golden, frozen long term),
+ *   the latter = "runtime counters" (can grow/shrink). Adding counters this way cannot
+ *   break golden; and **storm detection is a safety feature** (§8.3), so it cannot sit
+ *   behind a diagnostic switch ⇒ both pools always exist.
  */
 #ifndef BR_IRQ_INTERNAL_H
 #define BR_IRQ_INTERNAL_H
@@ -20,126 +21,128 @@
 #include <br/core/br_trace.h>
 
 /* =====================================================================
- * 描述符(3-02 §3.3; 下标 = virq, 热路径 O(1), 无查找表)
+ * Descriptor (3-02 §3.3; index = virq, hot path O(1), no lookup table)
  * ===================================================================== */
 typedef struct br_irq_desc {
-    void   (*isr)(void *);   /* [0x00] ISR 入口(thread-only 的 register 写入) */
+    void   (*isr)(void *);   /* [0x00] ISR entry (thread-only register write) */
     void    *arg;            /* [0x08] */
-    br_u32   hwirq;          /* [0x10] 缓存绑定表的 hwirq(热路径省一次查表) */
-    br_u16   flags;          /* [0x14] BR_IRQ_F_* 运行期属性 */
-    br_u16   depth;          /* [0x16] br_irq_disable 嵌套计数(IR-5; 注册后 = 1) */
-    br_u8    prio;           /* [0x18] 逻辑优先级(数值小 = 高) */
+    br_u32   hwirq;          /* [0x10] cached binding-table hwirq (saves a lookup on hot path) */
+    br_u16   flags;          /* [0x14] BR_IRQ_F_* runtime attributes */
+    br_u16   depth;          /* [0x16] br_irq_disable nesting count (IR-5; = 1 after register) */
+    br_u8    prio;           /* [0x18] logical priority (lower value = higher) */
     br_u8    trigger;        /* [0x19] BR_IRQ_TRIG_* */
-    br_s8    pic_id;         /* [0x1A] 直连: PIC 实例; 域成员: 父 PIC */
-    br_s8    dom_id;         /* [0x1B] -1 = 直连; >= 0 = 域 id */
-    br_u16   sub;            /* [0x1C] dom_id >= 0 时的子中断号 */
-    br_u16   storm;          /* [0x1E] 预留(§3.3 的 rsv 槽位): 交错的 2 B 槽位 */
+    br_s8    pic_id;         /* [0x1A] direct: PIC instance; domain member: parent PIC */
+    br_s8    dom_id;         /* [0x1B] -1 = direct; >= 0 = domain id */
+    br_u16   sub;            /* [0x1C] sub-IRQ number when dom_id >= 0 */
+    br_u16   storm;          /* [0x1E] reserved (§3.3 rsv slot): interleaved 2 B slot */
 } br_irq_desc_t;
 
-_Static_assert(sizeof(br_irq_desc_t) == 32u, "描述符必须 32 B(3-02 §3.3 的尺寸推导)");
+_Static_assert(sizeof(br_irq_desc_t) == 32u, "descriptor must be 32 B (3-02 §3.3 size derivation)");
 
-/* 运行期计数表(3-02 §3.3/§14.4; 与描述符平行同下标) */
+/* Runtime counter table (3-02 §3.3/§14.4; parallel to descriptors, same index) */
 typedef struct br_irq_rt {
-    br_u32 count;   /* 进入次数(仅 BR_IRQ_STATS=1 时维护) */
-    br_u16 storm;   /* 本线"窗口内被服务"次数(§8.3; 恒在 —— 安全特性) */
-    br_u16 epoch;   /* storm 复位用的 isr_seq 快照 */
+    br_u32 count;   /* entry count (maintained only when BR_IRQ_STATS=1) */
+    br_u16 storm;   /* times this line was serviced within the window (§8.3; always on — safety feature) */
+    br_u16 epoch;   /* isr_seq snapshot used to reset storm */
 } br_irq_rt_t;
 
-_Static_assert(sizeof(br_irq_rt_t) == 8u, "运行期表项必须 8 B");
+_Static_assert(sizeof(br_irq_rt_t) == 8u, "runtime table entry must be 8 B");
 
 /* =====================================================================
- * CPU-local(3-02 §14.4; TPIDR_EL1 指向它, BSS 零初始化 ⇒ 无运行期构造)
+ * CPU-local (3-02 §14.4; TPIDR_EL1 points here, BSS zero-init ⇒ no runtime construction)
  * ===================================================================== */
 typedef struct br_irq_cpu {
-    void   *current;          /* 当前线程(Stage 1 = NULL: 无线程) */
-    br_u32  irq_depth;        /* br_irq_lock 嵌套深度(INV-C 的执法对象) */
-    br_u32  saved_daif;       /* 最外层 lock 保存的 DAIF(以 br_irq_state_t 编码) */
-    br_u32  isr_nest;         /* ISR 嵌套(v1 恒 ≤ 1, IR-6) */
-    br_u32  in_fault;         /* fault 嵌套(≥2 = double fault, §10.6) */
-    br_u16  curr_virq;        /* 当前 ISR 的 virq(fault 归因: "哪个 ISR 踩了内存") */
-    br_u16  in_handler;       /* 正在执行的 fault handler 下标(v2; v1 恒 0xFFFF) */
-    br_u32  isr_seq;          /* 全局 ISR 序号(任何线进入 +1; 风暴窗口时基, §8.3) */
-    br_u32  storm_total;      /* 本核风暴事件累计(每次越过阈值 +1) */
-    br_u32  spurious_owned;   /* 有硬件屏蔽能力却仍到达(真 bug 信号) */
-    br_u32  spurious_nocap;   /* 无屏蔽能力时的预期丢弃(降级行为) */
-    br_u32  bh_deferred;      /* BH 形态: 成功推迟到下半部的次数(ADR-0011) */
-    br_u32  bh_dropped;       /* BH 形态: 队满 ⇒ 回滚未提交的次数(IR-10) */
-    br_u32  suppressed_dispatch; /* §11.4.1: 派发前已 disable ⇒ 抑制 handler 的次数 */
-    br_u32  prev_fault_ec;    /* 上一次 fault 的 EC(§10.6 打印用) */
-    br_u64  prev_fault_elr;   /* 上一次 fault 的 ELR */
+    void   *current;          /* current thread (Stage 1 = NULL: no thread) */
+    br_u32  irq_depth;        /* br_irq_lock nesting depth (enforcement target of INV-C) */
+    br_u32  saved_daif;       /* DAIF saved by outermost lock (encoded as br_irq_state_t) */
+    br_u32  isr_nest;         /* ISR nesting (v1 always <= 1, IR-6) */
+    br_u32  in_fault;         /* fault nesting (>=2 = double fault, §10.6) */
+    br_u16  curr_virq;        /* virq of current ISR (fault attribution: "which ISR faulted") */
+    br_u16  in_handler;       /* index of running fault handler (v2; v1 always 0xFFFF) */
+    br_u32  isr_seq;          /* global ISR sequence (any line entry +1; storm window time base, §8.3) */
+    br_u32  storm_total;      /* storm events on this core (each threshold crossing +1) */
+    br_u32  spurious_owned;   /* had hardware mask capability yet still arrived (real bug signal) */
+    br_u32  spurious_nocap;   /* expected drops without mask capability (degraded behavior) */
+    br_u32  bh_deferred;      /* BH form: successful deferrals to bottom half (ADR-0011) */
+    br_u32  bh_dropped;       /* BH form: queue full ⇒ rolled-back uncommitted count (IR-10) */
+    br_u32  suppressed_dispatch; /* §11.4.1: already disabled before dispatch ⇒ handler suppressed count */
+    br_u32  prev_fault_ec;    /* EC of previous fault (for §10.6 printing) */
+    br_u64  prev_fault_elr;   /* ELR of previous fault */
 } br_irq_cpu_t;
 
 #define BR_IRQ_NO_HANDLER  0xFFFFu
 
 /* =====================================================================
- * 级联域(3-02 §9.2)
+ * Cascaded domain (3-02 §9.2)
  * ===================================================================== */
 struct br_irq_domain {
     const char                *name;
     const br_irq_domain_ops_t *ops;
     void                      *priv;
-    br_u16 parent_virq;    /* 父物理线的 virq(★ 必须是 PIC 直连线) */
-    br_u16 virq_base;      /* 子中断 virq 窗口起点 */
+    br_u16 parent_virq;    /* virq of parent physical line (★ must be a PIC direct line) */
+    br_u16 virq_base;      /* start of child interrupt virq window */
     br_u16 n_sub;
     br_u16 flags;          /* BR_IRQ_DOMAIN_F_FAST / _SLOW */
-    br_irq_desc_t            *sub_desc;  /* [n_sub] 指向描述符池窗口 */
-    br_u32                   *bitmap;    /* [nwords] pending 缓冲(core 提供) */
+    br_irq_desc_t            *sub_desc;  /* [n_sub] points into descriptor pool window */
+    br_u32                   *bitmap;    /* [nwords] pending buffer (provided by core) */
     br_u16 nwords;
-    br_u8  id;             /* 域下标(域池) */
+    br_u8  id;             /* domain index (domain pool) */
     br_u8  rsv;
-    br_u16 busy;           /* SLOW 域: demux 单飞(§9.4; ADR-0011 起可达) */
-    br_u16 drop_count;     /* SLOW 域: 提交失败的推迟/丢弃计数 */
+    br_u16 busy;           /* SLOW domain: demux single-flight (§9.4; reachable since ADR-0011) */
+    br_u16 drop_count;     /* SLOW domain: deferred/dropped count for failed commits */
 };
 
 /* =====================================================================
- * core 内部接口(各 .c 之间共享; 均**不导出**)
+ * core internal interfaces (shared between .c files; all **not exported**)
  * ===================================================================== */
 
-/* 本核 CPU-local(BSS 静态实例; br_irq_cpu_init 后 TPIDR_EL1 指向同一处) */
+/* This core's CPU-local (static BSS instance; TPIDR_EL1 points to it after br_irq_cpu_init) */
 br_irq_cpu_t *br_irq_cpu(void);
 
-/* virq → 描述符(**含边界校验**: 越界/BR_IRQ_INVALID ⇒ NULL) */
+/* virq → descriptor (**with bounds check**: out of range/BR_IRQ_INVALID ⇒ NULL) */
 br_irq_desc_t *br_irq_desc_of(br_u32 virq);
 
-/* 运行期计数表项 */
+/* Runtime counter table entry */
 br_irq_rt_t *br_irq_rt_of(br_u32 virq);
 
-/* ---- PIC 注册表(irq_pic.c) ---- */
+/* ---- PIC registry (irq_pic.c) ---- */
 br_pic_t                *br_irq_pic(br_u32 pic_id);
 const br_pic_ops_t      *br_irq_pic_ops(br_u32 pic_id);
 const br_pic_caps_t     *br_irq_pic_caps(br_u32 pic_id);
 br_u32                   br_irq_pic_count(void);
-br_u32                   br_irq_cpu_pic_id(void);   /* 第一个注册的 = CPU 接口(IR-3 推论) */
+br_u32                   br_irq_cpu_pic_id(void);   /* first registered = CPU interface (IR-3 corollary) */
 
-/* hwirq → virq(热路径; v1 = 有序索引表 + 二分, §14.2)。命中返回 0 并写 *out。 */
+/* hwirq → virq (hot path; v1 = ordered index table + binary search, §14.2). Hit returns 0 and writes *out. */
 int br_irq_virq_of(br_u32 pic_id, br_u32 hwirq, br_u32 *out);
 
-/* ---- 屏蔽(irq_core.c) ---- */
+/* ---- masking (irq_core.c) ---- */
 void br_irq_pgm_mask  (br_irq_desc_t *d);
 void br_irq_pgm_unmask(br_irq_desc_t *d);
 
-/* ---- 风暴检测(irq_core.c; §8.3 的窗口化判据) ---- */
+/* ---- storm detection (irq_core.c; windowed criterion of §8.3) ---- */
 void br_irq_storm_check(br_irq_desc_t *d);
 
-/* ---- 下半部(irq_core.c; §11.1/§12.4/ADR-0011) ---- */
-/* 该线的 ISR 是否被配置为推迟到 bh(BR_IRQ_F_DISPATCH_BH)。直连线与域成员都可能。 */
+/* ---- bottom half (irq_core.c; §11.1/§12.4/ADR-0011) ---- */
+/* Whether this line's ISR is configured to defer to bh (BR_IRQ_F_DISPATCH_BH). Direct lines and domain members both. */
 br_bool br_irq_dispatch_is_bh(const br_irq_desc_t *d);
 
-/* 推迟/丢弃计数(CPU-local)。**两处推迟点共用一份真值**: 按线的分发(irq_core.c)
- * 与 SLOW 域的 demux(irq_domain.c)—— 否则"到底推迟了几次"会有两个来源。 */
+/* Defer/drop counters (CPU-local). **One source of truth shared by both deferral points**:
+ * per-line dispatch (irq_core.c) and SLOW domain demux (irq_domain.c) —— otherwise
+ * "how many deferrals happened" would have two sources. */
 void br_irq_bh_note_defer(void);
 void br_irq_bh_note_drop(void);
 
-/* ---- 域(irq_domain.c) ---- */
-/* 域 demux 主循环(§9.3)。**同一份代码服务两种上下文**:
- *   FAST 域 = 父线 ISR 内直接调; SLOW 域 = 由 bh 工作项调(ADR-0011)。
- * 上下文差异不在循环里, 只在**调用者**(这也是"SLOW 域的 ops->pending() 必须是
- * 总线事务、绝不能在 ISR 里读"这条契约的落点: 循环本身两种上下文都能跑)。 */
+/* ---- domain (irq_domain.c) ---- */
+/* Domain demux main loop (§9.3). **The same code serves both contexts**:
+ *   FAST domain = called directly in the parent line ISR; SLOW domain = called by the bh work item (ADR-0011).
+ * The context difference is not in the loop, only in the **caller** (this is also where the contract
+ * "SLOW domain ops->pending() must be a bus transaction and must never be read in the ISR" lands:
+ * the loop itself runs in either context). */
 void br_irq_demux(br_irq_domain_t *dom);
 
-/* SLOW 域成员所属域的"提交失败次数"(§9.4 的 drop_count; 直连线 ⇒ 0)。
- * 跨 TU 的只读访问器: 域对象是 irq_domain.c 的静态池, irq_core.c 的
- * `br_irq_stats_get()` 经它取 `br_irq_stat_t.drop`。 */
+/* "Commit failure count" of the domain owning a SLOW domain member (§9.4 drop_count; direct line ⇒ 0).
+ * Cross-TU read-only accessor: the domain object is irq_domain.c's static pool, and irq_core.c's
+ * `br_irq_stats_get()` reads `br_irq_stat_t.drop` through it. */
 br_u32 br_irq_domain_drop_of(const br_irq_desc_t *d);
 
 #endif /* BR_IRQ_INTERNAL_H */

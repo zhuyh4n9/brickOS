@@ -176,7 +176,7 @@ lookup 链与名字空间变更还需要:
    子 agent 按"非空目录 `-EBUSY`"实现后被一致性用例暴露(tmpfs 的非空 `rmdir` 与 vfs 的
    "挂载点不可删"要给出不同的 errno 才能分别判据)。这条是**用例发现的设计缺口**, 记在此。
 5. **`[[mount]]` 声明面是"人读的", 工具侧尚不消费** ⇒ 挂载点是**两处真值**
-   (`plugin.toml` 的 `[[mount]]` + 代码里的 `TMPFS_MOUNT_PATH`/`BR_DEVFS_MOUNT_PATH`),
+   (`brick.toml` 的 `[[mount]]` + 代码里的 `TMPFS_MOUNT_PATH`/`BR_DEVFS_MOUNT_PATH`),
    登记 `br-wa-fs-001`, 退出条件 = 组合器产出挂载计划(与 `br-wa-mem-001` 的
    budget→region 同源: 都是"声明面有了, 生成链路还没有")。
 6. **flash 子型的文件面在 v1 不存在**(`open_file = BR_NULL`): 设计 `7-03` §3 只说 "bdev 的 raw

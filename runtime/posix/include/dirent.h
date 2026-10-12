@@ -1,16 +1,18 @@
 /*
- * brickOS prototype v0.2.0 — 目录遍历(dirent.h; runtime/posix 插件提供)
+ * brickOS prototype v0.2.0 — directory traversal (dirent.h; provided by the runtime/posix plugin)
  *
- * ★ 底座是 vfs 的**纯泛型**目录面: `br_opendir`/`br_readdir`/`br_closedir`
- *   (目录 = 普通 `file_ops`, read 产出定长 `br_dirent_t`)。本服务只做形状转换 ——
- *   `br_dirent_t{type,name_len,name}` → `struct dirent{d_type,d_name}`。
+ * ★ The base is vfs's **purely generic** directory surface: `br_opendir`/`br_readdir`/
+ *   `br_closedir` (a directory = an ordinary `file_ops`, read produces a fixed-size
+ *   `br_dirent_t`). This service only converts shapes —
+ *   `br_dirent_t{type,name_len,name}` → `struct dirent{d_type,d_name}`.
  *
- * ★ `d_name` 留 256 字节(POSIX 习惯), 而 vfs 的名字上界是 `BR_NAME_MAX = 32`:
- *   缓冲比真实需要大是**契约稳定**的代价, 不是浪费 —— 将来 FS 放宽名字长度时,
- *   消费者不必重新编译。
+ * ★ `d_name` keeps 256 bytes (POSIX habit), while vfs's name bound is `BR_NAME_MAX = 32`:
+ *   a buffer larger than actually needed is the price of a **stable contract**, not waste —
+ *   when a future FS relaxes the name length, consumers need not recompile.
  *
- * ★ `d_off` / `seekdir` / `telldir` 属 TR-C(vfs 的 `br_dirent_t` 没有 `d_off`,
- *   见 `11-02` §2.2)⇒ 本代**不声明** `seekdir`/`telldir`, `d_off` 恒 0。
+ * ★ `d_off` / `seekdir` / `telldir` belong to TR-C (vfs's `br_dirent_t` has no `d_off`,
+ *   see `11-02` §2.2) ⇒ this generation **does not declare** `seekdir`/`telldir`, and
+ *   `d_off` is always 0.
  */
 #ifndef BR_POSIX_DIRENT_H
 #define BR_POSIX_DIRENT_H
@@ -27,7 +29,7 @@ struct dirent {
     char           d_name[BR_POSIX_NAME_MAX];
 };
 
-/* `d_type` 取值(与 Linux 同值) */
+/* `d_type` values (same as Linux) */
 #define DT_UNKNOWN  0
 #define DT_FIFO     1
 #define DT_CHR      2

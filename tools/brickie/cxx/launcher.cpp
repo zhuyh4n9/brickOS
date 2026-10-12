@@ -1,36 +1,39 @@
-// brickie — **单文件自包含**的宿主入口 ELF(零第三方依赖)。
+// brickie — **single-file self-contained** host entry ELF (zero third-party dependencies).
 //
-// 形态(用户裁定, 见 ADR-0004 §7): 把
-//   * Python 包(python/brickie/**)
-//   * 骨架模板(templates/**)
-//   * **原生工具**(bin/**, 现在 `brickie-gen`, 将来 `brickie-core` 等)
-// 全部作为数据嵌进本可执行文件(由 freeze.py 生成 `brickie_payload.cpp`),
-// 运行时解包到临时目录, 再用系统 `python3` 解释, 并执行嵌入的原生工具。
+// Shape (user decision, see ADR-0004 §7): everything below is embedded as data into this executable
+// (freeze.py generates `brickie_payload.cpp`), unpacked at runtime into a temp dir, then interpreted
+// by the system `python3`, which also runs the embedded native tools:
+//   * the Python package (python/brickie/**)
+//   * skeleton templates (templates/**)
+//   * **native tools** (bin/**, currently `brickie-gen`, later `brickie-core` etc.)
 //
-//   ┌─ brickie(本 ELF) ─────────────────────────────────────────────────┐
-//   │  1. 定位自身路径(/proc/self/exe, 退化到 argv[0])                   │
-//   │  2. 解包嵌入载荷 → $TMPDIR/brickie-XXXXXX/{python,templates,bin}   │
-//   │  3. 布环境: PYTHONPATH / BRICKIE_TOOL_ROOT / BRICKIE_GEN /         │
-//   │             BRICKIE_CORE(均指嵌入件)                                │
-//   │  4. fork+exec `python3 -m brickie <原样参数>`; 等子进程(含其孙进程)  │
-//   │  5. 清理临时目录, 转发子进程退出码                                 │
-//   └────────────────────────────────────────────────────────────────────┘
+//   ┌─ brickie (this ELF) ───────────────────────────────────────────────────┐
+//   │  1. locate own path (/proc/self/exe, fallback to argv[0])              │
+//   │  2. unpack payload -> $TMPDIR/brickie-XXXXXX/{python,templates,bin}    │
+//   │  3. set env: PYTHONPATH / BRICKIE_TOOL_ROOT / BRICKIE_GEN /            │
+//   │             BRICKIE_CORE (all point at the embedded files)             │
+//   │  4. fork+exec `python3 -m brickie <args>`; wait for child tree         │
+//   │  5. remove temp dir, forward the child's exit code                     │
+//   └────────────────────────────────────────────────────────────────────────┘
 //
-// 为什么不是 PyInstaller/Nuitka: 设计侧 v0.1 的纪律是"Python 零第三方依赖"
-// (BR-D3 修订口径); 自举种子要能随源码复现。自写启动器 + 未压缩 tar 载荷
-// 只需要 g++ 与 Python 标准库, 且载荷逐字节可复现。
+// Why not PyInstaller/Nuitka: the v0.1 design discipline is "zero third-party Python dependencies"
+// (BR-D3 revised wording); the bootstrap seed must be reproducible from source. A hand-written launcher
+// plus an uncompressed tar payload needs only g++ and the Python standard library, and the payload is
+// byte-for-byte reproducible.
 //
-// **单文件自包含**: 原生工具嵌在载荷的 `bin/` 下(带可执行位) —— 现在必嵌
-// `brickie-gen`(L2), 若 `brickie-core`(L0/L1 Rust)已就位则一并嵌。启动器把
-// `BRICKIE_GEN` / `BRICKIE_CORE` 指到解包出来的那几份 ⇒ **只拷 `brickie` 一个文件**
-// 到任何地方都能跑, 不需要同目录的 `brickie-gen`、不需要源码树、不需要 `PYTHONPATH`。
-// (过渡兜底: 若载荷里没有 `brickie-gen` 而自身同目录有独立的 `brickie-gen`, 也认。)
+// **Single-file self-contained**: native tools are embedded under `bin/` in the payload (with the
+// executable bit) — `brickie-gen` (L2) is always embedded, and `brickie-core` (L0/L1 Rust) too once it
+// exists. The launcher points `BRICKIE_GEN` / `BRICKIE_CORE` at the unpacked copies ⇒ copying **just the
+// single `brickie` file** anywhere works, with no sibling `brickie-gen`, no source tree and no
+// `PYTHONPATH` needed. (Transitional fallback: if the payload has no `brickie-gen` but a standalone
+// `brickie-gen` sits next to us, that is accepted too.)
 //
-// 退出码: 子进程的退出码原样转发; 启动器自身的环境错(找不到/解不开载荷、
-// 建不了临时目录、起不了 python3)按 BRV-D9 的"环境错"档返回 **2**。
+// Exit code: the child's exit code is forwarded as-is; the launcher's own environment errors (payload
+// missing/undecodable, cannot create temp dir, cannot start python3) return **2** per BRV-D9's
+// "environment error" class.
 //
-// 平台: POSIX(Linux 用 /proc/self/exe; 其他平台退化到 argv[0]/PATH 查找)。
-// Windows 的 `_spawnvp` 变体属后续(见 ADR-0004 §7.4)。
+// Platform: POSIX (/proc/self/exe on Linux; other platforms fall back to argv[0]/PATH lookup).
+// The Windows `_spawnvp` variant comes later (see ADR-0004 §7.4).
 
 #define _GNU_SOURCE 1
 
@@ -55,7 +58,7 @@ extern const unsigned long brickie_payload_size;
 
 namespace {
 
-constexpr int kEnvError = 2;      // BRV-D9: 用法/环境错
+constexpr int kEnvError = 2;      // BRV-D9: usage/environment error
 constexpr unsigned long kBlock = 512;
 
 [[noreturn]] void die(const std::string& message) {
@@ -63,7 +66,7 @@ constexpr unsigned long kBlock = 512;
     std::exit(kEnvError);
 }
 
-// ------------------------------------------------------------------ 自身路径
+// ------------------------------------------------------------------ own path
 
 std::string path_lookup(const std::string& name) {
     const char* path = std::getenv("PATH");
@@ -111,7 +114,7 @@ std::string dir_of(const std::string& path) {
     return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
 }
 
-// ------------------------------------------------------------------ 目录/文件
+// ------------------------------------------------------------------ dirs/files
 
 void make_dirs(const std::string& path) {
     if (path.empty()) return;
@@ -128,7 +131,7 @@ void make_dirs(const std::string& path) {
             if (current.empty() || current.back() != '/') current += '/';
             current += part;
             if (::mkdir(current.c_str(), 0755) != 0 && errno != EEXIST) {
-                die("无法创建目录 " + current + ": " + std::strerror(errno));
+                die("cannot create directory " + current + ": " + std::strerror(errno));
             }
         }
         if (slash == std::string::npos) break;
@@ -162,7 +165,7 @@ unsigned long long parse_octal(const unsigned char* field, std::size_t width) {
     for (std::size_t i = 0; i < width; ++i) {
         unsigned char c = field[i];
         if (c == '\0' || c == ' ') break;
-        if (c < '0' || c > '7') die("嵌入载荷的 tar 头字段非法");
+        if (c < '0' || c > '7') die("invalid tar header field in embedded payload");
         value = value * 8 + static_cast<unsigned long long>(c - '0');
     }
     return value;
@@ -178,11 +181,11 @@ bool block_is_zero(const unsigned char* block) {
 void write_file(const std::string& path, const unsigned char* data, unsigned long long size,
                 unsigned mode) {
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, mode & 0777);
-    if (fd < 0) die("无法写入 " + path + ": " + std::strerror(errno));
-    // umask 可能削掉可执行位 ⇒ 显式设一次模式(嵌入的原生工具要能 exec)。
+    if (fd < 0) die("cannot write " + path + ": " + std::strerror(errno));
+    // umask may strip the executable bit ⇒ set the mode explicitly (embedded native tools must be execable).
     if (::fchmod(fd, mode & 0777) != 0) {
         ::close(fd);
-        die("无法设置 " + path + " 的权限: " + std::strerror(errno));
+        die("cannot set permissions on " + path + ": " + std::strerror(errno));
     }
     unsigned long long written = 0;
     while (written < size) {
@@ -190,7 +193,7 @@ void write_file(const std::string& path, const unsigned char* data, unsigned lon
         if (n < 0) {
             if (errno == EINTR) continue;
             ::close(fd);
-            die("写入 " + path + " 失败: " + std::strerror(errno));
+            die("failed to write " + path + ": " + std::strerror(errno));
         }
         written += static_cast<unsigned long long>(n);
     }
@@ -198,7 +201,7 @@ void write_file(const std::string& path, const unsigned char* data, unsigned lon
 }
 
 void extract_payload(const std::string& dest) {
-    if (brickie_payload_size == 0) die("嵌入载荷为空(构建异常)");
+    if (brickie_payload_size == 0) die("embedded payload is empty (build error)");
 
     const unsigned char* cursor = brickie_payload;
     const unsigned char* end = brickie_payload + brickie_payload_size;
@@ -218,30 +221,30 @@ void extract_payload(const std::string& dest) {
         if (type == '0' || type == '\0') {
             std::string rel(name);
             if (rel.empty() || rel[0] == '/' || rel.find("..") != std::string::npos) {
-                die("嵌入载荷含非法路径: " + rel);
+                die("embedded payload contains an illegal path: " + rel);
             }
             std::string full = dest + "/" + rel;
             std::string parent = dir_of(full);
             make_dirs(parent);
 
             const unsigned char* data = header + kBlock;
-            if (data + size > end) die("嵌入载荷被截断");
+            if (data + size > end) die("embedded payload is truncated");
             write_file(full, data, size, mode);
             ++files;
         } else if (type == '5') {
             make_dirs(dest + "/" + std::string(name));
         } else {
-            die("嵌入载荷含不支持的条目类型");
+            die("embedded payload contains an unsupported entry type");
         }
 
         unsigned long long padded = ((size + kBlock - 1) / kBlock) * kBlock;
         cursor = header + kBlock + padded;
     }
 
-    if (files == 0) die("嵌入载荷没有任何文件(构建异常)");
+    if (files == 0) die("embedded payload contains no files (build error)");
 }
 
-// -------------------------------------------------------------------- 环境
+// -------------------------------------------------------------------- environment
 
 void set_env_if_absent(const char* key, const std::string& value) {
     if (::getenv(key) == nullptr) ::setenv(key, value.c_str(), 1);
@@ -268,7 +271,7 @@ int main(int argc, char** argv) {
     const std::string self = self_path(argc > 0 ? argv[0] : nullptr);
     const std::string self_dir = self.empty() ? std::string() : dir_of(self);
 
-    // 临时目录(TMPDIR 优先; 每次运行独立, 退出前清掉)
+    // Temp dir (TMPDIR preferred; per-run, removed before exit)
     const char* tmpdir = std::getenv("TMPDIR");
     std::string pattern = (tmpdir != nullptr && *tmpdir != '\0') ? tmpdir : "/tmp";
     if (!pattern.empty() && pattern.back() == '/') pattern.pop_back();
@@ -277,32 +280,33 @@ int main(int argc, char** argv) {
     std::vector<char> buffer(pattern.begin(), pattern.end());
     buffer.push_back('\0');
     char* made = ::mkdtemp(buffer.data());
-    if (made == nullptr) die(std::string("无法创建临时目录: ") + std::strerror(errno));
+    if (made == nullptr) die(std::string("cannot create temp directory: ") + std::strerror(errno));
     const std::string work(made);
 
     extract_payload(work);
 
-    // 让前端用**嵌入的**代码与模板
+    // Make the front-end use the **embedded** code and templates
     prepend_pythonpath(work + "/python");
     set_env_if_absent("BRICKIE_TOOL_ROOT", work);
     set_env_if_absent("PYTHONDONTWRITEBYTECODE", "1");
     set_env_if_absent("PYTHONNOUSERSITE", "1");
 
-    // 原生工具已**嵌在载荷里**(bin/brickie-gen): 优先用它 ⇒ brickie 单文件自包含,
-    // 不需要同目录的 brickie-gen、也不需要源码树。显式设了 BRICKIE_GEN 则不覆盖。
+    // Native tools are already **embedded in the payload** (bin/brickie-gen): prefer that one ⇒ brickie is
+    // a single self-contained file needing no sibling brickie-gen and no source tree. An explicit
+    // BRICKIE_GEN is never overridden.
     if (::getenv("BRICKIE_GEN") == nullptr) {
         std::string embedded = work + "/bin/brickie-gen";
         if (is_executable(embedded)) {
             set_env("BRICKIE_GEN", embedded);
         } else if (!self_dir.empty()) {
-            // 兜底(过渡形态): 同目录若还有独立的 brickie-gen, 也认。
+            // Fallback (transitional shape): accept a standalone brickie-gen in the same directory.
             std::string sibling = self_dir + "/brickie-gen";
             if (is_executable(sibling)) set_env("BRICKIE_GEN", sibling);
         }
     }
 
-    // L0/L1 的 Rust 核心: 载荷里有就指过去(缺失是允许的降级 —— 构建期 core 可能
-    // 还没产出, 见 cxx/Makefile 的 CORE_EMBED); 与 BRICKIE_GEN 一样不覆盖显式值。
+    // L0/L1 Rust core: point at it if the payload has it (absence is a permitted degradation — core may
+    // not be built yet, see CORE_EMBED in cxx/Makefile); like BRICKIE_GEN, never override an explicit value.
     if (::getenv("BRICKIE_CORE") == nullptr) {
         std::string embedded = work + "/bin/brickie-core";
         if (is_executable(embedded)) set_env("BRICKIE_CORE", embedded);
@@ -319,23 +323,23 @@ int main(int argc, char** argv) {
     child_argv.push_back(nullptr);
 
     pid_t pid = ::fork();
-    if (pid < 0) die(std::string("fork 失败: ") + std::strerror(errno));
+    if (pid < 0) die(std::string("fork failed: ") + std::strerror(errno));
     if (pid == 0) {
         ::execvp(python.c_str(), child_argv.data());
-        std::fprintf(stderr, "brickie: 无法执行 %s: %s\n", python.c_str(), std::strerror(errno));
+        std::fprintf(stderr, "brickie: cannot execute %s: %s\n", python.c_str(), std::strerror(errno));
         ::_exit(127);
     }
 
     int status = 0;
     while (::waitpid(pid, &status, 0) < 0) {
-        if (errno != EINTR) die(std::string("waitpid 失败: ") + std::strerror(errno));
+        if (errno != EINTR) die(std::string("waitpid failed: ") + std::strerror(errno));
     }
 
     int exit_code = 1;
     if (WIFEXITED(status)) {
         exit_code = WEXITSTATUS(status);
     } else if (WIFSIGNALED(status)) {
-        exit_code = 128 + WTERMSIG(status);   // 与 shell 的口径一致
+        exit_code = 128 + WTERMSIG(status);   // same convention as the shell
     }
 
     remove_tree(work);

@@ -1,12 +1,13 @@
-//! `dep-add` / `dep-rm` 的**片段生成**(裁定 R-2)。
+//! **Snippet generation** for `dep-add` / `dep-rm` (ruling R-2).
 //!
-//! R-2 取 §9.1.1 规则 1(后出的显式决策): **不写 `plugin.toml`**, 只打印可直接粘进
-//! 声明面的 TOML 片段(`data.snippet`)与定位(`data.span`)。写库会抹掉人写注释且违反
-//! "唯一真值"; 切换成本 = 将来加 `--write`。
+//! R-2 follows §9.1.1 rule 1 (later explicit decision): **do not write `brick.toml`**, only
+//! print the TOML snippet (`data.snippet`) to paste into the declaration and its span
+//! (`data.span`). Writing would erase human comments and break the "single source of truth";
+//! switching cost = adding `--write` later.
 //!
-//! 旗标纪律(§7.7.1): `dep` 族的旗标只描述**结构依赖** —— `--kind` 决定边类型,
-//! `--phase` 是 `kind = "init"` 的相位断言;**没有** `--compat-gen` / `--frozen-gen`
-//! (`[[dep]]` 一律不钉代, 依 F3)。
+//! Flag discipline (§7.7.1): `dep` flags describe **structural dependencies** only — `--kind`
+//! sets the edge type, `--phase` asserts the phase for `kind = "init"`; there is **no**
+//! `--compat-gen` / `--frozen-gen` (`[[dep]]` never pins a generation, per F3).
 
 use serde_json::{json, Value};
 
@@ -15,16 +16,16 @@ use crate::model::TreeLoad;
 use crate::rules;
 use crate::version::Range;
 
-/// 生成结果。
+/// Generation result.
 #[derive(Clone, Debug, Default)]
 pub struct DepSnippet {
-    /// 目标 `plugin.toml`(相对 root)。
+    /// Target `brick.toml` (relative to root).
     pub path: String,
-    /// TOML 路径定位, 如 `dep[2]`。
+    /// TOML path location, e.g. `dep[2]`.
     pub span: String,
-    /// 可直接粘贴的 TOML 片段。
+    /// TOML snippet ready to paste.
     pub snippet: String,
-    /// `dep-rm` 是否真的定位到了块。
+    /// Whether `dep-rm` actually located the block.
     pub found: bool,
 }
 
@@ -53,7 +54,7 @@ fn render_dep_block(name: &str, range: &str, kind: &str, phase: Option<&str>, sy
     out
 }
 
-/// `dep-add`: `{plugin, dep, range?, kind, phase?}` → `data.snippet`。
+/// `dep-add`: `{plugin, dep, range?, kind, phase?}` → `data.snippet`.
 pub fn dep_add(tree: &TreeLoad, args: &serde_json::Map<String, Value>) -> (Diags, Option<DepSnippet>) {
     let mut d = Diags::new();
     let plugin = args.get("plugin").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -76,50 +77,51 @@ pub fn dep_add(tree: &TreeLoad, args: &serde_json::Map<String, Value>) -> (Diags
         .to_string();
 
     if plugin.is_empty() {
-        d.shape("BRV-MF-0001", "", "", "args.plugin", "缺少必填参数 `plugin`", "§7.7");
+        d.shape("BRV-MF-0001", "", "", "args.plugin", "missing required argument `plugin`", "§7.7");
         return (d, None);
     }
     if dep.is_empty() {
-        d.shape("BRV-MF-0001", &plugin, "", "args.dep", "缺少必填参数 `dep`", "§7.7");
+        d.shape("BRV-MF-0001", &plugin, "", "args.dep", "missing required argument `dep`", "§7.7");
         return (d, None);
     }
     if !rules::valid_plugin_name(&dep) {
-        d.shape("BRV-MF-0001", &plugin, "", "args.dep", format!("依赖名 `{dep}` 不符名字契约"), "契约: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)");
+        d.shape("BRV-MF-0001", &plugin, "", "args.dep", format!("dependency name `{dep}` violates the name contract"), "contract: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)");
         return (d, None);
     }
     if !rules::in_list(rules::DEP_KINDS, &kind) {
-        d.shape("BRV-MF-0001", &plugin, "", "args.kind", format!("未知依赖类别 `{kind}`"), &format!("合法值: {}(§7.1)", rules::list_of(rules::DEP_KINDS)));
+        d.shape("BRV-MF-0001", &plugin, "", "args.kind", format!("unknown dependency kind `{kind}`"), &format!("valid values: {}(§7.1)", rules::list_of(rules::DEP_KINDS)));
         return (d, None);
     }
     if let Some(p) = &phase {
         if !rules::in_list(rules::PHASES, p) {
-            d.shape("BRV-MF-0001", &plugin, "", "args.phase", format!("未知 phase `{p}`"), &format!("合法值: {}", rules::list_of(rules::PHASES)));
+            d.shape("BRV-MF-0001", &plugin, "", "args.phase", format!("unknown phase `{p}`"), &format!("valid values: {}", rules::list_of(rules::PHASES)));
             return (d, None);
         }
         if kind != "init" {
-            d.shape("BRV-MF-0001", &plugin, "", "args.phase", "`phase` 只对 `kind = \"init\"` 有意义", "§7.2: 断言只描述 init 完成点");
+            d.shape("BRV-MF-0001", &plugin, "", "args.phase", "`phase` only applies to `kind = \"init\"`", "§7.2: the assertion only describes the init completion point");
             return (d, None);
         }
     }
     if let Err(e) = Range::parse(&range) {
-        d.shape(e.code, &plugin, "", "args.range", e.message, "§7.4: range 固定 3 段(4 段非法)");
+        d.shape(e.code, &plugin, "", "args.range", e.message, "§7.4: range has exactly 3 segments (4 is illegal)");
         return (d, None);
     }
 
-    // 目标插件必须在树里(否则片段无处可粘)。
+    // Target plugin must exist in the tree (otherwise there is nowhere to paste).
     let Some(target) = tree.by_name(&plugin) else {
         d.usage(
-            format!("插件树里找不到插件 `{plugin}`"),
-            "先在仓库根跑 `brickie new` 或确认 `root` 指向插件树",
+            format!("plugin `{plugin}` not found in the plugin tree"),
+            "run `brickie new` at the repo root first, or check that `root` points at the plugin tree",
         );
         return (d, None);
     };
 
-    // 注: "该依赖已声明"不做诊断 —— BRV-D8 没有为"重复声明"分配码, 而按裁定 R-9
-    // 借用 `BRV-MF-0001`(形状错)会把一次良性的重复提示升成退出码 2。已登记为缺口。
+    // Note: "dependency already declared" is not diagnosed — BRV-D8 allocates no code for
+    // "duplicate declaration", and per ruling R-9 borrowing `BRV-MF-0001` (shape error) would
+    // escalate a benign duplicate notice to exit code 2. Registered as a gap.
 
     let snippet = format!(
-        "# 粘贴到 {} 的 `[[dep]]` 区(裁定 R-2: brickie 不改写人写文件)\n{}",
+        "# paste into the `[[dep]]` section of {} (ruling R-2: brickie does not rewrite human-written files)\n{}",
         target.file,
         render_dep_block(&dep, &range, &kind, phase.as_deref(), None)
     );
@@ -134,7 +136,7 @@ pub fn dep_add(tree: &TreeLoad, args: &serde_json::Map<String, Value>) -> (Diags
     )
 }
 
-/// `dep-rm`: `{plugin, dep, kind?}` → 待删除块的**定位** + 还原片段。
+/// `dep-rm`: `{plugin, dep, kind?}` → **location** of the block to delete + restored snippet.
 pub fn dep_rm(tree: &TreeLoad, args: &serde_json::Map<String, Value>) -> (Diags, Option<DepSnippet>) {
     let mut d = Diags::new();
     let plugin = args.get("plugin").and_then(|v| v.as_str()).unwrap_or("").to_string();
@@ -142,17 +144,17 @@ pub fn dep_rm(tree: &TreeLoad, args: &serde_json::Map<String, Value>) -> (Diags,
     let kind = args.get("kind").and_then(|v| v.as_str()).map(str::to_string);
 
     if plugin.is_empty() || dep.is_empty() {
-        d.shape("BRV-MF-0001", &plugin, "", "args", "`dep-rm` 需要 `plugin` 与 `dep` 两个参数", "§7.7");
+        d.shape("BRV-MF-0001", &plugin, "", "args", "`dep-rm` requires both `plugin` and `dep` arguments", "§7.7");
         return (d, None);
     }
     if let Some(k) = &kind {
         if !rules::in_list(rules::DEP_KINDS, k) {
-            d.shape("BRV-MF-0001", &plugin, "", "args.kind", format!("未知依赖类别 `{k}`"), &format!("合法值: {}", rules::list_of(rules::DEP_KINDS)));
+            d.shape("BRV-MF-0001", &plugin, "", "args.kind", format!("unknown dependency kind `{k}`"), &format!("valid values: {}", rules::list_of(rules::DEP_KINDS)));
             return (d, None);
         }
     }
     let Some(target) = tree.by_name(&plugin) else {
-        d.usage(format!("插件树里找不到插件 `{plugin}`"), "确认 `root` 指向插件树");
+        d.usage(format!("plugin `{plugin}` not found in the plugin tree"), "check that `root` points at the plugin tree");
         return (d, None);
     };
     let idx = target.deps.iter().position(|x| {
@@ -161,7 +163,7 @@ pub fn dep_rm(tree: &TreeLoad, args: &serde_json::Map<String, Value>) -> (Diags,
     match idx {
         None => {
             let snippet = format!(
-                "# 未找到: {} 里没有对 `{}`{} 的 `[[dep]]` 块\n",
+                "# not found: {} has no `[[dep]]` block for `{}`{}\n",
                 target.file,
                 dep,
                 kind.as_deref().map(|k| format!("(kind = {k})")).unwrap_or_default()
@@ -179,7 +181,7 @@ pub fn dep_rm(tree: &TreeLoad, args: &serde_json::Map<String, Value>) -> (Diags,
         Some(i) => {
             let x = &target.deps[i];
             let snippet = format!(
-                "# 删除 {} 中的 `dep[{i}]` 块(裁定 R-2: 只定位, 不改写人写文件)\n{}",
+                "# delete the `dep[{i}]` block in {} (ruling R-2: locate only, do not rewrite human-written files)\n{}",
                 target.file,
                 render_dep_block(
                     &x.name,

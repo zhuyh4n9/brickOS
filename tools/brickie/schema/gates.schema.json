@@ -1,7 +1,7 @@
 {
   "$schema": "http://json-schema.org/draft-07/schema#",
-  "title": "tests/gates.toml — v0.1 门禁声明面(BRV-D2: 单条记录形状)",
-  "description": "形状对齐 contract §7.4。只表达**单条记录形状**(字段名/类型); 正则子集(支持 `. * + ? [...] \\x`, 不支持 `( ) | ^ $ { }`)、门禁名唯一性、`[build].post` 里的名字是否存在、日志判红绿等**判定**一律由 brickie-core 报 `BRV-BLD-0008..0012`(裁定 R-16: 判据在 core, L5 只执行)。本文件**不**参与 L5 的形状门(不登记进 schema.py 的 SCHEMA_FILES)—— 门禁判据属于 core, 不是 L5 的允许职责。",
+  "title": "tests/gates.toml - v0.1 gate declaration surface (BRV-D2: single-record shape)",
+  "description": "Shape matches contract §7.4. Expresses single-record shape only (field names/types); the regex subset (supports . * + ? [...] \\x, not ( ) | ^ $ { }), gate-name uniqueness, whether names in [build].post exist, and log pass/fail decisions are all decided by brickie-core as BRV-BLD-0008..0012 (ruling R-16: decisions live in core, L5 only executes). This file does NOT participate in L5 shape gate (not registered in schema.py SCHEMA_FILES) - gate decisions belong to core, not to L5 allowed duties.",
   "type": "object",
   "required": ["schema"],
   "additionalProperties": true,

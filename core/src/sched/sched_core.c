@@ -1,37 +1,37 @@
 /*
- * brickOS prototype v0.2.0 — 调度框架(core): 线程状态机 + 超时唤醒 + idle + 首次调度
+ * brickOS prototype v0.2.0 — scheduler framework (core): thread state machine + timeout wakeup + idle + first schedule
  *
- * 设计依据: `3-03-sched.md`(调度总纲)、`3-01-core-api-list.md` §2/§5.1/§14(CA-1/CA-4)、
- *           `3-02-int.md` §11.1–§11.3(IRQ ↔ 调度接缝; idle 的 L2 临界区处方在 §11.1 末)、
- *           `1-01-architecture.md` §9(启动序列)、`6-01-test.md` §3.1/§3.3。
- * 逐条决策与设计缺口裁定: `docs/decisions/0006-scheduler-framework.md`(本文件是它的落地)。
+ * Design basis: `3-03-sched.md` (scheduler overview), `3-01-core-api-list.md` §2/§5.1/§14 (CA-1/CA-4),
+ *           `3-02-int.md` §11.1–§11.3 (IRQ ↔ scheduler seam; the L2 critical-section idle recipe is at the end of §11.1),
+ *           `1-01-architecture.md` §9 (boot sequence), `6-01-test.md` §3.1/§3.3.
+ * Per-item decisions and design-gap rulings: `docs/decisions/0006-scheduler-framework.md` (this file implements it).
  *
- * ## 分工
- *   core : 上下文切换 asm(`switch.S`)/ TCB 公共头(`sched_internal.h`)/ 栈与 trampoline /
- *          超时唤醒框架 / idle / **线程状态机** / conformance
- *   插件 : 就绪结构 / `pick_next` / tick 策略 / 抢占决策(`sched/coop` = FIFO + 只在显式点切)
+ * ## Split
+ *   core   : context-switch asm (`switch.S`) / TCB common header (`sched_internal.h`) / stack + trampoline /
+ *            timeout wakeup framework / idle / **thread state machine** / conformance
+ *   plugin : ready structure / `pick_next` / tick policy / preemption decision (`sched/coop` = FIFO + switch only at explicit points)
  *
- * ## 关键不变量(ADR-0006 §1; 逐条都有机械判据)
- *   I1  `br_sched_register()` 把**调用者所在的启动上下文**物质化为 main 线程
- *       (RUNNING, 名字 "main")。register 之前 `br_task_self() == BR_NULL`, 之后恒 == main。
- *       ⇒ `br_task_create/join` 在 `br_sched_run()` **之前**就能工作(APP 的 start() 相),
- *          `br_sched_run()` 只是"进入 idle / 首次调度"的入口, 不是调度器的启动前提。
- *   I2  只有 core 改 `state`。插件只动"就绪结构的成员关系": READY ⇄ 队列;
- *       RUNNING ⇒ 不在队列; `pick_next` 只出队, 由 core 置 RUNNING。
- *   I3  `br_sched_wake(t)` 先写 `t->wait_status = 0`, 只有 `state == BLOCKED` 才挂回就绪队列
- *       (否则只写握手位)。超时扫描只碰 `state == BLOCKED` 且到期的线程。
- *   I4  **切换只发生在下列显式点**: yield / block / exit / 首次调度, **加上**——
- *       ADR-0011 之后 —— **IRQ 出口的抢占**(仅当调度器置了 need_resched)。
- *       COOP 从不置位 ⇒ 对 coop 而言 I4 的旧措辞(无抢占、IRQ 出口不切栈)逐字成立。
- *       IRQ 出口的切换点在 C 调用边界(`br_sched_switch_to`), 被抢占线程的异常帧
- *       完整地留在它自己的栈上 —— 见 `resched_from_irq()` 的长注释。
- *   I5  ICB 握手(ADR-0006 §3b, 与 F3 的 sync.c 对齐): `wait_status` 是唯一握手位 ——
- *       调用方在开窗前置 -ETIMEDOUT, wake 置 0, 超时置 -ETIMEDOUT;
- *       谁先写谁赢, 两种顺序收敛到同一结果(见 `br_sched_block_current`)。
- *   I6  **bh 不是线程上下文**(ADR-0011): 下半部跑在关中断的异常出口上, 在它里面
- *       阻塞/让出/退出都会让异常帧的返回路径丢失 ⇒ 三条路径都在运行期拒绝
- *       (`br_sched_block_current` = -EPERM, `br_task_yield` = 拒绝 + 留痕,
- *        `br_task_exit` = panic)。
+ * ## Key invariants (ADR-0006 §1; each has a mechanical check)
+ *   I1  `br_sched_register()` materializes the **caller's boot context** as the main thread
+ *       (RUNNING, name "main"). Before register `br_task_self() == BR_NULL`, afterwards always == main.
+ *       ⇒ `br_task_create/join` already work **before** `br_sched_run()` (APP's start() phase);
+ *          `br_sched_run()` is only the entry to "enter idle / first schedule", not a prerequisite for the scheduler.
+ *   I2  Only core writes `state`. Plugins only change "ready-structure membership": READY ⇄ queue;
+ *       RUNNING ⇒ not queued; `pick_next` only dequeues, core sets RUNNING.
+ *   I3  `br_sched_wake(t)` first writes `t->wait_status = 0`, and only requeues when `state == BLOCKED`
+ *       (otherwise it writes only the handshake bit). The timeout scan touches only threads with `state == BLOCKED` that are due.
+ *   I4  **Switches happen only at these explicit points**: yield / block / exit / first schedule, **plus** —
+ *       after ADR-0011 — **preemption at the IRQ exit** (only when the scheduler set need_resched).
+ *       COOP never sets it ⇒ for coop the old wording of I4 (no preemption, no stack switch at the IRQ exit) holds verbatim.
+ *       The IRQ-exit switch point is at the C call boundary (`br_sched_switch_to`); the preempted thread's exception frame
+ *       stays intact on its own stack — see the long comment in `resched_from_irq()`.
+ *   I5  ICB handshake (ADR-0006 §3b, aligned with F3's sync.c): `wait_status` is the only handshake bit —
+ *       the caller pre-sets -ETIMEDOUT before opening the window, wake sets 0, timeout sets -ETIMEDOUT;
+ *       whoever writes first wins, both orders converge to the same result (see `br_sched_block_current`).
+ *   I6  **bh is not a thread context** (ADR-0011): the bottom half runs on the IRQ-disabled exception exit; blocking/
+ *       yielding/exiting inside it loses the exception frame's return path ⇒ all three paths are rejected at runtime
+ *       (`br_sched_block_current` = -EPERM, `br_task_yield` = reject + trace,
+ *        `br_task_exit` = panic).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -47,11 +47,11 @@
 #include "sched_internal.h"
 
 /* =====================================================================
- * TCB 池(静态; 原型口径 "无动态分配", ADR-0006 §2 裁定 S-3)
+ * TCB pool (static; prototype rule "no dynamic allocation", ADR-0006 §2 ruling S-3)
  *
- * 槽位 = 公共头 + 插件私有尾。插件在 `ops.tcb_size` 里报总尺寸; 池按**编译期上界**
- * `BR_TCB_SLOT_BYTES` 划, 注册时校验 `tcb_size <= BR_TCB_SLOT_BYTES` —— 超了是插件
- * 与 core 的池配置不匹配, 注册即报错(不静默截断)。
+ * Slot = common header + plugin private tail. The plugin reports the total size in `ops.tcb_size`; the pool is
+ * sized by the **compile-time bound** `BR_TCB_SLOT_BYTES` and register checks `tcb_size <= BR_TCB_SLOT_BYTES` --
+ * exceeding it means the plugin and the core pool config disagree, so register fails loudly (no silent truncation).
  * ===================================================================== */
 #define BR_TCB_SLOT_BYTES 256u
 
@@ -62,35 +62,35 @@ typedef union br_tcb_slot {
 } br_tcb_slot_t;
 
 _Static_assert(sizeof(struct br_thread) <= BR_TCB_SLOT_BYTES,
-               "BR_TCB_SLOT_BYTES 装不下 TCB 公共头 —— 调整 sched_core.c 的池上界");
+               "BR_TCB_SLOT_BYTES cannot hold the TCB common header -- raise the pool bound in sched_core.c");
 _Static_assert(__builtin_offsetof(struct br_thread, ctx) == BR_THREAD_CTX_OFF,
-               "ctx 偏移与 switch.S / sched_ctx.h 漂移(换栈会踩错字)");
+               "ctx offset drifted from switch.S / sched_ctx.h (stack switch would hit the wrong words)");
 
 static br_tcb_slot_t        s_pool[BR_TASK_MAX];
-static br_thread_t         *s_all;        /* 全局 TCB 链(遍历/观测/超时扫描) */
-static br_thread_t         *s_current;    /* 当前线程(单核; TPIDR_EL1 是 v2/SMP 的落点) */
+static br_thread_t         *s_all;        /* global TCB chain (walk/observe/timeout scan) */
+static br_thread_t         *s_current;    /* current thread (single core; TPIDR_EL1 is the v2/SMP landing spot) */
 static const br_sched_ops_t *s_ops;
-static br_thread_t         *s_joiner[BR_TASK_MAX];  /* target → 它的 joiner(一次一个) */
+static br_thread_t         *s_joiner[BR_TASK_MAX];  /* target -> its joiner (one at a time) */
 
 /*
- * 抢占请求位(ADR-0011)。写点 = 调度插件的 tick 策略(`br_sched_request_resched`,
- * ISR 内); 消费点 = IRQ 出口的 `resched_from_irq()`。**只有这一个位**
- * (`volatile` 是给"ISR 写 / 出口读"这对上下文看的; 单核上它也不需要原子指令)。
+ * Preemption request bit (ADR-0011). Written by the scheduler plugin's tick policy (`br_sched_request_resched`,
+ * inside the ISR); consumed at the IRQ exit by `resched_from_irq()`. **This is the only bit**
+ * (`volatile` is for the "ISR writes / exit reads" pair; on a single core it needs no atomic instruction).
  */
 static volatile br_bool s_need_resched;
 
 /*
- * 宿主侧 idle 等待钩子(弱符号)。目标上根本没有这个符号: idle 直接发 `wfi`
- * (3-02 §11.1 的处方: 关中断 → 检查无就绪 → WFI → 开中断)。
- * 宿主没有真中断源, 也没有 WFI —— 用例在这里推进假时钟并调 `br_sched_on_tick()`,
- * 于是"周期 tick 上的超时扫描"在宿主上可测(见 tests/host/sched_test.c)。
+ * Host-side idle wait hook (weak symbol). The target has no such symbol: idle simply issues `wfi`
+ * (3-02 §11.1 recipe: disable IRQs -> check nothing ready -> WFI -> enable IRQs).
+ * The host has no real interrupt source and no WFI -- the test advances a fake clock and calls
+ * `br_sched_on_tick()` here, making "timeout scan on periodic tick" testable on the host (see tests/host/sched_test.c).
  */
 #if !defined(__aarch64__)
 void br_sched_host_wait(void) __attribute__((weak));
 #endif
 
 /* =====================================================================
- * 小工具
+ * Small helpers
  * ===================================================================== */
 
 br_size_t br_sched_tcb_size(void)
@@ -104,11 +104,11 @@ void *br_thread_priv(br_thread_t *t)
 }
 
 /* =====================================================================
- * 等待链四原语(零分配: 节点 = TCB 里的 `wait_next`; 同步原语在这里挂/摘等待者)
+ * Four wait-chain primitives (zero allocation: the node is `wait_next` in the TCB; sync primitives attach/detach waiters here)
  *
- * 为什么在 core 而不是各同步对象里: 节点布局属于冻结的 TCB(`sched_internal.h`),
- * 而且 `br_sched_block_current()` 的返回路径要求"摘链"与"握手位"能配合使用。
- * 这四个不依赖调度器状态(可以在没有 READY 线程时用), 所以同步路径永远可用。
+ * Why in core rather than in each sync object: the node layout belongs to the frozen TCB (`sched_internal.h`),
+ * and `br_sched_block_current()`'s return path requires "unchain" and "handshake bit" to work together.
+ * These four do not depend on scheduler state (usable with no READY thread), so the sync path is always available.
  * ===================================================================== */
 
 void br_waitq_push(void **head, br_thread_t *t)
@@ -140,7 +140,7 @@ br_thread_t *br_waitq_pop(void **head)
     return t;
 }
 
-int br_waitq_remove(void **head, br_thread_t *t)   /* 1 = 摘到了, 0 = 不在链上 */
+int br_waitq_remove(void **head, br_thread_t *t)   /* 1 = removed, 0 = not on the chain */
 {
     if (head == BR_NULL || t == BR_NULL) {
         return 0;
@@ -174,7 +174,7 @@ br_u32 br_waitq_len(const void *head)
     return n;
 }
 
-/* TCB 指针 → 池下标(不在池里 ⇒ BR_TASK_MAX)。 */
+/* TCB pointer -> pool index (not in the pool ⇒ BR_TASK_MAX). */
 static br_u32 tcb_index(const br_thread_t *t)
 {
     const br_uintptr_t base = (br_uintptr_t)(const void *)&s_pool[0];
@@ -186,7 +186,7 @@ static br_u32 tcb_index(const br_thread_t *t)
     return (br_u32)((p - base) / (br_uintptr_t)BR_TCB_SLOT_BYTES);
 }
 
-/* CPU 等待(目标 = WFI; 宿主 = 弱钩子)。调用者必须已关中断(L2)。 */
+/* CPU wait (target = WFI; host = weak hook). Caller must have IRQs disabled (L2). */
 static void cpu_wait(void)
 {
 #if defined(__aarch64__)
@@ -210,7 +210,7 @@ static br_u32 ready_count_now(void)
     return n;
 }
 
-/* 槽位清空(整槽, 含私有尾 —— 复用时不残留上一任的队列指针)。 */
+/* Clear the slot (whole slot, including the private tail -- no stale queue pointers on reuse). */
 static void tcb_clear(br_thread_t *t)
 {
     br_u8 *raw = (br_u8 *)(void *)t;
@@ -258,15 +258,15 @@ static void tcb_free(br_thread_t *t)
         }
         pp = &(*pp)->all_next;
     }
-    tcb_clear(t);              /* magic 归零 = 槽位空闲 */
+    tcb_clear(t);              /* magic zeroed = slot free */
     br_irq_unlock(st);
 }
 
 /* =====================================================================
- * 唤醒 / 超时(ICB 握手, I3/I5)
+ * Wakeup / timeout (ICB handshake, I3/I5)
  * ===================================================================== */
 
-/* 把 t 挂回就绪结构(state 由 core 改; 插件只入队)。调用者持 L2 或不要求原子。 */
+/* Put t back into the ready structure (core writes state; the plugin only enqueues). Caller holds L2 or atomicity is not required. */
 static void make_ready(br_thread_t *t)
 {
     t->state = BR_TASK_READY;
@@ -284,23 +284,23 @@ void br_sched_wake(br_thread_t *t)
     const br_irq_state_t st = br_irq_lock();
 
     /*
-     * ICB 步 3: **先**写握手位。若 t 此刻还是 RUNNING(调用方还在"开窗之后、
-     * 真正 BLOCKED 之前"), 这里就是"窗口里的早唤醒" —— 只写位, 不入队;
-     * `br_sched_block_current` 会在入口看到 0 并直接返回, 不切栈。
+     * ICB step 3: write the handshake bit **first**. If t is still RUNNING (the caller is
+     * "after opening the window, before actually BLOCKED"), this is an "early wake inside the window" -- write the
+     * bit only, do not enqueue; `br_sched_block_current` sees 0 at its entry and returns without switching stacks.
      */
     t->wait_status = 0;
 
     if (t->state == BR_TASK_BLOCKED) {
-        t->wake_at = BR_TIMEOUT_INF;   /* 停止跟踪期限 */
+        t->wake_at = BR_TIMEOUT_INF;   /* stop tracking the deadline */
         make_ready(t);
     } else {
-        /* 已 READY / RUNNING / ZOMBIE: 只交接握手位(幂等) */
+        /* Already READY / RUNNING / ZOMBIE: hand over the handshake bit only (idempotent) */
     }
 
     br_irq_unlock(st);
 }
 
-/* 超时到期: 只对 BLOCKED 且到期的线程(ICB 步 4)。 */
+/* Timeout expiry: only for BLOCKED threads that are due (ICB step 4). */
 static void make_timed_out(br_thread_t *t)
 {
     t->wait_status = BR_ERR(ETIMEDOUT);
@@ -316,7 +316,7 @@ static void scan_timeouts(br_time_t now)
 
     for (br_thread_t *t = s_all; t != BR_NULL; t = t->all_next) {
         if (t->state != BR_TASK_BLOCKED) {
-            continue;                  /* 已 READY/已被 wake 的不得再被超时 */
+            continue;                  /* already READY / already woken must not time out again */
         }
         if (t->wake_at == BR_TIMEOUT_INF || t->wake_at > now) {
             continue;
@@ -326,7 +326,7 @@ static void scan_timeouts(br_time_t now)
 }
 
 /* =====================================================================
- * 切换: pick_next → 换栈; 无就绪者 → idle
+ * Switch: pick_next -> stack switch; nothing ready -> idle
  * ===================================================================== */
 
 static void idle_wait(void)
@@ -337,11 +337,11 @@ static void idle_wait(void)
     }
 
     /*
-     * 3-02 §11.1 的处方(逐字): **关中断 → 检查"无就绪工作" → WFI → 开中断**。
-     * 检查与 WFI 之间不能被打断: 若在检查之后、WFI 之前来了中断并唤醒了一个线程,
-     * 那次 WFI 会一直睡到下一个中断(可能很久)才醒 —— 这就是经典的 idle 丢唤醒。
-     * WFI 在有 pending 中断时立即返回(即使 PSTATE.I == 1), 所以这里的关中断不
-     * 影响它被中断唤醒。
+     * 3-02 §11.1 recipe (verbatim): **disable IRQs -> check "no ready work" -> WFI -> enable IRQs**.
+     * The check and the WFI must not be interrupted: if an interrupt arrives after the check and before the WFI
+     * and wakes a thread, that WFI sleeps until the next interrupt (possibly a long time) -- the classic idle lost wakeup.
+     * WFI returns immediately when an interrupt is pending (even with PSTATE.I == 1), so disabling IRQs here does
+     * not stop it from being woken by an interrupt.
      */
     const br_irq_state_t st = br_irq_lock();
     if (ready_count_now() != 0u) {
@@ -358,14 +358,14 @@ static void switch_next(void)
         br_thread_t *to = (s_ops->pick_next != BR_NULL) ? s_ops->pick_next() : BR_NULL;
 
         if (to == BR_NULL) {
-            /* 没人可跑 ⇒ idle(WFI 临界区); 醒来后重新 pick */
+            /* nobody runnable ⇒ idle (WFI critical section); re-pick after waking */
             idle_wait();
             continue;
         }
         if (to == s_current) {
             /*
-             * 唯一可运行者就是自己: 睡眠者被超时叫醒、或 yield 时没有同级可让。
-             * 不切栈(切给自己没有意义), 把状态置回 RUNNING 直接继续。
+             * The only runnable thread is self: a sleeper woken by timeout, or yield with no peer to give way to.
+             * Do not switch stacks (switching to self is meaningless), set state back to RUNNING and continue.
              */
             to->state = BR_TASK_RUNNING;
             return;
@@ -374,13 +374,13 @@ static void switch_next(void)
         br_thread_t *from = s_current;
         to->state = BR_TASK_RUNNING;
         s_current = to;
-        br_sched_switch_to(from, to);   /* 回来 = 有人又把 from 选出来了 */
+        br_sched_switch_to(from, to);   /* return = someone picked from again */
         return;
     }
 }
 
 /* =====================================================================
- * 注册点
+ * Register point
  * ===================================================================== */
 
 br_bool br_sched_registered(void)
@@ -389,10 +389,10 @@ br_bool br_sched_registered(void)
 }
 
 /*
- * 注册表**只读**观测(`sched_internal.h`)。为什么需要它: 自检套件要打
- * "注册进来的是哪个调度器"这条证据行(name/kind/tcb_size), 而那些字段只在这里 ——
- * 与其让套件复制一份插件表(于是"注册了什么"有两处真值), 不如开一个只读口子。
- * 只读: 调用者拿不到写入通道(改注册只能走 br_sched_register 的"恰一次")。
+ * **Read-only** view of the registry (`sched_internal.h`). Why it exists: the self-test suite must print the
+ * evidence line "which scheduler got registered" (name/kind/tcb_size), and those fields live only here -- rather than
+ * have the suite copy the plugin table (giving "what was registered" two sources of truth), open a read-only accessor.
+ * Read-only: callers get no write path (changing the registration only goes through br_sched_register's "exactly once").
  */
 const br_sched_ops_t *br_sched_ops_get(void)
 {
@@ -402,34 +402,34 @@ const br_sched_ops_t *br_sched_ops_get(void)
 void br_sched_register(const br_sched_ops_t *ops)
 {
     if (s_ops != BR_NULL) {
-        br_panic("[sched] br_sched_register(): 二次注册(3-01 §5.1 '恰一次')");
+        br_panic("[sched] br_sched_register(): double registration (3-01 §5.1 'exactly once')");
     }
     if (ops == BR_NULL) {
         br_panic("[sched] br_sched_register(): ops == NULL");
     }
-    /* 必需槽位(ADR-0006 §2 裁定 S-1: 逐字段注释优先于"除 idle 外都不可为空"的总述) */
+    /* Required slots (ADR-0006 §2 ruling S-1: per-field comments take precedence over the blanket "all non-null except idle") */
     if (ops->name == BR_NULL || ops->thread_ready == BR_NULL ||
         ops->thread_block == BR_NULL || ops->pick_next == BR_NULL) {
-        br_panic("[sched] br_sched_register(): name/thread_ready/thread_block/pick_next 必填");
+        br_panic("[sched] br_sched_register(): name/thread_ready/thread_block/pick_next are required");
     }
     if (ops->kind > BR_SCHED_KIND_TT) {
-        br_panic("[sched] br_sched_register(): kind 非法");
+        br_panic("[sched] br_sched_register(): illegal kind");
     }
     if (ops->tcb_size < (br_u32)sizeof(struct br_thread) ||
         ops->tcb_size > BR_TCB_SLOT_BYTES) {
-        br_panic("[sched] br_sched_register(): tcb_size 与 core TCB 池不匹配");
+        br_panic("[sched] br_sched_register(): tcb_size does not match the core TCB pool");
     }
 
     s_ops = ops;
 
     /*
-     * I1: 把调用者所在的启动上下文物质化为 main 线程。
-     * 这一步之后 `br_task_self()` 恒返回它 —— 于是 APP 的 start() 相里创建的线程
-     * 与 join 立刻就能工作(3-01 §9 的启动序列), 不必等 `br_sched_run()`。
+     * I1: materialize the caller's boot context as the main thread.
+     * After this step `br_task_self()` always returns it -- so threads created in APP's start() phase
+     * and join work immediately (3-01 §9 boot sequence), without waiting for `br_sched_run()`.
      */
     br_thread_t *m = tcb_alloc();
     if (m == BR_NULL) {
-        br_panic("[sched] br_sched_register(): TCB 池满, 建不出 main");
+        br_panic("[sched] br_sched_register(): TCB pool full, cannot create main");
     }
     m->state   = BR_TASK_RUNNING;
     m->name    = "main";
@@ -441,10 +441,10 @@ void br_sched_register(const br_sched_ops_t *ops)
 BR_NORETURN void br_sched_run(void)
 {
     if (s_ops == BR_NULL) {
-        br_panic("[sched] br_sched_run(): 没有注册调度器(插件管理器的过渡桥不该走到这里)");
+        br_panic("[sched] br_sched_run(): no scheduler registered (the plugin manager transition bridge should not reach here)");
     }
     if (s_current == BR_NULL) {
-        br_panic("[sched] br_sched_run(): register 未建立 main 线程");
+        br_panic("[sched] br_sched_run(): register did not create the main thread");
     }
 
     for (;;) {
@@ -452,7 +452,7 @@ BR_NORETURN void br_sched_run(void)
     }
 }
 
-/* IRQ 出口的抢占换栈(定义在本节末; 前置条件与安全性论证在定义处)。 */
+/* Preemptive stack switch at the IRQ exit (defined at the end of this section; preconditions and safety argument at the definition). */
 static void resched_from_irq(void);
 
 void br_sched_irq_epilogue(void)
@@ -462,16 +462,16 @@ void br_sched_irq_epilogue(void)
     }
 
     /*
-     * 到期扫描(与 on_tick 同一处方): 覆盖"非 timer 中断"的出口, 使超时唤醒不依赖
-     * 具体是哪一个 IRQ 把 CPU 从 idle 里叫醒的。
-     * ★ 必须在抢占之前: 超时唤醒的线程要能被同一次出口的 pick_next 选中。
+     * Expiry scan (same recipe as on_tick): covers exits from "non-timer interrupts" so timeout wakeups do not depend
+     * on which particular IRQ woke the CPU out of idle.
+     * ★ Must run before preemption: a thread woken by timeout must be selectable by this same exit's pick_next.
      */
     scan_timeouts(br_clock_now());
 
     resched_from_irq();
 }
 
-/* ------------------------------------------------------------------ 抢占 */
+/* ------------------------------------------------------------- preemption */
 
 void br_sched_request_resched(void)
 {
@@ -484,25 +484,25 @@ br_bool br_sched_resched_pending(void)
 }
 
 /*
- * IRQ 出口的抢占换栈(ADR-0011; 由 `br_sched_irq_epilogue` 调)。
+ * Preemptive stack switch at the IRQ exit (ADR-0011; called by `br_sched_irq_epilogue`).
  *
- * 前置(由调用点保证, 不是猜测): 在**异常上下文**里、已经 eoi、`irq_depth == 0`
- * (INV-C 刚查过)、`PSTATE.I == 1`。
+ * Preconditions (guaranteed by the call site, not guessed): we are in an **exception context**, already eoi'd,
+ * `irq_depth == 0` (INV-C just checked), `PSTATE.I == 1`.
  *
- * ★ 为什么这样切是安全的(这是本机制唯一难懂的一处, 必须写死):
- *   `from` 的现场被 `br_sched_switch_to` 保存为"callee-saved + sp" —— 而 sp 指向
- *   **`br_irq_enter` 的栈帧**(异常帧在它下面)。于是被抢占的线程此后停在"IRQ 出口
- *   的 C 代码里", 等它被再次选中时从 `br_sched_switch_to` 返回, 依次走完
- *   `resched_from_irq` → `br_sched_irq_epilogue` → `br_irq_enter` → 汇编桩的
- *   "恢复现场 + ERET"。⇒ **它自己的 ELR/SPSR 寄存器值一直躺在它自己的栈上的异常帧里**,
- *   不需要在切换时保存到别处(单核上这些寄存器是全局的, 但它们只在"回到自己的桩"
- *   那一刻才被读出来)。
- *   ⇒ 因此 `switch.S` 只存 callee-saved 依然够, vectors.S 也不必改 —— 切栈点根本不在
- *   那几行汇编里(与 vectors.S 文件头 P-IRQ-ASM-2 的"v2 注意义务"一致: 那条义务针对的是
- *   "在 ERET 前用汇编切栈"的另一种实现)。
+ * ★ Why this switch is safe (the one subtle point of the mechanism, must be pinned down):
+ *   `from`'s context is saved by `br_sched_switch_to` as "callee-saved + sp" -- and sp points to
+ *   **`br_irq_enter`'s stack frame** (the exception frame is below it). So the preempted thread stops "inside the IRQ-exit
+ *   C code", and when it is selected again it returns from `br_sched_switch_to` and walks back through
+ *   `resched_from_irq` -> `br_sched_irq_epilogue` -> `br_irq_enter` -> the asm stub's
+ *   "restore context + ERET". ⇒ **its own ELR/SPSR values stay in the exception frame on its own stack**,
+ *   no need to save them elsewhere on switch (on a single core those registers are global, but they are read only at
+ *   the moment of "returning to its own stub").
+ *   ⇒ Hence `switch.S` saving only callee-saved still suffices and vectors.S need not change -- the switch point is not in
+ *   those asm lines at all (consistent with vectors.S header P-IRQ-ASM-2's "v2 obligation", which targets the other
+ *   implementation that switches stacks in asm before ERET).
  *
- * ★ 新线程的首次进入另有一处必须补: 此刻 `PSTATE.I == 1`(还在异常处理里), 而新线程
- *   的入口不经 ERET ⇒ 必须显式修正为"中断放开"。见 `br_sched_thread_entry`(裁定 P-1)。
+ * ★ First entry of a new thread needs one more fix: here `PSTATE.I == 1` (still in exception handling) while the new
+ *   thread's entry does not go through ERET ⇒ it must be explicitly corrected to "IRQs enabled". See `br_sched_thread_entry` (ruling P-1).
  */
 static void resched_from_irq(void)
 {
@@ -513,14 +513,14 @@ static void resched_from_irq(void)
 
     br_thread_t *cur = s_current;
 
-    /* 只在"当前线程还在跑"时才有抢占可言(block/exit 路径已把 state 改掉)。 */
+    /* Preemption only makes sense while the current thread is still running (block/exit paths already changed state). */
     if (s_ops == BR_NULL || cur == BR_NULL || cur->state != BR_TASK_RUNNING) {
         return;
     }
 
     /*
-     * 把被抢占者放回就绪结构(队尾)。**这是 round-robin 的语义落点**:
-     * 时间片用尽 ⇒ 排到队尾等下一轮; `state` 仍由 core 改(I2)。
+     * Put the preempted thread back into the ready structure (tail). **This is where round-robin semantics land**:
+     * timeslice exhausted ⇒ go to the tail for the next round; `state` is still written by core (I2).
      */
     cur->state = BR_TASK_READY;
     if (s_ops->thread_ready != BR_NULL) {
@@ -530,8 +530,8 @@ static void resched_from_irq(void)
     br_thread_t *to = (s_ops->pick_next != BR_NULL) ? s_ops->pick_next() : BR_NULL;
 
     if (to == BR_NULL) {
-        /* 防御(插件坏了才会到): 刚把 cur 放进队列, pick_next 却说没人 —— 把 cur 摘出来
-         * 继续跑。绝不能"什么都不做": 那会让 cur 留在队列里却处于 RUNNING(违反 I2)。 */
+        /* Defensive (only reachable if the plugin is broken): cur was just queued but pick_next says nobody -- remove
+         * cur and keep running. Must not "do nothing": that would leave cur queued while RUNNING (violates I2). */
         if (s_ops->thread_block != BR_NULL) {
             s_ops->thread_block(cur);
         }
@@ -540,7 +540,7 @@ static void resched_from_irq(void)
         return;
     }
     if (to == cur) {
-        /* 只有自己可跑(pick_next 已把它摘出队列): 不切栈, 直接继续(与 switch_next 同构)。 */
+        /* Only self is runnable (pick_next already dequeued it): no stack switch, just continue (isomorphic to switch_next). */
         cur->state = BR_TASK_RUNNING;
         br_trace_emit(BR_TRACE_SCHED_PREEMPT, 0u, 0u);
         return;
@@ -548,8 +548,8 @@ static void resched_from_irq(void)
 
     to->state = BR_TASK_RUNNING;
     s_current = to;
-    br_trace_emit(BR_TRACE_SCHED_PREEMPT, 0u, 1u);   /* 证据: IRQ 出口真的换了栈 */
-    br_sched_switch_to(cur, to);        /* 回来 = 有人又把 cur 选出来了 */
+    br_trace_emit(BR_TRACE_SCHED_PREEMPT, 0u, 1u);   /* evidence: the IRQ exit really switched stacks */
+    br_sched_switch_to(cur, to);        /* return = someone picked cur again */
 }
 
 void br_sched_on_tick(br_time_t now)
@@ -573,10 +573,10 @@ int br_sched_block_current(br_time_t abs_deadline)
         return BR_ERR(EINVAL);
     }
     /*
-     * ★ bh 禁令(I6, ADR-0011): 下半部在关中断的异常出口上跑, 它**没有**可回退的调度
-     *   上下文 —— 若在这里阻塞, 异常帧永远不会返回(且 ISR 的 eoi 已完成, 表现为
-     *   "系统静默失去一条线")。运行期拒绝, 返回 -EPERM 而不是 -EINVAL:
-     *   参数没错, 上下文错了(调用方要能区分这两种 bug)。
+     * ★ bh ban (I6, ADR-0011): the bottom half runs on the IRQ-disabled exception exit and has **no** schedulable
+     *   context to fall back to -- blocking here means the exception frame never returns (and the ISR's eoi is already
+     *   done, presenting as "the system silently loses a line"). Rejected at runtime, returning -EPERM not -EINVAL:
+     *   the arguments are fine, the context is wrong (callers must be able to tell these two bugs apart).
      */
     if (br_work_in_bh() != BR_FALSE) {
         br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 2u, 0u);
@@ -589,31 +589,31 @@ int br_sched_block_current(br_time_t abs_deadline)
     const br_irq_state_t st = br_irq_lock();
 
     /*
-     * ICB 步 2(ADR-0006 §3b): 入口先看握手位。调用方在**开窗之前**已经把它置成
-     * -ETIMEDOUT; 若这里读到 0, 说明 `br_sched_wake()` 在"调用方开窗之后、本函数
-     * 关中断之前"已经来过 —— 直接返回 0, 不置 BLOCKED、不登记期限、不切栈。
-     * 这把"push 等待链之后 / 真正 BLOCKED 之前"的丢唤醒窗口彻底消掉。
+     * ICB step 2 (ADR-0006 §3b): check the handshake bit at entry. The caller already set it to
+     * -ETIMEDOUT **before opening the window**; reading 0 here means `br_sched_wake()` came after the caller opened
+     * the window and before this function disabled IRQs -- return 0 directly, do not set BLOCKED, do not record a deadline, do not switch stacks.
+     * This eliminates the lost-wakeup window "after pushing onto the wait chain / before actually BLOCKED".
      */
     if (t->wait_status == 0) {
         br_irq_unlock(st);
         return 0;
     }
 
-    /* 期限已到(含相对 0 的绝对形态)⇒ 立即按超时收场(INV-1), 不切栈、不睡到下一个 tick */
+    /* Deadline already passed (including the absolute form of relative 0) ⇒ finish as timeout immediately (INV-1), no stack switch, no sleeping until the next tick */
     if (abs_deadline != BR_TIMEOUT_INF && abs_deadline <= br_clock_now()) {
         t->wait_status = BR_ERR(ETIMEDOUT);
         br_irq_unlock(st);
         return BR_ERR(ETIMEDOUT);
     }
 
-    t->wake_at = abs_deadline;          /* BR_TIMEOUT_INF = 无期限 */
+    t->wake_at = abs_deadline;          /* BR_TIMEOUT_INF = no deadline */
     t->state   = BR_TASK_BLOCKED;
     if (s_ops->thread_block != BR_NULL) {
         s_ops->thread_block(t);
     }
     br_irq_unlock(st);
 
-    switch_next();                      /* 交出 CPU; 回来时 state 已被 pick 侧置回 RUNNING */
+    switch_next();                      /* give up the CPU; on return the pick side has set state back to RUNNING */
     return t->wait_status;
 }
 
@@ -629,7 +629,7 @@ br_u32 br_sched_task_count(void)
     return n;
 }
 
-/* 内部契约(`sched_internal.h`)的池观测: 已占用槽位数(= 存活线程数)。 */
+/* Pool observation for the internal contract (`sched_internal.h`): number of occupied slots (= live threads). */
 br_u32 br_thread_pool_used(void)
 {
     return br_sched_task_count();
@@ -641,23 +641,23 @@ br_u32 br_sched_ready_count(void)
 }
 
 /* =====================================================================
- * 线程面(状态机: NEW → READY ⇄ RUNNING / BLOCKED / ZOMBIE)
+ * Thread face (state machine: NEW -> READY ⇄ RUNNING / BLOCKED / ZOMBIE)
  * ===================================================================== */
 
 BR_NORETURN void br_sched_thread_entry(struct br_thread *t)
 {
     /*
-     * ★ 裁定 P-1(ADR-0011): 新线程的首次进入必须把 L2 形态摆正。
+     * ★ Ruling P-1 (ADR-0011): a new thread's first entry must put the L2 state right.
      *
-     * 问题: preempt 类调度器可能在 **IRQ 出口**选中一个"从没跑过"的线程
-     * (`resched_from_irq` → `br_sched_switch_to` → trampoline)。那一刻 `PSTATE.I == 1`
-     * (我们仍在异常处理里), 而新线程**不经 ERET** 进入 ⇒ 若不管, 它会带着关中断一路
-     * 跑下去: timer 再也不来 ⇒ 抢占与超时同时失效(而且没有任何报错)。
+     * Problem: a preempt-class scheduler may pick a thread that "never ran" at the **IRQ exit**
+     * (`resched_from_irq` -> `br_sched_switch_to` -> trampoline). At that moment `PSTATE.I == 1`
+     * (we are still in exception handling) and the new thread enters **without ERET** ⇒ if ignored it runs on with
+     * IRQs disabled: the timer never fires again ⇒ preemption and timeouts both break (with no error reported).
      *
-     * 处置: `irq_depth == 0` ⇒ 线程的应然形态是"中断放开", 显式放行。
-     *   `irq_depth > 0` ⇒ **不动**(并且这不是"顺手修好"): 那意味着有人在 L2 临界区里
-     *   让出了 CPU —— 那是既有禁令(与 INV-C 同源), 此刻打开中断会把临界区撕开。
-     *   留痕而不改状态: 诚实失败优于静默地把中断打开。
+     * Handling: `irq_depth == 0` ⇒ the thread's proper state is "IRQs enabled", so explicitly enable them.
+     *   `irq_depth > 0` ⇒ **do not touch** (and this is not an opportunistic fix): it means someone gave up the CPU
+     *   inside an L2 critical section -- an existing ban (same root as INV-C) -- and enabling IRQs here would tear the critical
+     *   section open. Trace without changing state: honest failure beats silently enabling IRQs.
      */
     if (br_irq_lock_depth() == 0u) {
         br_irq_cpu_enable();
@@ -666,7 +666,7 @@ BR_NORETURN void br_sched_thread_entry(struct br_thread *t)
     }
 
     if (t != BR_NULL && t->entry != BR_NULL) {
-        t->entry(t->arg);               /* entry 正常返回 ⇒ 走下面, 不落野地址 */
+        t->entry(t->arg);               /* entry returning normally ⇒ fall through, no wild address */
     }
     br_task_exit(0);
 }
@@ -696,18 +696,18 @@ int br_task_create(br_thread_t **out, const br_task_attr_t *attr,
 
     t->name       = (attr->name != BR_NULL) ? attr->name : "task";
     t->prio       = attr->prio;
-    t->stack_top  = attr->stack;                 /* 契约: stack = 栈顶(高地址) */
+    t->stack_top  = attr->stack;                 /* contract: stack = stack top (high address) */
     t->stack_size = attr->stack_size;
     t->entry      = entry;
     t->arg        = arg;
     t->exit_code  = 0;
-    t->wait_status = BR_ERR(ETIMEDOUT);       /* ICB: 开窗前先置"未唤醒" */
+    t->wait_status = BR_ERR(ETIMEDOUT);       /* ICB: set "not woken" before opening the window */
     t->wake_at    = BR_TIMEOUT_INF;
 
     /*
-     * 初始上下文(与 switch.S 的 ctx 布局逐字一致):
-     *   x19 = TCB(trampoline 读它)   x30 = trampoline   sp = 栈顶(16 字节对齐)
-     * x29 = 0: fp 链从 0 起(backtrace 靠它停下来)。
+     * Initial context (matches switch.S's ctx layout verbatim):
+     *   x19 = TCB (the trampoline reads it)   x30 = trampoline   sp = stack top (16-byte aligned)
+     * x29 = 0: the fp chain starts at 0 (backtrace relies on it to stop).
      */
     t->ctx[BR_CTX_X19_TCB] = (br_u64)(br_uintptr_t)t;
     t->ctx[BR_CTX_X29]     = 0u;
@@ -733,28 +733,28 @@ int br_task_join(br_thread_t *t, int *exit_code)
         return BR_ERR(EINVAL);
     }
     if (t == s_current) {
-        return BR_ERR(EINVAL);                   /* 自 join */
+        return BR_ERR(EINVAL);                   /* self join */
     }
 
     const br_u32 i = tcb_index(t);
     if (i >= BR_TASK_MAX || s_joiner[i] != BR_NULL) {
-        return BR_ERR(EINVAL);                   /* 池外 / 已被别人 join */
+        return BR_ERR(EINVAL);                   /* outside the pool / already joined by someone else */
     }
 
     if (t->state != BR_TASK_ZOMBIE) {
         s_joiner[i] = s_current;
-        s_current->wait_status = BR_ERR(ETIMEDOUT);   /* ICB: 开窗 */
+        s_current->wait_status = BR_ERR(ETIMEDOUT);   /* ICB: open the window */
         const int w = br_sched_block_current(BR_TIMEOUT_INF);
         s_joiner[i] = BR_NULL;
         if (w != 0) {
-            return w;                               /* join 无期限 ⇒ 正常不会发生 */
+            return w;                               /* join has no deadline ⇒ normally unreachable */
         }
     }
 
     if (exit_code != BR_NULL) {
         *exit_code = t->exit_code;
     }
-    tcb_free(t);                                    /* ZOMBIE → 回收 */
+    tcb_free(t);                                    /* ZOMBIE -> reclaim */
     return 0;
 }
 
@@ -763,17 +763,17 @@ BR_NORETURN void br_task_exit(int code)
     br_thread_t *t = s_current;
 
     /*
-     * ★ bh 禁令(I6, ADR-0011): 从下半部结束一个线程没有任何正确的收尾方式 ——
-     *   它的异常帧还压在栈上, "切走"会让 ERET 永远不回来。设计的一贯口径是
-     *   "诚实失败优于静默降级" ⇒ panic(而不是假装退出成功)。
+     * ★ bh ban (I6, ADR-0011): ending a thread from the bottom half has no correct wind-down --
+     *   its exception frame is still on the stack, and "switching away" would make ERET never return. The design's
+     *   consistent stance is "honest failure beats silent degradation" ⇒ panic (rather than pretending the exit succeeded).
      */
     if (br_work_in_bh() != BR_FALSE) {
         br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 3u, 0u);
-        br_panic("[sched] br_task_exit(): 不许在中断下半部(bh)里结束线程(ADR-0011 §4)");
+        br_panic("[sched] br_task_exit(): must not end a thread in the interrupt bottom half (bh) (ADR-0011 §4)");
     }
 
     if (t == BR_NULL || s_ops == BR_NULL) {
-        /* 不在线程上下文: 没有"退出"可言 —— 诚实停住(不伪造) */
+        /* Not in a thread context: there is no "exit" to speak of -- stop honestly (no faking) */
         for (;;) {
             cpu_wait();
         }
@@ -785,16 +785,16 @@ BR_NORETURN void br_task_exit(int code)
     t->state     = BR_TASK_ZOMBIE;
     t->wake_at   = BR_TIMEOUT_INF;
     if (s_ops->thread_block != BR_NULL) {
-        s_ops->thread_block(t);                     /* 防御性摘除(通常不在队列里) */
+        s_ops->thread_block(t);                     /* defensive removal (usually not queued) */
     }
 
-    /* 唤醒 joiner(ICB: 即使它还在 RUNNING 的窗口里, 也只写握手位) */
+    /* Wake the joiner (ICB: even if it is still inside the RUNNING window, write the handshake bit only) */
     if (i < BR_TASK_MAX && s_joiner[i] != BR_NULL) {
         br_sched_wake(s_joiner[i]);
     }
 
     for (;;) {
-        switch_next();                              /* ZOMBIE 不再入队; 换到别人或 idle */
+        switch_next();                              /* ZOMBIE is never queued again; switch to someone else or idle */
     }
 }
 
@@ -804,9 +804,9 @@ void br_task_yield(void)
         return;
     }
     /*
-     * ★ bh 禁令(I6, ADR-0011): 下半部里让出 CPU == 把异常出口的返回路径丢掉。
-     *   `br_task_yield` 是 void ⇒ 无法返回错误码, 故**拒绝执行 + 留痕**(不静默地
-     *   当成"让出成功": 调用者以为切换发生过, 而实际什么都没发生 —— 那也是一种谎)。
+     * ★ bh ban (I6, ADR-0011): yielding the CPU in the bottom half == losing the exception exit's return path.
+     *   `br_task_yield` is void ⇒ it cannot return an error code, so it **refuses and traces** (rather than silently
+     *   treating it as a successful yield: the caller would think a switch happened when nothing did -- also a lie).
      */
     if (br_work_in_bh() != BR_FALSE) {
         br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 4u, 0u);
@@ -826,10 +826,10 @@ void br_task_yield(void)
 int br_task_sleep(br_time_t rel_us)
 {
     if (rel_us == BR_TIMEOUT_INF) {
-        return BR_ERR(EINVAL);       /* 裁定 G13: 相对睡眠没有"无限"语义 */
+        return BR_ERR(EINVAL);       /* ruling G13: relative sleep has no "infinite" semantics */
     }
     if (rel_us == 0u) {
-        return 0;                       /* 立即返回(TC-TIME-002) */
+        return 0;                       /* return immediately (TC-TIME-002) */
     }
     return br_task_sleep_until(br_deadline_from_now(rel_us));
 }
@@ -840,16 +840,16 @@ int br_task_sleep_until(br_time_t abs_us)
         return BR_ERR(EINVAL);
     }
     if (abs_us == 0u || (abs_us != BR_TIMEOUT_INF && abs_us <= br_clock_now())) {
-        return 0;                       /* 期限已过 ⇒ 立即返回 0(TC-TASK-005 口径) */
+        return 0;                       /* deadline passed ⇒ return 0 immediately (TC-TASK-005 rule) */
     }
 
-    s_current->wait_status = BR_ERR(ETIMEDOUT);   /* ICB: 开窗 */
+    s_current->wait_status = BR_ERR(ETIMEDOUT);   /* ICB: open the window */
 
     const int r = br_sched_block_current(abs_us);
 
     /*
-     * 裁定 G13b(ADR-0006 §2): 睡眠的**到期是成功路径** ⇒ 返回 0;
-     * -ETIMEDOUT 只属于"等某个事件而超时"的 API(mutex/sem/cond/join, INV-1)。
+     * Ruling G13b (ADR-0006 §2): sleep **expiry is a success path** ⇒ return 0;
+     * -ETIMEDOUT belongs only to APIs that "wait for an event and time out" (mutex/sem/cond/join, INV-1).
      */
     return (r == BR_ERR(ETIMEDOUT)) ? 0 : r;
 }

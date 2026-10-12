@@ -1,28 +1,33 @@
 #!/usr/bin/env python3
 #
-# brickOS prototype — "适配层不许夹带三方件源码副本"门禁(ADR-0026 / ADR-0029)
+# brickOS prototype — gate for "the adapter layer must not carry copies of third-party sources" (ADR-0026 / ADR-0029)
 #
-# 为什么需要它:
-#   ADR-0026 把三方件的纪律从"目录隔离"改成"**给上游它依赖的环境**": `third_party/` 只放
-#   逐字节上游原件(有 sha256 锁与 `check-third-party-pristine.sh`), 一切适配写在
-#   `adapter/<插件>/{compat,glue}`。但"适配"与"把上游源码抄一份到 adapter 再改名"这两件事
-#   **在文件系统上长得一模一样** —— 上一轮的 `adapter/uboot-fat/src/fat_core.c` 与上游
-#   `fs/fat/fat.c` 的行级相似度就有 0.58(改了缩进/改名, 逻辑是同一份)。
-#   本脚本把那条判据变成机械的: **adapter/ 下的文件与任何 vendor 原件的相似度不得越线**。
+# Why it is needed:
+#   ADR-0026 changed third-party discipline from "directory isolation" to "**give upstream the
+#   environment it depends on**": `third_party/` holds only byte-for-byte upstream originals (with a
+#   sha256 lock and `check-third-party-pristine.sh`), and all adaptation is written in
+#   `adapter/<plugin>/{compat,glue}`. But "adaptation" and "copy the upstream source into adapter and
+#   rename it" look **exactly the same on the filesystem** — the previous round's
+#   `adapter/uboot-fat/src/fat_core.c` had line-level similarity 0.58 with the upstream
+#   `fs/fat/fat.c` (indentation changed / renamed, same logic).
+#   This script makes that criterion mechanical: **no file under adapter/ may cross the similarity
+#   line against any vendor original**.
 #
-# 判据(逐条机械):
-#   ① 归一化: 去空行、去纯注释行、去 `#` 开头的预处理行, 再去首尾空白 —— 只留下"代码行";
-#      这样"加注释/换缩进/换 include 写法"不会被算成差异, 也不会被算成相似。
-#   ② 对 `adapter/**` 下每个 .c/.h, 与 `third_party/**` 下每个 .c/.h 算
-#      `difflib.SequenceMatcher` 行级相似度;
-#   ③ 越线 = 相似度 >= 阈值(缺省 0.30) **且** 双方归一化行数都 >= 最小行数(缺省 30);
-#   ④ 允许**具名豁免**(EXEMPT): 每条豁免必须写明文件、上游文件与理由 —— 豁免是"记账",
-#      不是"消音"; 未具名的越线一律红。
+# Criteria (mechanical, item by item):
+#   (1) normalize: drop blank lines, pure comment lines and `#`-prefixed preprocessor lines, then
+#       strip leading/trailing whitespace — leaving only "code lines"; this way "add a comment /
+#       change indentation / change the include form" counts neither as a difference nor as similarity.
+#   (2) for every .c/.h under `adapter/**`, compute `difflib.SequenceMatcher` line-level similarity
+#       against every .c/.h under `third_party/**`;
+#   (3) crossing the line = similarity >= threshold (default 0.30) **and** both normalized line
+#       counts >= min lines (default 30);
+#   (4) **named exemptions** (EXEMPT) are allowed: each one must name the file, the upstream file and
+#       the reason — an exemption is "bookkeeping", not "muting"; any un-named crossing is red.
 #
-# 用法: python3 tools/check-adapter-copies.py [--threshold 0.30] [--min-lines 30] [--all]
-# 退出码: 0 = 全过, 1 = 有越线, 2 = 用法/环境错
+# Usage: python3 tools/check-adapter-copies.py [--threshold 0.30] [--min-lines 30] [--all]
+# Exit code: 0 = all pass, 1 = crossing found, 2 = usage/environment error
 #
-# 输出口径(供门禁 require 匹配): "PASS: adapter 无三方件源码副本"
+# Output contract (for the gate require match): "PASS: adapter has no third-party source copies"
 
 import argparse
 import difflib
@@ -31,16 +36,16 @@ import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 具名豁免: (adapter 相对路径, vendor 相对路径) -> 理由。
-# 空 = 当前没有任何豁免。
+# Named exemptions: (adapter relative path, vendor relative path) -> reason.
+# Empty = there are currently no exemptions.
 EXEMPT = {
     # ("adapter/uboot-xxx/compat/yyy.h", "third_party/uboot-imx/include/yyy.h"):
-    #     "为什么这份相似是不可避免的",
+    #     "why this similarity is unavoidable",
 }
 
 
 def norm(path):
-    """归一化成"代码行"列表(去空行/纯注释行/预处理行)。"""
+    """Normalize into a list of "code lines" (drop blank lines / pure comment lines / preprocessor lines)."""
     try:
         with open(path, "r", encoding="utf-8", errors="replace") as f:
             text = f.read()
@@ -81,19 +86,19 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--threshold", type=float, default=0.30)
     ap.add_argument("--min-lines", type=int, default=30)
-    ap.add_argument("--all", action="store_true", help="打印每个 adapter 文件的最高相似度")
+    ap.add_argument("--all", action="store_true", help="print the highest similarity for every adapter file")
     args = ap.parse_args()
 
     adapter_root = os.path.join(ROOT, "adapter")
     vendor_root = os.path.join(ROOT, "third_party")
     if not os.path.isdir(adapter_root) or not os.path.isdir(vendor_root):
-        print("FAIL: 找不到 adapter/ 或 third_party/", file=sys.stderr)
+        print("FAIL: cannot find adapter/ or third_party/", file=sys.stderr)
         return 2
 
     adapters = collect(adapter_root)
     vendors = collect(vendor_root)
     if not adapters or not vendors:
-        print("FAIL: adapter/ 或 third_party/ 下没有 .c/.h", file=sys.stderr)
+        print("FAIL: no .c/.h under adapter/ or third_party/", file=sys.stderr)
         return 2
 
     vnorm = {}
@@ -122,13 +127,13 @@ def main():
         if args.all:
             print("     %5.2f  %s%s" % (best, rel_a, ("  ~= " + rel_v) if rel_v else ""))
         if best >= args.threshold and (rel_a, rel_v) not in EXEMPT:
-            print("FAIL: %s 与上游原件 %s 的行级相似度 %.2f >= %.2f —— "
-                  "adapter/ 只许放**适配**(环境/对接), 不许放三方件源码的副本(ADR-0026 D-3)"
-                  % (rel_a, rel_v, best, args.threshold), file=sys.stderr)
+            print("FAIL: %s has line-level similarity %.2f >= %.2f with upstream original %s — "
+                  "adapter/ may only hold **adaptation** (environment/glue), not copies of third-party sources (ADR-0026 D-3)"
+                  % (rel_a, best, args.threshold, rel_v), file=sys.stderr)
             status = 1
 
     if status == 0:
-        print("PASS: adapter 无三方件源码副本(阈值 %.2f / 最小行数 %d / 实测最高 %.2f)"
+        print("PASS: adapter has no third-party source copies (threshold %.2f / min lines %d / max observed %.2f)"
               % (args.threshold, args.min_lines, worst_all))
     return status
 

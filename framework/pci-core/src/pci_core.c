@@ -1,25 +1,30 @@
 /*
- * brickOS prototype v0.2.0 — 通用 PCI(e) 机制(framework/pci-core)
+ * brickOS prototype v0.2.0 — generic PCI(e) mechanism (framework/pci-core)
  *
- * 设计依据: **无设计文档条目**(PCI 是本刀新增的域); 裁定见 `docs/decisions/0021-bdev-pci-emmc.md`
- * D-2(板级事实留 platform、通用机制在本件、`highmem=off`)与 D-4(INTx 走中断)。
+ * Basis: **no design-document entry** (PCI is a domain added by this change); ruling in
+ * `docs/decisions/0021-bdev-pci-emmc.md` D-2 (board-level facts stay in platform, generic mechanism
+ * here, `highmem=off`) and D-4 (INTx goes through interrupts).
  *
- * ## 本文件的四件职责(别的都不做)
- *   ① ECAM 配置空间访问(32 位对齐; 小端; ECAM 落在低 1 GiB 的 **Device** 背景映射里);
- *   ② 总线枚举(bus×dev×fn; vendor == 0xFFFF = 空槽; header-type bit7 判多功能);
- *   ③ BAR 尺寸探测(BAR 写全 1 → 读回取反 + 1)与**从平台 MMIO 窗口分配**,
- *      随后打开端点的 Memory Space + Bus Master 并保持 INTx 使能(命令寄存器 bit10 = 0);
- *   ④ INTx 线的 **swizzle**: QEMU GPEX 按 `(pin_index + slot) % 4` 把 INTx A..D 轮转映射到
- *      SPI 3..6;平台只给"INTx A 的 virq", 具体哪条由本件算(ADR-0021)。
+ * ## The four responsibilities of this file (nothing else)
+ *   ① ECAM config-space access (32-bit aligned; little-endian; ECAM falls in the low 1 GiB
+ *      **Device** background mapping);
+ *   ② Bus enumeration (bus×dev×fn; vendor == 0xFFFF = empty slot; header-type bit7 = multifunction);
+ *   ③ BAR sizing (write all 1s → read back, invert, + 1) and **allocation from the platform MMIO
+ *      window**, then enabling the endpoint's Memory Space + Bus Master while keeping INTx enabled
+ *      (command register bit10 = 0);
+ *   ④ INTx line **swizzle**: QEMU GPEX rotates INTx A..D onto SPI 3..6 by `(pin_index + slot) % 4`;
+ *      the platform supplies only "the virq of INTx A", and this file computes which one (ADR-0021).
  *
- * ## 为什么 BAR 分配是本件的活(而不是"等固件")
- *   本镜像是 `-kernel` 直启, **没有固件**, PCIe 端点的 BAR 出厂是 0 且未映射(实测
- *   `info pci` 显示 `BAR0: 32 bit memory (not mapped)`)。不分配 BAR 就没有寄存器窗口可写。
- *   这是"补 platform PCIe 枚举"里最实的一块, 不是可省的一步。
+ * ## Why BAR allocation is this file's job (instead of "waiting for firmware")
+ *   This image is started directly with `-kernel`, **there is no firmware**, and PCIe endpoint BARs
+ *   come up as 0 and unmapped (measured: `info pci` shows `BAR0: 32 bit memory (not mapped)`).
+ *   Without BAR allocation there is no register window to write. This is the most concrete part of
+ *   "fill in platform PCIe enumeration", not an optional step.
  *
- * ## 无锁说明
- *   设备表在 CORE 相的 `br_pci_init` 里一次填好, 之后只读 ⇒ 查询面天然线程安全。
- *   唯一"会写"的是 `br_pci_cfg_write32`(给驱动遍历扩展能力/厂商寄存器用): 调用方自锁。
+ * ## Lock-free note
+ *   The device table is filled once in `br_pci_init` during the CORE phase and is read-only after
+ *   that ⇒ the query surface is naturally thread-safe. The only writer is `br_pci_cfg_write32` (used
+ *   by drivers to walk extended capabilities/vendor registers): callers do their own locking.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -27,22 +32,23 @@
 #include <br/pci/br_pci.h>
 #include <br/platform/br_plat_pci.h>
 
-/* 生命周期钩子原型(名 = symbol_prefix + 相; 由生成物 `plugin_desc.c` 引用; 不进 [[export]]) */
+/* Lifecycle hook prototypes (name = symbol_prefix + phase; referenced by generated `plugin_desc.c`; not in [[export]]) */
 int pci_core_early_init(void);
 int pci_core_init(void);
 int pci_core_start(void);
 
-/* ==================================================================== 状态 */
+/* ==================================================================== state */
 
 static br_plat_pci_host_t s_host;
 static br_pci_dev_t       s_devs[BR_PCI_MAX_DEVS];
 static br_u32             s_n;
 static br_bool            s_inited;
 
-/* ==================================================================== 配置空间访问
+/* ==================================================================== config-space access
  *
- * ECAM 布局(PCI 规范): addr = ecam + (bus << 20) + (dev << 15) + (fn << 12) + (off & 0xFFC)。
- * ECAM 在 Device-nGnRnE 背景里 ⇒ 只做 32 位对齐访问(`-mstrict-align` 下这更是硬约束)。 */
+ * ECAM layout (PCI spec): addr = ecam + (bus << 20) + (dev << 15) + (fn << 12) + (off & 0xFFC).
+ * ECAM sits in a Device-nGnRnE background ⇒ 32-bit aligned accesses only (`-mstrict-align` makes
+ * this a hard constraint). */
 
 #define PCI_CFG_VENDOR      0x00u
 #define PCI_CFG_COMMAND     0x04u
@@ -88,19 +94,20 @@ static br_u8 pci_cfg_read8_raw(br_u32 bus, br_u32 dev, br_u32 fn, br_u32 off)
     return (br_u8)((w >> ((off & 3u) * 8u)) & 0xFFu);
 }
 
-/* ==================================================================== 小工具 */
+/* ==================================================================== small helpers */
 
 static br_uintptr_t pci_align_up(br_uintptr_t v, br_uintptr_t a)
 {
     return (v + (a - 1u)) & ~(a - 1u);
 }
 
-/* ==================================================================== BAR 分配
+/* ==================================================================== BAR allocation
  *
- * 标准手法:
- *   ① 保存原值; ② 写全 1; ③ 读回 ⇒ 可写位掩码; ④ size = ~mask + 1(低 4 位保留);
- *   ⑤ 把原值/新基址写回。64 位 BAR 连高半一起探; 高半非 0 ⇒ 需要 > 4 GiB ⇒ 本件不支持, 跳过。
- * 分配游标 `*next` 沿平台 MMIO 窗口前进(每个 BAR 按自身尺寸对齐)。
+ * Standard recipe:
+ *   ① save the original value; ② write all 1s; ③ read back ⇒ writable bit mask; ④ size = ~mask + 1
+ *   (low 4 bits reserved); ⑤ write the original value / new base back. A 64-bit BAR is probed
+ *   together with its high half; a non-zero high half ⇒ needs > 4 GiB ⇒ unsupported here, skip.
+ * The allocation cursor `*next` walks along the platform MMIO window (each BAR aligned to its size).
  */
 static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
                            br_pci_dev_t *out, br_uintptr_t *next)
@@ -114,10 +121,11 @@ static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
         out->bar[i] = 0u;
         out->bar_size[i] = 0u;
 
-        /* ★ 不能拿 `orig == 0` 当"这个 BAR 不存在": **未分配的内存 BAR 地址就是 0**
-         *   (本镜像无固件, 所有端点都处于这个状态)。正确判据是**探测** —— 写全 1 再读回,
-         *   两个半字都不接受写入才是"未实现"。实测踩到过: 用 orig==0 判空 ⇒ sdhci 的
-         *   BAR0 永远分不到地址, TC-PCI-003 如实报红。 */
+        /* ★ Do not treat `orig == 0` as "this BAR does not exist": **an unassigned memory BAR has
+         *   address 0** (this image has no firmware, so every endpoint is in that state). The correct
+         *   test is **probing** — write all 1s and read back; only when neither half accepts a write
+         *   is the BAR unimplemented. Measured: using orig==0 as the empty test ⇒ sdhci's BAR0 never
+         *   got an address, and TC-PCI-003 honestly reported red. */
         pci_cfg_write32_raw(bus, dev, fn, off, 0xFFFFFFFFu);
         const br_u32 mask_lo = pci_cfg_read32_raw(bus, dev, fn, off) & ~0xFu;
 
@@ -127,31 +135,33 @@ static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
             mask_hi = pci_cfg_read32_raw(bus, dev, fn, off + 4u);
         }
 
-        pci_cfg_write32_raw(bus, dev, fn, off, orig);          /* 复原 */
+        pci_cfg_write32_raw(bus, dev, fn, off, orig);          /* restore */
         if (is64 == BR_TRUE) {
             pci_cfg_write32_raw(bus, dev, fn, off + 4u, 0u);
         }
 
         if (mask_lo == 0u && mask_hi == 0u) {
-            continue;                       /* 未实现的 BAR */
+            continue;                       /* unimplemented BAR */
         }
         if (is_io == BR_TRUE) {
             if (is64 == BR_TRUE) {
-                i++;                        /* 吃掉高半格 */
+                i++;                        /* consume the high half slot */
             }
-            continue;                       /* I/O BAR: 本件不分配 I/O 空间(只做 MEM) */
+            continue;                       /* I/O BAR: this file allocates no I/O space (MEM only) */
         }
 
-        /* 尺寸按 **BAR 位宽**算:
-         *   - 32 位 BAR: 只有低半是它的地址位 ⇒ `~mask_lo + 1` 必须在 **32 位**里取反
-         *     (拿 64 位取反会把高 32 位当成"不可写"而算出一个 ~4 GiB 的假尺寸 —— 实测踩到);
-         *   - 64 位 BAR: 合并掩码才决定尺寸(只测低半会把 16 KiB 的 BAR 误判成 > 4 GiB)。 */
+        /* Size is computed by **BAR width**:
+         *   - 32-bit BAR: only the low half holds its address bits ⇒ `~mask_lo + 1` must be inverted
+         *     in **32 bits** (inverting in 64 bits treats the upper 32 bits as "not writable" and
+         *     yields a bogus ~4 GiB size — measured);
+         *   - 64-bit BAR: only the merged mask determines the size (probing the low half alone
+         *     misjudges a 16 KiB BAR as > 4 GiB). */
         const br_u64 size64 = (is64 == BR_TRUE)
                             ? ((~((((br_u64)mask_hi) << 32) | (br_u64)mask_lo)) + 1u)
                             : ((br_u64)((~mask_lo) + 1u));
 
         if (size64 == 0u || size64 > (br_u64)s_host.mmio_size) {
-            br_log_warn("pci: %02x:%02x.%u BAR%u 尺寸 0x%lx 不可放入 MMIO 窗口, 跳过",
+            br_log_warn("pci: %02x:%02x.%u BAR%u size 0x%lx does not fit the MMIO window, skipped",
                         bus, dev, fn, i, (unsigned long)size64);
             if (is64 == BR_TRUE) {
                 i++;
@@ -168,7 +178,7 @@ static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
 
         pci_cfg_write32_raw(bus, dev, fn, off, (br_u32)base & ~0xFu);
         if (is64 == BR_TRUE) {
-            pci_cfg_write32_raw(bus, dev, fn, off + 4u, 0u);   /* 高半 = 0(基址在 32 位内) */
+            pci_cfg_write32_raw(bus, dev, fn, off + 4u, 0u);   /* high half = 0 (base fits in 32 bits) */
         }
         out->bar[i] = base;
         out->bar_size[i] = size;
@@ -178,13 +188,13 @@ static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
                      bus, dev, fn, i, (unsigned long)base, size);
 
         if (is64 == BR_TRUE) {
-            i++;                            /* 64 位 BAR 占两个配置双字 */
+            i++;                            /* a 64-bit BAR occupies two config dwords */
         }
     }
     return 0;
 }
 
-/* ==================================================================== 枚举 */
+/* ==================================================================== enumeration */
 
 static int pci_scan(void)
 {
@@ -197,12 +207,12 @@ static int pci_scan(void)
 
                 if (vendor == 0xFFFFu) {
                     if (fn == 0u) {
-                        break;              /* 功能 0 不在 ⇒ 整槽不在 */
+                        break;              /* function 0 absent ⇒ whole slot absent */
                     }
                     continue;
                 }
                 if (s_n >= (br_u32)BR_PCI_MAX_DEVS) {
-                    br_log_warn("pci: 设备表满(%u), 后面的设备被忽略", (unsigned)BR_PCI_MAX_DEVS);
+                    br_log_warn("pci: device table full (%u), further devices ignored", (unsigned)BR_PCI_MAX_DEVS);
                     return 0;
                 }
 
@@ -222,15 +232,16 @@ static int pci_scan(void)
                     return rc;
                 }
 
-                /* INTx: pin(1..4) + 槽号 swizzle ⇒ 平台的 virq 起点 + 偏移 */
+                /* INTx: pin (1..4) + slot swizzle ⇒ platform virq base + offset */
                 const br_u8 pin = pci_cfg_read8_raw(bus, dev, fn, PCI_CFG_INTPIN);
                 if (pin >= 1u && pin <= 4u) {
                     d->intx_pin  = pin;
                     d->intx_virq = s_host.intx_virq_a + (((br_u32)pin - 1u + dev) % 4u);
                 }
 
-                /* 打开端点的内存空间 + Bus Master; 保持 INTx 使能(bit10 = 0)。
-                 * 根桥(dev 0)不动它的命令寄存器 —— 它不解码任何我们分配的 BAR。 */
+                /* Enable the endpoint's memory space + Bus Master; keep INTx enabled (bit10 = 0).
+                 * The root bridge (dev 0) keeps its command register untouched — it decodes none of
+                 * the BARs we allocate. */
                 if (dev != 0u) {
                     br_u32 cmd = pci_cfg_read32_raw(bus, dev, fn, PCI_CFG_COMMAND);
                     cmd |= (PCI_CMD_MEM_SPACE | PCI_CMD_BUS_MASTER);
@@ -240,7 +251,7 @@ static int pci_scan(void)
 
                 s_n++;
 
-                /* 多功能判定: 功能 0 的 header-type bit7 = 0 ⇒ 单功能, 不再扫 1..7 */
+                /* Multifunction test: header-type bit7 of function 0 = 0 ⇒ single function, skip 1..7 */
                 if (fn == 0u && (pci_cfg_read8_raw(bus, dev, fn, PCI_CFG_HEADER_TYPE) & 0x80u) == 0u) {
                     break;
                 }
@@ -258,7 +269,7 @@ int br_pci_init(void)
 
     const int rc = br_plat_pci_host(&s_host);
     if (rc != 0) {
-        return rc;                          /* 平台无 PCIe ⇒ -ENODEV, 不假装枚举出 0 个设备 */
+        return rc;                          /* platform has no PCIe ⇒ -ENODEV, do not pretend to find 0 devices */
     }
     if (s_host.ecam_base == 0u || s_host.ecam_size < 0x100000u ||
         s_host.mmio_size == 0u || s_host.intx_virq_a == 0u) {
@@ -279,7 +290,7 @@ int br_pci_init(void)
     return 0;
 }
 
-/* ==================================================================== 查询面 */
+/* ==================================================================== query surface */
 
 br_u32 br_pci_dev_count(void)
 {
@@ -325,25 +336,25 @@ int br_pci_cfg_write32(br_u8 bus, br_u8 dev, br_u8 fn, br_u8 off, br_u32 value)
     return 0;
 }
 
-/* ==================================================================== 生命周期 */
+/* ==================================================================== lifecycle */
 
 int pci_core_early_init(void)
 {
-    return 0;   /* ECAM 在低 1 GiB 的 Device 背景里, EARLY 相即可访问; 但枚举留 CORE 相 */
+    return 0;   /* ECAM is in the low 1 GiB Device background, reachable in EARLY; enumeration waits for CORE */
 }
 
-/* CORE 相: 枚举 + BAR 分配。失败 = 启动失败(不静默降级 —— 与 platform 的 IRQ 初始化同纪律)。 */
+/* CORE phase: enumeration + BAR allocation. Failure = boot failure (no silent downgrade — same discipline as platform IRQ init). */
 int pci_core_init(void)
 {
     const int rc = br_pci_init();
     if (rc != 0) {
-        br_log_error("pci: 枚举失败 rc=%d", rc);
+        br_log_error("pci: enumeration failed rc=%d", rc);
         return rc;
     }
     return 0;
 }
 
-/* START 相: 只留一条设备摘要(逐条设备明细在 CORE 相的 debug 里)。 */
+/* START phase: only a device summary (per-device detail lives in the CORE-phase debug output). */
 int pci_core_start(void)
 {
     for (br_u32 i = 0u; i < s_n; i++) {

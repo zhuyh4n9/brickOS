@@ -1,3 +1,3 @@
 #!/usr/bin/env bash
-# fx/build 的脚本门禁桩(只被 [[script]] 列名; 用例不跑它)。
+# fx/build script-gate stub (only named by [[script]]; the test does not run it).
 echo "echo ok"

@@ -1,23 +1,27 @@
 /*
- * brickOS prototype v0.1.0 — 页分配器(静态位图 + 连续 run 首次适配)
+ * brickOS prototype v0.1.0 — page allocator (static bitmap + first-fit contiguous run)
  *
- * 权威设计: `docs/3-os-core/3-01-core-api-list.md` §6(页池)+ §14 **CA-8**
- * ("页分配器 = 静态位图 + 连续 run 首次适配; `BR_PAGE_SIZE` 平台编译期常量")。
- * 池从哪来: platform 在 region 表里声明 `BR_MM_KIND_PAGE` 那条, `br_mem_init()`
- * 经 `br_page_pool_init()` 把 base/size 交给本文件(`docs/3-os-core/3-04-memory.md`
- * 的"三池由 region 表划分")。
+ * Authoritative design: `docs/3-os-core/3-01-core-api-list.md` §6 (page pool) + §14 **CA-8**
+ * ("page allocator = static bitmap + first-fit contiguous run; `BR_PAGE_SIZE` is a platform
+ * compile-time constant"). Where the pool comes from: the platform declares it in the region
+ * table as the `BR_MM_KIND_PAGE` entry, and `br_mem_init()` hands base/size to this file via
+ * `br_page_pool_init()` (the "three pools divided by the region table" of
+ * `docs/3-os-core/3-04-memory.md`).
  *
- * 位图上界(静态, 与 region 表无关): BR_PAGE_MAX_PAGES = 4096 页
- *   = 4096 × BR_PAGE_SIZE(4 KiB) = **16 MiB 池上界**; 位图本体 512 B。
- * 为什么取这个数: 位图字数必须是编译期常量(CA-8 的"静态"), 而原型三池合计
- * 远小于 16 MiB; 超过上界由 `br_page_pool_init()` 返回 -ENOMEM, 不静默截断。
+ * Bitmap upper bound (static, independent of the region table): BR_PAGE_MAX_PAGES = 4096 pages
+ *   = 4096 × BR_PAGE_SIZE(4 KiB) = **16 MiB pool upper bound**; the bitmap itself is 512 B.
+ * Why this number: the bitmap word count must be a compile-time constant (CA-8 "static"), and
+ * the prototype's three pools total far less than 16 MiB; exceeding the bound makes
+ * `br_page_pool_init()` return -ENOMEM rather than truncate silently.
  *
- * v1 语义(§6 原文 + 3-04 §1):
- *   - `BR_PAGE_F_CONTIG` 恒真(恒等映射 + 单池), 置位不报错、不改变路径;
- *   - `BR_PAGE_F_ZERO` 逐字节清零(无 libc, 自持循环);
- *   - run 不跨池尾(首次适配从低地址起找, 找不到即失败)。
- * 不变量: bitmap 的 1 = 已分配; `s_page.used` 恒等于被置位数; 空闲 run 不含洞
- * 之外的解释 —— max_run 按需求值(遍历 O(total pages), 观测面非热路径)。
+ * v1 semantics (§6 text + 3-04 §1):
+ *   - `BR_PAGE_F_CONTIG` is always true (identity mapping + single pool); setting it neither
+ *     errors nor changes the path;
+ *   - `BR_PAGE_F_ZERO` zeroes byte by byte (no libc, self-contained loop);
+ *   - runs never cross the pool end (first fit scans from low addresses; not found = failure).
+ * Invariants: bitmap 1 = allocated; `s_page.used` always equals the number of set bits; the
+ * only reading of free runs is max_run computed on demand (O(total pages) scan, observation
+ * path, not hot).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_mem.h>          /* BR_PAGE_SIZE / BR_PAGE_F_* / br_page_stats_t */
@@ -37,7 +41,7 @@ static struct {
     br_u32       fail;
 } s_page;
 
-/* ---------------------------------------------------------------- 位操作 */
+/* ---------------------------------------------------------------- bit ops */
 
 static br_bool bit_test(br_u32 idx)
 {
@@ -54,7 +58,7 @@ static void bit_clr(br_u32 idx)
     s_page.bitmap[idx >> 5] &= ~((br_u32)1u << (idx & 31u));
 }
 
-/* 无 libc 的逐字节清零。 */
+/* Byte-by-byte zeroing without libc. */
 static void page_zero(br_u8 *p, br_size_t n)
 {
     for (br_size_t i = 0u; i < n; i++) {
@@ -62,7 +66,7 @@ static void page_zero(br_u8 *p, br_size_t n)
     }
 }
 
-/* ---------------------------------------------------------------- 内部建立 */
+/* ---------------------------------------------------------------- internal setup */
 
 int br_page_pool_init(br_uintptr_t base, br_size_t size)
 {
@@ -91,7 +95,7 @@ int br_page_pool_init(br_uintptr_t base, br_size_t size)
     return BR_OK;
 }
 
-/* ---------------------------------------------------------------- 公开面(§6) */
+/* ---------------------------------------------------------------- public surface (§6) */
 
 void *br_page_alloc(br_size_t n_pages, br_u32 attrs)
 {
@@ -105,7 +109,7 @@ void *br_page_alloc(br_size_t n_pages, br_u32 attrs)
     br_u32 start = 0u;
     br_bool found = BR_FALSE;
 
-    /* 首次适配: 从低地址起扫第一个能容纳 need 页的连续 run, 不跨池尾。 */
+    /* First fit: scan from low addresses for the first run holding need pages, no pool-end crossing. */
     while ((start + need) <= s_page.pages) {
         br_bool run_free = BR_TRUE;
         for (br_u32 k = 0u; k < need; k++) {
@@ -137,7 +141,7 @@ void *br_page_alloc(br_size_t n_pages, br_u32 attrs)
     if ((attrs & BR_PAGE_F_ZERO) != 0u) {
         page_zero(vaddr, (br_size_t)need * (br_size_t)BR_PAGE_SIZE);
     }
-    /* BR_PAGE_F_CONTIG: 本池恒真(恒等映射 + 单池), 刻意不做分支。 */
+    /* BR_PAGE_F_CONTIG: always true in this pool (identity mapping + single pool), deliberately not branched. */
     return (void *)vaddr;
 }
 
@@ -150,24 +154,24 @@ void br_page_free(void *vaddr, br_size_t n_pages)
 
     const br_uintptr_t a = (br_uintptr_t)vaddr;
     if ((a & (br_uintptr_t)(BR_PAGE_SIZE - 1u)) != 0u) {
-        s_page.fail++;                       /* 未按页对齐 */
+        s_page.fail++;                       /* not page-aligned */
         return;
     }
     if ((a < s_page.base) || (a >= (s_page.base + s_page.size))) {
-        s_page.fail++;                       /* 不在本池 */
+        s_page.fail++;                       /* not in this pool */
         return;
     }
 
     const br_u32 start = (br_u32)((a - s_page.base) / (br_uintptr_t)BR_PAGE_SIZE);
     if (n_pages > (br_size_t)(s_page.pages - start)) {
-        s_page.fail++;                       /* 越过池尾 */
+        s_page.fail++;                       /* past the pool end */
         return;
     }
 
     const br_u32 n = (br_u32)n_pages;
     for (br_u32 k = 0u; k < n; k++) {
         if (bit_test(start + k) == BR_FALSE) {
-            s_page.fail++;                   /* 重复释放 / 区间含未分配页: 忽略 */
+            s_page.fail++;                   /* double free / free span contains unallocated page: ignore */
             return;
         }
     }
@@ -187,7 +191,7 @@ int br_page_stats(br_page_stats_t *out)
         return BR_ERR(ENODEV);
     }
 
-    /* 当前最大连续空闲 run: 观测面, 线性扫描足够。 */
+    /* Current largest contiguous free run: observation path, linear scan suffices. */
     br_u32 best = 0u;
     br_u32 run  = 0u;
     for (br_u32 i = 0u; i < s_page.pages; i++) {

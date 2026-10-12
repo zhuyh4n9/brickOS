@@ -210,7 +210,7 @@ struct uboot_fat_ino {          /* 每次 lookup/create 造一个, free_inode �
 
 ```
 adapter/uboot-fat/
-├── plugin.toml      sources = ../../third_party/uboot-imx/fs/fat/fat_write.c + glue/*.c
+├── brick.toml      sources = ../../third_party/uboot-imx/fs/fat/fat_write.c + glue/*.c
 ├── compat/          u-boot 运行环境(我们写的):
 │     fat_env.h        环境实现头(类型/宏/字符串/日志/堆/块设备 shim/环境桩)
 │     <头名>.h         薄壳: blk.h config.h exports.h log.h part.h malloc.h memalign.h

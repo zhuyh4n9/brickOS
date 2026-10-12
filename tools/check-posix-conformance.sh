@@ -1,28 +1,37 @@
 #!/usr/bin/env bash
 #
-# brickOS prototype — iface/posix **与 POSIX 一致**的门禁(ADR-0028)
+# brickOS prototype — gate for iface/posix **matching POSIX** (ADR-0028)
 #
-# 为什么需要它:
-#   `iface/posix` 是 APP 看见的 POSIX 面(它把 `runtime/posix` 的头原样再导出)。
-#   一旦这些头与真 POSIX **不一致**, 后果不是"编不过"而是**更坏**:
-#     - 类型宽度不同 ⇒ 同一份代码在两边看到不同的布局(静默错值);
-#     - 常量不同 ⇒ 同一个 flag 位在两边的含义不同;
-#     - 少一个必需的名字(如 STDIN_FILENO) ⇒ 移植过来的 POSIX 代码编不过。
-#   这些都不能靠"读一遍头文件"发现 —— 必须**拿宿主 POSIX 当对照物逐条比**。
+# Why it is needed:
+#   `iface/posix` is the POSIX surface the APP sees (it re-exports the
+#   `runtime/posix` headers verbatim).
+#   Once these headers are **inconsistent** with real POSIX, the consequence is
+#   not "it fails to build" but something **worse**:
+#     - different type widths => the same code sees different layouts on the two sides (silent bad values);
+#     - different constants => the same flag bit means different things on the two sides;
+#     - a missing required name (e.g. STDIN_FILENO) => ported POSIX code fails to build.
+#   None of this can be found by "reading the headers once" — you must
+#   **compare against host POSIX item by item**.
 #
-# 判据(四条, 全部以宿主 glibc 为对照):
-#   ① **类型宽度**: `size_t/ssize_t/off_t/dev_t/blksize_t/…` 逐条与宿主 sizeof 相同;
-#   ② **常量**: APP 可能比较或传递的常量(`O_*`/`S_I*`/`DT_*`/`SEEK_*`/`FD_*`)值与宿主相同;
-#   ③ **函数签名**: 本仓声明的每个 POSIX 函数, 其签名与宿主同名函数**赋值兼容**
-#      (做法: 只包含宿主头, 把我们写的原型转成函数指针类型去接宿主函数 ⇒ 不符则编译报错);
-#   ④ **结构体成员**: `struct stat` / `struct dirent` 的 POSIX 必需成员**在场**且**类型宽度**正确。
-#      ★ **不**比字段偏移: POSIX 不规定 `struct stat` 的成员顺序(那是实现自由),
-#        拿 glibc 的偏移当判据会把"glibc 的 ABI"当成"POSIX 的要求"。
+# Criteria (four, all against host glibc):
+#   (1) **type widths**: `size_t/ssize_t/off_t/dev_t/blksize_t/...` match host sizeof one by one;
+#   (2) **constants**: values of constants the APP may compare or pass
+#       (`O_*`/`S_I*`/`DT_*`/`SEEK_*`/`FD_*`) match the host;
+#   (3) **function signatures**: every POSIX function declared in this repo must be
+#       **assignment-compatible** with the host function of the same name
+#       (method: include only host headers, cast our prototype to a function pointer
+#       type and assign the host function => a mismatch is a compile error);
+#   (4) **struct members**: the POSIX-required members of `struct stat` / `struct dirent`
+#       are **present** with the correct **type width**.
+#       * Do **not** compare field offsets: POSIX does not prescribe the member order of
+#         `struct stat` (that is implementation freedom); using glibc offsets as the
+#         criterion would mistake "glibc's ABI" for "a POSIX requirement".
 #
-# 白名单: 少数**有意偏离**的常量(必须在下面的表里写明理由, 否则一律判红)。
+# Whitelist: a few constants with **intentional deviations** (the reason must be
+# stated in the table below, otherwise it is red).
 #
-# 用法: bash tools/check-posix-conformance.sh
-# 退出码: 0 = 全过, 1 = 有偏离, 2 = 用法/环境错
+# Usage: bash tools/check-posix-conformance.sh
+# Exit code: 0 = all pass, 1 = deviations found, 2 = usage/environment error
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
@@ -35,13 +44,13 @@ INC = ROOT/"runtime/posix/include"
 CORE_INC = ROOT/"core/include"
 PLAT_INC = ROOT/"platform/qemu-aarch64/include"
 
-# ---- 有意偏离的白名单: 名字 → 理由(必须写清"为什么可以不同") -------------------
+# ---- whitelist of intentional deviations: name -> reason (must state "why it may differ") -----
 ALLOW = {
     "FD_SETSIZE":
-        "本仓 fd 表上界 BR_FT_MAX=32(fd 0..31), FD_SETSIZE=64 已覆盖**每一个合法 fd**"
-        " ⇒ 满足 POSIX 对 FD_SETSIZE 的要求(须容纳实现能创建的所有 fd); "
-        "宿主 1024 是 Linux 的选择, 不是 POSIX 的下限。"
-        " 取更大只会让 fd_set 占更多栈而无任何可用 fd 支撑。",
+        "this repo's fd table bound is BR_FT_MAX=32 (fd 0..31), FD_SETSIZE=64 already covers **every valid fd**"
+        " => it meets POSIX's FD_SETSIZE requirement (must hold every fd the implementation can create); "
+        "host 1024 is Linux's choice, not POSIX's lower bound."
+        " A larger value only makes fd_set use more stack, backed by no usable fd.",
 }
 
 TYPES = ["size_t","ssize_t","off_t","ino_t","mode_t","nlink_t","dev_t","blksize_t",
@@ -61,7 +70,7 @@ CONSTS = {
  "FD_SETSIZE":1,
 }
 
-# POSIX 必需的 struct 成员(只查"在场 + 类型宽度", 不查偏移)
+# POSIX-required struct members (only "present + type width", not offsets)
 STRUCT_MEMBERS = {
     "stat":   ["st_dev","st_ino","st_mode","st_nlink","st_uid","st_gid","st_rdev",
                "st_size","st_blksize","st_blocks","st_atime","st_mtime","st_ctime"],
@@ -75,9 +84,9 @@ HDR_FOR_SIG = {
     "poll.h":"<poll.h>","time.h":"<time.h>","sys/uio.h":"<sys/uio.h>",
     "sys/select.h":"<sys/select.h>",
 }
-SIG_ALLOW = {"pthread_yield": "宿主标 deprecated(仅告警, 非签名不符)",
-             "chown": "宿主该头未声明(chown 在 unistd.h); 探针口径问题, 非签名不符",
-             "fchown": "同上"}
+SIG_ALLOW = {"pthread_yield": "host marks it deprecated (warning only, not a signature mismatch)",
+             "chown": "not declared in that host header (chown is in unistd.h); probe artifact, not a mismatch",
+             "fchown": "same as above"}
 
 tmp = pathlib.Path(tempfile.mkdtemp())
 fails = []
@@ -92,29 +101,29 @@ def cc(prog, incs, extra=()):
     r = run(argv)
     return r
 
-# ============================================================ ① 类型宽度
+# ============================================================ (1) type widths
 prog = "#include <sys/types.h>\n#include <sys/stat.h>\n#include <unistd.h>\n#include <stdio.h>\nint main(void){\n"
 for t in TYPES:
     prog += f' printf("{t} %zu\\n", sizeof({t}));\n'
 prog += " return 0;}"
 r = cc(prog, [])
 if r.returncode:
-    print("FAIL: 宿主类型探针编不过:", r.stderr[:400]); sys.exit(2)
+    print("FAIL: host type probe fails to compile:", r.stderr[:400]); sys.exit(2)
 host_t = dict(l.split() for l in run([str(tmp/"p")]).stdout.splitlines())
 
 r = cc(prog, [INC, CORE_INC, PLAT_INC], ["-DBR_CFG_TICK_HZ=200"])
 if r.returncode:
-    print("FAIL: 本仓类型探针编不过:\n", r.stderr[:800]); sys.exit(1)
+    print("FAIL: this repo's type probe fails to compile:\n", r.stderr[:800]); sys.exit(1)
 ours_t = dict(l.split() for l in run([str(tmp/"p")]).stdout.splitlines())
 
 for t in TYPES:
     o, h = ours_t.get(t), host_t.get(t)
     if o is None:
-        fails.append(f"类型 {t}: 本仓头里没有定义"); continue
+        fails.append(f"type {t}: not defined in this repo's headers"); continue
     if o != h:
-        fails.append(f"类型 {t}: 本仓 {o} B, POSIX {h} B")
+        fails.append(f"type {t}: this repo {o} B, POSIX {h} B")
 
-# ============================================================ ② 常量
+# ============================================================ (2) constants
 names = list(CONSTS)
 prog = "#define _GNU_SOURCE\n#include <fcntl.h>\n#include <sys/stat.h>\n#include <dirent.h>\n" \
        "#include <unistd.h>\n#include <sys/select.h>\n#include <stdio.h>\nint main(void){\n"
@@ -155,12 +164,12 @@ for n in names:
     if h == "MISSING" or h is None: continue
     o = vals.get(n)
     if o is None:
-        fails.append(f"常量 {n}: 本仓头里没有定义(POSIX 有)"); continue
+        fails.append(f"constant {n}: not defined in this repo's headers (POSIX has it)"); continue
     if o != int(h):
         if n in ALLOW: continue
-        fails.append(f"常量 {n}: 本仓 {o}, POSIX {h}")
+        fails.append(f"constant {n}: this repo {o}, POSIX {h}")
 
-# ============================================================ ③ 函数签名
+# ============================================================ (3) function signatures
 proto_re = re.compile(r"^\s*([A-Za-z_][\w \t\*]*?)\s+([a-z_]\w*)\s*\(([^;{]*)\)\s*;", re.M)
 checked = 0
 for hdr, host_inc in HDR_FOR_SIG.items():
@@ -179,11 +188,11 @@ for hdr, host_inc in HDR_FOR_SIG.items():
             bad = [l.strip() for l in r.stderr.splitlines()
                    if "incompatible" in l or "conflicting" in l]
             if bad:
-                fails.append(f"签名 {hdr}:{name} 与 POSIX 不符 — {bad[0][:160]}")
+                fails.append(f"signature {hdr}:{name} does not match POSIX — {bad[0][:160]}")
             elif "undeclared" in r.stderr:
-                fails.append(f"签名 {hdr}:{name}: 宿主没有这个符号(本仓自造?)")
+                fails.append(f"signature {hdr}:{name}: host has no such symbol (invented here?)")
 
-# ============================================================ ④ 结构体成员
+# ============================================================ (4) struct members
 for st, members in STRUCT_MEMBERS.items():
     prog = ("#define _GNU_SOURCE\n#include <sys/stat.h>\n#include <dirent.h>\n#include <stdio.h>\n"
             "int main(void){\n")
@@ -192,33 +201,33 @@ for st, members in STRUCT_MEMBERS.items():
     prog += " return 0;}"
     r = cc(prog, [])
     if r.returncode:
-        print("FAIL: 宿主结构体探针编不过:", r.stderr[:300]); sys.exit(2)
+        print("FAIL: host struct probe fails to compile:", r.stderr[:300]); sys.exit(2)
     host_m = dict(l.split() for l in run([str(tmp/"p")]).stdout.splitlines())
     r = cc(prog, [INC, CORE_INC, PLAT_INC], ["-DBR_CFG_TICK_HZ=200"])
     if r.returncode:
-        fails.append(f"struct {st}: 本仓头里编不过(成员缺失?) — {r.stderr.splitlines()[0][:160]}"
-                     if r.stderr else f"struct {st}: 本仓头里编不过")
+        fails.append(f"struct {st}: fails to compile against this repo's headers (missing member?) — {r.stderr.splitlines()[0][:160]}"
+                     if r.stderr else f"struct {st}: fails to compile against this repo's headers")
         continue
     ours_m = dict(l.split() for l in run([str(tmp/"p")]).stdout.splitlines())
     for mem in members:
         o, h = ours_m.get(f"{st}.{mem}"), host_m.get(f"{st}.{mem}")
         if o is None:
-            fails.append(f"struct {st}: 缺 POSIX 必需成员 {mem}"); continue
+            fails.append(f"struct {st}: missing POSIX-required member {mem}"); continue
         if o != h:
-            fails.append(f"struct {st}.{mem}: 本仓 {o} B, POSIX {h} B")
+            fails.append(f"struct {st}.{mem}: this repo {o} B, POSIX {h} B")
 
-# ============================================================ 汇总
+# ============================================================ summary
 if fails:
-    print(f"FAIL: iface/posix 与 POSIX 不一致({len(fails)} 条):", file=sys.stderr)
+    print(f"FAIL: iface/posix does not match POSIX ({len(fails)} items):", file=sys.stderr)
     for f_ in fails:
         print("      " + f_, file=sys.stderr)
     if ALLOW:
-        print("      (白名单里的有意偏离: " + ", ".join(ALLOW) + ")", file=sys.stderr)
+        print("      (whitelisted intentional deviations: " + ", ".join(ALLOW) + ")", file=sys.stderr)
     sys.exit(1)
 
-print(f"ok   POSIX 一致性: 类型 {len(TYPES)} 项 / 常量 {len(names)-len(ALLOW)} 项 / "
-      f"签名 {checked} 项 / 结构体 {sum(len(v) for v in STRUCT_MEMBERS.values())} 个成员")
+print(f"ok   POSIX conformance: types {len(TYPES)} / constants {len(names)-len(ALLOW)} / "
+      f"signatures {checked} / struct members {sum(len(v) for v in STRUCT_MEMBERS.values())}")
 for k, why in ALLOW.items():
-    print(f"ok   有意偏离(已登记): {k} —— {why[:70]}…")
-print("PASS: iface/posix 与 POSIX 一致(类型宽度 / 常量值 / 函数签名 / 结构体成员)")
+    print(f"ok   intentional deviation (registered): {k} — {why[:70]}...")
+print("PASS: iface/posix matches POSIX (type widths / constant values / function signatures / struct members)")
 PY

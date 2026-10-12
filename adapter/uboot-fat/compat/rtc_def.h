@@ -1,11 +1,13 @@
-/* adapter/uboot-fat — `<rtc_def.h>` 的**转发壳**(不是副本)。
+/* adapter/uboot-fat - **forwarding shim** for `<rtc_def.h>` (not a copy).
  *
- * vendored `include/fs.h` 自己 `#include <rtc_def.h>`(它要用 `struct rtc_time` 作为
- * `struct fs_dirent` 的三个时间戳字段)。vendor 树里本来没有这个头, 于是按 ADR-0026
- * 的纪律**新增原件**: 逐字节取自 `build/uboot-ref/uboot.tar.gz`, 并在
- * `adapter/third-party-upstream.lock` 里补了 sha256。
- * 本件 v1 没有 RTC(`CONFIG_DM_RTC=0`), 于是那三个字段只被 `struct fs_dirent` 的**布局**
- * 用到 —— 上游 `fat_readdir` 只在 `CONFIG_EFI_LOADER` 分支里填它们。
+ * The vendored `include/fs.h` itself does `#include <rtc_def.h>` (it uses `struct rtc_time`
+ * for the three timestamp fields of `struct fs_dirent`). The vendor tree did not have this
+ * header, so under ADR-0026 it was **added as an original**: taken byte for byte from
+ * `build/uboot-ref/uboot.tar.gz` with a sha256 entry added to
+ * `adapter/third-party-upstream.lock`.
+ * This build has no RTC (`CONFIG_DM_RTC=0`), so those three fields are used only by the
+ * **layout** of `struct fs_dirent` - upstream `fat_readdir` fills them only under
+ * `CONFIG_EFI_LOADER`.
  */
 #ifndef BR_ADAPTER_UBOOT_FAT_SHIM_RTC_DEF_H
 #define BR_ADAPTER_UBOOT_FAT_SHIM_RTC_DEF_H

@@ -8,7 +8,7 @@
 > (**新增 `[plugin].symbol_prefix` 覆盖**)、
 > `tools/brickie/rust/src/model.rs`(`cross_plugin_includes` 为 `<br/core/...>` 产出合成
 > provider `"core"`)、`rust/src/check.rs` + `rust/src/build.rs`(**APP 直连 core 头判红**)、
-> `app/hello/plugin.toml`(+`[[dep]] iface/min`, dep 改 `iface/posix`)、
+> `app/hello/brick.toml`(+`[[dep]] iface/min`, dep 改 `iface/posix`)、
 > `app/hello/src/main.c`(**删掉 `<br/core/...>`**, 只 include 两个皮肤头)、
 > `api/iface/iface/{posix,min}/`(快照; 旧 `api/iface/iface-posix/` 删除)、
 > `product.toml` / `README.md` / 各 README。
@@ -96,7 +96,7 @@ symbol_prefix = "iface_posix_"   # 缺省仍是 symbol_prefix(name_short); 给�
 |---|---|---|
 | 声明面 | `brickie check` | 0 错/0 警(1 提示: 被再导出单元未冻结, dev 允许); 闭包 **18** 插件, RAM 42 KiB |
 | 构建 | `brickie build` | 通过(`iface/posix` 与 `iface/min` 的钩子无重复符号) |
-| 接口治理 | `brickie iface publish iface/posix#posix-skin` / `iface/min#min` | 各 0.1.0.0, green; 快照/CHANGELOG/lock 落盘, hash 抄回 plugin.toml |
+| 接口治理 | `brickie iface publish iface/posix#posix-skin` / `iface/min#min` | 各 0.1.0.0, green; 快照/CHANGELOG/lock 落盘, hash 抄回 brick.toml |
 | APP 只依赖 Interface | `grep -rn 'br/core/' app/hello/src/` | 0 命中(改由 `iface/min` 转出) |
 | A-2 判据生效 | 临时在 APP 里加 `#include <br/core/br_log.h>` | `brickie check`/`build` 报 `BRV-MF-0001`(已实测) |
 | 多线程样例 | `brickie test smoke` | `[APPCONF] SUMMARY pass=7 fail=0`(判据不变) |

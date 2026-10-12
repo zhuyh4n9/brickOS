@@ -37,7 +37,7 @@
       "compat_gen": 0,
       "declaration_freeze_state": "frozen",
       "declaration_hash": "sha256:4876b2696f65ffb2d478602c4222d689c8d39201618fb7810ab92208956c2e85",
-      "file": "service/crypto/plugin.toml",
+      "file": "service/crypto/brick.toml",
       "form": "api",
       "freeze_state": "frozen",
       "hash_scope": "decl",
@@ -58,7 +58,7 @@
   "diagnostics": [
     {
       "code": "BRV-MF-0001",
-      "file": "service/crypto/plugin.toml",
+      "file": "service/crypto/brick.toml",
       "severity": "info",
       "span": "export[0]",
       "target": "service/crypto"

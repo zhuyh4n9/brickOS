@@ -160,7 +160,7 @@ TC-PLUG-001 要断言"段里的条数 == 生成物数量"。运行期没有第�
 dump 对 trace/backtrace/hexdump/memleak 现在各有**两条**边:
 `kind = "runtime"`(带 `symbol`, 记录真实调用面)与 `kind = "init"`(`phase = "late"`,
 管顺序)。`brickie check` 允许同一声明同一提供方的不同 kind 边; 语义分工写进了
-`service/dump/plugin.toml` 的注释。没有 init 边时, LATE 相的 init 顺序会退化成字典序,
+`service/dump/brick.toml` 的注释。没有 init 边时, LATE 相的 init 顺序会退化成字典序,
 dump 会排到四个服务**之前**(而它要转调它们的 selftest)⇒ "编得过、跑不对"。
 
 另外四个 service 插件**不需要** init 边: 它们的 `init` 只调 core 的 API 与自身代码,
@@ -187,7 +187,7 @@ dump 会排到四个服务**之前**(而它要转调它们的 selftest)⇒ "编�
 
 1. **`1-01` §6.1 的描述符缺 `plugin_type`/`subkind`/`phase_self`** ⇒ **新增三个字段**。
    没有它们, 管理器只能**猜**类别(命名约定): "EARLY 第一步是 platform"就退化成
-   "谁的名字像 platform"。字段本来就写在 `plugin.toml` 里, 进描述符不增加真值来源。
+   "谁的名字像 platform"。字段本来就写在 `brick.toml` 里, 进描述符不增加真值来源。
    `phase_self` 只作呈现/诊断(init 相由类别决定, 与冻结头的口径一致)。
    *顺带*: 冻结的 `BR_PLUGIN_DEFINE` 宏的形参表**没有**这三个字段; 生成物因此
    **直接实例化结构体**(具名初始化器), 不用那个宏。宏保留给手写/测试用, 本刀不动它。

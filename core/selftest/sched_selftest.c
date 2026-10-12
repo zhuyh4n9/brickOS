@@ -1,73 +1,79 @@
 /*
- * brickOS prototype v0.2.0 — 调度框架 + coop 的**自检套件**(core/selftest/)
+ * brickOS prototype v0.2.0 — scheduler framework + coop self-test suite (core/selftest/)
  *
- * 设计依据与逐条裁定: `docs/decisions/0010-plugin-selftest.md`。
- * 用例口径: `6-01-test.md` §3.1/§3.3(`TC-TASK-*` / `TC-TIME-*`); 实现依据 `3-03-sched.md`。
+ * Design basis and rulings: `docs/decisions/0010-plugin-selftest.md`.
+ * Case spec: `6-01-test.md` §3.1/§3.3 (`TC-TASK-*` / `TC-TIME-*`); implementation: `3-03-sched.md`.
  *
- * ## 为什么这几十行从 `sched_core.c` 搬到这里
- *   它们本来就是**测试**, 却与生产实现同住一个 .c —— 于是"关掉自检"关不掉它们,
- *   而"读生产实现"的人要在一千行机制里翻找判定逻辑。搬到本目录后:
- *     - `core/src/sched/sched_core.c` 只留机制(状态机/超时/切换/线程面);
- *     - 自检关掉 ⇒ `core/selftest/` 整目录不参与编译 ⇒ 用例代码**不进镜像**
- *       (机械事实, 不是"编了不跑"; 见 product.toml 的 selftest_sources 与 build.rs);
- *     - 用例的读者与实现的读者不再互相干扰。
- *   代码是**搬移**, 不是重写: 判据/日志/顺序逐字未动(见下面的日志契约)。
+ * ## Why these lines moved here from `sched_core.c`
+ *   They are tests, yet lived in the same .c as the production implementation — so
+ *   "disable self-test" could not drop them, and readers of the production code had to
+ *   dig through a thousand lines of mechanism for the checks. After the move:
+ *     - `core/src/sched/sched_core.c` keeps mechanism only (state machine/timeouts/switch/thread API);
+ *     - self-test off ⇒ `core/selftest/` is not compiled at all ⇒ case code does not
+ *       reach the image (mechanical fact, not "compiled but not run"; see product.toml
+ *       selftest_sources and build.rs);
+ *     - case readers and implementation readers no longer interfere.
+ *   This is a move, not a rewrite: checks/logs/order are unchanged (see the log contract below).
  *
- * ## 唯一的跨边界观测
- *   套件真的 create/yield/join/sleep, 并要打出"注册进来的是哪个调度器"这条证据
- *   (`scheduler=%s kind=%u spawn=%u`)。这些字段只存在于生产侧的注册表里 ——
- *   经 `sched_internal.h` 的 `br_sched_ops_get()` 读取, 而**不是**在这里复制第二份
- *   插件表(那会让"注册了什么"有两处真值)。
+ * ## The only cross-boundary observation
+ *   The suite really does create/yield/join/sleep and must print which scheduler was
+ *   registered (`scheduler=%s kind=%u spawn=%u`). Those fields exist only in the production
+ *   registry — read via `br_sched_ops_get()` from `sched_internal.h`, not copied into a
+ *   second plugin table here (that would give "what is registered" two sources of truth).
  *
- * ## 日志契约(门禁按**逐字**匹配 ⇒ 改一个字就是改判据)
+ * ## Log contract (gates match literally ⇒ one changed character changes the check)
  *   `[TASKCONF] PASS/FAIL <id> <desc>` … `[TASKCONF] SUMMARY pass=%d fail=%d total=%d`
- *   `tests/gates.toml` 的 require/forbid/require_tags 与 `sched/coop/tests/smoke.toml`
- *   的 tag 表都锚在这两行上。
+ *   require/forbid/require_tags in `tests/gates.toml` and the tag table in
+ *   `sched/coop/tests/smoke.toml` are anchored to these two lines.
  *
- * ## 返回值
- *   `int` = **失败项数**(ADR-0010 §2.4: 套件只汇总不下判决, 由 `br_core_selftest()`
- *   相加、由门禁判红绿)。任何失败都**不停机** —— 日志里如实打出来即可。
+ * ## Return value
+ *   `int` = number of failed cases (ADR-0010 §2.4: the suite only aggregates, `br_core_selftest()`
+ *   sums, gates decide red/green). No failure stops the system — it is just logged.
  *
- * ## ★ 按调度器 kind 分叉(ADR-0011 §5)
- *   本套件同时服务 `sched/coop` 与 `sched/rr`(preempt)两件插件。共享用例照旧跑;
- *   **域特有**的几条按注册表里的 `ops.kind` 分叉(不是编译期开关 —— 于是"插件报的 kind"
- *   与"用例的期望"不可能各说各话):
- *     - coop        ⇒ `TC-TASK-101`: 不 yield 的忙线程**不被**抢占(coop 的定义)
- *     - preempt(rr) ⇒ `TC-TASK-102`: 同一形态**必须被**时间片抢占;
- *                      `TC-TASK-103`: L2 临界区内**不得**发生抢占(诚实条款)。
- *   两者是同一条分界线的两个方向, 放在一处才看得见它们互为反面。
+ * ## ★ Branch by scheduler kind (ADR-0011 §5)
+ *   This suite serves both `sched/coop` and `sched/rr` (preempt) plugins. Shared cases always
+ *   run; the domain-specific ones branch on the registry `ops.kind` (not a compile-time switch,
+ *   so "the kind the plugin reports" and "what the case expects" cannot disagree):
+ *     - coop        ⇒ `TC-TASK-101`: a busy thread that never yields is NOT preempted (the coop definition)
+ *     - preempt(rr) ⇒ `TC-TASK-102`: the same shape MUST be preempted by the time slice;
+ *                      `TC-TASK-103`: no preemption may occur inside an L2 critical section (honesty clause).
+ *   They are the two directions of one boundary; only together is it visible that they are opposites.
  */
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>          /* TC-TASK-103: L2 临界区(关中断 ⇒ 没有 IRQ 出口) */
+#include <br/core/br_irq.h>          /* TC-TASK-103: L2 critical section (IRQs off ⇒ no IRQ exit) */
 #include <br/core/br_log.h>
 #include <br/core/br_sched.h>
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
-/* TCB 公共头(BR_TASK_MAX / struct br_thread)与"注册表只读观测"是 core 私有面;
- * 跨目录相对包含在本仓有先例(core/src/sync/sync.c -> "../sched/sched_internal.h")。 */
+/* TCB common header (BR_TASK_MAX / struct br_thread) and the read-only registry view are
+ * core-private; cross-directory relative includes have precedent here
+ * (core/src/sync/sync.c -> "../sched/sched_internal.h"). */
 #include "../src/sched/sched_internal.h"
 
-/* 入口的可见声明集中在 `core/selftest/core_selftest.c`(它是唯一聚合器); 这里再声明
- * 一次是为了满足本文件"每个函数使用前都有原型"的纪律(-Wmissing-prototypes)。 */
+/* The entry's visible declaration lives in `core/selftest/core_selftest.c` (the only
+ * aggregator); repeating it here satisfies this file's rule that every function has a
+ * prototype before use (-Wmissing-prototypes). */
 int br_sched_selftest(void);
 
 /* =====================================================================
- * 一致性用例(TC-TASK-* / TC-TIME-*, 6-01 §3.1/§3.3)
+ * Conformance cases (TC-TASK-* / TC-TIME-*, 6-01 §3.1/§3.3)
  *
- * 形态: **自身运行在一个真实线程里**(APP 线程 / 宿主监督线程), 真的
- * create/yield/join/sleep —— 于是它验证的是切换/阻塞/唤醒/超时, 不只是查数据结构。
- * 每个子用例的线程栈都是**静态数组**(原型无动态分配)。
+ * Shape: the suite itself runs in a real thread (APP thread / host supervisor thread) and
+ * really does create/yield/join/sleep — so it validates switching/blocking/wakeup/timeout,
+ * not just data structures. Each sub-case's thread stack is a static array (the prototype
+ * has no dynamic allocation).
  * ===================================================================== */
 
 #define BR_CONF_STACK_BYTES 4096u
 #define BR_CONF_BUSY_ITERS  200000u
 
 /*
- * 抢占类用例的**时间口径**(TC-TASK-102/103): 判据是"几个时间片内被切走", 而墙钟长度
- * 随产品配置的 HZ 变(`product.toml [kernel].hz`, 缺省 200 ⇒ tick = 5 ms、
- * rr 时间片 = 2 tick = 10 ms; ADR-0017)。取 600 ms: 缺省配置下 ≈ 60 个时间片,
- * 即使把 HZ 调到 100 也仍有 ~30 片 —— 这里要的是**远大于一片**的窗口, 不是精确时长。
+ * Time basis for the preemption cases (TC-TASK-102/103): the criterion is "switched away
+ * within a few time slices", and wall-clock length varies with the product's HZ
+ * (`product.toml [kernel].hz`, default 200 ⇒ tick = 5 ms, rr slice = 2 tick = 10 ms;
+ * ADR-0017). 600 ms gives ≈ 60 slices at the default and still ~30 slices at HZ=100 — what
+ * is needed here is a window far larger than one slice, not an exact duration.
  */
 #define BR_CONF_PREEMPT_WAIT_US 600000u
 #define BR_CONF_CRIT_US         400000u
@@ -114,13 +120,14 @@ static br_task_attr_t conf_attr(br_u32 slot, const char *name)
     return a;
 }
 
-/* --- 各用例的线程体 ---------------------------------------------------  * WORKAROUND(br-wa-test-001): 本套件的 `TC-TASK-*`/`TC-TIME-*` id 与 `6-01` §3.1/§3.3 的
- * 表**尚未逐条对齐**(含义漂移, 自述文字准确); 对齐动作见 WORKAROUNDS.md。
+/* --- Thread bodies of each case ---------------------------------------  * WORKAROUND(br-wa-test-001): this suite's `TC-TASK-*`/`TC-TIME-*` ids are
+ * not yet aligned one-by-one with the `6-01` §3.1/§3.3 table (meaning drift; the prose here
+ * is accurate); see WORKAROUNDS.md for the alignment work.
  */
 
 static void conf_entry_ok(void *arg)
 {
-    (void)arg;                          /* 正常返回 ⇒ trampoline 调 br_task_exit(0) */
+    (void)arg;                          /* normal return ⇒ trampoline calls br_task_exit(0) */
 }
 
 static void conf_entry_code(void *arg)
@@ -144,7 +151,7 @@ static void conf_entry_ab(void *arg)
             s_seq_n++;
         }
         br_log_info("[TASKCONF] RUN worker %c i=%d", c, i);
-        br_task_yield();                /* coop 的唯一自愿让出点 */
+        br_task_yield();                /* the only voluntary yield point in coop */
     }
 }
 
@@ -181,14 +188,14 @@ static void conf_entry_busy(void *arg)
 {
     (void)arg;
 
-    /* 忙循环: 不 yield。coop 下这段时间里 victim **不该**被切上来。 */
+    /* busy loop: never yields. Under coop the victim must NOT be switched in meanwhile. */
     for (br_u32 i = 0u; i < BR_CONF_BUSY_ITERS; i++) {
         if (s_victim_ticks != 0u) {
             s_preempt_seen = 1;
         }
     }
 
-    br_task_yield();                    /* 显式让出: 此刻 victim 才该跑 */
+    br_task_yield();                    /* explicit yield: only now should the victim run */
 
     if (s_victim_ticks != 0u) {
         s_victim_after_yield = 1;
@@ -196,9 +203,10 @@ static void conf_entry_busy(void *arg)
 }
 
 /*
- * 抢占版忙循环(TC-TASK-102): 用**时钟**界定长度而不是迭代次数 —— 判据是
- * "几个时间片之内有没有被切走", 迭代次数会随优化等级与平台漂移。
- * 一旦看到 victim 跑过就立刻收工(避免每次都跑满 600 ms)。
+ * Preempting busy loop (TC-TASK-102): the length is bounded by the clock, not by iteration
+ * count — the criterion is "was it switched away within a few slices", and iteration counts
+ * drift with optimization level and platform. Stop as soon as the victim has run (avoid
+ * always burning the full 600 ms).
  */
 static void conf_entry_busy_preempt(void *arg)
 {
@@ -221,9 +229,10 @@ static void conf_entry_busy_preempt(void *arg)
 }
 
 /*
- * 临界区版(TC-TASK-103): 在 `br_irq_lock()` 里待**远超一个时间片**的时间。
- * 判据: 期间 victim 一次都不许跑(I4 的诚实条款 —— 抢占只发生在 IRQ 出口, 而关中断
- * 期间根本没有出口); 放开之后它必须很快跑起来(证明"没丢"而不是"永远不来")。
+ * Critical-section variant (TC-TASK-103): stay inside `br_irq_lock()` for far longer than
+ * one time slice. Criterion: the victim must not run even once meanwhile (the I4 honesty
+ * clause — preemption happens only at an IRQ exit, and with IRQs off there is no exit); once
+ * released it must run soon (proving it was not lost, rather than never scheduled).
  */
 static void conf_entry_crit(void *arg)
 {
@@ -234,19 +243,19 @@ static void conf_entry_crit(void *arg)
 
     while ((br_clock_now() - t0) < BR_CONF_CRIT_US) {
         if (s_victim_ticks != 0u) {
-            s_crit_violation = 1;       /* 关中断期间被抢占 = I4 破了 */
+            s_crit_violation = 1;       /* preempted with IRQs off = I4 broken */
         }
         s_crit_ticks++;
     }
     br_irq_unlock(st);
 
-    br_task_yield();                    /* 放开后让 victim 跑 */
+    br_task_yield();                    /* after release, let the victim run */
     if (s_victim_ticks != 0u) {
         s_victim_after_yield = 1;
     }
 }
 
-/* --- 子用例 ----------------------------------------------------------- */
+/* --- Sub-cases -------------------------------------------------------- */
 
 static void case_task_001(void)
 {
@@ -257,7 +266,7 @@ static void case_task_001(void)
     const br_bool ok = (r == 0) && (t != BR_NULL) && (br_task_state(t) == BR_TASK_READY) &&
                        (br_task_self() != BR_NULL);
 
-    conf_result(ok, "TC-TASK-001", "create 后 state=READY(且 br_task_self() 非空)");
+    conf_result(ok, "TC-TASK-001", "state=READY after create (and br_task_self() non-NULL)");
     if (t != BR_NULL) {
         (void)br_task_join(t, BR_NULL);
     }
@@ -273,7 +282,7 @@ static void case_task_002(void)
     const int j = (t != BR_NULL) ? br_task_join(t, &code) : BR_ERR(EINVAL);
 
     conf_result((r == 0) && (j == 0) && (code == 42), "TC-TASK-002",
-                "join 拿到退出码 42");
+                "join obtains exit code 42");
 }
 
 static void case_task_003_interleave(void)
@@ -288,8 +297,8 @@ static void case_task_003_interleave(void)
     int code_b = -1;
 
     /*
-     * (a) 直接判据: 本线程 yield 让出后, 另一个线程真的跑过(flag 被置上)。
-     *     此刻就绪队只有 flag 线程, 所以 FIFO 一定先跑它。
+     * (a) Direct check: after this thread yields, the other thread really ran (flag set).
+     *     The ready queue holds only the flag thread now, so FIFO must run it first.
      */
     s_flag_a = 0;
     const int rf = br_task_create(&tf, &af, conf_entry_flag, BR_NULL);
@@ -297,11 +306,11 @@ static void case_task_003_interleave(void)
     const br_bool ran = (s_flag_a == 1);
     const int jf = (tf != BR_NULL) ? br_task_join(tf, BR_NULL) : BR_ERR(EINVAL);
     conf_result((rf == 0) && (jf == 0) && ran, "TC-TASK-003",
-                "yield 让出后另一个线程真的跑过");
+                "another thread really ran after yield");
 
     /*
-     * (b) 交错证据: 两个 worker 各自"追加字母 + yield" × 4。
-     *     join(A) 让本线程阻塞 —— 调度器于是把 A/B 交替跑起来。
+     * (b) Interleave evidence: two workers each do "append letter + yield" x 4.
+     *     join(A) blocks this thread — so the scheduler alternates A/B.
      */
     s_seq_n = 0;
     for (br_u32 i = 0u; i < BR_ARRAY_SIZE(s_seq); i++) {
@@ -324,7 +333,7 @@ static void case_task_003_interleave(void)
 
     conf_result((r1 == 0) && (r2 == 0) && (j1 == 0) && (j2 == 0) && (code_a == 0) &&
                 (code_b == 0) && seq_ok,
-                "TC-TASK-003", "两线程严格交替(ABABABAB): 强制切换点真的在切");
+                "TC-TASK-003", "two threads strictly alternate (ABABABAB): the forced switch point really switches");
 }
 
 static void case_task_004(void)
@@ -334,13 +343,13 @@ static void case_task_004(void)
     int code = -1;
 
     const int r = br_task_create(&t, &a, conf_entry_ok, BR_NULL);
-    br_task_yield();                    /* 让它跑完(entry 返回 ⇒ trampoline ⇒ exit) */
+    br_task_yield();                    /* let it finish (entry returns ⇒ trampoline ⇒ exit) */
 
     const br_bool zombie = (t != BR_NULL) && (br_task_state(t) == BR_TASK_ZOMBIE);
     const int j = (t != BR_NULL) ? br_task_join(t, &code) : BR_ERR(EINVAL);
 
     conf_result((r == 0) && zombie && (j == 0) && (code == 0), "TC-TASK-004",
-                "exit 后 state=ZOMBIE 且 join 回收");
+                "state=ZOMBIE after exit and join reclaims the slot");
 }
 
 static void case_task_005(void)
@@ -371,7 +380,7 @@ static void case_task_005(void)
         }
     }
     conf_result(all && (x == BR_NULL), "TC-TASK-005",
-                "非法入参 -EINVAL(create NULL/attr/栈/entry + join NULL/自身)");
+                "invalid args -EINVAL (create NULL out/attr/stack/entry + join NULL/self)");
 }
 
 static void case_task_006(void)
@@ -392,7 +401,7 @@ static void case_task_006(void)
     }
 
     conf_result(last == BR_ERR(ENOMEM), "TC-TASK-006",
-                "TCB 池满 ⇒ -ENOMEM(池上限是硬上界)");
+                "TCB pool full ⇒ -ENOMEM (the pool limit is a hard bound)");
 
     for (br_u32 i = 0u; i < n; i++) {
         (void)br_task_join(ts[i], BR_NULL);
@@ -413,7 +422,7 @@ static void case_task_007(void)
     const br_bool in_range = (s_probe_addr >= lo) && (s_probe_addr < top);
 
     conf_result((r == 0) && (j == 0) && in_range, "TC-TASK-007",
-                "局部变量地址落在该线程自己的栈区间内(栈真的用上了)");
+                "a local variable's address falls inside this thread's own stack range (the stack is really used)");
 }
 
 static void case_time_001(void)
@@ -427,7 +436,7 @@ static void case_time_001(void)
     const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(EINVAL);
 
     conf_result((r == 0) && (j == 0) && (s_sleep_rc == 0) && (s_sleep_delta >= 2000u),
-                "TC-TIME-001", "sleep(2000us) 不早醒(实测 >= 请求值)");
+                "TC-TIME-001", "sleep(2000us) does not wake early (measured >= requested)");
 }
 
 static void case_time_002(void)
@@ -437,33 +446,36 @@ static void case_time_002(void)
     const br_time_t d = br_clock_now() - t0;
 
     /*
-     * 判据用"实测耗时 < 1 ms"而不是 `d == 0`: 目标上 timer ISR 可能在两次读数之间
-     * 落下(它是抢占的), 于是 d 会是几个 us —— 那与"立即返回"并不矛盾。
-     * 真正的反例是"被登记进超时表并切走", 那至少要等一个 tick(`1/HZ`, 缺省 5 ms)。
+     * The check uses "measured < 1 ms" rather than `d == 0`: on target a timer ISR may land
+     * between the two reads (it is preemptive), so d may be a few us — which does not
+     * contradict "returns immediately". The real counterexample is "registered in the timeout
+     * table and switched away", which takes at least one tick (`1/HZ`, 5 ms by default).
      */
     br_log_info("[TASKCONF] TRACE sleep0 rc=%d elapsed_us=%lu", r, (br_u64)d);
     conf_result((r == 0) && (d < BR_US_PER_MS), "TC-TIME-002",
-                "sleep(0) 立即返回 0(实测 < 1ms, 未进超时表)");
+                "sleep(0) returns 0 immediately (measured < 1ms, never entered the timeout table)");
 }
 
 static void case_time_003(void)
 {
     const int r = br_task_sleep(BR_TIMEOUT_INF);
 
-    conf_result(r == BR_ERR(EINVAL), "TC-TIME-003", "sleep(INF) ⇒ -EINVAL(裁定 G13)");
+    conf_result(r == BR_ERR(EINVAL), "TC-TIME-003", "sleep(INF) ⇒ -EINVAL (ruling G13)");
 }
 
 /*
- * TC-TASK-104(ADR-0011 §5): I2 的可观测面 —— "RUNNING 者不在就绪结构里"。
+ * TC-TASK-104 (ADR-0011 §5): the observable face of I2 — "a RUNNING thread is not in the
+ * ready structure".
  *
- * 为什么值得一条用例: I2 是"状态机只有一处真值"的表述, 但它一直是**纸面**纪律
- * (ADR-0006 §1 列了它, 却没有判据)。抢占把这条纪律的分量抬高了: IRQ 出口的换栈要在
- * "放回队尾 → 出队 → 置 RUNNING"之间来回, 任何一处写错都会留下"不可运行却在队列里"
- * 或"RUNNING 却仍在队列里"的幽灵节点。
+ * Why this deserves a case: I2 states "the state machine has one source of truth", but it
+ * stayed a paper rule (ADR-0006 §1 lists it without a check). Preemption raises the stakes:
+ * the IRQ exit switch stack cycles through "push to tail → pop → set RUNNING", and one wrong
+ * write leaves a ghost node that is "not runnable but still queued" or "RUNNING but still queued".
  *
- * 判据用**相对量**(不用绝对值): 镜像里 selftest 跑在 main 上下文, 而 APP 线程已经
- * 创建好躺在就绪队里 ⇒ 绝对值不是 0。于是断言 "current(RUNNING) 从不被计入":
- * create 一个线程 ⇒ +1; join 掉 ⇒ 回到基线。
+ * The check uses relative counts (not absolute): in the image selftest runs in the main
+ * context while the APP thread already sits in the ready queue, so the absolute value is not
+ * 0. Instead it asserts "current (RUNNING) is never counted": create one thread ⇒ +1; join it
+ * ⇒ back to baseline.
  */
 static void case_task_104_ready_set(void)
 {
@@ -475,7 +487,7 @@ static void case_task_104_ready_set(void)
     const int r = br_task_create(&t, &a, conf_entry_ok, BR_NULL);
     const br_u32 after_create = br_sched_ready_count();
 
-    /* 只等它跑完(trampoline → exit → ZOMBIE): 此刻它既不在就绪队也不在 RUNNING。 */
+    /* just wait for it to finish (trampoline → exit → ZOMBIE): it is then neither queued nor RUNNING. */
     br_task_yield();
     const br_u32 after_exit = br_sched_ready_count();
 
@@ -486,16 +498,17 @@ static void case_task_104_ready_set(void)
                 base, after_create, after_exit, after_join);
 
     /*
-     * 逐点相符的四个值(注意 ZOMBIE **不在**就绪结构里 ⇒ 它跑完后计数回落到基线):
-     *   create ⇒ base+1(READY); exit ⇒ base(ZOMBIE); join 回收 ⇒ base(槽位释放)。
+     * Four values matching point by point (note ZOMBIE is NOT in the ready structure, so the
+     * count drops back to baseline once it finishes):
+     *   create ⇒ base+1 (READY); exit ⇒ base (ZOMBIE); join reclaims ⇒ base (slot released).
      */
     conf_result((r == 0) && (j == 0) && (after_create == base + 1u) &&
                 (after_exit == base) && (after_join == base),
                 "TC-TASK-104",
-                "I2: READY ⇄ 就绪结构, RUNNING/ZOMBIE 都不在里面(相对计数逐点相符)");
+                "I2: READY ⇄ ready structure; RUNNING/ZOMBIE are never in it (relative counts match point by point)");
 }
 
-/* ---- 域特有: coop 的定义(不 yield 就不被切走) ---- */
+/* ---- Domain-specific: the coop definition (no yield ⇒ no preemption) ---- */
 
 static void case_task_101_coop(void)
 {
@@ -514,7 +527,7 @@ static void case_task_101_coop(void)
     s_preempt_seen = 0;
     s_victim_after_yield = 0;
 
-    /* 先建 busy 再建 victim ⇒ 就绪队序 [busy, victim]; join(busy) 后 busy 先跑。 */
+    /* create busy before victim ⇒ ready order [busy, victim]; after join(busy) busy runs first. */
     const int r1 = br_task_create(&tb, &ab, conf_entry_busy, BR_NULL);
     const int r2 = br_task_create(&tv, &av, conf_entry_victim, BR_NULL);
     const int j1 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(EINVAL);
@@ -523,10 +536,10 @@ static void case_task_101_coop(void)
     conf_result((r1 == 0) && (r2 == 0) && (j1 == 0) && (j2 == 0) &&
                 (s_preempt_seen == 0) && (s_victim_after_yield == 1) &&
                 (s_victim_ticks == 1u),
-                "TC-TASK-101", "coop: 不 yield 的忙线程不被抢占, yield 后 victim 才跑");
+                "TC-TASK-101", "coop: a busy thread that never yields is not preempted; victim runs only after yield");
 }
 
-/* ---- 域特有: preempt 的定义(同一形态必须被时间片切走) ---- */
+/* ---- Domain-specific: the preempt definition (the same shape must be sliced away) ---- */
 
 static void case_task_102_preempt(void)
 {
@@ -557,13 +570,14 @@ static void case_task_102_preempt(void)
                 (br_u64)elapsed, (unsigned)s_victim_ticks, s_preempt_seen);
 
     /*
-     * 判据 = **忙循环期间**(还没 yield)victim 就跑过 ⇒ 时间片真的把 busy 换下去了。
-     * 这是 TC-TASK-101 的**反面**: 同一段代码在 coop 下必须为假, 在 preempt 下必须为真。
+     * Criterion = the victim ran during the busy loop (before busy yielded) ⇒ the time slice
+     * really switched busy out. This is the OPPOSITE of TC-TASK-101: the same code must be
+     * false under coop and true under preempt.
      */
     conf_result((r1 == 0) && (r2 == 0) && (j1 == 0) && (j2 == 0) &&
                 (s_preempt_seen == 1),
                 "TC-TASK-102",
-                "preempt: 不 yield 的忙线程被时间片抢占(victim 在 busy 让出之前就跑过)");
+                "preempt: a busy thread that never yields is preempted by the slice (victim ran before busy yielded)");
 }
 
 static void case_task_103_critical(void)
@@ -596,7 +610,7 @@ static void case_task_103_critical(void)
                 (s_crit_ticks > 0u) && (s_crit_violation == 0) &&
                 (s_victim_after_yield == 1),
                 "TC-TASK-103",
-                "preempt: L2 临界区内不发生抢占(关中断 ⇒ 没有 IRQ 出口); 放开后 victim 立刻能跑");
+                "preempt: no preemption inside an L2 critical section (IRQs off ⇒ no IRQ exit); victim can run at once after release");
 }
 
 int br_sched_selftest(void)
@@ -604,7 +618,7 @@ int br_sched_selftest(void)
     s_conf_pass = 0;
     s_conf_fail = 0;
 
-    /* 注册表只读快照(与旧实现逐字同源: 这里原本直接读 sched_core.c 的 s_ops)。 */
+    /* read-only registry snapshot (byte-identical to the old code, which read s_ops in sched_core.c). */
     const br_sched_ops_t *ops = br_sched_ops_get();
 
     br_log_info("[TASKCONF] ==== sched framework + scheduler conformance (3-03 / 6-01 §3.1/§3.3)");
@@ -627,16 +641,17 @@ int br_sched_selftest(void)
     case_time_003();
 
     /*
-     * ---- 域特有: 按**注册表里的 kind** 分叉(不是编译期开关) ----
-     * coop 与 preempt 是同一条分界线("不 yield 的忙线程会不会被切走")的两个方向:
-     * 两边都跑就是自相矛盾, 所以这里只能跑一边 —— 依据取自 `ops->kind` 的真值。
+     * ---- Domain-specific: branch on the registry `kind` (not a compile-time switch) ----
+     * coop and preempt are the two directions of one boundary ("does a busy thread that never
+     * yields get switched away"): running both would be self-contradictory, so only one side
+     * runs here — chosen from the truth in `ops->kind`.
      */
     const br_u32 kind = (ops != BR_NULL) ? ops->kind : BR_SCHED_KIND_COOP;
 
     if (kind == BR_SCHED_KIND_COOP) {
         case_task_101_coop();
     } else {
-        /* preempt / tt: 时间片(或调度表)会抢占 ⇒ 判据翻面。 */
+        /* preempt / tt: the slice (or schedule table) preempts ⇒ the check flips. */
         case_task_102_preempt();
         case_task_103_critical();
     }
@@ -645,9 +660,9 @@ int br_sched_selftest(void)
                 s_conf_pass, s_conf_fail, s_conf_pass + s_conf_fail);
 
     if (s_conf_fail != 0) {
-        br_log_error("[TASKCONF] 有失败项 —— 调度框架/coop 未达 conformance");
+        br_log_error("[TASKCONF] failures present — sched framework/coop not conformant");
     }
 
-    /* 返回**失败项数**: 聚合器相加, 红绿由门禁判(ADR-0010 §2.4)。 */
+    /* return the failure count: the aggregator sums it, gates decide red/green (ADR-0010 §2.4). */
     return s_conf_fail;
 }

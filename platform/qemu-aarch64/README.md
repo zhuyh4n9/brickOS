@@ -42,7 +42,7 @@ arch timer + **GICv3 中断控制器 + 板级 IRQ 绑定表 + 目标侧一致性
 ## 目录
 
 ```
-plugin.toml                          人写   ← 插件级唯一真值(BRV-D4); 声明两个接口单元
+brick.toml                          人写   ← 插件级唯一真值(BRV-D4); 声明两个接口单元
 include/br/platform/br_plat.h        人写   ← Platform Entry 契约(含 IRQ/内存一致性入口)
 include/br/platform/br_gicv3.h       人写   ← GICv3 方言契约(ISA 层)
 include/br/platform/br_mmu.h         人写   ← 页表/MMU 观测面(ISA 层)
@@ -63,7 +63,7 @@ tests/smoke.toml                     人写   ← v0.4 才被消费(§0 边界)
 ```
 
 生成物(不在本目录): `build/gen/platform/qemu-aarch64/plugin_desc.c` —— 由
-`brickie gen` 从 `plugin.toml` 重建; **v0.1 不编译它**(V-9: 零编译依赖),
+`brickie gen` 从 `brick.toml` 重建; **v0.1 不编译它**(V-9: 零编译依赖),
 它是声明面产物。
 
 ## 常用命令

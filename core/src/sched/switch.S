@@ -1,20 +1,22 @@
 /*
- * brickOS prototype v0.2.0 — coop 上下文切换(aarch64)
+ * brickOS prototype v0.2.0 — coop context switch (aarch64)
  *
- * 设计依据: `3-03` §2 第 2 项(上下文切换: aarch64 asm 桩、callee-saved 约定、栈切换、
- * 首次进入的 trampoline); `3-01` §2.2("初始栈帧由 create 构造, entry 经 trampoline")。
+ * Design basis: `3-03` §2 item 2 (context switch: aarch64 asm stub, callee-saved convention, stack switch,
+ * first-entry trampoline); `3-01` §2.2 ("the initial stack frame is built by create, entry goes through the
+ * trampoline").
  *
- * 两个入口:
- *   br_sched_switch_to(from, to) —— 保存 from 的 callee-saved + sp, 恢复 to 的, 换栈。
- *   br_sched_thread_trampoline() —— 新线程的**首次**入口(x30 初值); 它把 x19 里的 TCB
- *                                   交给 C 侧 br_sched_thread_entry(), 由后者调
- *                                   entry(arg), entry 返回则 br_task_exit(0)。
+ * Two entries:
+ *   br_sched_switch_to(from, to) -- save from's callee-saved + sp, restore to's, switch stacks.
+ *   br_sched_thread_trampoline() -- the **first** entry of a new thread (initial x30 value); it hands the TCB in
+ *                                   x19 to the C-side br_sched_thread_entry(), which calls entry(arg); if entry
+ *                                   returns, br_task_exit(0).
  *
- * 为什么只存 callee-saved(AAPCS64): 调用者保存的寄存器由编译器在 `bl` 前后自己处理;
- * 协作式切换只发生在函数调用边界(yield/block/exit 都是普通 C 调用), 所以 13 个字足够。
- * 这与 `sched_internal.h` 的 ctx[13] 布局是同一处真值(偏移与下标在 sched_ctx.h)。
+ * Why only callee-saved (AAPCS64): caller-saved registers are handled by the compiler around `bl`; cooperative
+ * switching only happens at function call boundaries (yield/block/exit are all ordinary C calls), so 13 words
+ * suffice. This is the same source of truth as the ctx[13] layout in `sched_internal.h` (offsets and indices in
+ * sched_ctx.h).
  *
- * 本文件由 cpp 预处理(`.S` 的后缀让 GCC 自动这么做), 所以能用 `#if`/`#include`。
+ * This file is preprocessed by cpp (the `.S` suffix makes GCC do that automatically), so `#if`/`#include` work.
  */
 #if defined(__aarch64__)
 
@@ -25,10 +27,10 @@
 
 /* ---------------------------------------------------------------------------
  * void br_sched_switch_to(struct br_thread *from, struct br_thread *to);
- *   调用约定: x0 = from, x1 = to。
+ *   calling convention: x0 = from, x1 = to.
  *
- * 注意: 新线程的 ctx 由 br_task_create 预先填好(x19 = TCB, x30 = trampoline,
- *       sp = 栈顶), 所以本函数不需要区分"新/旧"—— 恢复即首次进入。
+ * Note: a new thread's ctx is pre-filled by br_task_create (x19 = TCB, x30 = trampoline,
+ *       sp = stack top), so this function need not distinguish "new/old" -- restoring is the first entry.
  * ------------------------------------------------------------------------- */
     .globl  br_sched_switch_to
     .type   br_sched_switch_to, %function
@@ -55,20 +57,20 @@ br_sched_switch_to:
     ldr     x3, [x2, #BR_CTX_SP * 8]
     mov     sp, x3
 
-    ret                                     /* 旧线程 = 回到 bl 之后; 新线程 = 进 trampoline */
+    ret                                     /* old thread = back after the bl; new thread = enter trampoline */
     .size   br_sched_switch_to, . - br_sched_switch_to
 
 /* ---------------------------------------------------------------------------
- * 新线程的首次入口。约定: 进入时 x19 = 该线程的 TCB(create 时写进 ctx[0])。
- * 我们不在这里直接 ldr entry/arg —— 字段偏移留一处真值(C 侧), 于是这里只有
- * 一条 mov + 一条 bl, 不会随 TCB 布局漂移。
+ * First entry of a new thread. Convention: on entry x19 = that thread's TCB (written into ctx[0] by create).
+ * We do not ldr entry/arg here -- field offsets keep a single source of truth (the C side), so this stays
+ * one mov + one bl and does not drift with the TCB layout.
  * ------------------------------------------------------------------------- */
     .globl  br_sched_thread_trampoline
     .type   br_sched_thread_trampoline, %function
 br_sched_thread_trampoline:
     mov     x0, x19
-    bl      br_sched_thread_entry           /* C: entry(arg); 返回则 br_task_exit(0) —— 不返回 */
-    /* 兜底: 万一 C 侧违反了"不返回"的约定, 也绝不落进野地址。 */
+    bl      br_sched_thread_entry           /* C: entry(arg); on return br_task_exit(0) -- does not return */
+    /* Safety net: if the C side ever breaks the "does not return" contract, never fall into a wild address. */
     b       br_sched_thread_trampoline
     .size   br_sched_thread_trampoline, . - br_sched_thread_trampoline
 

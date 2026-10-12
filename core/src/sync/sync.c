@@ -1,40 +1,53 @@
 /*
- * brickOS prototype v0.2.0 — 同步原语实现(core): mutex / semaphore / cond / spinlock
+ * brickOS prototype v0.2.0 — synchronization primitive implementation (core): mutex / semaphore / cond / spinlock
  *
- * 设计依据: `3-01` §7(同步原语, 117–139 行)、§14 CA-4(超时三态)、INV-1/INV-2(超时语义),
- *           `3-02` §6.4(`br_irq_lock/unlock` 的嵌套计数在 core)、§11.3(ISR 里 give 的语义:
- *           只改状态/挂链, **不在 ISR 里切换**), `6-01` §3.2/§3.3(TC-SYNC-* / TC-TIME-*)。
+ * Design basis: `3-01` §7 (synchronization primitives, lines 117–139), §14 CA-4 (three-state
+ *           timeout), INV-1/INV-2 (timeout semantics),
+ *           `3-02` §6.4 (`br_irq_lock/unlock` nesting count lives in core), §11.3 (give
+ *           semantics in ISR: only change state / link, **never switch inside an ISR**),
+ *           `6-01` §3.2/§3.3 (TC-SYNC-* / TC-TIME-*).
  *
- * ## 三条承重设计
+ * ## Three load-bearing designs
  *
- * 1. **阻塞的唯一基石**是 `br_sched_block_current(abs_deadline)`(`br_sched.h`):
- *    返回 0 = 被唤醒, `-ETIMEDOUT` = 期限已到。本文件不碰栈、不做上下文切换。
+ * 1. **The only basis for blocking** is `br_sched_block_current(abs_deadline)` (`br_sched.h`):
+ *    returns 0 = woken, `-ETIMEDOUT` = deadline reached. This file touches no stacks and
+ *    performs no context switches.
  *
- * 2. **等待者节点嵌在 TCB 里**(`sched_internal.h` 的 `br_waitq_push/pop/remove/len`),
- *    于是同步路径**零分配** —— 锁不会因为"分配失败"而失败。等待链指针就是对象里的
- *    `head` 字段, 节点复用 TCB 的 `wait_next`。
+ * 2. **Waiter nodes are embedded in the TCB** (`sched_internal.h`'s
+ *    `br_waitq_push/pop/remove/len`), so the synchronization path is **allocation-free** —
+ *    a lock never fails because "allocation failed". The wait-chain pointer is the object's
+ *    `head` field, and nodes reuse the TCB's `wait_next`.
  *
- * 3. **"检查条件 + 挂/摘等待链 + 所有权交接"全部在关中断临界区里**; 只有真正让出
- *    CPU 的那一步在开中断状态下发生(否则 tick(`1/HZ`)进不来, 超时永远不触发)。
+ * 3. **"Check condition + link/unlink wait chain + ownership handoff" all happen inside
+ *    the IRQ-disabled critical section**; only the step that actually yields the CPU runs
+ *    with interrupts enabled (otherwise ticks (`1/HZ`) cannot arrive and timeouts would
+ *    never fire).
  *
- * ## 与调度框架的握手位(ICB 协议; 见 ADR-0007 §2.6)
+ * ## Handshake bits with the scheduler framework (ICB protocol; see ADR-0007 §2.6)
  *
- * 从"关中断临界区里挂完等待链"到"`br_sched_block_current()` 把线程置 BLOCKED"之间,
- * 存在一个 ISR 可以 `give`/`signal` 并唤醒本线程的窗口。用 TCB 里**既有**的
- * `wait_status` 消掉它(不需要新字段):
- *   - 调用方在临界区内 `self->wait_status = -ETIMEDOUT` 并挂等待链;
- *   - `br_sched_wake(t)` 先写 `t->wait_status = 0`, 仅当 `t->state == BLOCKED` 才置
- *     READY + 挂就绪队列 ⇒ 落在窗口里的唤醒**只置位、不入队**, 不会丢;
- *   - `br_sched_block_current()` 看到 `wait_status == 0` 就**不切走**, 直接返回 0;
- *   - 超时扫描只对 `state == BLOCKED` 的线程置 `wait_status = -ETIMEDOUT`。
- * 顺序无论"先超时后被交接"还是"先交接后超时"都收敛到同一个赢家。
+ * Between "finish linking the wait chain in the IRQ-disabled critical section" and
+ * "`br_sched_block_current()` sets the thread BLOCKED", there is a window where an ISR can
+ * `give`/`signal` and wake this thread. It is closed with the TCB's **existing**
+ * `wait_status` (no new field needed):
+ *   - the caller sets `self->wait_status = -ETIMEDOUT` inside the critical section and links
+ *     the wait chain;
+ *   - `br_sched_wake(t)` writes `t->wait_status = 0` first, and only when
+ *     `t->state == BLOCKED` sets READY and enqueues ⇒ a wake landing in the window **only
+ *     sets the flag, does not enqueue**, so it is not lost;
+ *   - `br_sched_block_current()` sees `wait_status == 0` and **does not switch away**,
+ *     returning 0 immediately;
+ *   - the timeout scan sets `wait_status = -ETIMEDOUT` only for threads with
+ *     `state == BLOCKED`.
+ * Whether "timeout then handoff" or "handoff then timeout", the order converges to the same
+ * winner.
  *
- * ## 错误码口径(冻结)
+ * ## Error code conventions (frozen)
  *
- * `-EINVAL`(对象未初始化/魔数被踩) / `-EPERM`(非持有者 unlock) / `-EBUSY`(spinlock 的
- * `BR_TIMEOUT_ZERO` 忙) / `-ETIMEDOUT`(阻塞超时统一, INV-1) / `-ENOTSUP`(需要阻塞
- * 但当前没有线程上下文)。**sem 的 `take(ZERO)` 用 `-ETIMEDOUT`**(它就是"零期限",
- * 与 mutex 的 trylock 语义刻意不同; 依据 6-01 TC-SYNC-004, 见 ADR-0007 §2.3)。
+ * `-EINVAL` (object uninitialized / magic trampled) / `-EPERM` (unlock by non-owner) /
+ * `-EBUSY` (spinlock busy with `BR_TIMEOUT_ZERO`) / `-ETIMEDOUT` (all blocking timeouts,
+ * INV-1) / `-ENOTSUP` (blocking needed but no thread context). **sem's `take(ZERO)` uses
+ * `-ETIMEDOUT`** (it is a "zero deadline", deliberately different from mutex trylock;
+ * basis 6-01 TC-SYNC-004, see ADR-0007 §2.3).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -45,12 +58,13 @@
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
-/* TCB 布局与等待链四原语是 core 内部契约(sched_internal.h 自己也这么说)。
- * 跨目录相对包含在本仓有先例(core/src/irq/irq_fault.c -> "../panic_internal.h")。 */
+/* TCB layout and the four wait-chain primitives are a core-internal contract
+ * (sched_internal.h says so itself). Cross-directory relative includes have precedent in
+ * this repo (core/src/irq/irq_fault.c -> "../panic_internal.h"). */
 #include "../sched/sched_internal.h"
 
 /* =====================================================================
- * 公共小件
+ * shared helpers
  * ===================================================================== */
 
 #define SYNC_MUTEX_OK(m) ((m) != BR_NULL && (m)->magic == BR_SYNC_MAGIC_MUTEX)
@@ -58,17 +72,20 @@
 #define SYNC_COND_OK(c)  ((c) != BR_NULL && (c)->magic == BR_SYNC_MAGIC_COND)
 #define SYNC_SPIN_OK(s)  ((s) != BR_NULL && (s)->magic == BR_SYNC_MAGIC_SPIN)
 
-/* 相对超时 → 绝对期限。INF 原样传递("没有期限"不是"很远的期限")。 */
+/* Relative timeout → absolute deadline. INF passes through ("no deadline" is not
+ * "a very distant deadline"). */
 static br_time_t sync_deadline(br_time_t timeout)
 {
     return (timeout == BR_TIMEOUT_INF) ? BR_TIMEOUT_INF : br_deadline_from_now(timeout);
 }
 
 /*
- * 阻塞收尾: `br_sched_block_current()` 因超时返回时, 唤醒者并没有把我们摘下来
- * (它压根不知道我们在哪条链上) ⇒ **必须自己摘**, 否则链上留下一个"幽灵"节点:
- * 下一次 give/signal 会唤醒一个早就返回的线程。
- * 被正常唤醒时唤醒者已经 pop 过我们, `br_waitq_remove` 返回 0, 这里不动计数。
+ * Blocking epilogue: when `br_sched_block_current()` returns due to timeout, the waker did
+ * not unlink us (it does not even know which chain we are on) ⇒ **we must unlink
+ * ourselves**, otherwise a "ghost" node remains and the next give/signal wakes a thread
+ * that already returned.
+ * On a normal wake the waker already popped us, `br_waitq_remove` returns 0, and the count
+ * is left alone.
  */
 static int sync_wait_finish(void **head, br_u32 *waiters, int rc)
 {
@@ -89,9 +106,11 @@ static int sync_wait_finish(void **head, br_u32 *waiters, int rc)
 }
 
 /*
- * 持锁者放锁的**临界区内**实现(调用者已确认自已是 owner 且关着中断)。
- * 有等待者 ⇒ **直接交接所有权**(locked 保持 1, owner 换成被唤醒者):
- * 这样不会出现"计数先放出去、被第三个线程抢走"的窗口。
+ * Unlock done **inside the critical section** (the caller already verified it is the owner
+ * and interrupts are disabled).
+ * With waiters ⇒ **hand ownership over directly** (locked stays 1, owner becomes the woken
+ * thread): this avoids the window where the count is released first and a third thread
+ * grabs it.
  */
 static void sync_mutex_release_locked(br_mutex_t *m)
 {
@@ -101,7 +120,7 @@ static void sync_mutex_release_locked(br_mutex_t *m)
         if (m->waiters > 0u) {
             m->waiters--;
         }
-        m->owner = w;              /* 交接 */
+        m->owner = w;              /* handoff */
         br_sched_wake(w);
     } else {
         m->locked = 0u;
@@ -138,35 +157,37 @@ int br_mutex_lock_to(br_mutex_t *m, br_time_t timeout)
     br_thread_t   *self = br_task_self();
     br_irq_state_t st   = br_irq_lock();
 
-    if (m->locked == 0u) {                       /* 无锁快路径 */
+    if (m->locked == 0u) {                       /* unlocked fast path */
         m->locked = 1u;
         m->owner  = self;
         br_irq_unlock(st);
         return BR_OK;
     }
 
-    if (timeout == BR_TIMEOUT_ZERO) {            /* trylock 语义 */
-        /* ⚠ 这里返回 `-ETIMEDOUT` 而不是 `-EBUSY`: 设计 `6-01` 的 TC-SYNC-002 明写
-         * "lock_to(ZERO): 未锁 0 / 已锁 `-ETIMEDOUT`", 而 INV-1 把"等不到"统一到
-         * `-ETIMEDOUT` —— 零超时只是"等 0 微秒", 不是另一种错。冻结头最初写成 -EBUSY
-         * 是本刀的偏离, 已按设计改回(ADR-0007 §2.7); spinlock 的 trylock 仍用
-         * `-EBUSY`(它不在设计面内, 是本刀新增, 见 br_sync.h 头注)。 */
+    if (timeout == BR_TIMEOUT_ZERO) {            /* trylock semantics */
+        /* ⚠ This returns `-ETIMEDOUT`, not `-EBUSY`: design `6-01` TC-SYNC-002 states
+         * "lock_to(ZERO): unlocked 0 / locked `-ETIMEDOUT`", and INV-1 unifies "cannot
+         * wait" to `-ETIMEDOUT` — zero timeout is just "wait 0 microseconds", not another
+         * error. The frozen header first said -EBUSY, which was this change's deviation and
+         * has been fixed back to the design (ADR-0007 §2.7); spinlock's trylock still uses
+         * `-EBUSY` (it is outside the design surface, added by this change, see the
+         * br_sync.h header note). */
         br_irq_unlock(st);
         return BR_ERR(ETIMEDOUT);
     }
 
-    if (self == BR_NULL) {                       /* 有锁要等, 但没有线程上下文 */
+    if (self == BR_NULL) {                       /* lock is held, must wait, but no thread context */
         br_irq_unlock(st);
         return BR_ERR(ENOTSUP);
     }
 
     br_waitq_push(&m->head, self);
     m->waiters++;
-    self->wait_status = BR_ERR(ETIMEDOUT);    /* ICB: 乐观之前先立悲观默认 */
+    self->wait_status = BR_ERR(ETIMEDOUT);    /* ICB: pessimistic default before optimism */
     br_irq_unlock(st);
 
     const int rc = br_sched_block_current(sync_deadline(timeout));
-    /* rc == 0 ⇒ `br_mutex_unlock` 已把所有权交接给我们, 这里不再碰 locked/owner。 */
+    /* rc == 0 ⇒ `br_mutex_unlock` already handed ownership to us; do not touch locked/owner here. */
     return sync_wait_finish(&m->head, &m->waiters, rc);
 }
 
@@ -244,7 +265,7 @@ int br_sem_take(br_sem_t *s, br_time_t timeout)
         return BR_OK;
     }
 
-    if (timeout == BR_TIMEOUT_ZERO) {            /* 零期限 = 立刻到期 */
+    if (timeout == BR_TIMEOUT_ZERO) {            /* zero deadline = expires immediately */
         br_irq_unlock(st);
         return BR_ERR(ETIMEDOUT);
     }
@@ -260,13 +281,14 @@ int br_sem_take(br_sem_t *s, br_time_t timeout)
     br_irq_unlock(st);
 
     const int rc = br_sched_block_current(sync_deadline(timeout));
-    /* rc == 0 ⇒ give 已把令牌**直接交接**给我们(计数未被加回), 无需再减。 */
+    /* rc == 0 ⇒ give already handed the token **directly** to us (count was not added back), so no decrement. */
     return sync_wait_finish(&s->head, &s->waiters, rc);
 }
 
 /*
- * ISR-safe(CA-3 白名单, `3-02` §11.3): 只做"计数 + 挂链/交接 + 唤醒标记", 不切换。
- * 被唤醒者在下一个调度点才跑 —— 这是 v1 COOP 的诚实语义。
+ * ISR-safe (CA-3 whitelist, `3-02` §11.3): only "count + link/handoff + wake flag", no
+ * switch. The woken thread runs at the next scheduling point — that is v1 COOP's honest
+ * semantics.
  */
 int br_sem_give(br_sem_t *s)
 {
@@ -281,9 +303,9 @@ int br_sem_give(br_sem_t *s)
         if (s->waiters > 0u) {
             s->waiters--;
         }
-        br_sched_wake(w);                        /* 直接交接: 不动 count */
+        br_sched_wake(w);                        /* direct handoff: count untouched */
     } else {
-        s->count++;                              /* 没人等 ⇒ 记在计数上 */
+        s->count++;                              /* nobody waiting ⇒ record it in the count */
     }
 
     br_irq_unlock(st);
@@ -325,16 +347,19 @@ int br_cond_wait(br_cond_t *c, br_mutex_t *m, br_time_t timeout)
     br_thread_t *self = br_task_self();
     br_irq_state_t st = br_irq_lock();
 
-    if ((m->locked == 0u) || (m->owner != self)) {   /* cond_wait 的前提: 持有 m */
+    if ((m->locked == 0u) || (m->owner != self)) {   /* cond_wait precondition: hold m */
         br_irq_unlock(st);
         return BR_ERR(EPERM);
     }
 
     /*
-     * 零期限特例: 不挂等待链。语义仍是"原子地放锁 + 重取锁 + 返回超时",
-     * 但不经过 `br_sched_block_current`(否则是否走超时取决于调度器如何解释
-     * "期限已在过去", 这里把判据收进同步原语内部, 结果确定)。
-     * 这条路径也不需要线程上下文(不阻塞), 所以 `self == NULL` 的检查放在它之后。
+     * Zero-deadline special case: do not link the wait chain. Semantics stay "atomically
+     * release + reacquire + return timeout", but without going through
+     * `br_sched_block_current` (otherwise whether it times out depends on how the scheduler
+     * interprets "deadline already in the past"; here the criterion is brought inside the
+     * primitive, so the result is deterministic).
+     * This path also needs no thread context (it does not block), so the `self == NULL`
+     * check comes after it.
      */
     if (timeout == BR_TIMEOUT_ZERO) {
         sync_mutex_release_locked(m);
@@ -343,7 +368,7 @@ int br_cond_wait(br_cond_t *c, br_mutex_t *m, br_time_t timeout)
         return (rl != 0) ? rl : BR_ERR(ETIMEDOUT);
     }
 
-    if (self == BR_NULL) {                           /* 要阻塞, 但没有线程上下文 */
+    if (self == BR_NULL) {                           /* must block, but no thread context */
         br_irq_unlock(st);
         return BR_ERR(ENOTSUP);
     }
@@ -351,12 +376,12 @@ int br_cond_wait(br_cond_t *c, br_mutex_t *m, br_time_t timeout)
     br_waitq_push(&c->head, self);
     c->waiters++;
     self->wait_status = BR_ERR(ETIMEDOUT);
-    sync_mutex_release_locked(m);                    /* 原子: 放锁(可能交接给 mutex 等待者) */
+    sync_mutex_release_locked(m);                    /* atomic: unlock (may hand off to a mutex waiter) */
     br_irq_unlock(st);
 
     const int rc = br_sched_block_current(sync_deadline(timeout));
 
-    if (rc != 0) {                                   /* 超时: 把自己从 cond 等待链摘掉 */
+    if (rc != 0) {                                   /* timeout: unlink ourselves from the cond wait chain */
         st = br_irq_lock();
         if (br_waitq_remove(&c->head, self) != 0) {
             if (c->waiters > 0u) {
@@ -367,8 +392,10 @@ int br_cond_wait(br_cond_t *c, br_mutex_t *m, br_time_t timeout)
     }
 
     /*
-     * ★ TC-SYNC-008 的判据: **超时返回 -ETIMEDOUT 时也必须已经重新持有 m**。
-     * 用无期限重取(超时语义只覆盖"等待", 不覆盖"重新加锁" —— 标准 cond 语义)。
+     * ★ TC-SYNC-008 criterion: **when returning -ETIMEDOUT due to timeout, m must already
+     * be re-held**.
+     * Reacquire without a deadline (timeout semantics cover only "waiting", not
+     * "re-locking" — standard cond semantics).
      */
     const int rl = br_mutex_lock(m);
     if (rl != 0) {
@@ -392,7 +419,7 @@ int br_cond_signal(br_cond_t *c)
         }
         br_sched_wake(w);
     }
-    /* 无等待者 ⇒ no-op, **不计数**(裁定 G12: 别把 cond 做成 sem)。 */
+    /* no waiters ⇒ no-op, **no counting** (ruling G12: do not turn cond into sem). */
 
     br_irq_unlock(st);
     return BR_OK;
@@ -430,10 +457,10 @@ br_u32 br_cond_waiters(const br_cond_t *c)
 }
 
 /* =====================================================================
- * spinlock(设计里 0 命中的新增面, 见 br_sync.h 头注与 ADR-0007 §2.1)
+ * spinlock (a surface with 0 hits in the design; see the br_sync.h header note and ADR-0007 §2.1)
  * ===================================================================== */
 
-static volatile br_u32 s_spin_contention;   /* 进过自旋循环的次数 */
+static volatile br_u32 s_spin_contention;   /* number of times the spin loop was entered */
 
 int br_spinlock_init(br_spinlock_t *s)
 {
@@ -449,23 +476,27 @@ int br_spinlock_init(br_spinlock_t *s)
 }
 
 /*
- * 关中断(嵌套计数在 core)+ 自旋到拿到锁, 返回**进入前的中断状态**。
- * 单核上自旋位一次成功(没有别人在跑), 但"关中断"才是互斥的真身; 自旋位让临界区
- * 在代码里显式可见, 并为多核(SMP)留位。
+ * Disable interrupts (nesting count in core) + spin until the lock is acquired, returning
+ * the **interrupt state from before entry**.
+ * On a single core the spin bit succeeds first try (nobody else is running), but "disable
+ * interrupts" is the real mutex; the spin bit makes the critical section explicit in code
+ * and reserves the place for multicore (SMP).
  */
 br_irq_state_t br_spinlock_lock(br_spinlock_t *s)
 {
     const br_irq_state_t st = br_irq_lock();
 
     if (s == BR_NULL || s->magic != BR_SYNC_MAGIC_SPIN) {
-        /* 无返回错误码的通道; 未初始化/被踩坏是内核 bug, 不静默当"没锁"(ADR-0007 §2.5)。 */
+        /* No channel to return an error code; uninitialized/trampled is a kernel bug, not
+         * silently "unlocked" (ADR-0007 §2.5). */
         br_panic_bare("spinlock: magic corrupt (s=%p)", (const void *)s);
     }
 
     if (s->lock != 0u) {
-        s_spin_contention++;                 /* 单核上只有"自己锁自己"才会走到这里 */
+        s_spin_contention++;                 /* on a single core only "locking itself" reaches here */
         while (s->lock != 0u) {
-            /* 自旋等待。多核上等的是另一个核; 单核上这里是死锁, 不是正常路径。 */
+            /* Spin-wait. On multicore this waits for another core; on a single core it is a
+             * deadlock, not a normal path. */
         }
     }
     s->lock = 1u;
@@ -481,7 +512,7 @@ int br_spinlock_trylock(br_spinlock_t *s, br_irq_state_t *saved)
     const br_irq_state_t st = br_irq_lock();
 
     if (s->lock != 0u) {
-        br_irq_unlock(st);                   /* 忙: 不持锁、不改 *saved */
+        br_irq_unlock(st);                   /* busy: do not hold the lock, do not modify *saved */
         return BR_ERR(EBUSY);
     }
 
@@ -497,7 +528,8 @@ void br_spinlock_unlock(br_spinlock_t *s, br_irq_state_t saved)
     if (SYNC_SPIN_OK(s)) {
         s->lock = 0u;
     }
-    /* 魔数坏了也要把中断状态交回去 —— 否则一次脏对象会让本核永久关中断。 */
+    /* Even with a corrupt magic, hand the interrupt state back — otherwise one dirty
+     * object would leave this core with interrupts disabled forever. */
     br_irq_unlock(saved);
 }
 

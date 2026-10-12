@@ -1,30 +1,40 @@
 #!/usr/bin/env bash
 #
-# brickOS prototype — third_party **只读 vendor 树**门禁(ADR-0025)
+# brickOS prototype — gate for third_party being a **read-only vendor tree** (ADR-0025)
 #
-# 为什么需要它:
-#   `third_party/` 从本刀起是**逐字节上游原件**的 vendor 树(从 u-boot 钉死 commit 引入),
-#   我们对三方件的**一切改动(移植/兼容/对接/自检)**都在 `adapter/` 下。这两条纪律
-#   以前只写在文档里, 于是"顺手改一行三方件让它编过"永远不会被发现 —— 而那正是上一轮
-#   反复犯的错(往三方件里加注释/SPDX、改 include、删裁剪)。
+# Why it is needed:
+#   From this cut on, `third_party/` is a vendor tree of **byte-for-byte upstream
+#   originals** (pinned to a u-boot commit), and **every change** we make to
+#   third-party code (porting / compat / glue / self-checks) lives under `adapter/`.
+#   These two rules used to exist only in documents, so "just tweak one line of
+#   third-party code to make it build" was never caught — and that is exactly the
+#   mistake made repeatedly in the previous round (adding comments/SPDX inside
+#   third-party code, changing includes, deleting trims).
 #
-# 判据(五条, 全机械, 不需要编译器/网络):
-#   ① 锁文件在场且元数据齐(repo / branch / commit / snapshot_sha256);
-#   ② `third_party/uboot-imx/**` 的**每个文件**的 sha256 与锁一致  ← 核心: "不改三方代码"
-#   ③ 锁里**每条**在磁盘上都存在(没有静默丢失; 少了文件也是红);
-#   ④ `third_party/` 下没有 `plugin.toml` —— 三方件不是 brickOS 插件, 我们的插件在 adapter/;
-#   ⑤ `third_party/` 之外**没有**任何代码 include 三方件的头 —— 具体判据是"不出现
-#      `#include <third_party/...>` / `#include "third_party/..."`"(绝对路径形态)。
-#      ★ ADR-0026 起 vendor 的 `.c` **确实参与编译**(各 `plugin.toml` 的 `sources` 直接
-#        指向它们), 所以"参照物、不参与编译"这句旧口径不再成立; 本条现在守的是
-#        "**头**不许被绝对路径直取" —— 需要 vendor 的头时, 由 `adapter/*/compat/` 放一个
-#        **相对路径转发壳**(见 `adapter/uboot-erofs/compat/u-boot/lz4.h` 与
-#        `adapter/uboot-fat/compat/{fat,fs,rtc_def}.h`), 于是"谁引用了三方件"在 adapter/ 里
-#        一眼可数, 而不是散在构建的 `-I` 里。
-#      ⇒ 与之配套的另一半是 `tools/check-adapter-copies.py`(adapter 里不许有 vendor 源码副本)。
+# Criteria (five, all mechanical, no compiler/network needed):
+#   (1) the lock file is present with complete metadata (repo / branch / commit / snapshot_sha256);
+#   (2) the sha256 of **every file** under `third_party/uboot-imx/**` matches the lock
+#       <- core: "do not modify third-party code"
+#   (3) **every** entry in the lock exists on disk (nothing silently lost; a missing file is red too);
+#   (4) there is no `brick.toml` under `third_party/` — third-party code is not a
+#       brickOS plugin; our plugins live in adapter/;
+#   (5) **no** code outside `third_party/` includes third-party headers — concretely,
+#       no `#include <third_party/...>` / `#include "third_party/..."` (absolute-path
+#       form) may appear.
+#       * Since ADR-0026 the vendored `.c` files **do take part in compilation**
+#         (`sources` in each `brick.toml` points directly at them), so the old wording
+#         "reference only, not compiled" no longer holds; what this item now guards is
+#         "**headers** must not be taken directly by absolute path" — when a vendor
+#         header is needed, `adapter/*/compat/` provides a **relative-path forwarding
+#         shim** (see `adapter/uboot-erofs/compat/u-boot/lz4.h` and
+#         `adapter/uboot-fat/compat/{fat,fs,rtc_def}.h`), so "who references third-party
+#         code" is countable at a glance in adapter/, instead of being scattered across
+#         the build's `-I` flags.
+#       => the other half that goes with it is `tools/check-adapter-copies.py`
+#          (no vendor source copies inside adapter).
 #
-# 用法: bash tools/check-third-party-pristine.sh
-# 退出码: 0 = 全过, 1 = 有违规, 2 = 用法/环境错
+# Usage: bash tools/check-third-party-pristine.sh
+# Exit code: 0 = all pass, 1 = violations found, 2 = usage/environment error
 
 set -uo pipefail
 
@@ -33,24 +43,24 @@ cd "$(dirname "$0")/.." || exit 2
 LOCK="adapter/third-party-upstream.lock"
 VENDOR="third_party/uboot-imx"
 
-[ -f "$LOCK" ] || { echo "FAIL: 找不到锁文件 $LOCK" >&2; exit 2; }
-[ -d "$VENDOR" ] || { echo "FAIL: 找不到 vendor 树 $VENDOR" >&2; exit 2; }
+[ -f "$LOCK" ] || { echo "FAIL: lock file not found: $LOCK" >&2; exit 2; }
+[ -d "$VENDOR" ] || { echo "FAIL: vendor tree not found: $VENDOR" >&2; exit 2; }
 
 status=0
 fail() { echo "FAIL: $*" >&2; status=1; }
 pass() { echo "ok   $*"; }
 
-# ---- ① 元数据 ---------------------------------------------------------------
+# ---- (1) metadata -----------------------------------------------------------
 meta_ok=1
 for k in repo branch commit snapshot_sha256; do
-    grep -qE "^$k[[:space:]]*=" "$LOCK" || { fail "$LOCK 缺元数据字段: $k"; meta_ok=0; }
+    grep -qE "^$k[[:space:]]*=" "$LOCK" || { fail "$LOCK is missing metadata field: $k"; meta_ok=0; }
 done
 if [ "$meta_ok" = 1 ]; then
     commit="$(grep -E '^commit[[:space:]]*=' "$LOCK" | head -1 | sed 's/.*"\(.*\)".*/\1/')"
-    pass "锁元数据齐(commit ${commit:0:12}…)"
+    pass "lock metadata complete (commit ${commit:0:12}...)"
 fi
 
-# ---- 解析 [[file]] 条目 ------------------------------------------------------
+# ---- parse [[file]] entries --------------------------------------------------
 mapfile -t want < <(
     awk '
         function val(s) { sub(/^[^"]*"/, "", s); sub(/"[^"]*$/, "", s); return s }
@@ -60,9 +70,9 @@ mapfile -t want < <(
                                  if (path != "" && sha != "") print path " " sha; next }
     ' "$LOCK"
 )
-[ "${#want[@]}" -gt 0 ] || { fail "$LOCK 里没有 [[file]] 条目"; exit 1; }
+[ "${#want[@]}" -gt 0 ] || { fail "no [[file]] entries in $LOCK"; exit 1; }
 
-# ---- ②③ 逐文件核对 -----------------------------------------------------------
+# ---- (2)(3) per-file verification --------------------------------------------
 n_ok=0
 : > /tmp/.tp_want.$$
 for row in "${want[@]}"; do
@@ -70,24 +80,24 @@ for row in "${want[@]}"; do
     printf '%s\n' "$p" >> /tmp/.tp_want.$$
     f="$VENDOR/$p"
     if [ ! -f "$f" ]; then
-        fail "锁里有但磁盘上没有: $f"
+        fail "in the lock but missing on disk: $f"
         continue
     fi
     got="$(sha256sum "$f" | cut -d' ' -f1)"
     if [ "$got" = "$h" ]; then
         n_ok=$((n_ok + 1))
     else
-        fail "三方件被改动过: $f"
-        echo "       锁  $h" >&2
-        echo "       实得 $got" >&2
-        echo "       ⇒ third_party/ 是**只读** vendor 树; 要适配请改 adapter/ 下的移植件" >&2
+        fail "third-party file was modified: $f"
+        echo "       lock $h" >&2
+        echo "       got  $got" >&2
+        echo "       => third_party/ is a **read-only** vendor tree; to adapt, change the port files under adapter/" >&2
     fi
 done
 if [ "$status" -eq 0 ]; then
-    pass "vendor 树与锁逐字节一致($n_ok 个文件)"
+    pass "vendor tree is byte-identical to the lock ($n_ok files)"
 fi
 
-# ②b 反向: vendor 树里不许有"锁里没有"的文件(多出来的文件 = 有人往三方件里塞东西)
+# (2b) reverse: no files in the vendor tree that are "not in the lock" (an extra file = something stuffed in)
 extra=""
 while IFS= read -r f; do
     rel="${f#"$VENDOR"/}"
@@ -95,30 +105,30 @@ while IFS= read -r f; do
 done < <(find "$VENDOR" -type f | sort)
 rm -f /tmp/.tp_want.$$
 if [ -n "$extra" ]; then
-    fail "$VENDOR 里有锁里没有的文件(往只读 vendor 树里塞了东西)"
+    fail "$VENDOR has files that are not in the lock (something was stuffed into the read-only vendor tree)"
     printf '%s' "$extra" | sed 's/^/      /' >&2
 else
-    pass "vendor 树没有多余文件(只有锁里登记的上游原件)"
+    pass "vendor tree has no extra files (only the upstream originals registered in the lock)"
 fi
 
-# ---- ④ third_party 下不许有插件 ---------------------------------------------
-if find third_party -name plugin.toml -print -quit | grep -q .; then
-    fail "third_party/ 下有 plugin.toml —— 三方件不是 brickOS 插件(我们的插件在 adapter/)"
+# ---- (4) no plugins under third_party ----------------------------------------
+if find third_party -name brick.toml -print -quit | grep -q .; then
+    fail "brick.toml found under third_party/ — third-party code is not a brickOS plugin (our plugins live in adapter/)"
 else
-    pass "third_party/ 下没有 plugin.toml(插件都在 adapter/)"
+    pass "no brick.toml under third_party/ (all plugins are in adapter/)"
 fi
 
-# ---- ⑤ 三方件的头不许被绝对路径直取 -------------------------------------------
+# ---- (5) third-party headers must not be taken by absolute path --------------
 hits="$(grep -rn --include='*.c' --include='*.h' -E '^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]third_party/' \
             --exclude-dir=build --exclude-dir=.git --exclude-dir=tools . 2>/dev/null || true)"
 if [ -n "$hits" ]; then
-    fail "third_party/ 之外有人以绝对路径 include 三方件的头(要取 vendor 的头, 请放 adapter/*/compat/ 的相对路径转发壳)"
+    fail "code outside third_party/ includes third-party headers by absolute path (to use a vendor header, add a relative-path forwarding shim under adapter/*/compat/)"
     printf '%s\n' "$hits" | sed 's/^/      /' >&2
 else
-    pass "无人以绝对路径 include 三方件的头(vendor 的头只经 adapter/*/compat/ 的转发壳)"
+    pass "nobody includes third-party headers by absolute path (vendor headers only via adapter/*/compat/ shims)"
 fi
 
 if [ "$status" -eq 0 ]; then
-    echo "PASS: third_party 只读 vendor 树(逐字节=上游 / 无多余文件 / 无插件 / 头只经 adapter 转发壳)"
+    echo "PASS: third_party is a read-only vendor tree (byte-identical to upstream / no extra files / no plugins / headers only via adapter shims)"
 fi
 exit "$status"

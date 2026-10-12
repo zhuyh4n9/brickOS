@@ -4,7 +4,7 @@
 
 #define BR_MAINLOOP_PERIOD_MS   1000u
 
-/* ------------------------------------------------------------------ APPCONF 装置 */
+/* ------------------------------------------------------------------ APPCONF fixture */
 
 #define APP_WORKERS   3u
 #define APP_ITERS     500
@@ -23,16 +23,16 @@ static void ap(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* ------------------------------------------------------------------ 用例 ①:
- * mutex 保护计数 + barrier 起跑 + join 搬 retval。 */
-static pthread_barrier_t s_start_bar;      /* APP_WORKERS + 主线程 */
+/* ------------------------------------------------------------------ Case ①:
+ * mutex-protected counter + barrier start + retval moved via join. */
+static pthread_barrier_t s_start_bar;      /* APP_WORKERS + main thread */
 static pthread_mutex_t   s_count_lock = PTHREAD_MUTEX_INITIALIZER;
 static long              s_count;
 
 static void *worker_count(void *arg)
 {
     const long bump = (long)(br_intptr_t)arg;
-    (void)pthread_barrier_wait(&s_start_bar);       /* 三个 worker 同一起跑线 */
+    (void)pthread_barrier_wait(&s_start_bar);       /* all three workers on one start line */
     for (int i = 0; i < APP_ITERS; i++) {
         if (pthread_mutex_lock(&s_count_lock) != 0) {
             return (void *)(br_intptr_t)(-1);
@@ -42,7 +42,7 @@ static void *worker_count(void *arg)
             return (void *)(br_intptr_t)(-2);
         }
     }
-    return (void *)(br_intptr_t)bump;               /* retval 经 join 回主线程 */
+    return (void *)(br_intptr_t)bump;               /* retval returns to the main thread via join */
 }
 
 static br_bool case_mutex_count(void)
@@ -53,20 +53,20 @@ static br_bool case_mutex_count(void)
     for (unsigned i = 0u; i < APP_WORKERS; i++) {
         ok = ok && (pthread_create(&t[i], BR_NULL, worker_count, (void *)(br_intptr_t)(i + 1u)) == 0);
     }
-    (void)pthread_barrier_wait(&s_start_bar);        /* 放开起跑线 */
+    (void)pthread_barrier_wait(&s_start_bar);        /* release the start line */
     long sum = 0;
     for (unsigned i = 0u; i < APP_WORKERS; i++) {
         void *ret = BR_NULL;
         ok = ok && (pthread_join(t[i], &ret) == 0);
-        sum += (long)(br_intptr_t)ret;               /* retval 之和 = 1+2+3 */
+        sum += (long)(br_intptr_t)ret;               /* sum of retvals = 1+2+3 */
     }
     ok = ok && (sum == 6) && (s_count == (long)(APP_WORKERS * (unsigned)APP_ITERS));
     ok = ok && (pthread_barrier_destroy(&s_start_bar) == 0);
     return ok;
 }
 
-/* ------------------------------------------------------------------ 用例 ②:
- * condvar 会合(主线程等全部 worker 就绪, 再广播放行)。 */
+/* ------------------------------------------------------------------ Case ②:
+ * condvar rendezvous (main thread waits for all workers ready, then broadcasts go). */
 static pthread_mutex_t s_join_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  s_join_ready = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t  s_join_go = PTHREAD_COND_INITIALIZER;
@@ -117,8 +117,8 @@ static br_bool case_cond_rendezvous(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ 用例 ③:
- * TLS key: 每线程值隔离 + 退出时析构。 */
+/* ------------------------------------------------------------------ Case ③:
+ * TLS key: per-thread value isolation + destructor on exit. */
 static pthread_key_t s_tls_key;
 static int           s_tls_dtors;
 
@@ -130,7 +130,7 @@ static void *worker_tls(void *arg)
     if (pthread_setspecific(s_tls_key, (void *)(br_intptr_t)(idx + 1)) != 0) {
         return (void *)(br_intptr_t)(-1);
     }
-    (void)pthread_yield();                           /* 让别的线程也写它自己的槽位 */
+    (void)pthread_yield();                           /* let other threads write their own slots too */
     const long got = (long)(br_intptr_t)pthread_getspecific(s_tls_key);
     return (void *)(br_intptr_t)((got == (long)(idx + 1)) ? 0 : -2);
 }
@@ -152,8 +152,8 @@ static br_bool case_tls_key(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ 用例 ④:
- * detach(惰性回收): detached 线程照跑; join detached ⇒ EINVAL。 */
+/* ------------------------------------------------------------------ Case ④:
+ * detach (lazy reclaim): the detached thread still runs; join detached => EINVAL. */
 static int            s_det_ran;
 static sem_t          s_det_gate;
 
@@ -176,18 +176,18 @@ static br_bool case_detach(void)
     ok = ok && (pthread_create(&t, &a, worker_det, BR_NULL) == 0);
     ok = ok && (pthread_attr_destroy(&a) == 0);
     void *r = BR_NULL;
-    ok = ok && (pthread_join(t, &r) == EINVAL);      /* 记录还在 ⇒ EINVAL(不是 ESRCH) */
+    ok = ok && (pthread_join(t, &r) == EINVAL);      /* record still exists => EINVAL (not ESRCH) */
     ok = ok && (sem_post(&s_det_gate) == 0);
     for (int i = 0; i < 8; i++) {
-        (void)pthread_yield();                       /* 让它退出; 后续调用触发惰性回收 */
+        (void)pthread_yield();                       /* let it exit; later calls trigger lazy reclaim */
     }
     ok = ok && (s_det_ran == 1);
     ok = ok && (sem_destroy(&s_det_gate) == 0);
     return ok;
 }
 
-/* ------------------------------------------------------------------ 用例 ⑤:
- * 每线程 errno 隔离(两线程各写各的槽位, 用 barrier 保证写入先于读取)。 */
+/* ------------------------------------------------------------------ Case ⑤:
+ * per-thread errno isolation (each thread writes its own slot; barrier makes the write precede the read). */
 static pthread_barrier_t s_err_bar;
 static int               s_err_seen[2];
 
@@ -216,8 +216,8 @@ static br_bool case_errno_isolated(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ 用例 ⑥:
- * rwlock 读并发 / 写独占。 */
+/* ------------------------------------------------------------------ Case ⑥:
+ * rwlock: concurrent readers / exclusive writer. */
 static pthread_rwlock_t s_rw = PTHREAD_RWLOCK_INITIALIZER;
 static pthread_mutex_t  s_rw_stats = PTHREAD_MUTEX_INITIALIZER;
 static int              s_rw_value;
@@ -239,7 +239,7 @@ static void *worker_reader(void *arg)
             s_rw_active_max = s_rw_active;
         }
         (void)pthread_mutex_unlock(&s_rw_stats);
-        (void)usleep(5000u);                         /* 持读锁睡 ⇒ 另一个读者能同时进 */
+        (void)usleep(5000u);                         /* sleep holding the read lock => another reader can enter */
         (void)pthread_mutex_lock(&s_rw_stats);
         s_rw_active--;
         (void)pthread_mutex_unlock(&s_rw_stats);
@@ -258,7 +258,7 @@ static void *worker_writer(void *arg)
         }
         (void)pthread_mutex_lock(&s_rw_stats);
         if (s_rw_active != 0) {
-            s_rw_bad = 1;                            /* 写者持锁时不许有活跃读者 */
+            s_rw_bad = 1;                            /* no active readers allowed while a writer holds the lock */
         }
         s_rw_value++;
         (void)pthread_mutex_unlock(&s_rw_stats);
@@ -285,8 +285,8 @@ static br_bool case_rwlock(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ 用例 ⑦:
- * once(恰一次)+ 线程名 set/get。 */
+/* ------------------------------------------------------------------ Case ⑦:
+ * once (exactly once) + thread name set/get. */
 static pthread_once_t s_once = PTHREAD_ONCE_INIT;
 static int            s_once_count;
 static sem_t          s_name_gate;
@@ -338,30 +338,32 @@ static br_bool case_once_and_name(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ 用例 ⑧–⑭:
- * 介质类文件系统(第三方 FAT / EROFS 移植件)的端到端样例(ADR-0022)。
+/* ------------------------------------------------------------------ Cases ⑧–⑭:
+ * End-to-end samples for media-class filesystems (third-party FAT / EROFS ports) (ADR-0022).
  *
- * ★ **只 include POSIX 头、只调 POSIX 面**(经 iface/posix 皮肤): 这一族的价值恰在于
- *   "APP 眼里没有第三个文件系统" —— 它看见的只是 `/fat12`、`/fat16`、`/fat32`、`/assets`
- *   四个挂载点上的普通 open/read/write/stat/opendir。挂载表、块设备、SDHCI、LZ4 解压
- *   全在下面若干层, APP 一行都不知道。
- * ★ 判据是**逐字节**的: 宿主用外部权威工具(mkfs.fat + mcopy / mkfs.erofs)把这些字节
- *   放进卷里(build/emmc0..3.img, 见 tools/mk-fs-images.sh)—— 自研 mkfs 与自研 reader
- *   互为镜像证明不了任何东西, 所以"读出来的字节 == 外部工具放进去的字节"是这一族的根判据。
- * ★ 写面用例**自己收摊**(先 unlink 再建、用完 unlink/rmdir): 门禁可能多次启动同一镜像,
- *   留垃圾会让下一次的目录断言漂移。
+ * ★ **Include only POSIX headers, call only the POSIX face** (via the iface/posix skin): the value of
+ *   this family is exactly that "the APP sees no third filesystem" — only ordinary
+ *   open/read/write/stat/opendir on the four mount points `/fat12`, `/fat16`, `/fat32`, `/assets`.
+ *   The mount table, block device, SDHCI and LZ4 decompression are all several layers below; the APP
+ *   knows none of it.
+ * ★ The criterion is **byte-for-byte**: the host uses authoritative external tools (mkfs.fat + mcopy /
+ *   mkfs.erofs) to place these bytes into the volumes (build/emmc0..3.img, see tools/mk-fs-images.sh) —
+ *   a homemade mkfs and a homemade reader mirroring each other prove nothing, so "bytes read == bytes
+ *   put in by the external tool" is this family's root criterion.
+ * ★ Write-path cases **clean up after themselves** (unlink before create, unlink/rmdir after use): the
+ *   gate may boot the same image repeatedly, and leftover garbage would drift the next directory check.
  */
 
-/* 分块比对的缓冲: 512 B 是有意的 —— APP 线程栈是 4 KiB 级, 最大的被判据文件是 70000 B
- * (EROFS 的 LZ4 压缩件), 不可能整个读进栈里。 */
+/* Chunk-compare buffer: 512 B is intentional — APP thread stacks are 4 KiB-class and the largest
+ * checked file is 70000 B (the EROFS LZ4 artifact); it cannot be read into the stack whole. */
 #define FS_CHUNK 512u
 static br_u8 s_fs_buf[FS_CHUNK];
 
-/* 期望字节生成式(id 与 tools/mk-fs-images.sh 的内容生成一一对应) */
-#define FSGEN_CONST   0   /* 常量字符 `ch` */
-#define FSGEN_ABCDEF  1   /* "ABCDEFGH" 无限重复(EROFS 的 LZ4 压缩件) */
-#define FSGEN_IDX     2   /* 第 i 字节 = i & 0xFF */
-#define FSGEN_PRNG    3   /* 与造镜像脚本同一个线性同余式(EROFS 的 raw.bin) */
+/* Expected-byte generators (ids correspond one-to-one with tools/mk-fs-images.sh content generation) */
+#define FSGEN_CONST   0   /* constant character `ch` */
+#define FSGEN_ABCDEF  1   /* "ABCDEFGH" repeated forever (the EROFS LZ4 artifact) */
+#define FSGEN_IDX     2   /* byte i = i & 0xFF */
+#define FSGEN_PRNG    3   /* same LCG as the image-building script (EROFS raw.bin) */
 
 static br_u8 fs_gen(int gen, char ch, br_u64 i)
 {
@@ -374,12 +376,12 @@ static br_u8 fs_gen(int gen, char ch, br_u64 i)
     }
 }
 
-/* 读满 `len` 字节并逐字节比对; 还要求"恰好在此处 EOF"(再读一字节必须得 0)。 */
+/* Read exactly `len` bytes and compare byte-for-byte; also requires "exactly EOF here" (one more read must return 0). */
 static br_bool fs_check_read(const char *path, br_u64 len, int gen, char ch)
 {
     const int fd = open(path, O_RDONLY);
     if (fd < 0) {
-        br_log_info("[APPCONF]   (open %s 失败 errno=%d)", path, errno);
+        br_log_info("[APPCONF]   (open %s failed errno=%d)", path, errno);
         return BR_FALSE;
     }
 
@@ -403,7 +405,7 @@ static br_bool fs_check_read(const char *path, br_u64 len, int gen, char ch)
 
     if (ok == BR_TRUE) {
         br_u8 tail = 0u;
-        if (read(fd, &tail, 1u) != 0) {   /* 文件应当恰好在 len 处结束 */
+        if (read(fd, &tail, 1u) != 0) {   /* the file must end exactly at len */
             ok = BR_FALSE;
         }
     }
@@ -411,7 +413,7 @@ static br_bool fs_check_read(const char *path, br_u64 len, int gen, char ch)
     return ok;
 }
 
-/* 逐字节比对一个常量串(不走生成式路径, 判据更直白: 出错时日志能看出差在哪)。 */
+/* Compare a constant string byte-for-byte (no generator path; a plainer criterion: logs show where it differs). */
 static br_bool fs_check_exact(const char *path, const char *text)
 {
     const size_t len = strlen(text);
@@ -438,7 +440,7 @@ static br_bool fs_check_exact(const char *path, const char *text)
     return ok;
 }
 
-/* APP-FS-001: 四个挂载点都在, hello.txt 的类型/大小/内容逐字节正确(未压缩路径) */
+/* APP-FS-001: all four mount points present; hello.txt type/size/content byte-correct (uncompressed path) */
 static br_bool case_fs_hello(void)
 {
     static const struct { const char *path; const char *text; } t[] = {
@@ -458,7 +460,7 @@ static br_bool case_fs_hello(void)
     return ok;
 }
 
-/* APP-FS-002: 各卷的 dir/a.bin 按生成式逐字节比对(跨块/大文件读) */
+/* APP-FS-002: dir/a.bin on each volume compared byte-for-byte via generators (cross-block/large reads) */
 static br_bool case_fs_binaries(void)
 {
     br_bool ok = BR_TRUE;
@@ -470,7 +472,7 @@ static br_bool case_fs_binaries(void)
     return ok;
 }
 
-/* APP-FS-003: FAT 写闭环(建 → 三段写 → fsync → 关 → 重开读回 → stat → 删) */
+/* APP-FS-003: FAT write round-trip (create -> three writes -> fsync -> close -> reopen/read back -> stat -> unlink) */
 static br_bool case_fs_write_roundtrip(void)
 {
     const char *path = "/fat16/app-rw.txt";
@@ -497,7 +499,7 @@ static br_bool case_fs_write_roundtrip(void)
     return ok;
 }
 
-/* APP-FS-004: FAT 目录面(mkdir → 在其中建文件 → opendir/readdir 看得见 → 收摊) */
+/* APP-FS-004: FAT directory face (mkdir -> create file inside -> opendir/readdir sees it -> clean up) */
 static br_bool case_fs_directory(void)
 {
     const char *dir  = "/fat32/appdir";
@@ -538,7 +540,7 @@ static br_bool case_fs_directory(void)
     return ok;
 }
 
-/* APP-FS-005: FAT 改名 + 截断(改名后旧名不存在; 截断改 size 与内容) */
+/* APP-FS-005: FAT rename + truncate (old name gone after rename; truncate changes size and content) */
 static br_bool case_fs_rename_truncate(void)
 {
     const char *old_path = "/fat12/app-ren.txt";
@@ -568,7 +570,7 @@ static br_bool case_fs_rename_truncate(void)
     return ok;
 }
 
-/* APP-FS-006: EROFS 只读执法(写/建目录/删都必须是 EROFS, 而不是别的错) + LZ4 压缩读路径 */
+/* APP-FS-006: EROFS read-only enforcement (write/mkdir/unlink must give EROFS, not another error) + LZ4 read path */
 static br_bool case_fs_erofs_readonly_lz4(void)
 {
     errno = 0;
@@ -584,14 +586,14 @@ static br_bool case_fs_erofs_readonly_lz4(void)
     errno = 0;
     ok = ok && (unlink("/assets/hello.txt") == -1) && (errno == EROFS);
 
-    /* 压缩路径: 70000 B 的 "ABCDEFGH" 重复(宿主用 mkfs.erofs -zlz4 造的压缩件) */
+    /* compressed path: 70000 B of repeated "ABCDEFGH" (host-built with mkfs.erofs -zlz4) */
     ok = ok && fs_check_read("/assets/comp/lz4.txt", 70000u, FSGEN_ABCDEF, 0);
-    /* 另一条压缩路径: 8192 B 近似随机(压不太动的那一类) */
+    /* another compressed path: 8192 B near-random (the barely compressible kind) */
     ok = ok && fs_check_read("/assets/raw.bin", 8192u, FSGEN_PRNG, 0);
     return ok;
 }
 
-/* APP-FS-007: VFAT 长文件名(宿主放的是 "long name file.txt", 短名是 LONGNA~1.TXT) */
+/* APP-FS-007: VFAT long file name (host placed "long name file.txt", short name LONGNA~1.TXT) */
 static br_bool case_fs_longname(void)
 {
     const char *path = "/fat32/long name file.txt";
@@ -602,66 +604,70 @@ static br_bool case_fs_longname(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ 入口 */
+/* ------------------------------------------------------------------ Entry */
 
 static void app_pthread_conformance(void)
 {
     s_app_pass = 0u;
     s_app_fail = 0u;
-    br_log_info("[APPCONF] ==== POSIX pthread 多线程一致性(APP 侧; 经 iface/posix) ====");
-    ap(case_mutex_count(),     "APP-PT-001", "mutex 保护计数(3×500) + barrier 起跑 + join 搬 retval");
-    ap(case_cond_rendezvous(), "APP-PT-002", "condvar 会合: 主线程等全部 worker 就绪后广播放行");
-    ap(case_tls_key(),         "APP-PT-003", "pthread_key_*: 每线程值隔离 + 退出析构");
-    ap(case_detach(),          "APP-PT-004", "detach: detached 线程照跑; join detached ⇒ EINVAL");
-    ap(case_errno_isolated(),  "APP-PT-005", "每线程 errno 隔离(两线程各写各的槽位)");
-    ap(case_rwlock(),          "APP-PT-006", "rwlock: 读者并发(active_max>=2)、写者独占");
-    ap(case_once_and_name(),   "APP-PT-007", "pthread_once 恰一次 + setname/getname_np");
+    br_log_info("[APPCONF] ==== POSIX pthread multithreading conformance (APP side; via iface/posix) ====");
+    ap(case_mutex_count(),     "APP-PT-001", "mutex-protected counter (3x500) + barrier start + retval moved via join");
+    ap(case_cond_rendezvous(), "APP-PT-002", "condvar rendezvous: main thread waits for all workers ready, then broadcasts go");
+    ap(case_tls_key(),         "APP-PT-003", "pthread_key_*: per-thread value isolation + destructor on exit");
+    ap(case_detach(),          "APP-PT-004", "detach: detached thread still runs; join detached => EINVAL");
+    ap(case_errno_isolated(),  "APP-PT-005", "per-thread errno isolation (each thread writes its own slot)");
+    ap(case_rwlock(),          "APP-PT-006", "rwlock: concurrent readers (active_max>=2), exclusive writer");
+    ap(case_once_and_name(),   "APP-PT-007", "pthread_once exactly once + setname/getname_np");
     br_log_info("[APPCONF] SUMMARY pass=%u fail=%u total=%u", s_app_pass, s_app_fail,
                 s_app_pass + s_app_fail);
 }
 
 /*
- * 介质类文件系统一致性(ADR-0022)。与上面那套**共用**同一对计数器与同一条 SUMMARY 行 ——
- * 于是门禁的 `[APPCONF] SUMMARY ... fail=0` 一句话覆盖两族用例, 而 tag 逐条点名又把
- * "某一族被裁掉"这件事照旧判红。
+ * Media-class filesystem conformance (ADR-0022). **Shares** the same counter pair and the same SUMMARY
+ * line as the set above — so the gate's one-liner `[APPCONF] SUMMARY ... fail=0` covers both families,
+ * while the per-case tags still flag "one family got compiled out" as before.
  *
- * ★ 为什么本族落在 **start 相**(由 `hello_start` 直接调用)而不是 APP 线程里:
- *   自检 pass 跑在"全部 start 之后、`br_sched_run()` 之前", 而 **timer 抢占在此之前就
- *   已经生效**(ADR-0011 的 IRQ 出口换栈只看"有没有就绪任务", 不看 `br_sched_run()` 是否
- *   被调用过)—— 实测: 第一版把本族放在 APP 线程里, 它立刻与 `[SELFTEST]` 并发, 于是
- *   **两边同时访问同一块卡/同一个卷**: EROFS 侧读到 `bdev read 失败 lba=2 rc=-5`,
- *   eMMC 侧两条用例各等满 2 s 超时(sdhci wait 超时/pending=0), APP 侧 FAT 写闭环也红。
- *   放在 start 相就没有这个并发窗口: 此刻只有启动上下文一条控制流, 且四个卷都已挂好、
- *   中断已开、块设备已注册 —— 本族需要的前提**全部成立**。
- *   (这也把"FS 栈本代不保证多线程并发"这条 v1 边界如实暴露出来: vfs-core / fs/tmpfs /
- *    两件移植件都没有卷级锁, 与"设备 ops 由驱动自锁"是两回事。)
+ * ★ Why this family runs in the **start phase** (called directly by `hello_start`) rather than in an APP
+ *   thread: the selftest pass runs "after all starts, before `br_sched_run()`", and **timer preemption is
+ *   already in effect before that** (the ADR-0011 IRQ-exit stack switch only looks at "is any task ready",
+ *   not at whether `br_sched_run()` was called). Measured: the first version put this family in an APP
+ *   thread and it immediately ran concurrently with `[SELFTEST]`, so **both sides touched the same
+ *   card/volume at once**: the EROFS side read `bdev read failed lba=2 rc=-5`, two eMMC cases each hit the
+ *   full 2 s timeout (sdhci wait timeout/pending=0), and the APP-side FAT write round-trip also went red.
+ *   In the start phase there is no such concurrency window: there is only one control flow (the boot
+ *   context), and all four volumes are mounted, interrupts are on, the block device is registered — every
+ *   precondition this family needs **holds**.
+ *   (This also honestly exposes the v1 boundary "this generation's FS stack does not guarantee
+ *    multithreaded concurrency": vfs-core / fs/tmpfs / both ports have no volume-level lock, which is a
+ *    different matter from "device ops are self-locked by the driver".)
  *
- * WORKAROUND(br-wa-test-001): `APP-FS-*` 与 `APP-PT-*` 一样是**自编号** —— 设计 `6-01`
- * 的用例表里没有"APP 自己的样例"这一族。与其余各族的编号债同一处登记。
+ * WORKAROUND(br-wa-test-001): like `APP-PT-*`, `APP-FS-*` is **self-numbered** — the `6-01` design case
+ * table has no "APP's own samples" family. Registered together with the other families' numbering debt.
  */
 static void app_fs_conformance(void)
 {
     s_app_pass = 0u;
     s_app_fail = 0u;
-    br_log_info("[APPCONF] ==== 介质类文件系统端到端(FAT12/16/32 + EROFS; 经 iface/posix) ====");
-    ap(case_fs_hello(),             "APP-FS-001", "四挂载点都在; hello.txt 类型/大小/内容逐字节正确");
-    ap(case_fs_binaries(),          "APP-FS-002", "各卷 dir/a.bin 按生成式逐字节比对(跨块读)");
-    ap(case_fs_write_roundtrip(),   "APP-FS-003", "FAT 写闭环: 建→三段写→fsync→重开读回→stat→删");
-    ap(case_fs_directory(),         "APP-FS-004", "FAT 目录面: mkdir→建文件→opendir/readdir 看得见→收摊");
-    ap(case_fs_rename_truncate(),   "APP-FS-005", "FAT 改名(旧名 ENOENT)+ truncate 改 size 与内容");
-    ap(case_fs_erofs_readonly_lz4(),"APP-FS-006", "EROFS 只读执法(EROFS)+ LZ4 压缩件逐字节读回");
-    ap(case_fs_longname(),          "APP-FS-007", "VFAT 长名 \"long name file.txt\" 可 stat/读");
+    br_log_info("[APPCONF] ==== media-class filesystem end-to-end (FAT12/16/32 + EROFS; via iface/posix) ====");
+    ap(case_fs_hello(),             "APP-FS-001", "all four mount points present; hello.txt type/size/content byte-correct");
+    ap(case_fs_binaries(),          "APP-FS-002", "dir/a.bin on each volume compared byte-for-byte via generators (cross-block reads)");
+    ap(case_fs_write_roundtrip(),   "APP-FS-003", "FAT write round-trip: create->three writes->fsync->reopen/read back->stat->unlink");
+    ap(case_fs_directory(),         "APP-FS-004", "FAT directory face: mkdir->create file->opendir/readdir sees it->clean up");
+    ap(case_fs_rename_truncate(),   "APP-FS-005", "FAT rename (old name ENOENT) + truncate changes size and content");
+    ap(case_fs_erofs_readonly_lz4(),"APP-FS-006", "EROFS read-only enforcement (EROFS) + LZ4 artifact read back byte-for-byte");
+    ap(case_fs_longname(),          "APP-FS-007", "VFAT long name \"long name file.txt\" can be stat'ed/read");
     br_log_info("[APPCONF] SUMMARY pass=%u fail=%u total=%u", s_app_pass, s_app_fail,
                 s_app_pass + s_app_fail);
 }
 
 /*
- * APP 线程体 = MainLoop(**不返回**): 先跑一次多线程一致性用例, 再进周期心跳。
+ * APP thread body = MainLoop (**never returns**): run the multithreading conformance cases once, then
+ * enter the periodic heartbeat.
  *
- * ⚠ 心跳循环里的"睡眠"用 `usleep`(POSIX; 实现在 runtime/posix, 落到 core 的
- *   `br_task_sleep`)。唤醒精度 = 一拍(`product.toml [kernel].hz` 的倒数, 缺省 200
- *   ⇒ 5 ms; ADR-0017)⇒ 每拍实际约 1.00–1.01 s; 3 秒的 smoke 门禁里 `tick=2` 仍稳。
- *   判据 "delay >= 请求" 是设计 3-01 §2.1 的"不早醒"义务。
+ * ⚠ The "sleep" in the heartbeat loop uses `usleep` (POSIX; implemented in runtime/posix, ending at core's
+ *   `br_task_sleep`). Wakeup resolution = one tick (the inverse of `product.toml [kernel].hz`, default 200
+ *   => 5 ms; ADR-0017) => each tick is really about 1.00–1.01 s; in the 3 s smoke gate `tick=2` still holds.
+ *   The criterion "delay >= requested" is the "no early wakeup" duty of design 3-01 §2.1.
  */
 static void *hello_mainloop(void *arg)
 {
@@ -689,37 +695,40 @@ static void *hello_mainloop(void *arg)
     return BR_NULL;
 }
 
-/* EARLY 相: 不用堆/无线程/关中断 ⇒ APP 没有可做的事(钩子必须在场)。 */
+/* EARLY phase: no heap/threads/interrupts => the APP has nothing to do (the hook must be present). */
 int hello_early_init(void)
 {
     return 0;
 }
 
-/* CORE 相: 放开日志等级(日志设施已就绪)。 */
+/* CORE phase: raise the log level (logging is ready). */
 int hello_init(void)
 {
     br_log_set_level(BR_LOG_DEBUG);
-    br_log_info("app: init (CORE 相; POSIX 多线程样例在 start 相起线程)");
+    br_log_info("app: init (CORE phase; POSIX multithreading samples start threads in the start phase)");
     return 0;
 }
 
 /*
- * START 相(**最后**一个 start): 设置 APP 线程名 → `pthread_create` 建线程 → 返回 0;
- * 管理器随后 `br_sched_run()` 首次调度, APP 线程接管 MainLoop。
- * ★ 自检不由 APP 驱动(ADR-0010): 各插件 selftest 由 core 在全部 start 之后统一跑;
- *   本文件里的 `[APPCONF]` 是 **APP 自己的多线程样例**, 不是插件自检。
+ * START phase (**the last** start): set the APP thread name -> `pthread_create` the thread -> return 0;
+ * the manager then calls `br_sched_run()` for the first schedule, and the APP thread takes over MainLoop.
+ * ★ Selftests are not driven by the APP (ADR-0010): core runs each plugin's selftest after all starts;
+ *   the `[APPCONF]` here is the **APP's own multithreading samples**, not plugin selftest.
  */
-/* ==================================================================== 挂载(ADR-0030)
+/* ==================================================================== Mounting (ADR-0030)
  *
- * ★ **挂载由 APP 决定**: FS 插件只向 vfs-core 注册驱动(`"tmpfs"`/`"devfs"`/`"fat"`/
- *   `"erofs"`), 不再自己挂载。要挂什么、挂在哪, 写在本插件的 `plugin.toml` 的
- *   `[[mount]]` 里; brickie 把那张表 + 遍历生成成 `hello_mount_plan_apply()`(见
- *   `include/hello/hello.h` 的说明: APP 不许 include core 头, 所以表不进 APP 源码)。
+ * ★ **The APP decides mounting**: FS plugins only register drivers with vfs-core
+ *   (`"tmpfs"`/`"devfs"`/`"fat"`/`"erofs"`) and no longer mount themselves. What to mount and where
+ *   is written in this plugin's `brick.toml` under `[[mount]]`; brickie generates that table plus
+ *   the walk into `hello_mount_plan_apply()` (see the notes in `include/hello/hello.h`: the APP may
+ *   not include core headers, so the table does not enter APP sources).
  *
- * ★ 为什么在 start 相而不是 init:
- *   ① 介质类 FS 的 `mount()` 要块设备, 而 bdev 由 `adapter/uboot-mmc` 在**它的** start
- *      相注册; 非 APP 的 start 全部跑完才轮到 APP(插件管理器的相位规则)⇒ 这里最早可用。
- *   ② 挂载点次序: 生成时已按 `order` 排序("/" 最前), 否则子挂载点没有父 FS 承接(-ENODEV)。
+ * ★ Why the start phase rather than init:
+ *   ① Media-class FS `mount()` needs a block device, and bdev is registered by `adapter/uboot-mmc`
+ *      in **its** start phase; APP starts run only after all non-APP starts (plugin manager phase
+ *      rules) => this is the earliest it is available.
+ *   ② Mount point order: generation already sorts by `order` ("/" first), otherwise child mount
+ *      points have no parent FS to attach to (-ENODEV).
  */
 int hello_start(void)
 {
@@ -728,25 +737,26 @@ int hello_start(void)
     br_log_info("clock: %lu Hz (arch timer), %lu ticks/ms (exact integer conversion)",
                 br_clock_freq_hz(), br_clock_ticks_per_ms());
 
-    /* ① 先把本 APP 声明的挂载计划执行掉 —— 之后才有命名空间可看 */
+    /* ① Execute this APP's declared mount plan first — only then is there a namespace to see */
     if (hello_mount_plan_apply() != 0) {
         return -1;
     }
 
     /*
-     * ★ 介质类 FS 的端到端样例在**这里**跑(而不是 APP 线程里): 此刻只有一条控制流,
-     *   不会与"start 之后立刻开始"的插件自检 pass 并发访问同一批卷/同一块卡。
-     *   理由与实测现象见 app_fs_conformance 的注释。
+     * ★ The media-class FS end-to-end samples run **here** (not in an APP thread): only one control
+     *   flow exists, so they cannot concurrently touch the same volumes/card as the plugin selftest
+     *   pass that starts right after start. Rationale and measurements are in the app_fs_conformance
+     *   comment.
      */
     app_fs_conformance();
 
     pthread_t app = BR_NULL;
     const int rc = pthread_create(&app, BR_NULL, hello_mainloop, BR_NULL);
     if (rc != 0) {
-        br_log_error("app: pthread_create(APP 线程) 失败 rc=%d", rc);
+        br_log_error("app: pthread_create(APP thread) failed rc=%d", rc);
         return rc;
     }
     (void)pthread_setname_np(app, "app-main");
-    br_log_info("app: APP 线程已创建; 交给 br_sched_run() 首次调度");
+    br_log_info("app: APP thread created; handed to br_sched_run() for the first schedule");
     return 0;
 }

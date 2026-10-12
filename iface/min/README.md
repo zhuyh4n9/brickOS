@@ -44,12 +44,12 @@ Interface 类别里的**极简别名层**: 把 APP 需要的 core native 面(日
 ## 目录
 
 ```
-plugin.toml                        人写   ← 插件级唯一真值(导出面/条目)
+brick.toml                        人写   ← 插件级唯一真值(导出面/条目)
 include/iface/min/min.h            人写   ← 转出的 core 头 + 三个钩子原型
 src/iface_min.c                    人写   ← 三个空钩子
 tests/smoke.toml                   人写   ← 用例声明(自述, 不被消费)
 README.md                          人写   ← 本文件
 ```
 
-**不做**: core 全量别名(只按 APP 需要增补; 见 plugin.toml 头注)。ABI/符号级清单暂不
+**不做**: core 全量别名(只按 APP 需要增补; 见 brick.toml 头注)。ABI/符号级清单暂不
 逐个声明(与 `iface/posix` 同口径: `truth = "decl"`, 提供方是 unfrozen)。

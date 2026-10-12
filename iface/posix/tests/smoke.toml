@@ -27,7 +27,7 @@ platform = ["qemu-aarch64"]
 [[case]]
 id       = "TC-IFACE-003"
 pre      = "同上"
-steps    = ["核对 iface/posix 与 runtime/posix 共享 name_short(posix)", "核对 plugin.toml 显式给出 symbol_prefix"]
+steps    = ["核对 iface/posix 与 runtime/posix 共享 name_short(posix)", "核对 brick.toml 显式给出 symbol_prefix"]
 expect   = "钩子符号前缀为 iface_posix_(不是推导的 posix_), 与 runtime/posix 无重复定义"
 sched    = ["coop", "preempt"]
 platform = ["qemu-aarch64"]

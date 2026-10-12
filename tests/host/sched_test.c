@@ -1,19 +1,21 @@
 /*
- * tests/host/sched_test.c — 宿主侧调度框架 / **coop** 语义门禁(不需要 QEMU)
+ * tests/host/sched_test.c — host-side semantic gate for the scheduling framework / **coop** (no QEMU needed)
  *
- * 为什么在宿主跑: 就绪队列序 / block↔wake 状态机 / 超时表到期 / 池上限这些是**策略性质**,
- * 宿主上可以毫秒级反复跑; 同一批性质在 QEMU 上只能靠几条用例撞。宿主用 `ucontext.h`
- * 做**真的换栈**(不是"假切换"), 于是 `br_task_create`/`yield`/`block`/`join`/`sleep`
- * 全部走真实路径 —— 与目标上 `switch.S` 的语义一一对应。
+ * Why run on the host: ready-queue order / block↔wake state machine / timeout-table expiry / pool
+ * limit are **policy properties** that the host can re-run in milliseconds; on QEMU the same
+ * properties could only be hit by a few cases. The host uses `ucontext.h` for **real stack
+ * switching** (not a "fake switch"), so `br_task_create`/`yield`/`block`/`join`/`sleep` all take
+ * the real path — corresponding one-to-one with the semantics of `switch.S` on the target.
  *
- * 共享装置(假时钟 / L2 / 日志 / panic / ucontext 切换层)在 `tests/host/host_sched.c`;
- * 本文件只放 **coop 特有的判据**与用例。
+ * Shared fixtures (fake clock / L2 / logging / panic / ucontext switch layer) live in
+ * `tests/host/host_sched.c`; this file holds only **coop-specific checks** and cases.
  *
- * ★ ADR-0011 之后镜像选的是 `sched/rr`(时间片抢占), 于是**这个文件是 coop 的唯一腿**:
- *   `TC-TASK-101`("不 yield 的忙线程不被切走")在目标上已经不跑了 —— 它正是 coop 与
- *   preempt 的分界, 而镜像里换成了 preempt。⇒ 本用例的红绿从此意味着"coop 还在"。
+ * ★ After ADR-0011 the image selects `sched/rr` (timeslice preemption), so **this file is coop's only leg**:
+ *   `TC-TASK-101` ("a busy thread that does not yield is not switched away") no longer runs on the
+ *   target — it is exactly the coop/preempt boundary, and the image switched to preempt. ⇒ The
+ *   red/green of this case now means "coop is still there".
  *
- * 输出协议: [HOSTTEST] PASS|FAIL <tag> <desc> … SUMMARY; 有失败 ⇒ 退出码非 0。
+ * Output protocol: [HOSTTEST] PASS|FAIL <tag> <desc> … SUMMARY; any failure ⇒ non-zero exit code.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -30,14 +32,14 @@
 
 #include "host_sched.h"
 
-/* TCB 公共头(`wait_status` 的 ICB 开窗是**调用方义务**, 用例自己履行)。 */
+/* TCB common header (opening the ICB window for `wait_status` is the **caller's obligation**, fulfilled by the case itself). */
 #include "sched_internal.h"
 
-/* 自检套件入口的前置声明(ADR-0010: 它不再出现在 br_sched.h)。 */
+/* Forward declaration of the selftest suite entry (ADR-0010: it no longer appears in br_sched.h). */
 int br_sched_selftest(void);
 
 /* =====================================================================
- * 用例框架
+ * case framework
  * ===================================================================== */
 
 static int s_hpass;
@@ -71,7 +73,7 @@ static br_task_attr_t host_attr(br_u32 slot, const char *name)
     return a;
 }
 
-/* ---- ① 就绪队列 FIFO 序: 三线程严格轮转 ABCABCABC ---- */
+/* ---- 1) ready-queue FIFO order: three threads rotate strictly ABCABCABC ---- */
 
 static volatile char s_fifo_seq[32];
 static volatile int  s_fifo_n;
@@ -121,10 +123,10 @@ static void host_case_fifo(void)
                        (p[3] == 'A') && (p[4] == 'B') && (p[5] == 'C') &&
                        (p[6] == 'A') && (p[7] == 'B') && (p[8] == 'C');
 
-    host_check(ok, "HOST-SCHED-FIFO", "coop 就绪队列 FIFO: 三线程严格轮转 ABCABCABC");
+    host_check(ok, "HOST-SCHED-FIFO", "coop ready queue FIFO: three threads rotate strictly ABCABCABC");
 }
 
-/* ---- ② block/wake 状态机(直接打 br_sched_block_current / br_sched_wake) ---- */
+/* ---- 2) block/wake state machine (drives br_sched_block_current / br_sched_wake directly) ---- */
 
 static volatile int s_bw_rc = -12345;
 
@@ -133,7 +135,7 @@ static void host_waiter_inf(void *arg)
     (void)arg;
     br_thread_t *me = br_task_self();
 
-    me->wait_status = BR_ERR(ETIMEDOUT);   /* ICB 握手: 开窗前置"未唤醒" */
+    me->wait_status = BR_ERR(ETIMEDOUT);   /* ICB handshake: pre-set "not woken" before opening the window */
     s_bw_rc = br_sched_block_current(BR_TIMEOUT_INF);
 }
 
@@ -146,13 +148,13 @@ static void host_case_blockwake(void)
     s_bw_rc = -12345;
     const int r = br_task_create(&t, &a, host_waiter_inf, BR_NULL);
 
-    br_task_yield();                     /* 让 waiter 跑起来并阻塞 */
+    br_task_yield();                     /* let the waiter run and block */
     blocked = (t != BR_NULL) && (br_task_state(t) == BR_TASK_BLOCKED);
 
-    br_sched_wake(t);                    /* BLOCKED → READY(只改状态 + 挂链, 不动栈) */
+    br_sched_wake(t);                    /* BLOCKED → READY (only changes state + links, does not touch the stack) */
     ready = (t != BR_NULL) && (br_task_state(t) == BR_TASK_READY);
 
-    br_task_yield();                     /* 让它恢复: block_current 返回 wait_status(0) */
+    br_task_yield();                     /* let it resume: block_current returns wait_status (0) */
     zombie = (t != BR_NULL) && (br_task_state(t) == BR_TASK_ZOMBIE);
 
     const int j = (t != BR_NULL) ? br_task_join(t, BR_NULL) : BR_ERR(EINVAL);
@@ -162,7 +164,7 @@ static void host_case_blockwake(void)
                "block_current/wake: RUNNING→BLOCKED→(wake)READY→RUNNING→ZOMBIE");
 }
 
-/* ---- ③ 超时表到期唤醒(有限绝对期限) ---- */
+/* ---- 3) timeout-table expiry wake (finite absolute deadline) ---- */
 
 static volatile int s_to_rc = -12345;
 
@@ -186,10 +188,10 @@ static void host_case_timeout(void)
 
     host_check((r == 0) && (j == 0) && (s_to_rc == BR_ERR(ETIMEDOUT)),
                "HOST-SCHED-TIMEOUT",
-               "有限期限到期 ⇒ -ETIMEDOUT(wake_at 表在 tick 扫描里唤醒)");
+               "finite deadline expires ⇒ -ETIMEDOUT (wake_at table wakes it during the tick scan)");
 }
 
-/* ---- ④ sleep_until 登记 ---- */
+/* ---- 4) sleep_until registration ---- */
 
 static volatile br_time_t s_su_delta;
 static volatile int      s_su_rc = -12345;
@@ -215,18 +217,18 @@ static void host_case_sleep_until(void)
 
     host_check((r == 0) && (j == 0) && (s_su_rc == 0) && (s_su_delta >= 3000u),
                "HOST-SCHED-SLEEPUNTIL",
-               "br_task_sleep_until 登记绝对期限, 不早醒");
+               "br_task_sleep_until registers an absolute deadline, does not wake early");
 }
 
 /* =====================================================================
- * 监督线程: 跑完全部用例后按失败数退出(调度循环本身不返回)
+ * supervisor thread: runs all cases then exits with the failure count (the scheduling loop itself does not return)
  * ===================================================================== */
 
 static void host_supervisor(void *arg)
 {
     (void)arg;
 
-    br_log_info("[HOSTTEST] supervisor 线程开始: self=%s state=%u",
+    br_log_info("[HOSTTEST] supervisor thread start: self=%s state=%u",
                 br_task_name(br_task_self()), (unsigned)br_task_state(br_task_self()));
 
     host_case_fifo();
@@ -234,19 +236,20 @@ static void host_supervisor(void *arg)
     host_case_timeout();
     host_case_sleep_until();
 
-    /* core 的自检套件(`core/selftest/sched_selftest.c`): 它自身跑在真实线程里, 真的
-     * create/join/yield/sleep。返回值 = 失败项数; 日志红绿由上面的 br_log 钩子汇总。 */
+    /* core's selftest suite (`core/selftest/sched_selftest.c`): it runs in real threads itself and
+     * really does create/join/yield/sleep. Return value = number of failing items; red/green is
+     * aggregated by the br_log hooks above. */
     br_sched_selftest();
 
     host_check(host_sched_idle_calls() > 0u, "HOST-SCHED-IDLE",
-               "pick_next 返回 NULL ⇒ core 进 idle(宿主由钩子代 WFI)并被 tick 唤醒");
+               "pick_next returns NULL ⇒ core enters idle (the host emulates WFI via a hook) and the tick wakes it");
     host_check(br_sched_task_count() == 2u, "HOST-SCHED-POOL",
-               "测试线程全部被 join 回收(只剩 main + supervisor)");
+               "all test threads are reclaimed by join (only main + supervisor remain)");
     host_check(host_sched_watch_hits() == 0u, "HOST-SCHED-CONF",
-               "br_sched_selftest 无 [TASKCONF] FAIL");
+               "br_sched_selftest has no [TASKCONF] FAIL");
     host_check((br_task_name(br_task_self()) != NULL) &&
                (strcmp(br_task_name(br_task_self()), "supervisor") == 0),
-               "HOST-SCHED-NAME", "br_task_name/br_task_self 在真实线程里正确");
+               "HOST-SCHED-NAME", "br_task_name/br_task_self are correct in a real thread");
 
     printf("[HOSTTEST] SUMMARY pass=%d fail=%d total=%d (idle_calls=%u)\n",
            s_hpass, s_hfail, s_hpass + s_hfail, (unsigned)host_sched_idle_calls());
@@ -256,9 +259,9 @@ static void host_supervisor(void *arg)
 
 int main(void)
 {
-    printf("[HOSTTEST] ==== coop: 协作式调度器(无抢占) ====\n");
+    printf("[HOSTTEST] ==== coop: cooperative scheduler (no preemption) ====\n");
 
-    /* 套件里的 [TASKCONF] FAIL 也要进退出码(宿主是 sched/sync 的主判据)。 */
+    /* [TASKCONF] FAIL inside the suite must also affect the exit code (the host is the primary judge for sched/sync). */
     host_sched_watch("[TASKCONF] FAIL");
 
     const int r = coop_early_init();

@@ -1,17 +1,17 @@
-//! L0 声明面模型 + 加载器(contract §7.1 / §7.2 的字段表)。
+//! L0 declaration-surface model + loader (contract §7.1 / §7.2 field tables).
 //!
-//! - 扫描 `root` 下的插件树: 递归找 `plugin.toml`, 跳过 `.git` / `build` /
-//!   `prebuilts` / `tools` / `api` / `docs` / `Design` 与任何以 `.` 开头的目录,
-//!   只挑真正含 `plugin.toml` 的目录。
-//! - `Product` 可选(`root/product.toml`)。
-//! - 形状错(缺必填 / 类型不符 / 名字契约不符 / 枚举越界 / 4 段版本串 / 4 段 range)
-//!   ⇒ `BRV-MF-0001` 或 `BRV-VER-0005/0006`, 退出码 2(BRV-D2: schema 只表达
-//!   单条记录形状; 跨字段不变量归引擎)。
-//! - 单**记录内**的跨字段不变量(导出分类 TAX-0016..19、相位、特权)也在加载期报出,
-//!   以满足 V-18a(`brickie-core --selftest` 独立可证)。**agent-B 的 check.rs 请勿重复报**。
-//! - `Snapshot`(`api/iface/**`)与 `Lock`(`brickie.lock`)只**读**; 读不到就当"未发布"。
-//!
-//! 全部文本解析用 `toml::Value`(不依赖 serde derive), 判定在此模块 + `rules`。
+//! - Scan the plugin tree under `root`: recurse for `brick.toml`, skipping `.git` /
+//!   `build` / `prebuilts` / `tools` / `api` / `docs` / `Design` and dot-prefixed dirs;
+//!   only directories that really contain `brick.toml` are picked.
+//! - `Product` is optional (`root/product.toml`).
+//! - Shape errors (missing required / type mismatch / name contract / enum out of range /
+//!   4-segment version / 4-segment range) ⇒ `BRV-MF-0001` or `BRV-VER-0005/0006`, exit
+//!   code 2 (BRV-D2: schema is per-record shape; cross-field invariants are engine-side).
+//! - Cross-field invariants within one **record** (export taxonomy TAX-0016..19, phase,
+//!   privilege) are also reported at load time for V-18a (`brickie-core --selftest`
+//!   provable standalone). **agent-B's check.rs must not re-report them.**
+//! - `Snapshot` (`api/iface/**`) / `Lock` (`brickie.lock`) are **read-only**; unreadable = unpublished.
+//! All text parsing uses `toml::Value` (no serde derive); decisions here + `rules`.
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -21,12 +21,12 @@ use crate::diag::{Diags, Severity};
 use crate::rules;
 use crate::version::{self, Range, Version};
 
-/// 扫描时跳过的目录名(contract §7.1 的加载器纪律)。
+/// Directory names skipped during scanning (contract §7.1 loader discipline).
 pub const SKIP_DIRS: &[&str] = &[".git", "build", "prebuilts", "tools", "api", "docs", "Design"];
 
-// ------------------------------------------------------------------ 模型类型
+// ------------------------------------------------------------------ model types
 
-/// `[[res]]` 一条。
+/// One `[[res]]` entry.
 #[derive(Clone, Debug, Default)]
 pub struct Res {
     pub kind: String,
@@ -34,7 +34,7 @@ pub struct Res {
     pub notes: Option<String>,
 }
 
-/// `[sched.tt]`(仅 `sched_class = "TT_SAFE"`)。
+/// `[sched.tt]` (only when `sched_class = "TT_SAFE"`).
 #[derive(Clone, Debug, Default)]
 pub struct SchedTt {
     pub period_us: i64,
@@ -42,7 +42,7 @@ pub struct SchedTt {
     pub wcet_us: i64,
 }
 
-/// `[[compat.requires_iface]]`(v0.1 只校验 schema, 不参与求解 —— V-10)。
+/// `[[compat.requires_iface]]` (v0.1 validates schema only, not used in solving — V-10).
 #[derive(Clone, Debug, Default)]
 pub struct RequiresIface {
     pub id: String,
@@ -53,7 +53,7 @@ pub struct RequiresIface {
     pub mode: String,
 }
 
-/// `[compat]`。
+/// `[compat]`.
 #[derive(Clone, Debug, Default)]
 pub struct Compat {
     pub core: Option<Range>,
@@ -65,19 +65,19 @@ pub struct Compat {
     pub requires_iface: Vec<RequiresIface>,
 }
 
-/// `[[dep]]` 一条(结构依赖; 一律**不钉** `compat_gen`, 依 F3)。
+/// `[[dep]]` entry (structural dependency; never **pins** `compat_gen`, per F3).
 #[derive(Clone, Debug, Default)]
 pub struct Dep {
     pub name: String,
     pub range: Range,
     pub range_raw: String,
     pub kind: String,
-    /// 相位**断言**(仅 `kind = "init"`; 缺省 = 依赖方自身相位, §7.2 R2)。
+    /// Phase **assertion** (only `kind = "init"`; default = consumer's own phase, §7.2 R2).
     pub phase: Option<String>,
     pub symbol: Option<String>,
 }
 
-/// `[[export.entries]]` 一条。
+/// One `[[export.entries]]` entry.
 #[derive(Clone, Debug, Default)]
 pub struct ExportEntry {
     pub kind: String,
@@ -89,7 +89,7 @@ pub struct ExportEntry {
     pub status: String,
 }
 
-/// `[[export]]` 一条(接口单元 = 冻结与版本的基本粒度, F1)。
+/// One `[[export]]` (interface unit = basic granularity of freezing and versioning, F1).
 #[derive(Clone, Debug, Default)]
 pub struct Export {
     pub api_iface: String,
@@ -107,13 +107,13 @@ pub struct Export {
 }
 
 impl Export {
-    /// 接口单元 id = `<provider>#<unit>`。
+    /// Interface unit id = `<provider>#<unit>`.
     pub fn unit_id(&self, plugin_name: &str) -> String {
         format!("{}#{}", plugin_name, self.name)
     }
 }
 
-/// `[privileged.resources]`。
+/// `[privileged.resources]`.
 #[derive(Clone, Debug, Default)]
 pub struct PrivilegedResources {
     pub irq: Vec<i64>,
@@ -131,7 +131,7 @@ impl PrivilegedResources {
     }
 }
 
-/// `[privileged]`。
+/// `[privileged]`.
 #[derive(Clone, Debug, Default)]
 pub struct PrivilegedDecl {
     pub level: Option<String>,
@@ -139,49 +139,49 @@ pub struct PrivilegedDecl {
     pub resources: PrivilegedResources,
 }
 
-/// `[[mount]]` 一条(ADR-0030: **APP 的挂载计划**)。
+/// One `[[mount]]` entry (ADR-0030: **the APP's mount plan**).
 ///
-/// 从前这个表挂在 FS 插件上, 表示"本插件挂在哪"; 现在它归**消费者**(APP), 表示
-/// "要挂什么、挂在哪" —— FS 插件只注册驱动(fstype), 不再自带挂载点。
+/// Formerly this table lived on FS plugins ("where this plugin mounts"); now it belongs to
+/// the **consumer** (APP): what to mount and where — FS plugins only register drivers (fstype).
 #[derive(Clone, Debug, Default)]
 pub struct MountDecl {
-    /// POSIX `mount()` 第 1 参: 源设备名(介质类 FS 用; 无介质留空)。
+    /// POSIX `mount()` arg 1: source device name (media FS only; empty when no media).
     pub source: Option<String>,
-    /// POSIX `mount()` 第 2 参: 挂载点(绝对路径)。
+    /// POSIX `mount()` arg 2: mount point (absolute path).
     pub target: String,
-    /// POSIX `mount()` 第 3 参: 驱动名(`"tmpfs"`/`"devfs"`/`"fat"`/`"erofs"`)。
+    /// POSIX `mount()` arg 3: driver name (`"tmpfs"`/`"devfs"`/`"fat"`/`"erofs"`).
     pub fstype: String,
-    /// 生成期排序键(APP 必须按它升序挂: 先 "/" 再子挂载点)。
+    /// Build-time sort key (APP must mount in ascending order: "/" before sub-mounts).
     pub order: i64,
 }
 
-/// `[build]`(`brickie build` 消费它 —— ADR-0004 / 设计 ADR-0003 的 S1–S3)。
+/// `[build]` (consumed by `brickie build` — ADR-0004 / design ADR-0003 S1–S3).
 #[derive(Clone, Debug, Default)]
 pub struct BuildDecl {
-    /// 相对插件根的通配(`src/*.c`; 展开规则见 `build.rs`)。
+    /// Globs relative to the plugin root (`src/*.c`; expansion rules in `build.rs`).
     pub sources: Vec<String>,
-    /// 相对插件根的 include 目录。
+    /// Include directories relative to the plugin root.
     pub includes: Vec<String>,
-    /// 额外的 `-D<name>`(可选; 产品级 `[build]` 里也有同名键)。
+    /// Extra `-D<name>` (optional; the product-level `[build]` has the same key).
     pub defines: Vec<String>,
-    /// 本插件自己的编译标志。接在**产品级** `cflags` 之后 ⇒ 可以用来关掉某几条告警。
-    /// 用途(vendor 代码): 上游 u-boot 的 `fs/erofs/**` 按 u-boot 自己的告警集合写,
-    /// 不含本项目的 `-Wshadow`/`-Wpointer-arith`/… ⇒ 编它得按它的口径。
+    /// This plugin's own compile flags, appended after the **product-level** `cflags` ⇒ can
+    /// disable individual warnings. Use case (vendor code): upstream u-boot's `fs/erofs/**`
+    /// is written against u-boot's own warning set, without our `-Wshadow`/`-Wpointer-arith`/… .
     pub cflags: Vec<String>,
 }
 
-/// platform 插件的 `[build.target]`: **目标事实**(arch / 交叉前缀 / 链接脚本 / QEMU 型号)。
+/// Platform plugin `[build.target]`: **target facts** (arch / cross prefix / linker script / QEMU model).
 ///
-/// 归属理由: "每镜像恰一个 platform"(§8.3 ④), 而 arch 与链接脚本本来就是"平台是什么"
-/// 的一部分 —— 放进 `product.toml` 会让同一件事有两个可写处。
+/// Ownership: "exactly one platform per image" (§8.3 ④), and arch plus linker script are
+/// part of "what the platform is" — putting them in `product.toml` would give two writers.
 #[derive(Clone, Debug, Default)]
 pub struct BuildTarget {
     pub arch: String,
-    /// 交叉前缀(`aarch64-linux-gnu-`)或带路径的前缀。
+    /// Cross prefix (`aarch64-linux-gnu-`) or a path-qualified prefix.
     pub cross: String,
-    /// `-march=…` / `-mstrict-align` 这类**由目标决定**的标志。
+    /// Flags **determined by the target**, such as `-march=…` / `-mstrict-align`.
     pub arch_flags: Vec<String>,
-    /// 相对**插件根**的链接脚本路径。
+    /// Linker script path relative to the **plugin root**.
     pub linker_script: String,
     pub qemu_binary: String,
     pub qemu_machine: String,
@@ -190,62 +190,62 @@ pub struct BuildTarget {
     pub qemu_extra: Vec<String>,
 }
 
-/// `product.toml [build]`: **产品级构建策略**(标志表 + 产物落点 + 核心本体源集合)。
+/// `product.toml [build]`: **product-level build policy** (flag tables + output location + core sources).
 #[derive(Clone, Debug, Default)]
 pub struct ProductBuild {
-    /// 核心本体(**不是插件**)的源集合, 相对仓库根。
+    /// Source set of the core proper (**not a plugin**), relative to the repo root.
     pub core_sources: Vec<String>,
-    /// 核心本体的 include 目录, 相对仓库根。
+    /// Include directories of the core proper, relative to the repo root.
     pub core_includes: Vec<String>,
-    /// 生成物源集合(`build/gen/**`, 由 `brickie gen` 产出), 相对仓库根。
+    /// Generated-source set (`build/gen/**`, produced by `brickie gen`), relative to the repo root.
     pub gen_sources: Vec<String>,
-    /// **core 自检套件的源集合**(ADR-0010), 相对仓库根。
+    /// **Core selftest suite source set** (ADR-0010), relative to the repo root.
     ///
-    /// 与 `core_sources` 分开是刻意的: 自检会被 `product.toml [selftest]` 关掉, 而
-    /// "关掉"的含义是**不编进来**(不是"编了不跑")—— 于是 `core/selftest/**` 不能落在
-    /// `core_sources` 的通配范围内(否则关掉开关后 core 仍会带上测试代码)。
+    /// Kept separate from `core_sources` on purpose: selftest is switched off by
+    /// `product.toml [selftest]`, and "off" means **not compiled in** (not "compiled but
+    /// not run") — so `core/selftest/**` must not fall inside `core_sources` globs.
     pub selftest_sources: Vec<String>,
     pub cflags: Vec<String>,
     pub asflags: Vec<String>,
     pub ldflags: Vec<String>,
-    /// `--profile release` 时**追加**的标志(缺省 = 与 dev 相同)。
+    /// Flags **appended** under `--profile release` (default = same as dev).
     pub release_cflags_extra: Vec<String>,
     pub release_asflags_extra: Vec<String>,
     pub release_ldflags_extra: Vec<String>,
     pub obj_dir: Option<String>,
 }
 
-/// 一个插件的规范化模型。
+/// Normalized model of one plugin.
 #[derive(Clone, Debug, Default)]
 pub struct Plugin {
-    /// 相对 `root` 的 `plugin.toml` 路径。
+    /// `brick.toml` path relative to `root`.
     pub file: String,
-    /// 相对 `root` 的插件目录。
+    /// Plugin directory relative to `root`.
     pub dir: String,
     pub schema: i64,
     pub name: String,
     pub plugin_type: String,
     pub api_type: String,
     pub subkind: Option<String>,
-    /// `[plugin].symbol_prefix`: **钩子/描述符符号前缀覆盖**(可选)。
+    /// `[plugin].symbol_prefix`: **hook/descriptor symbol prefix override** (optional).
     ///
-    /// 缺省 = 生成器按 `symbol_prefix(name_short)` 推导。但**不同命名空间可以共享 short**
-    /// (例如 `iface/posix` 与 `runtime/posix`, 或 `iface/posix` 这类皮肤), 推导值会撞成
-    /// 同一个 `posix_*` ⇒ 链接期重复符号。此字段让皮肤/同名插件显式给出唯一前缀
-    /// (如 `iface_posix_`)。
+    /// Default = the generator derives it from `symbol_prefix(name_short)`. But **different
+    /// namespaces can share a short name** (e.g. `iface/posix` and `runtime/posix`), so derived
+    /// values collide into the same `posix_*` ⇒ duplicate symbols at link time. This field lets
+    /// skins/same-named plugins give an explicit unique prefix (e.g. `iface_posix_`).
     pub symbol_prefix: Option<String>,
     pub lang: String,
     pub phase: String,
     pub sched_class: String,
     pub sched_kind: Option<String>,
-    /// 本插件是否声明了 `[selftest]`(ADR-0010)。
+    /// Whether this plugin declares `[selftest]` (ADR-0010).
     ///
-    /// **为什么由 manifest 声明而不是"猜"**: 生成器要决定描述符里发不发
-    /// `.selftest = <prefix>selftest` 这个**符号引用** —— 一个不存在的符号会让链接失败,
-    /// 而"哪些插件有自检"既不能从 `phase` 推导(自检不是相), 也不能靠扫源码(组合期工具
-    /// 零编译依赖, 不做符号级分析)。所以它是**声明面事实**: 写了 `[selftest]` = 有自检。
+    /// **Why declare it in the manifest instead of guessing**: the generator must decide
+    /// whether to emit the `.selftest = <prefix>selftest` **symbol reference** — a missing
+    /// symbol fails the link, and "which plugins have selftests" is derivable neither from
+    /// `phase` (selftest is not a phase) nor from scanning sources. It is a declaration fact.
     pub has_selftest: bool,
-    /// `[selftest].cases`: 自称的用例条数(**只作呈现/诊断**, 不参与任何判定)。
+    /// `[selftest].cases`: self-declared case count (**presentation/diagnostics only**).
     pub selftest_cases: Option<i64>,
     pub version: Version,
     pub version_raw: String,
@@ -258,15 +258,15 @@ pub struct Plugin {
     pub deps: Vec<Dep>,
     pub exports: Vec<Export>,
     pub privileged: Option<PrivilegedDecl>,
-    /// `[[mount]]` 逐条(APP 的挂载计划; ADR-0030)。
+    /// `[[mount]]` entries (the APP's mount plan; ADR-0030).
     pub mounts: Vec<MountDecl>,
     pub build: Option<BuildDecl>,
-    /// `[build.target]`(仅 platform 插件; `brickie build` 的目标事实)。
+    /// `[build.target]` (platform plugins only; target facts for `brickie build`).
     pub build_target: Option<BuildTarget>,
 }
 
 impl Plugin {
-    /// `[[res]]` 求和: `(ram_kib, stack_kib)`。
+    /// `[[res]]` totals: `(ram_kib, stack_kib)`.
     pub fn res_totals(&self) -> (i64, i64) {
         let mut ram = 0;
         let mut stack = 0;
@@ -280,7 +280,7 @@ impl Plugin {
         (ram, stack)
     }
 
-    /// 导出单元 id 列表。
+    /// List of export unit ids.
     pub fn unit_ids(&self) -> Vec<String> {
         self.exports.iter().map(|e| e.unit_id(&self.name)).collect()
     }
@@ -427,7 +427,7 @@ impl Plugin {
     }
 }
 
-/// `product.toml` 的规范化模型。
+/// Normalized model of `product.toml`.
 #[derive(Clone, Debug, Default)]
 pub struct Product {
     pub file: String,
@@ -440,30 +440,30 @@ pub struct Product {
     pub select: Vec<String>,
     pub budget_ram_kib: Option<i64>,
     pub budget_stack_kib: Option<i64>,
-    /// `[kernel].hz`: 时钟节拍频率(Hz; 参考 Linux 的 `CONFIG_HZ`)。
+    /// `[kernel].hz`: tick frequency in Hz (cf. Linux `CONFIG_HZ`).
     ///
-    /// `None` = 未声明(或整表不在场) ⇒ **缺省 200**(5 ms 一拍)。
-    /// `brickie build` 把它转成 `-DBR_CFG_TICK_HZ=<hz>` 下发到**全部编译单元**
-    /// (core / 各插件 / 生成物), 于是"每秒多少次时钟中断"只有一处真值(ADR-0017)。
+    /// `None` = undeclared (or the whole table absent) ⇒ **default 200** (5 ms per tick).
+    /// `brickie build` passes it as `-DBR_CFG_TICK_HZ=<hz>` to **all compilation units**
+    /// (core / plugins / generated sources), so tick rate has a single source of truth (ADR-0017).
     pub kernel_hz: Option<i64>,
     pub lint_frozen_deps: String,
     pub allow_edges: Vec<(String, String)>,
-    /// `[build]`: 产品级构建策略(ADR-0004; `brickie build` 消费)。
+    /// `[build]`: product-level build policy (ADR-0004; consumed by `brickie build`).
     pub build: Option<ProductBuild>,
-    /// `[selftest].enabled`: 自检总开关(ADR-0010)。`None` = 未声明 ⇒ 跟随 stage。
+    /// `[selftest].enabled`: master selftest switch (ADR-0010). `None` = undeclared ⇒ follow stage.
     pub selftest_enabled: Option<bool>,
-    /// `[selftest].plugins`: 只跑列出的插件(空 = 所有声明了 `[selftest]` 的插件)。
+    /// `[selftest].plugins`: run only the listed plugins (empty = all declaring `[selftest]`).
     pub selftest_plugins: Vec<String>,
-    /// `[selftest]` 表是否在场(用于区分"没写"与"写了空表")。
+    /// Whether the `[selftest]` table is present (distinguishes absent from empty table).
     pub has_selftest_table: bool,
 }
 
 impl Product {
-    /// 自检总开关的**唯一**裁决点(ADR-0010 §2.3)。
+    /// The **single** decision point for the selftest master switch (ADR-0010 §2.3).
     ///
-    /// 语义: `enabled = true|false` 显式; 缺省(整表不在场) = **跟随 `stage`** ——
-    /// `dev` 开、`release` 关(工程直觉: 开发镜像自带自检, 发布镜像不带)。
-    /// 写成 `"inherit"` 与缺省等价(显式表达同一条默认, 便于评审时一眼看到)。
+    /// Semantics: `enabled = true|false` explicit; absent (whole table missing) = **follow
+    /// `stage`** — on for `dev`, off for `release` (dev images carry selftests, release don't).
+    /// Writing `"inherit"` equals the default (makes the default visible in review).
     pub fn selftest_on(&self) -> bool {
         match self.selftest_enabled {
             Some(v) => v,
@@ -471,9 +471,9 @@ impl Product {
         }
     }
 
-    /// 某个插件这次要不要发 `selftest` 钩子(总开关 ∧ 名单)。
+    /// Whether this plugin emits the `selftest` hook now (master switch ∧ list).
     ///
-    /// 名单为空 = 不做逐件筛选(所有**声明了** `[selftest]` 的插件都发钩子)。
+    /// Empty list = no per-plugin filtering (every plugin that **declares** `[selftest]` emits it).
     pub fn selftest_for(&self, plugin: &str) -> bool {
         if !self.selftest_on() {
             return false;
@@ -481,7 +481,7 @@ impl Product {
         self.selftest_plugins.is_empty() || self.selftest_plugins.iter().any(|n| n == plugin)
     }
 
-    /// §7.5: `[lint].frozen_deps` 覆盖 `stage` 的默认。
+    /// §7.5: `[lint].frozen_deps` overrides the `stage` default.
     pub fn release_strict(&self) -> bool {
         match self.lint_frozen_deps.as_str() {
             "deny" => true,
@@ -533,13 +533,13 @@ impl Product {
     }
 }
 
-/// 插件树加载结果。
+/// Result of loading the plugin tree.
 #[derive(Clone, Debug, Default)]
 pub struct TreeLoad {
     pub diags: Diags,
     pub plugins: Vec<Plugin>,
     pub product: Option<Product>,
-    /// 是否找到 `product.toml`(R-1 的分支判据)。
+    /// Whether `product.toml` was found (R-1 branch criterion).
     pub has_product: bool,
 }
 
@@ -555,9 +555,9 @@ impl TreeLoad {
             .unwrap_or_default()
     }
 
-    /// 裁定 R-6: `plugin_type = "platform"` 的 `[[res]]` 同时是**平台容量**。
+    /// Ruling R-6: a `plugin_type = "platform"` `[[res]]` is also **platform capacity**.
     ///
-    /// `(ram_kib, stack_kib)`; 多个 platform 时求和(理论上每镜像恰 1)。
+    /// `(ram_kib, stack_kib)`; summed across platforms (theoretically exactly 1 per image).
     pub fn platform_capacity(&self) -> (i64, i64) {
         let mut ram = 0;
         let mut stack = 0;
@@ -571,13 +571,13 @@ impl TreeLoad {
         (ram, stack)
     }
 
-    /// 裁定 R-1: 无 `product.toml` ⇒ 校验整棵插件树, 跳过产品级数量约束。
+    /// Ruling R-1: no `product.toml` ⇒ validate the whole plugin tree, skip product-level counts.
     pub fn product_level_constraints_apply(&self) -> bool {
         self.has_product
     }
 }
 
-// ------------------------------------------------------------------ 形状辅助
+// ------------------------------------------------------------------ shape helpers
 
 fn req_str(
     t: &toml::Table,
@@ -594,8 +594,8 @@ fn req_str(
                 target,
                 file,
                 format!("{span}.{key}"),
-                format!("缺少必填字段 `{key}`"),
-                "contract §7 字段表",
+                format!("missing required field `{key}`"),
+                "contract §7 field table",
             );
             None
         }
@@ -607,8 +607,8 @@ fn req_str(
                     target,
                     file,
                     format!("{span}.{key}"),
-                    format!("字段 `{key}` 形状不符: 期望字符串"),
-                    "contract §7 字段表",
+                    format!("field `{key}` has wrong shape: expected string"),
+                    "contract §7 field table",
                 );
                 None
             }
@@ -627,8 +627,8 @@ fn opt_str(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d: 
                     target,
                     file,
                     format!("{span}.{key}"),
-                    format!("字段 `{key}` 形状不符: 期望字符串"),
-                    "contract §7 字段表",
+                    format!("field `{key}` has wrong shape: expected string"),
+                    "contract §7 field table",
                 );
                 None
             }
@@ -644,8 +644,8 @@ fn req_int(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d: 
                 target,
                 file,
                 format!("{span}.{key}"),
-                format!("缺少必填字段 `{key}`"),
-                "contract §7 字段表",
+                format!("missing required field `{key}`"),
+                "contract §7 field table",
             );
             None
         }
@@ -657,8 +657,8 @@ fn req_int(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d: 
                     target,
                     file,
                     format!("{span}.{key}"),
-                    format!("字段 `{key}` 形状不符: 期望整数"),
-                    "contract §7 字段表",
+                    format!("field `{key}` has wrong shape: expected int"),
+                    "contract §7 field table",
                 );
                 None
             }
@@ -677,8 +677,8 @@ fn opt_int(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d: 
                     target,
                     file,
                     format!("{span}.{key}"),
-                    format!("字段 `{key}` 形状不符: 期望整数"),
-                    "contract §7 字段表",
+                    format!("field `{key}` has wrong shape: expected int"),
+                    "contract §7 field table",
                 );
                 None
             }
@@ -696,8 +696,8 @@ fn str_array(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d
                     target,
                     file,
                     format!("{span}.{key}"),
-                    format!("字段 `{key}` 形状不符: 期望字符串数组"),
-                    "contract §7 字段表",
+                    format!("field `{key}` has wrong shape: expected string array"),
+                    "contract §7 field table",
                 );
                 Vec::new()
             }
@@ -711,8 +711,8 @@ fn str_array(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d
                             target,
                             file,
                             format!("{span}.{key}[{i}]"),
-                            format!("字段 `{key}[{i}]` 形状不符: 期望字符串"),
-                            "contract §7 字段表",
+                            format!("field `{key}[{i}]` has wrong shape: expected string"),
+                            "contract §7 field table",
                         ),
                     }
                 }
@@ -732,8 +732,8 @@ fn int_array(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d
                     target,
                     file,
                     format!("{span}.{key}"),
-                    format!("字段 `{key}` 形状不符: 期望整数数组"),
-                    "contract §7 字段表",
+                    format!("field `{key}` has wrong shape: expected int array"),
+                    "contract §7 field table",
                 );
                 Vec::new()
             }
@@ -747,8 +747,8 @@ fn int_array(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d
                             target,
                             file,
                             format!("{span}.{key}[{i}]"),
-                            format!("字段 `{key}[{i}]` 形状不符: 期望整数"),
-                            "contract §7 字段表",
+                            format!("field `{key}[{i}]` has wrong shape: expected int"),
+                            "contract §7 field table",
                         ),
                     }
                 }
@@ -758,13 +758,13 @@ fn int_array(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d
     }
 }
 
-/// 解析 `[[mount]]` 数组(ADR-0030)。
+/// Parse the `[[mount]]` array (ADR-0030).
 ///
-/// 形状: `[[mount]] source = "emmc0" / target = "/fat12" / fstype = "fat" / order = 2`
-///   - `target` / `fstype` **必填**(缺一个就是"挂不上"或"挂什么不知道");
-///   - `source` 可省(= 无介质 FS, 如 tmpfs/devfs);
-///   - `order` 可省(缺省 0); 同 order 时按声明顺序稳定排序。
-/// 归属: 只允许 `plugin_type = "app"` 声明 —— 挂载计划归消费者。
+/// Shape: `[[mount]] source = "emmc0" / target = "/fat12" / fstype = "fat" / order = 2`
+///   - `target` / `fstype` are **required** (missing either = "cannot mount" or "mount what?");
+///   - `source` is optional (= media-less FS, e.g. tmpfs/devfs);
+///   - `order` is optional (default 0); equal orders sort stably by declaration order.
+/// Ownership: only `plugin_type = "app"` may declare it — the mount plan belongs to the consumer.
 fn parse_mounts(
     top: &toml::Table,
     name: &str,
@@ -781,8 +781,8 @@ fn parse_mounts(
             name,
             file,
             "mount",
-            "`[[mount]]` 形状不符: 期望表数组".to_string(),
-            "写成 `[[mount]]` 后跟 source/target/fstype/order",
+            "`[[mount]]` has wrong shape: expected array of tables".to_string(),
+            "write `[[mount]]` followed by source/target/fstype/order",
         );
         return Vec::new();
     };
@@ -793,9 +793,9 @@ fn parse_mounts(
             file,
             "mount",
             format!(
-                "`[[mount]]` 只允许 `plugin_type = \"app\"` 声明(本件是 `{plugin_type}`)"
+                "`[[mount]]` may only be declared by `plugin_type = \"app\"` (this one is `{plugin_type}`)"
             ),
-            "ADR-0030: 挂载计划归**消费者**(APP); FS 插件只注册驱动(fstype), 不声明挂载点",
+            "ADR-0030: the mount plan belongs to the **consumer** (APP); FS plugins only register drivers (fstype)",
         );
         return Vec::new();
     }
@@ -807,8 +807,8 @@ fn parse_mounts(
                 name,
                 file,
                 format!("mount[{i}]"),
-                "`[[mount]]` 元素不是表".to_string(),
-                "contract §7 字段表",
+                "`[[mount]]` element is not a table".to_string(),
+                "contract §7 field table",
             );
             continue;
         };
@@ -821,8 +821,8 @@ fn parse_mounts(
                 name,
                 file,
                 span,
-                "`[[mount]]` 缺必填字段(target / fstype)".to_string(),
-                "target = 挂载点(绝对路径), fstype = 驱动名(如 \"fat\")",
+                "`[[mount]]` is missing required field(s) (target / fstype)".to_string(),
+                "target = mount point (absolute path), fstype = driver name (e.g. \"fat\")",
             );
             continue;
         };
@@ -840,7 +840,7 @@ fn opt_table<'a>(t: &'a toml::Table, key: &str) -> Option<&'a toml::Table> {
     t.get(key).and_then(|v| v.as_table())
 }
 
-/// 按路径取嵌套值(`[sched.tt]` ⇒ `["sched","tt"]`)。
+/// Fetch a nested value by path (`[sched.tt]` ⇒ `["sched","tt"]`).
 fn dig<'a>(t: &'a toml::Table, path: &[&str]) -> Option<&'a toml::Value> {
     let (first, rest) = path.split_first()?;
     let mut cur = t.get(*first)?;
@@ -861,9 +861,9 @@ fn array_of_tables<'a>(t: &'a toml::Table, key: &str) -> Vec<&'a toml::Table> {
     }
 }
 
-/// `[[export.entries]].value`: 裁定 R-4 / schema 的 `oneOf[string, string[]]`。
+/// `[[export.entries]].value`: ruling R-4 / schema `oneOf[string, string[]]`.
 ///
-/// 数组形态规范化为 `,` 连接(进 hash 的输入必须是单一确定字符串; 见 IFACE-IR 规则 9)。
+/// Array form is normalized to a `,` join (hash input must be one deterministic string; IFACE-IR rule 9).
 fn load_entry_value(
     t: &toml::Table,
     target: &str,
@@ -888,8 +888,8 @@ fn load_entry_value(
                         target,
                         file,
                         format!("{span}.value[{i}]"),
-                        "`value` 数组的元素必须是字符串(裁定 R-4)",
-                        "contract §7.1 / §6.2 规则 9",
+                        "elements of the `value` array must be strings (ruling R-4)",
+                        "contract §7.1 / §6.2 rule 9",
                     );
                 }
             }
@@ -901,7 +901,7 @@ fn load_entry_value(
         target,
         file,
         format!("{span}.value"),
-        "`value` 形状不符: 期望字符串或字符串数组(裁定 R-4)",
+        "`value` has wrong shape: expected string or string array (ruling R-4)",
         "contract §7.1",
     );
     None
@@ -922,10 +922,10 @@ fn shape_enum(
         file,
         format!("{span}.{key}"),
         format!(
-            "字段 `{key}` 取值 `{val}` 越界; 合法值: {}",
+            "field `{key}` value `{val}` out of range; allowed: {}",
             rules::list_of(allowed)
         ),
-        "contract §7 字段表",
+        "contract §7 field table",
     );
 }
 
@@ -946,7 +946,7 @@ fn check_enum(
     }
 }
 
-/// 解析 `version` 字段(四段); 形状错 ⇒ `BRV-VER-0005` + 退出码 2。
+/// Parse the `version` field (four segments); shape error ⇒ `BRV-VER-0005` + exit code 2.
 fn parse_version_field(
     raw: &str,
     target: &str,
@@ -957,13 +957,13 @@ fn parse_version_field(
     match version::parse_version(raw) {
         Ok(v) => Some(v),
         Err(e) => {
-            d.shape(e.code, target, file, span, e.message, "§5.1: 四段 `COMPAT_GEN.MAJOR.MINOR.REVISE`");
+            d.shape(e.code, target, file, span, e.message, "§5.1: four segments `COMPAT_GEN.MAJOR.MINOR.REVISE`");
             None
         }
     }
 }
 
-/// 解析 `range` 字段; 4 段 ⇒ `BRV-VER-0006`; 其它形状错 ⇒ `BRV-MF-0001`。均退出码 2。
+/// Parse the `range` field; 4 segments ⇒ `BRV-VER-0006`; other shape errors ⇒ `BRV-MF-0001`. Both exit code 2.
 fn parse_range_field(
     raw: &str,
     target: &str,
@@ -979,13 +979,13 @@ fn parse_range_field(
             } else {
                 "BRV-MF-0001"
             };
-            d.shape(code, target, file, span, e.message, "§7.4: range 固定 3 段, 缺段右补 0, 4 段非法");
+            d.shape(code, target, file, span, e.message, "§7.4: range is exactly 3 segments, missing ones right-padded 0, 4 illegal");
             None
         }
     }
 }
 
-// ------------------------------------------------------------------ plugin.toml
+// ------------------------------------------------------------------ brick.toml
 
 fn rel_path(root: &Path, p: &Path) -> String {
     p.strip_prefix(root)
@@ -994,7 +994,7 @@ fn rel_path(root: &Path, p: &Path) -> String {
         .replace('\\', "/")
 }
 
-/// 解析一个 `plugin.toml`。返回 `None` 只在"连 TOML 都读不成"时。
+/// Parse one `brick.toml`. Returns `None` only when even the TOML cannot be read.
 pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin> {
     let file = rel_path(root, abs);
     let dir = abs
@@ -1004,7 +1004,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     let text = match fs::read_to_string(abs) {
         Ok(t) => t,
         Err(e) => {
-            d.env(format!("读不到 `{file}`: {e}"), "检查路径与权限");
+            d.env(format!("cannot read `{file}`: {e}"), "check path and permissions");
             return None;
         }
     };
@@ -1012,8 +1012,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         Ok(v) => v,
         Err(e) => {
             d.env(
-                format!("`{file}` 不是合法 TOML: {e}"),
-                "BRV-D9 退出码 2(环境/用法错, 无码)",
+                format!("`{file}` is not valid TOML: {e}"),
+                "BRV-D9 exit code 2 (environment/usage error, no code)",
             );
             return None;
         }
@@ -1021,7 +1021,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     let top = match value.as_table() {
         Some(t) => t,
         None => {
-            d.env(format!("`{file}` 顶层必须是 TOML 表"), "contract §7.1");
+            d.env(format!("top level of `{file}` must be a TOML table"), "contract §7.1");
             return None;
         }
     };
@@ -1031,7 +1031,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         file: file.clone(),
         dir,
         schema: 0,
-        lang: "c".to_string(), // 缺省按 §8.1 的 c; 仍要求显式(见下)
+        lang: "c".to_string(), // default is c per §8.1; still required explicitly (see below)
         sched_class: "SAFE_PREEMPT".to_string(),
         version: Version::new(0, 0, 0, 0),
         ..Default::default()
@@ -1045,7 +1045,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             target,
             &file,
             "schema",
-            format!("`schema` 只支持 1, 收到 {other}"),
+            format!("`schema` supports only 1, got {other}"),
             "contract §7.1",
         ),
         None => {}
@@ -1057,7 +1057,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             target,
             &file,
             "plugin",
-            "缺少必填表 `[plugin]`",
+            "missing required table `[plugin]`",
             "contract §7.1",
         );
         return Some(p);
@@ -1070,8 +1070,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             &p.name,
             &file,
             "plugin.name",
-            format!("插件名 `{}` 不符名字契约", p.name),
-            "契约: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)",
+            format!("plugin name `{}` violates the name contract", p.name),
+            "contract: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)",
         );
     }
     p.plugin_type =
@@ -1087,7 +1087,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     if let Some(sk) = &p.subkind {
         check_enum(d, &p.name, &file, "plugin", "subkind", sk, rules::SUBKINDS);
     }
-    // 钩子/描述符符号前缀覆盖(可选; 见 Plugin::symbol_prefix 的说明)。
+    // Hook/descriptor symbol prefix override (optional; see Plugin::symbol_prefix).
     p.symbol_prefix = opt_str(plugin, "symbol_prefix", &p.name, &file, "plugin", d);
     if let Some(sp) = &p.symbol_prefix {
         if sp.is_empty() || !sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
@@ -1096,8 +1096,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                 &p.name,
                 &file,
                 "plugin.symbol_prefix",
-                format!("`symbol_prefix` 只允许 [A-Za-z0-9_], 且非空(收到 `{sp}`)"),
-                "它会成为 C 符号前缀(`<prefix>early_init` 等), 必须是合法标识符片段",
+                format!("`symbol_prefix` allows only [A-Za-z0-9_] and must be non-empty (got `{sp}`)"),
+                "it becomes the C symbol prefix (`<prefix>early_init` etc.), so it must be an identifier fragment",
             );
         }
     }
@@ -1108,8 +1108,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     p.phase = req_str(plugin, "phase", &p.name, &file, "plugin", d).unwrap_or_default();
     p.sched_class = opt_str(plugin, "sched_class", &p.name, &file, "plugin", d)
         .unwrap_or_else(|| "SAFE_PREEMPT".to_string());
-    // `[selftest]`(ADR-0010): **表在场 = 本插件有自检**。表里的字段现在只有 `cases`
-    // (自述条数, 仅呈现); 钩子符号名由生成器按 symbol_prefix 推导, 不在这里写。
+    // `[selftest]` (ADR-0010): **table present = this plugin has selftests**. Its only field
+    // today is `cases` (self-reported count, presentation only); the hook symbol comes from symbol_prefix.
     if let Some(st) = opt_table(top, "selftest") {
         p.has_selftest = true;
         p.selftest_cases = opt_int(st, "cases", &p.name, &file, "selftest", d);
@@ -1126,8 +1126,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                 &p.name,
                 &file,
                 "plugin.sched_kind",
-                "`sched_kind` 只对 `subkind = \"scheduler\"` 有意义",
-                "contract §7.1 / 裁定 R-5",
+                "`sched_kind` is only meaningful for `subkind = \"scheduler\"`",
+                "contract §7.1 / ruling R-5",
             );
         }
     }
@@ -1140,10 +1140,10 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     p.summary = opt_str(plugin, "summary", &p.name, &file, "plugin", d);
     p.license = opt_str(plugin, "license", &p.name, &file, "plugin", d);
 
-    // ---- subkind 推导与冲突(§8.4 / BRV-TAX-0015)----
+    // ---- subkind derivation and conflicts (§8.4 / BRV-TAX-0015) ----
     validate_subkind(&mut p, d);
 
-    // ---- 相位与 plugin_type 约束(§7.2; schema/规则错)----
+    // ---- phase and plugin_type constraints (§7.2; schema/rule errors) ----
     if !p.phase.is_empty() && !p.plugin_type.is_empty() {
         if let Some(reason) = rules::phase_reason(&p.plugin_type, p.subkind.as_deref(), &p.phase) {
             d.shape("BRV-MF-0001", &p.name, &file, "plugin.phase", reason, "§7.2");
@@ -1179,7 +1179,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             &p.name,
             &file,
             "sched.tt",
-            "`sched_class = \"TT_SAFE\"` 必须同时给 `[sched.tt]` 周期元数据",
+            "`sched_class = \"TT_SAFE\"` requires `[sched.tt]` period metadata",
             "§8.1",
         );
     }
@@ -1197,8 +1197,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                     &p.name,
                     &file,
                     format!("iface.typedefs.{k}"),
-                    format!("类型别名 `{k}` 的目标必须是字符串(规范名)"),
-                    "contract §7.1 / IFACE-IR 规则 4",
+                    format!("target of type alias `{k}` must be a string (canonical name)"),
+                    "contract §7.1 / IFACE-IR rule 4",
                 ),
             }
         }
@@ -1215,8 +1215,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                 &p.name,
                 &file,
                 format!("{span}.name"),
-                format!("依赖名 `{name}` 不符名字契约"),
-                "契约: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)",
+                format!("dependency name `{name}` violates the name contract"),
+                "contract: ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$ (§8.3)",
             );
         }
         if t.contains_key("compat_gen") {
@@ -1225,8 +1225,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                 &p.name,
                 &file,
                 format!("{span}.compat_gen"),
-                "结构依赖(`[[dep]]`)一律不钉 `compat_gen`(依 F3)",
-                "§7.1: 钉代只属接口依赖(`requires_iface`)",
+                "structural dependencies (`[[dep]]`) never pin `compat_gen` (per F3)",
+                "§7.1: pinning a generation belongs to interface deps (`requires_iface`) only",
             );
         }
         let range_raw = opt_str(t, "range", &p.name, &file, &span, d).unwrap_or_else(|| "*".to_string());
@@ -1247,8 +1247,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                     &p.name,
                     &file,
                     format!("{span}.phase"),
-                    "`[[dep]].phase` 只对 `kind = \"init\"` 有意义",
-                    "§7.2: 断言只描述 init 完成点",
+                    "`[[dep]].phase` is only meaningful for `kind = \"init\"`",
+                    "§7.2: the assertion describes only the init completion point",
                 );
             }
         }
@@ -1259,7 +1259,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                 &p.name,
                 &file,
                 format!("{span}.symbol"),
-                "`[[dep]].symbol` 只对 `kind = \"runtime\"` 有意义",
+                "`[[dep]].symbol` is only meaningful for `kind = \"runtime\"`",
                 "contract §7.1",
             );
         }
@@ -1286,7 +1286,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             check_enum(d, &p.name, &file, &span, "form", &e.form, rules::EXPORT_FORMS);
         }
         e.name = req_str(t, "name", &p.name, &file, &span, d).unwrap_or_default();
-        // schema/plugin.schema.json: `version` / `compat_gen` / `freeze_state` / `status` 均 required。
+        // schema/plugin.schema.json: `version` / `compat_gen` / `freeze_state` / `status` are all required.
         let vraw = req_str(t, "version", &p.name, &file, &span, d);
         e.version_raw = vraw.clone();
         if let Some(raw) = &vraw {
@@ -1314,7 +1314,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             en.name = req_str(et, "name", &p.name, &file, &espan, d).unwrap_or_default();
             en.sig = opt_str(et, "sig", &p.name, &file, &espan, d);
             en.layout = opt_str(et, "layout", &p.name, &file, &espan, d);
-            // 裁定 R-4 / schema: `value` = 字符串**或**字符串数组。
+            // Ruling R-4 / schema: `value` = string **or** string array.
             en.value = load_entry_value(et, &p.name, &file, &espan, d);
             en.ops = et.get("ops").map(|_| str_array(et, "ops", &p.name, &file, &espan, d));
             en.status = opt_str(et, "status", &p.name, &file, &espan, d)
@@ -1327,7 +1327,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         p.exports.push(e);
     }
 
-    // ---- 导出面分类不变量(§3.5; 单记录内可判的部分)----
+    // ---- export-surface taxonomy invariants (§3.5; the per-record decidable part) ----
     check_export_invariants(&p, d);
 
     // ---- [privileged] ----
@@ -1342,14 +1342,14 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         for (i, mt) in array_of_tables(priv_t, "memory").into_iter().enumerate() {
             let span = format!("privileged.memory[{i}]");
             let granularity = req_str(mt, "granularity", &p.name, &file, &span, d).unwrap_or_default();
-            // schema: `ops` required(缺 ⇒ 形状错; 空表另由 BRV-PRIV-0002 处理)。
+            // schema: `ops` required (absent ⇒ shape error; an empty table is handled by BRV-PRIV-0002).
             if !mt.contains_key("ops") {
                 d.shape(
                     "BRV-MF-0001",
                     &p.name,
                     &file,
                     format!("{span}.ops"),
-                    "缺少必填字段 `ops`",
+                    "missing required field `ops`",
                     "contract §7.1 / schema/plugin.schema.json",
                 );
             }
@@ -1359,8 +1359,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                 regions: str_array(mt, "regions", &p.name, &file, &span, d),
             });
         }
-        // `[[privileged.resources]]` 是**数组表**(contract §7.1 / schema):
-        // 多条按字段累加; 是否有内容决定 P1 的下限。
+        // `[[privileged.resources]]` is an **array of tables** (contract §7.1 / schema):
+        // entries accumulate per field; presence of content decides P1's lower bound.
         let mut resources = PrivilegedResources::default();
         for rt in array_of_tables(priv_t, "resources") {
             resources
@@ -1406,10 +1406,10 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         });
     }
 
-    // ---- [[mount]](ADR-0030: **消费者**的挂载计划) ----
-    // ★ 为什么只对 app 报"缺 fstype"这类错: 从前 [[mount]] 在 FS 插件上表示"我挂在哪",
-    //   现在它归 APP。为了不把旧写法静默吃掉(那会让"以为挂了、其实没挂"), 这里对
-    //   **非 app** 插件声明 [[mount]] 报一条 shape 错并指路。
+    // ---- [[mount]] (ADR-0030: the **consumer**'s mount plan) ----
+    // ★ Why only app gets "missing fstype"-style errors: [[mount]] used to mean "where I mount"
+    //   on FS plugins; it now belongs to the APP. To avoid silently swallowing the old form (which
+    //   would look mounted but isn't), a **non-app** plugin declaring [[mount]] gets a shape error.
     p.mounts = parse_mounts(top, &p.name, &file, &p.plugin_type, d);
 
     // ---- [build] ----
@@ -1420,7 +1420,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             defines: str_array(bt, "defines", &p.name, &file, "build", d),
             cflags: str_array(bt, "cflags", &p.name, &file, "build", d),
         });
-        // `[build.target]`: 目标事实。只允许 platform 声明(§8.3 ④ 的"每镜像恰一个")。
+        // `[build.target]`: target facts. Only platform may declare it (§8.3 ④: one platform per image).
         if let Some(tt) = opt_table(bt, "target") {
             if p.plugin_type != "platform" {
                 d.shape(
@@ -1429,10 +1429,10 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                     &file,
                     "build.target",
                     format!(
-                        "`[build.target]` 只允许 `plugin_type = \"platform\"` 声明, 本插件是 `{}`",
+                        "`[build.target]` may only be declared by `plugin_type = \"platform\"`, this plugin is `{}`",
                         p.plugin_type
                     ),
-                    "目标事实属于「平台是什么」; 每镜像恰一个 platform(§8.3 ④)",
+                    "target facts are part of \"what the platform is\"; exactly one platform per image (§8.3 ④)",
                 );
             }
             let qemu = opt_table(tt, "qemu");
@@ -1464,7 +1464,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     Some(p)
 }
 
-/// `subkind` 推导与冲突(§8.4 / `BRV-TAX-0015`; error ⇒ 退出码 1)。
+/// `subkind` derivation and conflicts (§8.4 / `BRV-TAX-0015`; error ⇒ exit code 1).
 fn validate_subkind(p: &mut Plugin, d: &mut Diags) {
     if p.plugin_type.is_empty() {
         return;
@@ -1476,7 +1476,7 @@ fn validate_subkind(p: &mut Plugin, d: &mut Diags) {
                 &p.name,
                 &p.file,
                 "plugin.subkind",
-                format!("`subkind` 只对 `plugin_type = \"ability\"` 有意义, `{}` 不接受", p.plugin_type),
+                format!("`subkind` is only meaningful for `plugin_type = \"ability\"`, `{}` does not accept it", p.plugin_type),
                 "§8.1",
             );
         }
@@ -1493,14 +1493,14 @@ fn validate_subkind(p: &mut Plugin, d: &mut Diags) {
                     &p.file,
                     "plugin.subkind",
                     format!(
-                        "subkind 推导与显式声明冲突: 由名字 namespace 推导 = `{der}`, 显式 = `{explicit}`"
+                        "subkind derivation conflicts with the explicit declaration: derived from name namespace = `{der}`, explicit = `{explicit}`"
                     ),
-                    "去掉显式 `subkind`, 或改用与 namespace 相符的名字(§8.4)",
+                    "drop the explicit `subkind`, or use a name matching its namespace (§8.4)",
                 );
             }
         }
         (Some(der), None) => {
-            // 名字可推导: 补全模型里的 subkind(不写回文件)。
+            // Derivable from the name: fill in the model's subkind (not written back to the file).
             p.subkind = Some(der.to_string());
         }
         (None, None) => {
@@ -1510,20 +1510,20 @@ fn validate_subkind(p: &mut Plugin, d: &mut Diags) {
                 &p.file,
                 "plugin.subkind",
                 format!(
-                    "ability 插件 `{}` 无法由名字推导 `subkind`, 必须显式声明",
+                    "ability plugin `{}` has no name-derivable `subkind`; it must be declared explicitly",
                     p.name
                 ),
-                format!("合法值: {}; 或改用可推导的名字(service/ sched/ framework/ io/ fs/)", rules::list_of(rules::SUBKINDS)),
+                format!("allowed values: {}; or use a derivable name (service/ sched/ framework/ io/ fs/)", rules::list_of(rules::SUBKINDS)),
             );
         }
         (None, Some(_)) => {}
     }
 }
 
-/// 导出面分类不变量(§3.5, `BRV-TAX-0016/0017/0018/0019`)。
+/// Export-surface taxonomy invariants (§3.5, `BRV-TAX-0016/0017/0018/0019`).
 ///
-/// 不变量 3 的"列表中每个被再导出单元的 `api_iface` 与自身相等"是**跨文件**判定,
-/// 归 agent-B 的 `iface`/`check`(本函数只判"非空 + 元素形状")。
+/// Invariant 3 — "every re-exported unit's `api_iface` equals its own" — is a **cross-file**
+/// decision owned by agent-B's `iface`/`check` (this function checks non-empty + element shape).
 fn check_export_invariants(p: &Plugin, d: &mut Diags) {
     let views: Vec<rules::ExportView<'_>> = p
         .exports
@@ -1543,7 +1543,7 @@ fn check_export_invariants(p: &Plugin, d: &mut Diags) {
             &p.file,
             format!("export[{i}]"),
             msg,
-            "§3.5 导出面分类不变量(V-12)",
+            "§3.5 export-surface taxonomy invariants (V-12)",
         );
     }
 }
@@ -1554,7 +1554,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
     let Some(c) = opt_table(top, "compat") else {
         return;
     };
-    // schema/plugin.schema.json: `[compat]` 存在时 `core` required。
+    // schema/plugin.schema.json: `core` is required when `[compat]` exists.
     if c.contains_key("core") {
         if let Some(raw) = opt_str(c, "core", &p.name, &p.file, "compat", d) {
             p.compat.core = parse_range_field(&raw, &p.name, &p.file, "compat.core", d);
@@ -1566,7 +1566,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
             &p.name,
             &p.file,
             "compat.core",
-            "缺少必填字段 `core`(`[compat]` 存在时必填)",
+            "missing required field `core` (required when `[compat]` exists)",
             "contract §7.1 / schema/plugin.schema.json",
         );
     }
@@ -1575,7 +1575,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
     p.compat.truth = opt_str(c, "truth", &p.name, &p.file, "compat", d);
     p.compat.abi_id = opt_str(c, "abi_id", &p.name, &p.file, "compat", d);
 
-    // v0.1 只允许 hash_scope/truth 都是 "decl"(BRV-IFACE-0011, §6.6 / V-11②)。
+    // v0.1 allows only hash_scope/truth both = "decl" (BRV-IFACE-0011, §6.6 / V-11②).
     let hs = p.compat.hash_scope.clone().unwrap_or_else(|| "decl".to_string());
     let tr = p.compat.truth.clone().unwrap_or_else(|| "decl".to_string());
     if hs != "decl" || tr != "decl" {
@@ -1586,9 +1586,9 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
             &p.file,
             "compat",
             format!(
-                "`truth`/`hash_scope` 必须成对且 v0.1 只允许 `decl`: hash_scope=`{hs}`, truth=`{tr}`"
+                "`truth`/`hash_scope` must be paired, and v0.1 allows `decl` only: hash_scope=`{hs}`, truth=`{tr}`"
             ),
-            "§6.6/§10 V-11②: sym/header 是 v0.x; 不得静默迁移",
+            "§6.6/§10 V-11②: sym/header are v0.x; no silent migration",
         );
     }
 
@@ -1601,7 +1601,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
                 &p.name,
                 &p.file,
                 format!("{span}.id"),
-                format!("接口单元 id `{id}` 形状不符: 应为 `<provider>#<unit>`"),
+                format!("interface unit id `{id}` has wrong shape: expected `<provider>#<unit>`"),
                 "§6.1",
             );
         }
@@ -1609,7 +1609,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
         if !api_iface.is_empty() {
             check_enum(d, &p.name, &p.file, &span, "api_iface", &api_iface, rules::API_TYPES);
         }
-        // 必填: compat_gen 与 range 分开(§5.6)。
+        // Required: compat_gen and range are separate (§5.6).
         let compat_gen = req_int(t, "compat_gen", &p.name, &p.file, &span, d)
             .map(|v| v.max(0) as u64)
             .unwrap_or(0);
@@ -1635,7 +1635,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
         });
     }
 
-    // 分类相容(§3.5 消费方 2)在 v0.1 只报 info('v0.1 不扫描声明面接口依赖', V-10③)。
+    // Taxonomy compatibility (§3.5 consumer 2) reports info only in v0.1 (V-10③).
     for r in &p.compat.requires_iface {
         if p.api_type == "native" && r.api_iface == "runtime_adapter" {
             d.coded(
@@ -1645,10 +1645,10 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
                 &p.file,
                 "compat.requires_iface",
                 format!(
-                    "`native` 插件引用了 `runtime_adapter` 分类的单元 `{}`(v0.1 不扫描接口依赖, 仅提示; v0.2 起为红)",
+                    "`native` plugin references a `runtime_adapter` unit `{}` (v0.1 does not scan iface deps, info only; red from v0.2)",
                     r.id
                 ),
-                "§3.5 消费方 2 / V-10③",
+                "§3.5 consumer 2 / V-10③",
             );
         }
     }
@@ -1656,7 +1656,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
 
 // ------------------------------------------------------------------ product.toml
 
-/// 加载 `root/product.toml`(可选)。返回 `(是否有文件, 模型)`。
+/// Load `root/product.toml` (optional). Returns `(file present, model)`.
 pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     let abs = root.join("product.toml");
     if !abs.is_file() {
@@ -1666,19 +1666,19 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     let text = match fs::read_to_string(&abs) {
         Ok(t) => t,
         Err(e) => {
-            d.env(format!("读不到 `{file}`: {e}"), "检查路径与权限");
+            d.env(format!("cannot read `{file}`: {e}"), "check path and permissions");
             return (true, None);
         }
     };
     let value: toml::Value = match text.parse() {
         Ok(v) => v,
         Err(e) => {
-            d.env(format!("`{file}` 不是合法 TOML: {e}"), "BRV-D9 退出码 2");
+            d.env(format!("`{file}` is not valid TOML: {e}"), "BRV-D9 exit code 2");
             return (true, None);
         }
     };
     let Some(top) = value.as_table() else {
-        d.env(format!("`{file}` 顶层必须是 TOML 表"), "contract §7.2");
+        d.env(format!("top level of `{file}` must be a TOML table"), "contract §7.2");
         return (true, None);
     };
     let mut prod = Product {
@@ -1694,7 +1694,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
             &file,
             &file,
             "schema",
-            format!("`schema` 只支持 1, 收到 {other}"),
+            format!("`schema` supports only 1, got {other}"),
             "contract §7.2",
         ),
         None => {}
@@ -1706,13 +1706,13 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
             &file,
             &file,
             "product",
-            "缺少必填表 `[product]`",
+            "missing required table `[product]`",
             "contract §7.2",
         );
         return (true, Some(prod));
     };
     prod.name = req_str(product, "name", &file, &file, "product", d).unwrap_or_default();
-    // schema/product.schema.json: `version` 在 `[product]` 内**非** required; 缺省 0.0.0.0。
+    // schema/product.schema.json: `version` is **not** required inside `[product]`; default 0.0.0.0.
     if let Some(vraw) = opt_str(product, "version", &file, &file, "product", d) {
         if let Some(v) = parse_version_field(&vraw, &file, &file, "product.version", d) {
             prod.version = v;
@@ -1725,7 +1725,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
             &file,
             &file,
             "product.app",
-            format!("`app` 名 `{}` 不符名字契约", prod.app),
+            format!("`app` name `{}` violates the name contract", prod.app),
             "§8.3",
         );
     }
@@ -1741,7 +1741,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     if let Some(sel) = opt_table(top, "select") {
         prod.select = str_array(sel, "plugins", &file, &file, "select", d);
     }
-    // ---- [selftest](ADR-0010: 自检的总开关 + 可选名单) ----
+    // ---- [selftest] (ADR-0010: master switch for selftests + optional list) ----
     if let Some(st) = opt_table(top, "selftest") {
         prod.has_selftest_table = true;
         match st.get("enabled") {
@@ -1754,10 +1754,10 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
                 &file,
                 "selftest.enabled",
                 format!(
-                    "`enabled` 必须是布尔或字符串 \"inherit\", 收到 {}",
+                    "`enabled` must be a boolean or the string \"inherit\", got {}",
                     other.type_str()
                 ),
-                "ADR-0010 §2.3: inherit = 跟随 [product].stage(dev 开 / release 关)",
+                "ADR-0010 §2.3: inherit = follow [product].stage (dev on / release off)",
             ),
         }
         prod.selftest_plugins = str_array(st, "plugins", &file, &file, "selftest", d);
@@ -1766,7 +1766,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
         prod.budget_ram_kib = opt_int(b, "ram_kib", &file, &file, "budget", d);
         prod.budget_stack_kib = opt_int(b, "stack_kib", &file, &file, "budget", d);
     }
-    // ---- [kernel](时钟节拍: 参考 Linux 的 CONFIG_HZ; ADR-0017) ----
+    // ---- [kernel] (tick rate: cf. Linux CONFIG_HZ; ADR-0017) ----
     if let Some(k) = opt_table(top, "kernel") {
         prod.kernel_hz = opt_int(k, "hz", &file, &file, "kernel", d);
     }
@@ -1806,7 +1806,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
                         &file,
                         &file,
                         format!("lint.allow_edges[{i}]"),
-                        "`allow_edges` 的每一项必须是 `[<consumer>, <provider>]` 两个字符串",
+                        "each `allow_edges` entry must be two strings `[<consumer>, <provider>]`",
                         "§7.3 / §8.2",
                     );
                 }
@@ -1814,7 +1814,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
         }
     }
 
-    // ---- [build](产品级构建策略: `brickie build` 消费) ----
+    // ---- [build] (product-level build policy: consumed by `brickie build`) ----
     if let Some(b) = opt_table(top, "build") {
         let rel = opt_table(b, "release");
         prod.build = Some(ProductBuild {
@@ -1841,7 +1841,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     (true, Some(prod))
 }
 
-// ------------------------------------------------------------------ 树扫描
+// ------------------------------------------------------------------ tree scan
 
 fn scan_plugin_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = match fs::read_dir(dir) {
@@ -1861,15 +1861,15 @@ fn scan_plugin_files(dir: &Path, out: &mut Vec<PathBuf>) {
                 continue;
             }
             scan_plugin_files(&path, out);
-        } else if name == "plugin.toml" {
+        } else if name == "brick.toml" {
             out.push(path);
         }
     }
 }
 
-// ------------------------------------------------------ 依赖闭包与 include 使用扫描
+// ------------------------------------------------------ dependency closure and include-use scan
 
-/// 一个插件**声明依赖的传递闭包**(按名; 不含自身)。
+/// Transitive closure of a plugin's **declared dependencies** (by name; excludes itself).
 pub fn dep_closure(tree: &TreeLoad, name: &str) -> std::collections::BTreeSet<String> {
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut stack: Vec<String> = vec![name.to_string()];
@@ -1884,34 +1884,34 @@ pub fn dep_closure(tree: &TreeLoad, name: &str) -> std::collections::BTreeSet<St
     seen
 }
 
-/// 一条"跨插件的 `#include`"(消费者源码里出现、属于另一个被选插件的头)。
+/// One cross-plugin `#include` (a header owned by another selected plugin, used in consumer source).
 #[derive(Clone, Debug)]
 pub struct IncludeUse {
     pub consumer: String,
     pub provider: String,
     pub header: String,
-    /// 相对 `root` 的源文件路径(诊断落点)。
+    /// Source file path relative to `root` (diagnostic location).
     pub file: String,
 }
 
-/// 扫描被选插件源码(`src/` + `include/`)里的 `#include`, 映射到**全树**里提供该头的
-/// 插件(消费者只扫被选插件; 提供方映射不看闭包, 见下)。
+/// Scan `#include`s in selected plugins' sources (`src/` + `include/`) and map them to the
+/// plugin providing the header across the **whole tree** (consumers = selected only).
 ///
-/// 为什么需要它(`-I` 收窄不够): 目标工具链自带 glibc 头, `#include <unistd.h>` 这类
-/// 常见名会被**系统头兜住** —— 收窄 `-I` 之后不会"找不到头", 而是静默改用 glibc 的
-/// 声明(裸机镜像里错误且危险)。文件系统层面的"头 → 提供方"映射与编译器搜索路径无关,
-/// 所以它是可靠判据(ADR-0018)。
+/// Why needed (`-I` narrowing is not enough): the target toolchain ships glibc headers, so a common
+/// name like `#include <unistd.h>` gets **caught by system headers** — after narrowing `-I` nothing
+/// is "missing"; it silently resolves to the glibc declaration (wrong and dangerous in bare-metal).
+/// A filesystem-level "header → provider" map is compiler-search-path independent (ADR-0018).
 ///
-/// 局限(如实声明): 逐行识别 `#include`, **不解析注释** —— 注释里写的 `#include` 也会
-/// 被算进来。当前全树没有这种误报; 真出现时把注释改写即可。
+/// Limitation (stated honestly): `#include` is detected line by line, **comments are not parsed** —
+/// an `#include` inside a comment counts too. No such false positive in the current tree.
 pub fn cross_plugin_includes(
     root: &Path,
     tree: &TreeLoad,
     selected: &std::collections::BTreeSet<String>,
 ) -> Vec<IncludeUse> {
-    // (include 目录相对 root, 拥有者插件名) —— **全树**映射: 一个头的"归属"与它是否
-    // 在本产品的闭包里无关。若只看被选插件, "include 了闭包外插件的头"这种最严重的情形
-    // 反而漏报(而它恰恰是 glibc 兜底最容易掩盖的)。
+    // (include dir relative to root, owning plugin name) — **whole-tree** map: a header's
+    // ownership is independent of whether it is in this product's closure. Looking at selected
+    // plugins only would miss the worst case: including a header of an out-of-closure plugin.
     let mut inc_owner: Vec<(String, String)> = Vec::new();
     for p in &tree.plugins {
         if let Some(b) = &p.build {
@@ -1929,9 +1929,9 @@ pub fn cross_plugin_includes(
         for f in plugin_source_files(root, p) {
             let Ok(text) = fs::read_to_string(root.join(&f)) else { continue };
             for h in scan_include_names(&text) {
-                // core 头: core **不是插件**(没有 provider#unit), 但"APP 直连 core 头"是
-                // A-2 的禁则(ADR-0020 / 设计 1-01 §7.3)⇒ 用合成 provider `"core"` 记录下来,
-                // 由调用方按**消费者类别**判(app 才违规; core 是内核面, 其它插件不受限)。
+                // core headers: core **is not a plugin** (no provider#unit), but "APP includes
+                // a core header directly" is forbidden by A-2 (ADR-0020 / design 1-01 §7.3) ⇒
+                // record it with synthetic provider `"core"`; the caller judges by consumer class.
                 if h.starts_with("br/core/") {
                     out.push(IncludeUse {
                         consumer: p.name.clone(),
@@ -1943,7 +1943,7 @@ pub fn cross_plugin_includes(
                 }
                 for (dir, owner) in &inc_owner {
                     if owner == &p.name {
-                        continue; // 自己的头
+                        continue; // own header
                     }
                     if root.join(dir).join(&h).is_file() {
                         out.push(IncludeUse {
@@ -1960,7 +1960,7 @@ pub fn cross_plugin_includes(
     out
 }
 
-/// 插件的源文件(`src/**` 与 `include/**` 里的 `.c/.h/.S`), 相对 `root`。
+/// Plugin source files (`.c/.h/.S` under `src/**` and `include/**`), relative to `root`.
 fn plugin_source_files(root: &Path, p: &Plugin) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for base in ["src", "include"] {
@@ -1989,7 +1989,7 @@ fn collect_source_files(dir: &Path, root: &Path, out: &mut Vec<String>) {
     }
 }
 
-/// 从一段 C 源码里抽取 `#include <…>` / `#include "…"` 的头名。
+/// Extract header names from `#include <…>` / `#include "…"` in a piece of C source.
 fn scan_include_names(text: &str) -> Vec<String> {
     let mut out: Vec<String> = Vec::new();
     for line in text.lines() {
@@ -2012,7 +2012,7 @@ fn scan_include_names(text: &str) -> Vec<String> {
     out
 }
 
-/// 加载整棵插件树(裁定 R-1: 无 `product.toml` 时校验整棵树)。
+/// Load the whole plugin tree (ruling R-1: validate the whole tree when there is no `product.toml`).
 pub fn load_tree(root: &Path) -> TreeLoad {
     let mut load = TreeLoad::default();
     let mut files = Vec::new();
@@ -2023,7 +2023,7 @@ pub fn load_tree(root: &Path) -> TreeLoad {
             load.plugins.push(p);
         }
     }
-    // 名字全局唯一(BRV-D4 唯一真值 / §8.3): 重名 ⇒ 形状错。
+    // Globally unique names (BRV-D4 single source of truth / §8.3): duplicates ⇒ shape error.
     let mut seen: BTreeMap<String, String> = BTreeMap::new();
     let mut dups: Vec<(String, String, String)> = Vec::new();
     for p in &load.plugins {
@@ -2042,8 +2042,8 @@ pub fn load_tree(root: &Path) -> TreeLoad {
             &name,
             &second,
             "plugin.name",
-            format!("插件名 `{name}` 在树内重复: {first} 与 {second}"),
-            "§8.3: 插件名全局唯一",
+            format!("plugin name `{name}` is duplicated in the tree: {first} and {second}"),
+            "§8.3: plugin names are globally unique",
         );
     }
 
@@ -2054,9 +2054,9 @@ pub fn load_tree(root: &Path) -> TreeLoad {
     load
 }
 
-// ------------------------------------------------------------------ 快照 / lock
+// ------------------------------------------------------------------ snapshots / lock
 
-/// 接口面快照的一个条目(读取用; 与 model 的 [`ExportEntry`] 同形)。
+/// One interface-surface snapshot entry (read side; same shape as [`ExportEntry`]).
 #[derive(Clone, Debug, Default)]
 pub struct SnapshotEntry {
     pub kind: String,
@@ -2068,12 +2068,12 @@ pub struct SnapshotEntry {
     pub status: String,
 }
 
-/// `api/iface/<provider>/<unit>.toml` 的一份快照(**只读**)。
+/// A snapshot of `api/iface/<provider>/<unit>.toml` (**read-only**).
 #[derive(Clone, Debug, Default)]
 pub struct Snapshot {
-    /// 相对 `root`。
+    /// Relative to `root`.
     pub file: String,
-    /// `<provider>#<unit>`。
+    /// `<provider>#<unit>`.
     pub id: String,
     pub provider: String,
     pub unit: String,
@@ -2087,15 +2087,15 @@ pub struct Snapshot {
     pub hash_scope: Option<String>,
     pub truth: Option<String>,
     pub not_abi: bool,
-    /// `strict_params`(IFACE-IR 规则 10: 必须存进快照, 否则跨环境 hash 抖动)。
+    /// `strict_params` (IFACE-IR rule 10: must be stored in the snapshot, else cross-env hash jitter).
     pub strict_params: Option<bool>,
-    /// 解冻窗口的基线(裁定 R-7): `unfreeze` 时写入, `refreeze` 与它比。
+    /// Baseline of the unfreeze window (ruling R-7): written on `unfreeze`, compared on `refreeze`.
     pub baseline_hash: Option<String>,
     pub baseline_entries: Vec<SnapshotEntry>,
     pub entries: Vec<SnapshotEntry>,
 }
 
-/// 读取 `api/iface/**` 的全部快照(读不到 ⇒ 空表 = "未发布")。
+/// Read all snapshots under `api/iface/**` (unreadable ⇒ empty = "unpublished").
 pub fn load_snapshots(root: &Path, d: &mut Diags) -> Vec<Snapshot> {
     let base = root.join("api").join("iface");
     if !base.is_dir() {
@@ -2113,14 +2113,14 @@ pub fn load_snapshots(root: &Path, d: &mut Diags) -> Vec<Snapshot> {
         let text = match fs::read_to_string(&f) {
             Ok(t) => t,
             Err(e) => {
-                d.env(format!("读不到快照 `{file}`: {e}"), "api/iface/** 只读");
+                d.env(format!("cannot read snapshot `{file}`: {e}"), "api/iface/** is read-only");
                 continue;
             }
         };
         let value: toml::Value = match text.parse() {
             Ok(v) => v,
             Err(e) => {
-                d.env(format!("快照 `{file}` 不是合法 TOML: {e}"), "agent-B 写入; 本刀只读");
+                d.env(format!("snapshot `{file}` is not valid TOML: {e}"), "written by agent-B; read-only here");
                 continue;
             }
         };
@@ -2151,14 +2151,14 @@ fn snapshot_from_table(file: &str, _base: &Path, top: &toml::Table) -> Snapshot 
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_default();
-    // provider = api/iface 与文件名之间的路径段
+    // provider = path segment between api/iface and the file name
     let provider = {
         let p = std::path::Path::new(file);
         let mut comps: Vec<String> = p
             .components()
             .map(|c| c.as_os_str().to_string_lossy().to_string())
             .collect();
-        // 去掉 "api" "iface" 与文件名
+        // drop "api", "iface" and the file name
         if comps.len() >= 3 {
             comps.drain(0..2);
             comps.pop();
@@ -2168,7 +2168,7 @@ fn snapshot_from_table(file: &str, _base: &Path, top: &toml::Table) -> Snapshot 
         }
     };
 
-    // 字段可能平铺, 也可能在 `[unit_meta]` 子表里(B 的形状待定 ⇒ 两种都读)。
+    // Fields may be flat or inside the `[unit_meta]` sub-table (B's shape is TBD ⇒ read both).
     let meta = opt_table(top, "unit_meta");
     let get_str = |key: &str| -> Option<String> {
         top.get(key)
@@ -2286,7 +2286,7 @@ impl Snapshot {
     }
 }
 
-/// `brickie.lock` 的一条插件记录(`schema/lock.schema.json` 的 `lock.plugins[]`)。
+/// One plugin record of `brickie.lock` (`lock.plugins[]` in `schema/lock.schema.json`).
 #[derive(Clone, Debug, Default)]
 pub struct LockPlugin {
     pub name: String,
@@ -2294,7 +2294,7 @@ pub struct LockPlugin {
     pub compat_gen: u64,
 }
 
-/// `brickie.lock` 的一条接口单元记录(`schema/lock.schema.json` 的 `lock.units[]`)。
+/// One interface unit record of `brickie.lock` (`lock.units[]` in `schema/lock.schema.json`).
 #[derive(Clone, Debug, Default)]
 pub struct LockUnit {
     pub id: String,
@@ -2308,11 +2308,11 @@ pub struct LockUnit {
     pub truth: String,
 }
 
-/// `[lock.product]` —— 本实现的**扩展字段**。
+/// `[lock.product]` — an **extension field** of this implementation.
 ///
-/// 权威 schema(`schema/lock.schema.json`)在顶层与 `lock` 上都声明
-/// `additionalProperties: true`, 故这是合法扩展(便于 core 记录产品头);
-/// 若将来 schema 收紧, 删掉即可。
+/// The authoritative schema (`schema/lock.schema.json`) declares `additionalProperties: true`
+/// at the top level and on `lock`, so this is a legal extension (lets core record the product
+/// header); if the schema tightens later, just delete it.
 #[derive(Clone, Debug, Default)]
 pub struct LockProduct {
     pub name: String,
@@ -2320,7 +2320,7 @@ pub struct LockProduct {
     pub stage: String,
 }
 
-/// `brickie.lock` 的规范化模型(**只读**; agent-B 负责写)。
+/// Normalized model of `brickie.lock` (**read-only**; agent-B owns writing).
 #[derive(Clone, Debug)]
 pub struct Lock {
     pub schema: i64,
@@ -2342,9 +2342,9 @@ impl Default for Lock {
     }
 }
 
-/// 读取 `brickie.lock`(不存在 ⇒ `None` = "未发布"/"还没求解过")。
+/// Read `brickie.lock` (absent ⇒ `None` = "unpublished" / "never solved").
 ///
-/// 形状 = `schema/lock.schema.json`(v0.1 弱校验: 顶层无 required)。
+/// Shape = `schema/lock.schema.json` (v0.1 weak validation: nothing required at top level).
 pub fn load_lock(root: &Path, d: &mut Diags) -> Option<Lock> {
     let abs = root.join("brickie.lock");
     if !abs.is_file() {
@@ -2353,14 +2353,14 @@ pub fn load_lock(root: &Path, d: &mut Diags) -> Option<Lock> {
     let text = match fs::read_to_string(&abs) {
         Ok(t) => t,
         Err(e) => {
-            d.env(format!("读不到 `brickie.lock`: {e}"), "锁文件只读");
+            d.env(format!("cannot read `brickie.lock`: {e}"), "lock file is read-only");
             return None;
         }
     };
     let value: toml::Value = match text.parse() {
         Ok(v) => v,
         Err(e) => {
-            d.env(format!("`brickie.lock` 不是合法 TOML: {e}"), "agent-B 写入; 本刀只读");
+            d.env(format!("`brickie.lock` is not valid TOML: {e}"), "written by agent-B; read-only here");
             return None;
         }
     };
@@ -2370,7 +2370,7 @@ pub fn load_lock(root: &Path, d: &mut Diags) -> Option<Lock> {
         ..Default::default()
     };
     let Some(lk) = opt_table(top, "lock") else {
-        // schema 的 `lock` 不是 required(v0.1 弱校验): 有 schema 无 lock 也算存在。
+        // schema's `lock` is not required (v0.1 weak validation): schema without lock still counts.
         return Some(lock);
     };
     lock.profile = lk
@@ -2408,27 +2408,27 @@ pub fn load_lock(root: &Path, d: &mut Diags) -> Option<Lock> {
     Some(lock)
 }
 
-// ------------------------------------------------------------------ 反向依赖索引
+// ------------------------------------------------------------------ reverse dependency index
 
-/// `build/index/dependents.json` 的一条反向边。
+/// One reverse edge of `build/index/dependents.json`.
 #[derive(Clone, Debug, Default)]
 pub struct DependentEdge {
     pub from: String,
     pub kind: String,
 }
 
-/// 反向依赖索引(权威 schema 由 `schema/index.schema.json` 给出)。
+/// Reverse dependency index (authoritative schema: `schema/index.schema.json`).
 #[derive(Clone, Debug, Default)]
 pub struct DependentsIndex {
     pub schema: i64,
-    /// 被依赖插件 → 依赖它的边(键已排序)。
+    /// Dependee plugin → edges depending on it (keys sorted).
     pub dependents: BTreeMap<String, Vec<DependentEdge>>,
 }
 
 impl DependentsIndex {
-    /// 从插件树全量重建(§6.3: `brickie dep index` 的语义)。
+    /// Rebuild fully from the plugin tree (§6.3: semantics of `brickie dep index`).
     ///
-    /// 只按**已声明的** `[[dep]]` 建边; 运行期注册表取用不产生边(§3.1 / BRV-Q13)。
+    /// Edges come only from **declared** `[[dep]]`; runtime registry use creates no edge (§3.1 / BRV-Q13).
     pub fn build(tree: &TreeLoad) -> Self {
         let mut idx = DependentsIndex {
             schema: 1,

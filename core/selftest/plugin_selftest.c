@@ -1,21 +1,26 @@
 /*
- * brickOS prototype v0.2.0 — 插件管理器自检套件(core 私有; TC-PLUG-*)
+ * brickOS prototype v0.2.0 — plugin-manager selftest suite (core-private; TC-PLUG-*)
  *
- * 从 `core/src/plugin/plugin_mgr.c` **原样搬来**(ADR-0010): 用例、case id
- * (`TC-PLUG-001/002/003/002b`)与日志一字未改 —— 门禁 `tests/gates.toml` 按
- * `[PLGCONF] PASS/FAIL`、`[PLGCONF] SUMMARY` 与 require_tags 判红绿。
+ * Moved verbatim from `core/src/plugin/plugin_mgr.c` (ADR-0010): the cases, case ids
+ * (`TC-PLUG-001/002/003/002b`) and logs are unchanged —— the gate `tests/gates.toml`
+ * judges red/green from `[PLGCONF] PASS/FAIL`, `[PLGCONF] SUMMARY` and require_tags.
  *
- * 为什么搬出生产文件:
- *   - 生产文件只留机制(扫段/拓扑/相驱动), 不再背着用例;
- *   - 关掉自检时整个 `core/selftest/` 目录**不参与编译** ⇒ 测试代码不进镜像(不只是不跑);
- *   - 入口不再进 `br_plugin.h`: 测试面进 golden 接口会让"改一个用例"变成接口变更。
+ * Why it moved out of the production file:
+ *   - the production file keeps only the mechanism (segment scan/topology/phase
+ *     driving) and no longer carries cases;
+ *   - with selftest off, the whole `core/selftest/` directory is not compiled ⇒ test
+ *     code does not enter the image (not merely does not run);
+ *   - the entry no longer enters `br_plugin.h`: a test surface in the golden interface
+ *     would make "change one case" an interface change.
  *
- * 白盒访问路径: `../src/plugin/plugin_mgr_internal.h`。★ 它读的是**真**状态与**真**算法:
- * `TC-PLUG-002b` 的负例跑的就是 plugin_mgr.c 里那个 `topo_sort()`(不是副本), 否则负例
- * 只证明副本会报环。暴露清单与理由见该头注。
+ * White-box access path: `../src/plugin/plugin_mgr_internal.h`. ★ It reads real state
+ * and the real algorithm: the TC-PLUG-002b negative case runs the very `topo_sort()`
+ * in plugin_mgr.c (not a copy), otherwise the negative case would only prove that a
+ * copy reports a cycle. See that header for the exposed list and rationale.
  *
- * 入口口径(与 `br_plugin_manager_selftest` 对插件自检一致): 返回**失败项数**
- * (0 = 全绿), 只记不停 —— 红绿由门禁判(ADR-0010 §2.4)。
+ * Entry contract (same as `br_plugin_manager_selftest` for plugin selftests): returns
+ * the number of failed items (0 = all green), records without stopping —— red/green is
+ * judged by the gate (ADR-0010 §2.4).
  */
 #include <br/core/br_log.h>
 #include <br/core/br_plugin.h>
@@ -23,7 +28,8 @@
 
 #include "../src/plugin/plugin_mgr_internal.h"
 
-/* 入口原型(声明面集中在 `core_selftest.c`; 这里重述只为满足全局函数的原型纪律)。 */
+/* Entry prototype (declarations are centralized in `core_selftest.c`; restated here only
+ * to satisfy the global-function prototype discipline). */
 int br_plugin_selftest(void);
 
 static br_u32 s_pc_pass;
@@ -41,9 +47,10 @@ static void pc_report(br_bool ok, const char *tag, const char *what)
 }
 
 /*
- * TC-PLUG-002b 的负例夹具: 3 节点环(a→b→c→a)与 3 节点 DAG(c→b→a)。
- * WORKAROUND(br-wa-test-001): 本套件的 `TC-PLUG-*` id 是**自编号**(6-01 表里没有这一组),
- * 自述文字才是判据内容; 与设计表逐条对齐见 WORKAROUNDS.md 的 br-wa-test-001。
+ * Negative-case fixture for TC-PLUG-002b: a 3-node cycle (a→b→c→a) and a 3-node DAG (c→b→a).
+ * WORKAROUND(br-wa-test-001): this suite's `TC-PLUG-*` ids are self-assigned (6-01 has no
+ * such group); the descriptive text is the actual criterion; per-item alignment with the
+ * design table is in WORKAROUNDS.md under br-wa-test-001.
  */
 static br_bool cycle_negative_case(void)
 {
@@ -53,7 +60,8 @@ static br_bool cycle_negative_case(void)
     br_u16 cycle[BR_PLUGIN_MAX];
     br_u32 clen = 0u;
 
-    /* (a) 环必须被检出, 且报出**完整**路径: 3 个节点 + 收尾闭合 = 4 项。 */
+    /* (a) the cycle must be detected, with the complete path reported: 3 nodes + closing
+     * entry = 4 items. */
     if (topo_sort(3u, cyc, 3u, order, cycle, &clen)) {
         return BR_FALSE;
     }
@@ -73,7 +81,8 @@ static br_bool cycle_negative_case(void)
         }
     }
 
-    /* (b) 负控制: 同样的算法对无环图必须排得出 c→b→a(否则"总能报环"也是假绿)。 */
+    /* (b) negative control: the same algorithm must order the acyclic graph as c→b→a
+     * (otherwise "always reports a cycle" would also be a false green). */
     if (!topo_sort(3u, dag, 2u, order, cycle, &clen)) {
         return BR_FALSE;
     }
@@ -85,9 +94,9 @@ int br_plugin_selftest(void)
     s_pc_pass = 0u;
     s_pc_fail = 0u;
 
-    br_log_info("[PLGCONF] plugin-manager conformance (.br_plugins / init-DAG / 相位)");
+    br_log_info("[PLGCONF] plugin-manager conformance (.br_plugins / init DAG / phases)");
 
-    /* ---- TC-PLUG-001: 段非空且条数 == 生成物数量 ---- */
+    /* ---- TC-PLUG-001: segment non-empty and count == generated count ---- */
     {
         const br_u32 count = br_plugin_count();
         br_bool ok = (count > 0u);
@@ -97,14 +106,14 @@ int br_plugin_selftest(void)
             total = br_plugin_gen_total;
             ok = ok && (count == total);
         } else {
-            ok = BR_FALSE;   /* 生成物计数符号缺席 = 描述符不是生成物 ⇒ 明确报红 */
+            ok = BR_FALSE;   /* generated count symbol absent = descriptors are not generated ⇒ explicit red */
         }
         br_log_info("[PLGCONF] descriptors=%u gen_total=%u", count, total);
         pc_report(ok, "TC-PLUG-001",
-                  "段非空 且 条数 == 生成物数量(生成物计数符号在场)");
+                  "segment non-empty and count == generated count (generated count symbol present)");
     }
 
-    /* ---- TC-PLUG-002: 拓扑序满足每条 init 边(逐边校验, 违例报出边) ---- */
+    /* ---- TC-PLUG-002: topological order satisfies every init edge (per-edge check, report the edge) ---- */
     {
         br_bool ok = s_sorted;
         const char *bad_from = BR_NULL;
@@ -112,7 +121,7 @@ int br_plugin_selftest(void)
         for (br_u32 e = 0u; e < s_edge_count && ok; e++) {
             const br_u16 f = s_edges[e].from;
             const br_u16 t = s_edges[e].to;
-            /* from 依赖 to ⇒ to 的位次必须更靠前 */
+            /* from depends on to ⇒ to must come earlier */
             if (!(s_pos[t] < s_pos[f])) {
                 ok = BR_FALSE;
                 bad_from = s_plugins[f]->name;
@@ -120,61 +129,66 @@ int br_plugin_selftest(void)
             }
         }
         if (!ok && bad_from != BR_NULL) {
-            br_log_info("[PLGCONF] 违例边: %s -> %s", bad_from, bad_to);
+            br_log_info("[PLGCONF] violating edge: %s -> %s", bad_from, bad_to);
         }
         br_log_info("[PLGCONF] init_edges=%u", s_edge_count);
-        pc_report(ok, "TC-PLUG-002", "拓扑序满足全部 init 边(逐边校验)");
+        pc_report(ok, "TC-PLUG-002", "topological order satisfies all init edges (per-edge check)");
     }
 
-    /* ---- TC-PLUG-003: 相位单调 + 顺序不变量(APP 最后 / 自检在全部 start 之后) ----
+    /* ---- TC-PLUG-003: phase monotonicity + order invariants (APP last / selftest after all starts) ----
      *
-     * ★ 本用例的**第三格**在 ADR-0010 后换过一次判据, 原委值得留下, 否则下一个人
-     *   会以为它是被削弱了:
-     *   旧判据 `s_app_start_last_ok && s_in_app_start` 断言"非 APP 的 start 全跑完,
-     *   **且本用例正跑在 APP 的 start 里**" —— 那时候自检由 APP 的 start 调用, 所以
-     *   "我正跑在 APP 的 start 里"是**那个调用点的自证**。
-     *   现在自检由 `br_plugin_manager_selftest()` 在**全部 start 返回之后**驱动
-     *   (ADR-0010 §2.2), 于是 `s_in_app_start` 恒为 BR_FALSE ⇒ 旧判据**结构上不可能成立**。
-     *   新判据把同一件事换个方向断言, 而且**更强**:
-     *     - `s_app_start_last_ok` 仍断言"APP 最后"这条组合规则在 START 相被遵守
-     *       (它是 START 相**当时记下的历史事实**, 与自检何时跑无关);
-     *     - `s_in_app_start == BR_FALSE` 断言"自检**不在**任何插件的 start 里跑" ——
-     *       这正是新调用点的契约(旧判据断言"在里面", 新判据断言"在外面", 都是自证);
-     *     - `br_plugin_phase_reached() == BR_PHASE_APP` 断言"相位已走到 APP" ⇒
-     *       START 相确实**跑完了**, 而不是"还没开始就来自检"。
-     *   三者合起来 = "START 全部完成, 且自检发生在它之后", 与 ADR-0010 的裁决一字对应。 */
+     * ★ The third cell of this case changed criterion after ADR-0010; the story is worth
+     *   keeping, or the next reader will think it was weakened:
+     *   The old criterion `s_app_start_last_ok && s_in_app_start` asserted "all non-APP
+     *   starts finished, AND this case is running inside APP's start" —— at that time
+     *   selftest was called by APP's start, so "I am running in APP's start" was the
+     *   self-witness of that call site.
+     *   Now selftest is driven by `br_plugin_manager_selftest()` after ALL starts have
+     *   returned (ADR-0010 §2.2), so `s_in_app_start` is always BR_FALSE ⇒ the old
+     *   criterion can structurally never hold.
+     *   The new criteria assert the same fact in another direction, and more strongly:
+     *     - `s_app_start_last_ok` still asserts the combination rule "APP last" was
+     *       honored in the START phase (a historical fact recorded at that time,
+     *       independent of when selftest runs);
+     *     - `s_in_app_start == BR_FALSE` asserts selftest does NOT run inside any
+     *       plugin's start —— exactly the new call site's contract (old asserted
+     *       "inside", new asserts "outside"; both are self-witnesses);
+     *     - `br_plugin_phase_reached() == BR_PHASE_APP` asserts the phase reached APP ⇒
+     *       the START phase really finished, rather than "selftest ran before it started".
+     *   Together = "all STARTs completed, and selftest happens after", matching the
+     *   ADR-0010 ruling. */
     {
         br_bool ok = BR_TRUE;
         for (br_u32 e = 0u; e < s_edge_count; e++) {
-            const br_plugin_t *a = s_plugins[s_edges[e].from];   /* 依赖方 */
-            const br_plugin_t *b = s_plugins[s_edges[e].to];     /* 提供方 */
+            const br_plugin_t *a = s_plugins[s_edges[e].from];   /* consumer */
+            const br_plugin_t *b = s_plugins[s_edges[e].to];     /* provider */
             const br_u32 ra = init_phase_of(a);
             const br_u32 rb = init_phase_of(b);
             if (rb > ra) {
                 ok = BR_FALSE;
-                br_log_info("[PLGCONF] 相位违例: %s(%s) 依赖 %s(%s)",
+                br_log_info("[PLGCONF] phase violation: %s(%s) depends on %s(%s)",
                             a->name, br_plugin_phase_name(ra), b->name, br_plugin_phase_name(rb));
             }
         }
         pc_report(ok, "TC-PLUG-003",
-                  "相位单调: 每条 init 边的提供方完成点 rank <= 消费方");
+                  "phase monotonicity: provider completion rank <= consumer for every init edge");
 
         pc_report((s_plat_index != (br_u32)-1) && (s_first_early_name != BR_NULL)
                   && (s_first_early_name == s_plugins[s_plat_index]->name),
                   "TC-PLUG-003",
-                  "early 相第一步 = platform 插件的 early_init(显式取 plugin_type, 不靠拓扑序)");
+                  "first early-phase step = platform plugin's early_init (explicit plugin_type, not topological order)");
 
         pc_report(s_app_start_last_ok, "TC-PLUG-003",
-                  "APP 最后: 进第一个 APP start 之前, 非 APP 的 start 已全部跑完");
+                  "APP last: before the first APP start, all non-APP starts had completed");
 
         pc_report((s_in_app_start == BR_FALSE) &&
                   (br_plugin_phase_reached() == BR_PHASE_APP), "TC-PLUG-003",
-                  "自检时机: 跑在**全部 start 返回之后**(不在任何 start 里), 且相位已到 APP");
+                  "selftest timing: runs after ALL starts returned (inside no start), and phase already reached APP");
     }
 
-    /* ---- TC-PLUG-002b: 环检测负例 ---- */
+    /* ---- TC-PLUG-002b: cycle-detection negative case ---- */
     pc_report(cycle_negative_case(), "TC-PLUG-002b",
-              "环检测负例: 3 节点环被检出且报完整路径; 同算法对 DAG 排得出序");
+              "cycle negative case: 3-node cycle detected with full path; same algorithm orders the DAG");
 
     br_log_info("[PLGCONF] SUMMARY pass=%u fail=%u total=%u",
                 s_pc_pass, s_pc_fail, s_pc_pass + s_pc_fail);

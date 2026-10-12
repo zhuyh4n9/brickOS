@@ -1,31 +1,37 @@
 /*
- * brickOS prototype v0.2.0 — 延迟工作(bottom half / workqueue, core)实现
+ * brickOS prototype v0.2.0 — deferred work (bottom half / workqueue, core) implementation
  *
- * 设计与裁定: `core/include/br/core/br_work.h` 的文件头 + `docs/decisions/0011-...md`。
- * 设计依据: `3-01` §5(延迟工作 = bottom half; 队列深度静态、满 ⇒ -EAGAIN)、
- *           `3-02` §11.1(ISR → 延迟工作是四条交互路径的第一条)、§11.4.1(BH 形态下
- *           `br_irq_disable` 的语义: 抑制不取消/不重放 —— 抑制判定在 irq_core.c, 本文件
- *           只提供"工作项在 bh 里被执行"这个事实 + `br_work_in_bh()` 的判据)、
- *           §9.4(SLOW 域 demux 是它的第一个真实消费者)、IR-10(提交失败必须回滚)。
+ * Design and rulings: file header of `core/include/br/core/br_work.h` + `docs/decisions/0011-...md`.
+ * Design basis: `3-01` §5 (deferred work = bottom half; static queue depth, full ⇒ -EAGAIN),
+ *           `3-02` §11.1 (ISR → deferred work is the first of four interaction paths), §11.4.1
+ *           (semantics of `br_irq_disable` in BH form: suppress, do not cancel/replay — the
+ *           suppression decision is in irq_core.c; this file only supplies the fact that a work
+ *           item runs in bh + the `br_work_in_bh()` predicate),
+ *           §9.4 (SLOW domain demux is its first real consumer), IR-10 (a failed submit must roll back).
  *
- * 三个不可动摇的性质(实现与用例都建在它们上):
- *   W1 **有界**: 队列是编译期静态环(`BR_WORKQ_DEPTH`), 不分配、不增长; 满 ⇒ -EAGAIN。
- *   W2 **ISR-safe**: 唯一的共享可变状态(环 + 计数)只在 `br_irq_lock()` 的 L2 临界区里改;
- *      提交路径不取锁、不读时钟、不打日志、不回调(回调一律在 drain 里做)。
- *   W3 **非重入**: `br_work_drain` 在执行工作项期间把"在 bh"标志立起来; 工作项再调
- *      `br_work_drain`(或再提交后由外层循环继续)都安全 —— 栈深度不随队列长度增长。
+ * Three immovable properties (implementation and cases rest on them):
+ *   W1 **bounded**: the queue is a compile-time static ring (`BR_WORKQ_DEPTH`), no allocation,
+ *      no growth; full ⇒ -EAGAIN.
+ *   W2 **ISR-safe**: the only shared mutable state (ring + counts) is changed only inside an
+ *      `br_irq_lock()` L2 critical section; the submit path takes no lock, reads no clock, logs
+ *      nothing, calls nothing back (callbacks always happen in drain).
+ *   W3 **non-reentrant**: `br_work_drain` raises the "in bh" flag while running work items; a
+ *      work item that calls `br_work_drain` again (or re-submits for the outer loop to
+ *      continue) is safe — stack depth does not grow with queue length.
  *
- * 为什么 drain 在**关中断**下执行: 它发生在 IRQ 出口(eoi 之后、ERET 之前), 此刻
- * `PSTATE.I == 1` 是硬件进入异常时就定下的。我们**刻意不去打开**它(打开就要考虑
- * 异常嵌套 IR-6 与 ISR 栈帧归属), 于是 bh 的契约是"短 + 不可阻塞"(见头注释的推论)。
- * 这也是 §11.4.1 那句"抑制判定必须原子"免费成立的原因: bh 与 ISR 天然互斥。
+ * Why drain runs with **interrupts disabled**: it happens at IRQ exit (after eoi, before ERET),
+ * where `PSTATE.I == 1` was fixed by hardware on exception entry. We **deliberately do not open**
+ * it (opening it would force reasoning about exception nesting IR-6 and ISR stack-frame
+ * ownership), so the bh contract is "short + non-blocking" (see the corollary in the header
+ * comment). This is also why §11.4.1's "the suppression decision must be atomic" holds for
+ * free: bh and ISR are mutually exclusive by nature.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
 #include <br/core/br_types.h>
 #include <br/core/br_work.h>
 
-/* ------------------------------------------------------------------ 静态环 */
+/* ------------------------------------------------------------------ static ring */
 
 typedef struct br_work_item {
     br_work_fn_t fn;
@@ -33,13 +39,13 @@ typedef struct br_work_item {
 } br_work_item_t;
 
 static br_work_item_t s_q[BR_WORKQ_DEPTH];
-static br_u32         s_head;    /* 出队游标(消费者) */
-static br_u32         s_tail;    /* 入队游标(生产者) */
-static br_u32         s_count;   /* 当前待执行条数 */
+static br_u32         s_head;    /* dequeue cursor (consumer) */
+static br_u32         s_tail;    /* enqueue cursor (producer) */
+static br_u32         s_count;   /* items currently pending */
 
-static br_bool        s_in_bh;   /* W3: drain 执行工作项期间为真 */
+static br_bool        s_in_bh;   /* W3: true while drain runs work items */
 
-/* 诊断计数(不参与判定; 由 br_work_stats_get 暴露) */
+/* Diagnostic counters (not used in decisions; exposed by br_work_stats_get) */
 static br_u32 s_submitted;
 static br_u32 s_ran;
 static br_u32 s_dropped_full;
@@ -47,23 +53,24 @@ static br_u32 s_dropped_invalid;
 static br_u32 s_max_pending;
 static br_u32 s_drain_passes;
 
-/* ------------------------------------------------------------------ 提交 */
+/* ------------------------------------------------------------------ submit */
 
 int br_work_submit(br_work_fn_t fn, void *arg)
 {
-    /* 参数错与队列满是两种不同的失败: 前者是**调用点的 bug**, 后者是**容量预算**
-     * (IR-10 要求调用方对后者做回滚)。分开计数, 免得把 bug 读成"预算不够"。 */
+    /* A bad argument and a full queue are two different failures: the former is a **call-site
+     * bug**, the latter a **capacity budget** (IR-10 requires the caller to roll back the
+     * latter). Counted separately so a bug is not misread as "budget exhausted". */
     if (fn == BR_NULL) {
         s_dropped_invalid++;
         return BR_ERR(EINVAL);
     }
 
-    const br_irq_state_t st = br_irq_lock();   /* W2: 与 drain 的取件互斥 */
+    const br_irq_state_t st = br_irq_lock();   /* W2: mutually exclusive with drain's dequeue */
 
     if (s_count >= (br_u32)BR_WORKQ_DEPTH) {
         br_irq_unlock(st);
         s_dropped_full++;
-        return BR_ERR(EAGAIN);              /* W1: 绝不静默丢弃 */
+        return BR_ERR(EAGAIN);              /* W1: never silently dropped */
     }
 
     s_q[s_tail].fn  = fn;
@@ -72,18 +79,18 @@ int br_work_submit(br_work_fn_t fn, void *arg)
     s_count++;
     s_submitted++;
     if (s_count > s_max_pending) {
-        s_max_pending = s_count;               /* "队列深度够不够"的证据 */
+        s_max_pending = s_count;               /* evidence for "is the queue deep enough" */
     }
 
     br_irq_unlock(st);
     return 0;
 }
 
-/* ------------------------------------------------------------------ 执行 */
+/* ------------------------------------------------------------------ execution */
 
 br_u32 br_work_drain(br_u32 max_items)
 {
-    /* W3: 非重入 —— 已经在 bh 里说明是"工作项内部"调的, 交给外层循环继续。 */
+    /* W3: non-reentrant — already in bh means this call came from inside a work item; the outer loop continues. */
     if (s_in_bh != BR_FALSE) {
         return 0u;
     }
@@ -100,7 +107,7 @@ br_u32 br_work_drain(br_u32 max_items)
         br_work_fn_t fn;
         void        *arg;
 
-        /* 取件在 L2 临界区里(L2 的语义就是"这一小段不与中断竞争")。 */
+        /* Dequeue happens inside the L2 critical section (L2 means "this short span does not race with interrupts"). */
         const br_irq_state_t st = br_irq_lock();
 
         if (s_count == 0u) {
@@ -110,15 +117,16 @@ br_u32 br_work_drain(br_u32 max_items)
 
         fn  = s_q[s_head].fn;
         arg = s_q[s_head].arg;
-        s_q[s_head].fn  = BR_NULL;             /* 槽位清空: 复用时不残留上一任的指针 */
+        s_q[s_head].fn  = BR_NULL;             /* clear the slot: no stale pointer from the previous occupant on reuse */
         s_q[s_head].arg = BR_NULL;
         s_head = (s_head + 1u) % (br_u32)BR_WORKQ_DEPTH;
         s_count--;
 
         br_irq_unlock(st);
 
-        /* ★ 出临界区之后再执行: 工作项自己要能取 L2(否则自锁), 也要能被观测
-         *   (计数器、trace)。执行期间 `s_in_bh` 为真 ⇒ 阻塞/让出类 API 会拒绝。 */
+        /* ★ Run only after leaving the critical section: the work item must itself be able to
+         *   take L2 (else self-lock), and must stay observable (counters, trace). While it
+         *   runs `s_in_bh` is true ⇒ blocking/yielding APIs refuse. */
         if (fn != BR_NULL) {
             fn(arg);
             s_ran++;

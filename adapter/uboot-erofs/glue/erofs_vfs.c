@@ -1,51 +1,62 @@
 /*
- * adapter/uboot-erofs — VFS 对接 + 生命周期钩子
+ * adapter/uboot-erofs — VFS glue + lifecycle hooks
  *
- * ============================== 本文件是什么 ==============================
- * 上游 EROFS 是**路径风格**的(u-boot 的 fs 层给它一个路径字符串, 它自己走查),
- * 而 brickOS 的 VFS(`framework/vfs-core/include/br/vfs/br_vfs.h`)是**两段式**的
- * (父目录 inode + 一个名字), 且 inode 是**瞬态**的(SD-3)。于是本文件是那层翻译:
+ * ============================== what this file is ==============================
+ * Upstream EROFS is **path style** (u-boot's fs layer hands it a path string and it
+ * walks it), while brickOS's VFS (`framework/vfs-core/include/br/vfs/br_vfs.h`) is
+ * **two-part** (parent dir inode + a name), and inodes are **transient** (SD-3).
+ * So this file is that translation layer:
  *
- * 本文件 = 上游 `fs/erofs/fs.c` 的对应物, 分成两节:
- *   ① **块层 shim**(`uboot_erofs_bdev_bind/dev_read/blk_read`): 把 u-boot 的
- *      `blk_desc`/`fs_devread` 换成 `br_bdev_ops_t`, 并把"字节偏移"折成"扇区 + 块内偏移";
- *   ② **VFS 对接**: 四层 ops 表 + 生命周期钩子。
+ * this file = counterpart of upstream `fs/erofs/fs.c`, split into two sections:
+ *   ① **block-layer shim** (`uboot_erofs_bdev_bind/dev_read/blk_read`): replace
+ *      u-boot's `blk_desc`/`fs_devread` with `br_bdev_ops_t`, and fold "byte offset"
+ *      into "sector + in-block offset";
+ *   ② **VFS glue**: four layers of ops tables + lifecycle hooks.
  *
- *   VFS 契约                              本文件                  上游 EROFS
+ *   VFS contract                          this file             upstream EROFS
  *   ---------------------------------------------------------------------------
- *   br_fs_ops.mount                       挂载 + 造根 inode       erofs_read_superblock()
- *                                                                 + erofs_ilookup("")
- *   br_inode_ops.lookup(dir, name)        路径片段 → 相对路径     erofs_ilookup(path)
- *   br_inode_ops.getattr(ino)             size/type               (inode 里的字段)
- *   br_file_ops.read(f, buf, n)           offset + pread          erofs_pread()
- *   br_file_ops(目录).read                (块号, 序号) → dirent   erofs_readdir 的块内解析
- *   create/unlink/mkdir/rmdir/rename/…    **一律 -EROFS**(只读 FS)
+ *   br_fs_ops.mount                       mount + build root inode erofs_read_superblock()
+ *                                                               + erofs_ilookup("")
+ *   br_inode_ops.lookup(dir, name)        path segment → rel path erofs_ilookup(path)
+ *   br_inode_ops.getattr(ino)             size/type              (fields in the inode)
+ *   br_file_ops.read(f, buf, n)           offset + pread         erofs_pread()
+ *   br_file_ops(dir).read                 (block, index) → dirent in-block erofs_readdir
+ *   create/unlink/mkdir/rmdir/rename/…    **always -EROFS** (read-only FS)
  *
- * ## inode = 瞬态路径包装(设计 SD-3)
- *   每次 `lookup` 用 `br_malloc` 造一个节点, 里面放:
- *     - `path`: **相对挂载点**的路径(根 = 空串)。为什么不放 nid 就够? —— 上游的入口
- *       `erofs_ilookup(path, &vi)` 只认路径, 而 vfs 只会告诉我们"父 inode + 名字"
- *       (父 inode 自己也只有路径) ⇒ 拼前缀是唯一不需要再实现一份走查的做法。
- *       代价: 每次 lookup 都要从根重走一遍(EROFS 的目录块是排序的, 但本件照上游
- *       线性扫描)。在 v1 的单 APP 规模下可接受; 登记为 README 的欠债。
- *     - `vi`: **当次**解析出来的 `struct erofs_inode`(EROFS 是只读的, inode 内容不会
- *       在两次读之间改变, 所以把它随包装一起存下来是安全的 —— 省掉每次 read 的重复解析)。
- *   所有权规则(照 tmpfs 的读法, 但结论相反):
- *     - `mount` 交出的**根 inode**由挂载表长期持有, **永不**交给 `free_inode`
- *       (它同样是 `br_malloc` 出来的, 只是没人还);
- *     - 其余每一个都是瞬态 ⇒ `free_inode` 必须 `br_free`(不然走查一次泄漏一个)。
+ * ## inode = transient path wrapper (design SD-3)
+ *   Every `lookup` allocates a node with `br_malloc`, holding:
+ *     - `path`: path **relative to the mount point** (root = empty string). Why not
+ *       just store an nid? Because upstream entry `erofs_ilookup(path, &vi)` only
+ *       accepts paths, and the vfs only tells us "parent inode + name" (the parent
+ *       inode itself only has a path) ⇒ concatenating the prefix is the only option
+ *       that avoids a second tree walk. Cost: every lookup re-walks from the root
+ *       (EROFS dir blocks are sorted, but this file scans linearly like upstream).
+ *       Acceptable at v1 single-APP scale; recorded as README debt.
+ *     - `vi`: the `struct erofs_inode` parsed **this time** (EROFS is read-only, so
+ *       inode contents cannot change between reads; caching it with the wrapper is
+ *       safe — it saves re-parsing on every read).
+ *   Ownership rules (read like tmpfs, opposite conclusion):
+ *     - the **root inode** handed out by `mount` is held by the mount table forever,
+ *       **never** passed to `free_inode` (it too comes from `br_malloc`, just nobody
+ *       returns it);
+ *     - every other node is transient ⇒ `free_inode` must `br_free` (else each walk
+ *       leaks one).
  *
- * ## 只读执法
- *   任务书的硬性口径: 名字空间变更槽位**也要填**, 但一律返回 `BR_ERR(EROFS)` ——
- *   这比 vfs 对空槽位给的 -ENOTSUP 更准(EROFS 不是"不支持", 是"只读")。
- *   同理 `br_file_ops.write` 与"写权限打开"(`br_open(path, BR_O_WRONLY)`)都报 -EROFS:
- *   vfs 的 `open` 不替 FS 判访问模式(只读 fd 能不能写是 fd 层的事), 所以
- *   `TC-EROFS-007` 要的"写打开必须失败"这条判据落在本文件的 `uboot_erofs_file_open` 里。
+ * ## read-only enforcement
+ *   Hard requirement of the task: the namespace-mutation slots **must be filled**,
+ *   but always return `BR_ERR(EROFS)` — more accurate than the -ENOTSUP the vfs
+ *   gives for empty slots (EROFS is not "unsupported", it is "read-only").
+ *   Likewise `br_file_ops.write` and "open for write" (`br_open(path, BR_O_WRONLY)`)
+ *   both report -EROFS: the vfs `open` does not judge access mode for the FS
+ *   (whether a read-only fd may write is the fd layer's business), so the
+ *   `TC-EROFS-007` criterion "write-open must fail" lands in this file's
+ *   `uboot_erofs_file_open`.
  *
- * ## 名字上界(本仓库 BR_NAME_MAX = 32, EROFS 是 255)
- *   `br_dirent_t.name[32]` 装不下 32 字节及以上的名字 ⇒ 目录面上**跳过并计数**
- *   (日志打一次总数), `lookup` 上超长返回 `-ENOSPC`(vfs 的 `resolve_norm` 对超长分量
- *   给的也是 -ENOSPC, 口径一致; 见 README 的取舍说明)。
+ * ## name upper bound (this repo BR_NAME_MAX = 32, EROFS is 255)
+ *   `br_dirent_t.name[32]` cannot hold names of 32 bytes or more ⇒ on the directory
+ *   face **skip and count** (log the total once); in `lookup` over-long names return
+ *   `-ENOSPC` (the vfs `resolve_norm` also gives -ENOSPC for an over-long component,
+ *   consistent; see the README trade-off note).
  * ==========================================================================
  */
 #include <br/core/br_error.h>
@@ -54,137 +65,160 @@
 #include <br/dev/br_bdev.h>
 #include <br/vfs/br_vfs.h>
 
-#include "internal.h"        /* 上游 fs/erofs/internal.h(原样编译) */
+#include "internal.h"        /* upstream fs/erofs/internal.h (compiled as-is) */
 #include "erofs_glue.h"
 
 /*
- * ★ `struct erofs_sb_info sbi` —— 上游把它的**存储**放在 `fs/erofs/fs.c` 里
- *   (`struct erofs_sb_info sbi;` 那一行, 见 third_party/.../fs/erofs/fs.c:5), 而
- *   `fs.c` 是 u-boot 的 **blk/DM 胶水层**(它认识 `struct blk_desc`/`fs_devread`),
- *   本插件不编译它 —— 它的职责(块层 + 目录流)由本文件接管。
- *   ⇒ 全局 `sbi` 的存储由**适配层**提供(上游 `internal.h` 已经 `extern` 它)。
- *   这是"适配"的典型形态: 上游缺的那块环境由我们补, 上游的代码一个字不改。
+ * ★ `struct erofs_sb_info sbi` —— upstream keeps its **storage** in `fs/erofs/fs.c`
+ *   (the `struct erofs_sb_info sbi;` line, see third_party/.../fs/erofs/fs.c:5), and
+ *   `fs.c` is u-boot's **blk/DM glue layer** (it knows `struct blk_desc`/
+ *   `fs_devread`); this plugin does not compile it — its job (block layer + dir
+ *   stream) is taken over by this file.
+ *   ⇒ the storage for the global `sbi` is provided by the **adapter layer**
+ *   (upstream `internal.h` already `extern`s it). This is the typical shape of
+ *   "adaptation": we supply the missing environment, upstream code stays untouched.
  */
-struct erofs_sb_info sbi;      /* 适配层内部契约(本项目的声明) */
+struct erofs_sb_info sbi;      /* adapter-internal contract (declared by this project) */
 
 /*
- * ★ 盘上布局的**编译期自检** —— 在适配层做, 而不是去实例化上游那个函数。
+ * ★ **compile-time self-check** of the on-disk layout — done in the adapter layer
+ *   rather than instantiating that upstream function.
  *
- * 上游 `erofs_fs.h` 末尾有个 `static inline erofs_check_ondisk_layout_definitions()`,
- * 里面是一串 `BUILD_BUG_ON(sizeof(struct …) != N)`。但**上游自己从不调用它**
- * (全树 grep 只有定义处) ⇒ `static inline` 无调用者时 GCC 不实例化 ⇒ 那些
- * `__compiletime_error` 永远不会被诊断, **上游这份自检实际是死的**(ADR-0024 §7)。
+ * Upstream `erofs_fs.h` ends with a `static inline erofs_check_ondisk_layout_definitions()`
+ * holding a series of `BUILD_BUG_ON(sizeof(struct …) != N)`. But **upstream never
+ * calls it** (tree-wide grep finds only the definition) ⇒ GCC does not instantiate
+ * an uncalled `static inline` ⇒ those `__compiletime_error`s are never diagnosed,
+ * so **upstream's self-check is effectively dead** (ADR-0024 §7).
  *
- * 本插件早先把这张表改写成文件域的 `_Static_assert`(一定求值)⇒ 反而**更强**。
- * 本刀要求 `src/erofs_fs.h` 与上游**逐字相同**, 所以不能再用那个改写; 但也不能把
- * 布局保证丢掉 ⇒ 把它挪到这里(**本项目代码**, 三方件那边一个字没动)。
+ * This plugin earlier rewrote that table into file-scope `_Static_assert`s (always
+ * evaluated) ⇒ strictly **stronger**. This change requires `src/erofs_fs.h` to be
+ * **byte-identical** to upstream, so that rewrite can no longer be used; but the
+ * layout guarantee must not be dropped ⇒ move it here (**this project's code**;
+ * the third_party tree is untouched).
  *
- * 为什么不"取上游函数的地址强制实例化": 试过, 能激活断言, 但上游那句
+ * Why not "take the address of the upstream function to force instantiation": tried
+ * it, it does activate the assertions, but the upstream line
  *   `const __le64 fmh __maybe_unused = *(__le64 *)&(struct …){…};`
- * 在本项目的 `-Wall -Wextra -Werror` 下会报 `-Wuninitialized` —— 为了编过一句话
- * 就得在本文件里压制告警, 那比在这里重述尺寸更坏。尺寸就是**判据**, 重述它是正当的。
+ * trips `-Wuninitialized` under this project's `-Wall -Wextra -Werror` — silencing
+ * a warning in this file just to compile one statement is worse than restating the
+ * sizes here. Sizes are the **criterion**; restating them is legitimate.
  *
- * 判据(负例见 ADR-0024 §7): 把任一 `== N` 改错 ⇒ 编译立刻失败。
+ * Criterion (negative case in ADR-0024 §7): break any `== N` ⇒ the build fails at once.
  */
-_Static_assert(sizeof(struct erofs_super_block) == 128u, "on-disk: super_block 必须 128 B");
-_Static_assert(sizeof(struct erofs_inode_compact) == 32u, "on-disk: compact inode 必须 32 B");
-_Static_assert(sizeof(struct erofs_inode_extended) == 64u, "on-disk: extended inode 必须 64 B");
-_Static_assert(sizeof(struct erofs_xattr_ibody_header) == 12u, "on-disk: xattr ibody 头必须 12 B");
-_Static_assert(sizeof(struct erofs_xattr_entry) == 4u, "on-disk: xattr entry 必须 4 B");
-_Static_assert(sizeof(struct erofs_inode_chunk_info) == 4u, "on-disk: chunk_info 必须 4 B");
-_Static_assert(sizeof(struct erofs_inode_chunk_index) == 8u, "on-disk: chunk_index 必须 8 B");
-_Static_assert(sizeof(struct z_erofs_map_header) == 8u, "on-disk: map_header 必须 8 B");
-_Static_assert(sizeof(struct z_erofs_lcluster_index) == 8u, "on-disk: lcluster_index 必须 8 B");
-_Static_assert(sizeof(struct erofs_dirent) == 12u, "on-disk: dirent 必须 12 B");
-_Static_assert(sizeof(struct erofs_deviceslot) == 128u, "on-disk: deviceslot 必须 128 B");
-/* keep in sync between 2 index structures for better extendibility(上游原话) */
+_Static_assert(sizeof(struct erofs_super_block) == 128u, "on-disk: super_block must be 128 B");
+_Static_assert(sizeof(struct erofs_inode_compact) == 32u, "on-disk: compact inode must be 32 B");
+_Static_assert(sizeof(struct erofs_inode_extended) == 64u, "on-disk: extended inode must be 64 B");
+_Static_assert(sizeof(struct erofs_xattr_ibody_header) == 12u, "on-disk: xattr ibody header must be 12 B");
+_Static_assert(sizeof(struct erofs_xattr_entry) == 4u, "on-disk: xattr entry must be 4 B");
+_Static_assert(sizeof(struct erofs_inode_chunk_info) == 4u, "on-disk: chunk_info must be 4 B");
+_Static_assert(sizeof(struct erofs_inode_chunk_index) == 8u, "on-disk: chunk_index must be 8 B");
+_Static_assert(sizeof(struct z_erofs_map_header) == 8u, "on-disk: map_header must be 8 B");
+_Static_assert(sizeof(struct z_erofs_lcluster_index) == 8u, "on-disk: lcluster_index must be 8 B");
+_Static_assert(sizeof(struct erofs_dirent) == 12u, "on-disk: dirent must be 12 B");
+_Static_assert(sizeof(struct erofs_deviceslot) == 128u, "on-disk: deviceslot must be 128 B");
+/* keep in sync between 2 index structures for better extendibility (upstream words) */
 _Static_assert(sizeof(struct erofs_inode_chunk_index) ==
-               sizeof(struct z_erofs_lcluster_index), "on-disk: 两种 index 结构必须同尺寸");
+               sizeof(struct z_erofs_lcluster_index), "on-disk: both index structs must match");
 
-/* 生命周期钩子原型(名 = symbol_prefix + 相; 生成物 plugin_desc.c 引用)。
- * 本插件**不导出任何 API** ⇒ 除这三个 + 自检钩子外, 本文件其余函数全是 static。 */
+/* Lifecycle hook prototypes (name = symbol_prefix + phase; referenced by the
+ * generated plugin_desc.c). This plugin **exports no API** ⇒ besides these three
+ * plus the self-test hook, every function in this file is static. */
 int uboot_erofs_early_init(void);
 int uboot_erofs_init(void);
 int uboot_erofs_start(void);
 
 
 /* =====================================================================
- * 块层 shim(移植自上游 fs.c 的 `erofs_dev_read()` / `erofs_blk_read()`)
+ * block-layer shim (ported from upstream fs.c `erofs_dev_read()` / `erofs_blk_read()`)
  *
- * ============================== 这一节解决什么 ==============================
- * EROFS 内部**全部按字节偏移寻址**(`off`), 而 brickOS 的块设备契约
- * (`framework/bdev-core/include/br/dev/br_bdev.h`)按**扇区**寻址:
+ * ============================== what this section solves ==============================
+ * EROFS internally addresses **everything by byte offset** (`off`), while brickOS's
+ * block-device contract (`framework/bdev-core/include/br/dev/br_bdev.h`) addresses
+ * by **sector**:
  *
  *     sector     = off / sector_size
  *     sector_off = off % sector_size
  *
- * 上游把这件事写成 `fs/erofs/fs.c` 的 `erofs_dev_read()`(它认识 u-boot 的
- * `struct blk_desc` 与 `disk_partition`, 用 `fs_devread()` 做"偏移 + 长度"的读)。
- * 本件保留**同名同义的函数**, 只把介质接口换成 `br_bdev_ops_t`:
+ * Upstream writes this in `fs/erofs/fs.c`'s `erofs_dev_read()` (it knows u-boot's
+ * `struct blk_desc` and `disk_partition` and uses `fs_devread()` for "offset +
+ * length" reads). This file keeps **functions of the same name and meaning**, only
+ * swapping the medium interface for `br_bdev_ops_t`:
  *
- *   u-boot 侧                                  brickOS 侧
+ *   u-boot side                                brickOS side
  *   ---------------------------------------------------------------------------
- *   ctxt.cur_dev + cur_part_info               br_bdev_get("emmc3", &priv) 一次
- *   fs_devread(dev, part, sect, off, len, buf) 逐扇区 ops->read(priv, lba, buf, 1)
- *   log2blksz / blksz                          geometry.sector_size(512)
+ *   ctxt.cur_dev + cur_part_info               br_bdev_get("emmc3", &priv) once
+ *   fs_devread(dev, part, sect, off, len, buf) per-sector ops->read(priv, lba, buf, 1)
+ *   log2blksz / blksz                          geometry.sector_size (512)
  *
- * ★ 为什么在 `erofs_vfs.c` 里而不是单独一件: 上游的 `fs.c` 一半是块层、一半是
- *   u-boot 的 fs 层粘合; 两半在本项目里都归"与外界对接", 合在一件里读起来仍是
- *   `fs.c` 的对应物(`super.c`/`namei.c`/`data.c`/`zmap.c`/`decompress.c` 才是纯 EROFS)。
+ * ★ Why in `erofs_vfs.c` and not a separate unit: upstream `fs.c` is half block layer,
+ *   half u-boot fs-layer glue; both halves are "interface with the outside world"
+ *   here, and together they still read as the counterpart of `fs.c` (`super.c`/
+ *   `namei.c`/`data.c`/`zmap.c`/`decompress.c` are the pure EROFS parts).
  *
- * ## 为什么逐扇区下发(而不是"一次多扇区")
- *   任务书的硬约束是"单次 I/O 不超过 `geometry.max_rw`"(本平台 = 64 扇区 = 32 KiB)。
- *   逐扇区是**最强**的满足方式(每次 1 扇区, 恒 ≤ max_rw), 而且顺带把"缓冲区对齐"
- *   这件事也解决了: 每次只落到调用方缓冲里的一个扇区位置, 只要调用方的缓冲至少按
- *   扇区对齐即可(`-mstrict-align` 下未对齐的多字节访问会取 Alignment fault)。
- *   代价是命令变多 —— 本插件读的是只读镜像, 每条路径都按 4 KiB 块走(见 erofs_data.c),
- *   8 次 512 B 的读换一次 4 KiB 块的语义, 在原型阶段是可接受的取舍(记在 README 的欠债里)。
+ * ## why issue one sector at a time (rather than "many sectors at once")
+ *   The task's hard constraint is "a single I/O must not exceed `geometry.max_rw`"
+ *   (this platform = 64 sectors = 32 KiB). Per-sector is the **strongest** way to
+ *   satisfy it (1 sector each time, always ≤ max_rw), and it also solves buffer
+ *   alignment: each transfer lands at one sector position inside the caller's
+ *   buffer, so the caller's buffer only has to be sector-aligned (under
+ *   `-mstrict-align` an unaligned multi-byte access takes an Alignment fault).
+ *   The cost is more commands — this plugin reads a read-only image and every path
+ *   goes by 4 KiB blocks (see erofs_data.c), so 8 reads of 512 B per 4 KiB block is
+ *   an acceptable prototype-stage trade-off (recorded as README debt).
  *
- * ## 有意偏离(相对上游)
- *   1. `device_id` 参数**被忽略**: 多设备卷在挂载期就被拒(见 erofs_super.c 的
- *      `erofs_init_devices`), 所以到得了这里的一定是设备 0。保留形参是为了让 data.c 的
- *      `erofs_dev_read(mdev.m_deviceid, ...)` 调用点一字不改。
- *   2. 越界(offset/len 超出介质)⇒ `-EIO`。多设备被拒之后, "盘上块地址指向本设备之外"
- *      就一定是坏镜像 —— 这一条是最后的防线(否则坏 nid 会读出一块垃圾当 inode)。
- *   3. **整扇区中转**(实测踩到): bdev 的 `read(lba, buf, 1)` 会把**512 字节**写进 `buf`,
- *      而 EROFS 要的是"偏移 + 长度"(可能是 32 字节的 inode、8 字节的映射头)。直接把
- *      调用方的缓冲交给设备 = 越界写 480 字节 ⇒ 必须先读进中转缓冲再按长度拷出。
- *      中转缓冲用共享 scratch 的**尾部**(最后一个扇区): EROFS 自己的解析全部发生在
- *      4 KiB 块内且满足 `offset % 4096 + len <= 4096`, 永远碰不到最后一个扇区。
+ * ## deliberate deviations (from upstream)
+ *   1. the `device_id` parameter is **ignored**: multi-device volumes are rejected at
+ *      mount (see `erofs_init_devices` in erofs_super.c), so anything reaching here is
+ *      device 0. Keeping the formal parameter leaves data.c's
+ *      `erofs_dev_read(mdev.m_deviceid, ...)` call site untouched.
+ *   2. out of range (offset/len beyond the medium) ⇒ `-EIO`. After multi-device is
+ *      rejected, "an on-disk block address points outside this device" must mean a
+ *      corrupt image — this is the last line of defence (otherwise a bad nid reads
+ *      garbage as an inode).
+ *   3. **whole-sector staging** (hit in practice): bdev's `read(lba, buf, 1)` writes
+ *      **512 bytes** into `buf`, while EROFS wants "offset + length" (maybe a 32-byte
+ *      inode, an 8-byte map header). Handing the caller's buffer straight to the
+ *      device = writing 480 bytes out of bounds ⇒ read into the staging buffer first,
+ *      then copy out the wanted range. The staging buffer uses the **tail** of the
+ *      shared scratch (the last sector): EROFS's own parsing always stays inside a
+ *      4 KiB block with `offset % 4096 + len <= 4096`, so it never touches the last
+ *      sector.
  * ===================================================================== */
 
-/* 挂载期绑定一次的设备事实(见 erofs_internal.h 的 br_erofs_dev_t)。
- * 非 static: 自检要经它读盘上字节做判据(只读地看几何, 不写任何字段)。 */
+/* Device facts bound once at mount (see br_erofs_dev_t in erofs_internal.h).
+ * Non-static: the self-test reads on-disk bytes through it as a criterion (reads the
+ * geometry only, writes no field). */
 br_erofs_dev_t uboot_erofs_dev;
 
-/* ★ ADR-0030: 介质名由**调用方**给(APP 的 `mount(source, ...)` 传进来, 经 `cfg->dev`),
- * 不再写死 `BR_EROFS_DEV_NAME` —— 于是"挂哪块卡上的 EROFS"是 APP 的决定, 不是本件的常量。 */
+/* ★ ADR-0030: the medium name comes from the **caller** (passed by the APP's
+ * `mount(source, ...)` via `cfg->dev`), no longer hard-coded `BR_EROFS_DEV_NAME` —
+ * so "which card's EROFS to mount" is the APP's decision, not this file's constant. */
 int uboot_erofs_bdev_bind(const char *dev_name)
 {
     void *priv = BR_NULL;
 
     if (dev_name == BR_NULL) {
-        br_log_error("uboot-erofs: mount 未给源设备(cfg->dev 为空)");
+        br_log_error("uboot-erofs: mount has no source device (cfg->dev is null)");
         return BR_ERR(EINVAL);
     }
     const br_bdev_ops_t *ops = br_bdev_get(dev_name, &priv);
     if ((ops == BR_NULL) || (priv == BR_NULL)) {
-        br_log_error("uboot-erofs: 找不到块设备 %s", dev_name);
+        br_log_error("uboot-erofs: block device %s not found", dev_name);
         return BR_ERR(ENODEV);
     }
     if ((ops->read == BR_NULL) || (ops->geometry == BR_NULL)) {
-        br_log_error("uboot-erofs: %s 的 bdev ops 缺 read/geometry 槽位", dev_name);
+        br_log_error("uboot-erofs: %s bdev ops lacks read/geometry slot", dev_name);
         return BR_ERR(EINVAL);
     }
 
     br_bdev_geom_t g;
     const int grc = ops->geometry(priv, &g);
     if (grc != 0) {
-        br_log_error("uboot-erofs: %s geometry() 失败 rc=%d", dev_name, grc);
+        br_log_error("uboot-erofs: %s geometry() failed rc=%d", dev_name, grc);
         return grc;
     }
     if ((g.sector_size == 0u) || (g.n_sectors == 0u) || (g.max_rw == 0u)) {
-        br_log_error("uboot-erofs: %s 几何非法(sector=%u n=%llu max_rw=%u)",
+        br_log_error("uboot-erofs: %s bad geometry (sector=%u n=%llu max_rw=%u)",
                      dev_name, (unsigned)g.sector_size,
                      (unsigned long long)g.n_sectors, (unsigned)g.max_rw);
         return BR_ERR(EINVAL);
@@ -204,11 +238,11 @@ int erofs_dev_read(int device_id, void *buf, u64 offset, size_t len)
     br_u8 *p = (br_u8 *)buf;
     u64    off;
 
-    /* 偏离 1: 见文件头。到得了这里的一定是设备 0。 */
+    /* deviation 1: see file header. Anything reaching here is device 0. */
     (void)device_id;
 
     if (uboot_erofs_dev.ops == BR_NULL) {
-        return BR_ERR(EIO);                 /* 没绑定就读: FS 侧时序错误 */
+        return BR_ERR(EIO);                 /* read before bind: FS-side ordering bug */
     }
     if ((buf == BR_NULL) && (len != 0u)) {
         return BR_ERR(EINVAL);
@@ -218,16 +252,20 @@ int erofs_dev_read(int device_id, void *buf, u64 offset, size_t len)
     }
 
     /*
-     * ★ 关键的一步(实测踩到): bdev 的 `read(lba, buf, 1)` 是**整扇区**语义 ——
-     *   它会把 512 字节写进 `buf`。而 EROFS 要的是"偏移 + 长度"(可能是 32 字节的
-     *   inode、8 字节的映射头)。直接把调用方的缓冲交给设备 = **越界写 480 字节**。
-     *   所以这里必须"整扇区读进中转缓冲, 再把要的那一段拷出去"。
+     * ★ the crucial step (hit in practice): bdev's `read(lba, buf, 1)` has
+     *   **whole-sector** semantics — it writes 512 bytes into `buf`. EROFS wants
+     *   "offset + length" (maybe a 32-byte inode, an 8-byte map header). Handing the
+     *   caller's buffer to the device = **writing 480 bytes out of bounds**. So we
+     *   must "read a whole sector into the staging buffer, then copy out the range".
      *
-     * 中转缓冲用共享 scratch 的**尾部**(最后一个扇区): EROFS 自己的解析全都发生在
-     * 4 KiB 块内且满足 `offset % 4096 + len <= 4096`, 永远碰不到最后一个扇区; 而
-     * `erofs_blk_read()` 一次读整块时, 中转缓冲落在目标块内部, 拷回同一位置也无害
-     * (`in_sec == 0` 时源与目的重合, memcpy 允许——两块都不重叠出界)。
-     * 对齐用 u32 视图取得(DMA 通路要求 ≥ 4 字节对齐)。
+     * The staging buffer uses the **tail** of the shared scratch (the last sector):
+     * all EROFS parsing happens inside a 4 KiB block with
+     * `offset % 4096 + len <= 4096`, so it never touches the last sector; and when
+     * `erofs_blk_read()` reads a whole block at once the staging buffer lies inside
+     * the target block, where copying back to the same place is harmless
+     * (`in_sec == 0` means source and destination coincide, which memcpy allows —
+     * both stay in bounds). Alignment comes from the u32 view (the DMA path needs
+     * ≥ 4-byte alignment).
      */
     br_u8 *stage = (br_u8 *)(void *)((br_u32 *)(void *)uboot_erofs_scratch() +
                                      (EROFS_MAX_BLOCK_SIZE / 4u) - (512u / 4u));
@@ -240,7 +278,7 @@ int erofs_dev_read(int device_id, void *buf, u64 offset, size_t len)
         br_size_t    cnt         = (br_size_t)((br_u64)uboot_erofs_dev.sector_size - (br_u64)in_sec);
 
         if (lba >= uboot_erofs_dev.n_sectors) {
-            br_log_error("uboot-erofs: 读越界 off=0x%llx len=%llu (> %llu 字节介质)",
+            br_log_error("uboot-erofs: read past end off=0x%llx len=%llu (> %llu byte medium)",
                          (unsigned long long)offset, (unsigned long long)len,
                          (unsigned long long)media_bytes);
             return BR_ERR(EIO);
@@ -251,14 +289,15 @@ int erofs_dev_read(int device_id, void *buf, u64 offset, size_t len)
 
         const int rc = uboot_erofs_dev.ops->read(uboot_erofs_dev.priv, lba, stage, 1u);
         if (rc < 0) {
-            /* ★ 有意偏离: EROFS 的块层错误在 errno 表里只有 -EIO(上游同样把一切读失败
-             *   收成 -EIO)。保留上游的码, 但把设备的真实返回值打进日志 —— 排障要它。 */
-            br_log_error("uboot-erofs: bdev read 失败 lba=%llu rc=%d",
+            /* ★ deliberate deviation: EROFS's block-layer error table has only -EIO
+             *   (upstream likewise collapses every read failure to -EIO). Keep the
+             *   upstream code but log the device's real return value — debugging needs it. */
+            br_log_error("uboot-erofs: bdev read failed lba=%llu rc=%d",
                          (unsigned long long)lba, rc);
             return BR_ERR(EIO);
         }
         if (rc != 1) {
-            br_log_error("uboot-erofs: bdev 短读 lba=%llu rc=%d(短读是坏介质)",
+            br_log_error("uboot-erofs: bdev short read lba=%llu rc=%d (short read = bad medium)",
                          (unsigned long long)lba, rc);
             return BR_ERR(EIO);
         }
@@ -277,11 +316,12 @@ int erofs_blk_read(void *buf, erofs_blk_t start, u32 nblocks)
 }
 
 /*
- * 共享的 4 KiB scratch(见 erofs_internal.h 的"共享静态缓冲")。
- * ★ 为什么是 static 而不是栈: 内核给 APP 线程的栈是 4 KiB 量级, 一个 4 KiB 数组放栈上
- *   就把栈用光了(上游在 namei.c 的 `erofs_namei()` 里正是这么写的)。
- * `s_scratch` 只按 `u32` 对齐即可(我们从不把它当 64 位对象用; 所有多字节访问都走
- * `__builtin_memcpy` 或 `__le32*`)。
+ * Shared 4 KiB scratch (see "shared static buffers" in erofs_internal.h).
+ * ★ Why static and not on the stack: the kernel gives APP threads a stack on the
+ *   order of 4 KiB, so a 4 KiB array on the stack exhausts it (upstream does exactly
+ *   that in namei.c's `erofs_namei()`).
+ * `s_scratch` only needs `u32` alignment (we never use it as a 64-bit object; all
+ * multi-byte accesses go through `__builtin_memcpy` or `__le32*`).
  */
 static br_u32 s_scratch_words[EROFS_MAX_BLOCK_SIZE / 4u];
 
@@ -291,22 +331,24 @@ u8 *uboot_erofs_scratch(void)
 }
 
 /* =====================================================================
- * 瞬态 inode(公共头 + 私有尾; CA-2)
+ * transient inodes (common head + private tail; CA-2)
  * ===================================================================== */
 
 /*
- * ★ 为什么 `path` 是"相对挂载点的路径"而不是绝对路径: 挂载点是**两处真值**
- *   (plugin.toml 的 `[[mount]].path` 与 erofs_internal.h 的 BR_EROFS_MOUNT_PATH),
- *   而 `erofs_ilookup()` 的走查从卷根开始 —— 卷内的名字空间与"挂在哪个绝对路径下"
- *   无关。相对路径让"换个挂载点"这件事不需要改任何一行拼路径的代码。
+ * ★ Why `path` is "path relative to the mount point" and not absolute: the mount
+ *   point is **two sources of truth** (brick.toml's `[[mount]].path` and
+ *   erofs_internal.h's BR_EROFS_MOUNT_PATH), while `erofs_ilookup()` walks from the
+ *   volume root — the in-volume namespace is independent of "which absolute path it
+ *   is mounted under". Relative paths mean "change the mount point" needs no change
+ *   to any path-building code.
  */
 typedef struct uboot_erofs_ino {
-    br_inode_t         head;                          /* 公共头(必须首字段) */
-    struct erofs_inode vi;                            /* 当次解析出的 EROFS inode */
-    char               path[UBOOT_EROFS_REL_PATH_MAX]; /* 相对挂载点; 根 = "" */
+    br_inode_t         head;                          /* common head (must be first field) */
+    struct erofs_inode vi;                            /* EROFS inode parsed this time */
+    char               path[UBOOT_EROFS_REL_PATH_MAX]; /* relative to mount point; root = "" */
 } uboot_erofs_ino_t;
 
-/* 节点身份(与 fs/tmpfs 同款): 用 head.fpriv, 不引入额外的跨插件符号 */
+/* Node identity (same style as fs/tmpfs): use head.fpriv, no extra cross-plugin symbol */
 static uboot_erofs_ino_t *uboot_erofs_wrap(const br_inode_t *ino)
 {
     return (uboot_erofs_ino_t *)(void *)ino->fpriv;
@@ -318,33 +360,40 @@ static uboot_erofs_ino_t *uboot_erofs_session(br_file_t *f)
 }
 
 /*
- * 目录迭代器(挂在**文件句柄**的 fpriv 上, 不动 inode 的 fpriv —— 同一个目录可以
- * 被同时打开多次迭代)。生命周期: dir_open 分配 / dir_close 释放。
+ * Directory iterator (kept on the **file handle**'s fpriv, not the inode's fpriv —
+ * the same directory can be opened for iteration many times at once). Lifetime:
+ * dir_open allocates / dir_close frees.
  *
- * 块级缓存: EROFS 的目录数据是"每 4 KiB 一块, 块头是 dirent 数组, 块尾是名字区"。
- *   `blk`  = 当前已载入 `s_dir_blk` 的块号(相对目录文件开头, 以 4 KiB 为单位)
- *   `de_end` = 该块里 dirent 数组的结束偏移(块首 dirent 的 nameoff)
- *   `max`  = 该块的有效字节数(最后一块可能更短)
- * `pos` 是**目录文件内**的字节偏移, 也就是"下一条 dirent 在哪儿"。
+ * Block-level cache: EROFS directory data is "one 4 KiB block each, block head is a
+ * dirent array, block tail is the name area".
+ *   `blk`  = number of the block currently loaded in `s_dir_blk` (relative to the
+ *            start of the directory file, in 4 KiB units)
+ *   `de_end` = end offset of the dirent array in that block (nameoff of the first dirent)
+ *   `max`  = valid byte count of that block (the last block may be shorter)
+ * `pos` is the byte offset **within the directory file**, i.e. "where the next
+ * dirent is".
  */
 #define UBOOT_EROFS_DIR_NO_BLK  ((br_u32)-1)
 
 typedef struct uboot_erofs_dir_iter {
-    uboot_erofs_ino_t *ino;         /* 被枚举的目录(借用; vfs 持有它) */
-    erofs_off_t        pos;         /* 目录文件内偏移(下一条 dirent) */
-    br_u32             cursor;      /* 0 = ".", 1 = "..", ≥2 = 目录块里的第 (cursor-2) 条 */
-    br_u32             blk;         /* 已载入 s_dir_blk 的块号; UBOOT_EROFS_DIR_NO_BLK = 无 */
-    br_u32             de_end;      /* 已载入块的 dirent 数组结束偏移(= 名字区起点) */
-    br_u32             max;         /* 已载入块的有效字节数 */
-    br_u32             skipped;     /* 本目录里因名字超 BR_NAME_MAX 被跳过的条数 */
+    uboot_erofs_ino_t *ino;         /* directory being enumerated (borrowed; vfs holds it) */
+    erofs_off_t        pos;         /* offset within dir file (next dirent) */
+    br_u32             cursor;      /* 0 = ".", 1 = "..", ≥2 = entry (cursor-2) of the dir block */
+    br_u32             blk;         /* block loaded in s_dir_blk; UBOOT_EROFS_DIR_NO_BLK = none */
+    br_u32             de_end;      /* dirent array end offset of loaded block (= name area start) */
+    br_u32             max;         /* valid byte count of loaded block */
+    br_u32             skipped;     /* entries skipped in this dir for names over BR_NAME_MAX */
 } uboot_erofs_dir_iter_t;
 
 /*
- * ★ 目录块缓冲: 与"共享 scratch"**分开**的一份静态 4 KiB。
- *   为什么不借共享 scratch: 目录读的流程是"读一块目录数据 → 在块内解析若干条 dirent",
- *   而"读一块目录数据"本身走 `erofs_pread()` —— 它内部会用共享 scratch 做映射/索引解析。
- *   一旦共用, 目录块的内容会被自己的映射读覆盖掉。分开之后两条路径互不干扰,
- *   代价是 4 KiB 静态(见 erofs_internal.h 的"栈纪律": 静态换栈是这里唯一的出路)。
+ * ★ directory block buffer: a static 4 KiB kept **separate** from the shared scratch.
+ *   Why not borrow the shared scratch: a directory read is "read one block of dir
+ *   data → parse several dirents inside it", and "read one block of dir data" itself
+ *   goes through `erofs_pread()` — which uses the shared scratch for map/index
+ *   parsing. Sharing them would let the dir block contents be overwritten by its own
+ *   map read. Kept apart, the two paths do not interfere; the cost is 4 KiB of static
+ *   data (see "stack discipline" in erofs_internal.h: trading static for stack is the
+ *   only way out here).
  */
 static br_u32 s_dir_blk_words[EROFS_MAX_BLOCK_SIZE / 4u];
 
@@ -354,7 +403,7 @@ static u8 *uboot_erofs_dir_blk(void)
 }
 
 /* =====================================================================
- * 类型翻译(EROFS 的 dirent 文件类型 ↔ brickOS 的 inode 类型)
+ * type translation (EROFS dirent file type ↔ brickOS inode type)
  * ===================================================================== */
 
 static br_u32 uboot_erofs_type_from_ftype(u8 ftype)
@@ -372,8 +421,9 @@ static br_u32 uboot_erofs_type_from_mode(umode_t mode)
     return uboot_erofs_type_from_ftype(uboot_erofs_ftype_from_mode(mode));
 }
 
-/* 私有尾入口(不用 br_inode_priv(): head 首字段的布局下两者同址, 但 fpriv 是 vfs 交给
- * 文件面的契约载体, 用它少一个跨插件符号 —— 与 fs/tmpfs 的取舍一致)。 */
+/* Private-tail entry (not br_inode_priv(): with head as the first field both are at
+ * the same address, but fpriv is the contract carrier the vfs hands to the file
+ * face; using it avoids one cross-plugin symbol — same trade-off as fs/tmpfs). */
 static uboot_erofs_ino_t *uboot_erofs_new(const struct erofs_inode *vi, const char *rel_path,
                                           const br_file_ops_t *fops)
 {
@@ -383,18 +433,19 @@ static uboot_erofs_ino_t *uboot_erofs_new(const struct erofs_inode *vi, const ch
         return BR_NULL;
     }
     n->head.type  = uboot_erofs_type_from_mode(vi->i_mode);
-    n->head.iops  = BR_NULL;              /* 由调用方决定(只有目录需要名字空间面) */
+    n->head.iops  = BR_NULL;              /* set by the caller (only dirs need the namespace face) */
     n->head.fops  = fops;
-    n->head.fpriv = n;                    /* 节点身份: vfs 在 open 时把它交给 br_file_t */
+    n->head.fpriv = n;                    /* node identity: the vfs hands it to br_file_t at open */
     n->vi         = *vi;
-    /* rel_path 是我们自己拼出来的 C 串; 按长度复制到这里(与盘上名字的纪律一致)。 */
+    /* rel_path is a C string we built ourselves; copy it by length (same discipline as on-disk names). */
     uboot_erofs_copy_n(n->path, (br_size_t)sizeof(n->path), rel_path,
                        uboot_erofs_strnlen(rel_path, (br_size_t)sizeof(n->path)));
     return n;
 }
 
-/* 相对路径拼接: 父 + '/' + 名字(父为空 ⇒ 就是名字本身)。返回 -ENOSPC 表示放不下。
- * 名字长度在上界内(调用方先查), 所以这里只需查**总长**。 */
+/* Relative path join: parent + '/' + name (empty parent ⇒ just the name). Returns
+ * -ENOSPC when it does not fit. The name length is already within bounds (the caller
+ * checks first), so only the **total length** is checked here. */
 static int uboot_erofs_join(char *dst, br_size_t cap, const char *parent, const char *name)
 {
     const br_size_t plen = uboot_erofs_strlen(parent);
@@ -407,8 +458,9 @@ static int uboot_erofs_join(char *dst, br_size_t cap, const char *parent, const 
     if (need > cap) {
         return BR_ERR(ENOSPC);
     }
-    /* 按**长度**拼, 不靠 TPL 的 "\0"(名字来自 vfs 的分量缓冲, 一定是 C 串; 但这里
-     * 统一用长度版, 免得将来有非 C 串的调用者踩到同一个坑)。 */
+    /* Join by **length**, not by relying on a TPL "\0" (names come from the vfs
+     * component buffer and are always C strings; but use the length version uniformly
+     * so a future non-C-string caller does not hit the same trap). */
     if (plen != 0u) {
         (void)__builtin_memcpy(dst, parent, plen);
         dst[plen] = '/';
@@ -422,7 +474,7 @@ static int uboot_erofs_join(char *dst, br_size_t cap, const char *parent, const 
 }
 
 /* =====================================================================
- * 层 3: 文件面
+ * layer 3: file face
  * ===================================================================== */
 
 static int uboot_erofs_file_open(br_file_t *f, br_u32 flags)
@@ -435,8 +487,9 @@ static int uboot_erofs_file_open(br_file_t *f, br_u32 flags)
     if (n->head.type == BR_INODE_DIR) {
         return BR_ERR(EISDIR);
     }
-    /* ★ 只读执法(见文件头): 写权限打开在**这里**就失败, 而不是等到第一次 write。
-     *   这样"打开一个只读卷上的文件要写"的调用方立刻拿到正确的 -EROFS。 */
+    /* ★ read-only enforcement (see file header): write-open fails **here**, not at
+     *   the first write. So a caller that opens a file on a read-only volume for
+     *   writing gets the correct -EROFS immediately. */
     if (BR_O_WRITABLE(flags) || ((flags & BR_O_TRUNC) != 0u) || ((flags & BR_O_CREAT) != 0u)) {
         return BR_ERR(EROFS);
     }
@@ -445,7 +498,8 @@ static int uboot_erofs_file_open(br_file_t *f, br_u32 flags)
 
 static br_s64 uboot_erofs_file_read(br_file_t *f, void *buf, br_size_t n)
 {
-    /* 名字取 `node` 而不是 `n`: 本函数的 `n` 是**要读多少字节**(契约签名如此)。 */
+    /* Named `node` rather than `n`: in this function `n` is **how many bytes to read**
+     * (the contract signature says so). */
     const uboot_erofs_ino_t *node = uboot_erofs_session(f);
     br_s64 off;
 
@@ -467,7 +521,7 @@ static br_s64 uboot_erofs_file_read(br_file_t *f, void *buf, br_size_t n)
         return BR_ERR(EINVAL);
     }
     if ((erofs_off_t)off >= node->vi.i_size) {
-        return 0;                          /* 读到/越过 EOF: 0 字节是**成功** */
+        return 0;                          /* at/past EOF: 0 bytes is **success** */
     }
 
     erofs_off_t want = node->vi.i_size - (erofs_off_t)off;
@@ -484,7 +538,7 @@ static br_s64 uboot_erofs_file_read(br_file_t *f, void *buf, br_size_t n)
     return (br_s64)want;
 }
 
-/* 只读: 写槽位填上(比空槽位更准), 但一律 -EROFS */
+/* read-only: fill the write slot (more accurate than an empty slot), always -EROFS */
 static br_s64 uboot_erofs_file_write(br_file_t *f, const void *buf, br_size_t n)
 {
     (void)f;
@@ -511,7 +565,8 @@ static br_s64 uboot_erofs_file_lseek(br_file_t *f, br_s64 off, int whence)
     if (base < 0) {
         return BR_ERR(EINVAL);
     }
-    /* 允许越过 EOF(POSIX): 之后读得 0。用内建判溢出, 免得有符号加溢出(UB)。 */
+    /* Allow seeking past EOF (POSIX): reads then return 0. Use the builtin to detect
+     * overflow so signed addition cannot overflow (UB). */
     if (__builtin_add_overflow(base, off, &pos) || (pos < 0)) {
         return BR_ERR(EINVAL);
     }
@@ -521,22 +576,24 @@ static br_s64 uboot_erofs_file_lseek(br_file_t *f, br_s64 off, int whence)
 
 static int uboot_erofs_file_close(br_file_t *f)
 {
-    /* 文件会话没有要归还的东西: fpriv 仍是节点(瞬态节点由 vfs 经 free_inode 释放)。
-     * 与目录面成对 —— 那里必须 br_free 迭代器。 */
+    /* A file session has nothing to give back: fpriv is still the node (transient
+     * nodes are freed by the vfs via free_inode). Pairs with the directory face —
+     * there the iterator must be br_free'd. */
     (void)f;
     return 0;
 }
 
 /* =====================================================================
- * 层 3: 目录面(read = 恰好一条 br_dirent_t)
+ * layer 3: directory face (read = exactly one br_dirent_t)
  * ===================================================================== */
 
 /*
- * 填一条定长目录项。
- * ★ 必须按 `name_len` **按长度**复制, 不能用"扫到 NUL 为止"的复制:
- *   EROFS 目录块里的名字是紧挨着拼起来的, **没有** NUL 结尾 —— 实测症状是第一条
- *   "comp" 会把后面所有名字一起吞进来("compdirhello.txtraw.bin")。
- *   整条先清零, 于是 `name[name_len..]` 全是 '\0'(不把上轮残留漏给调用方)。
+ * Fill one fixed-size directory entry.
+ * ★ Must copy **by length** using `name_len`, not by "scan until NUL": names inside
+ *   EROFS directory blocks are packed back to back with **no** NUL terminator — the
+ *   observed symptom was that the first entry "comp" swallowed every following name
+ *   ("compdirhello.txtraw.bin"). Zero the whole entry first, so `name[name_len..]` is
+ *   all '\0' (no stale bytes from a previous round leak to the caller).
  */
 static void uboot_erofs_dirent_fill(br_dirent_t *de, br_u32 type, const char *name,
                                     br_u32 name_len)
@@ -552,7 +609,7 @@ static int uboot_erofs_dir_open(br_file_t *f, br_u32 flags)
     uboot_erofs_ino_t *n = uboot_erofs_session(f);
     uboot_erofs_dir_iter_t *it;
 
-    (void)flags;    /* vfs 已在 br_open 里挡下"目录写打开 ⇒ -EISDIR" */
+    (void)flags;    /* the vfs already rejects "write-open of a dir ⇒ -EISDIR" in br_open */
     if ((n == BR_NULL) || (n->head.type != BR_INODE_DIR)) {
         return BR_ERR(ENOTSUP);
     }
@@ -573,17 +630,21 @@ static int uboot_erofs_dir_open(br_file_t *f, br_u32 flags)
 }
 
 /*
- * 载入 `blk` 号目录块(若它还没在缓冲里)。返回该块的有效字节数, 失败返回负 errno。
+ * Load directory block number `blk` (if not already buffered). Returns the block's
+ * valid byte count, or a negative errno on failure.
  *
- * ★ 目录块的布局(实测确认, 与上游 `fs.c` 的 `erofs_readdir()` 同一口径):
- *     [0, de_end)        : **连续的 dirent 数组**(12 字节一条, 按名字字节序排)
- *     [de_end, max)      : 名字区(顺序拼接; 每条 dirent 的 `nameoff` 指这里)
- *   `de_end` 就是**块首第一条 dirent 的 `nameoff`** —— 它不是"名字区起点"这一个含义,
- *   EROFS 用它表达"本块的 dirent 数组有多长"。于是块内解析非常直接:
- *     idx   = 块内偏移 / 12
- *     namelen = (下一条的 nameoff) - (本条 nameoff); 最后一条则扫到 NUL。
- *   (本件第一版把它误当成"数组起点偏移"而多减了一次, 症状是四条名字被拼成一条 ——
- *    这一条留在注释里, 因为它是"看起来对但差一个常数"的典型。)
+ * ★ directory block layout (confirmed in practice, same reading as upstream `fs.c`'s
+ *   `erofs_readdir()`):
+ *     [0, de_end)        : **contiguous dirent array** (12 bytes per entry, sorted by name bytes)
+ *     [de_end, max)      : name area (packed in order; each dirent's `nameoff` points here)
+ *   `de_end` is **the `nameoff` of the block's first dirent** — it does not just mean
+ *   "start of the name area", EROFS uses it to say "how long this block's dirent
+ *   array is". So in-block parsing is very direct:
+ *     idx   = in-block offset / 12
+ *     namelen = (next entry's nameoff) - (this entry's nameoff); the last one scans to NUL.
+ *   (This file's first version mistook it for an "array start offset" and subtracted
+ *    once too often, which packed four names into one — kept in the comment because it
+ *    is the classic "looks right but off by a constant" case.)
  */
 static int uboot_erofs_dir_load_block(uboot_erofs_dir_iter_t *it, br_u32 blk)
 {
@@ -595,7 +656,7 @@ static int uboot_erofs_dir_load_block(uboot_erofs_dir_iter_t *it, br_u32 blk)
     int rc;
 
     if ((it->blk == blk) && (it->max != 0u)) {
-        return (int)it->max;               /* 已在缓冲里 */
+        return (int)it->max;               /* already buffered */
     }
 
     want = n->vi.i_size - blk_off;
@@ -628,7 +689,8 @@ static int uboot_erofs_dir_load_block(uboot_erofs_dir_iter_t *it, br_u32 blk)
     return (int)it->max;
 }
 
-/* 第 `idx` 条(0 基, 相对本块)在块内的字节偏移; 越过数组尾返回 -1。 */
+/* Byte offset within the block of entry `idx` (0-based, relative to this block);
+ * past the end of the array returns -1. */
 static int uboot_erofs_dir_de_off(const uboot_erofs_dir_iter_t *it, br_u32 idx)
 {
     const br_u32 off = idx * (br_u32)sizeof(struct erofs_dirent);
@@ -647,13 +709,15 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
     if ((it == BR_NULL) || (it->ino == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
-    /* 定长记录不可截断: 装不下一条就 -EINVAL(返回 0 会被 br_readdir 读成"目录已穷尽",
-     * 返回半条会被判 -EIO 的 FS 违约)。vfs 恒传 sizeof(br_dirent_t)。 */
+    /* Fixed-size records cannot be truncated: not enough room for one entry ⇒ -EINVAL
+     * (returning 0 would be read by br_readdir as "directory exhausted"; returning
+     * half an entry would be an -EIO FS violation). The vfs always passes sizeof(br_dirent_t). */
     if ((buf == BR_NULL) || (n < (br_size_t)sizeof(br_dirent_t))) {
         return BR_ERR(EINVAL);
     }
 
-    /* "." 与 ".." 就地合成(EROFS 的目录块里**不含**这两条 —— 上游同样如此) */
+    /* "." and ".." are synthesized in place (EROFS dir blocks **do not** contain these
+     * two entries — upstream is the same) */
     if (it->cursor == 0u) {
         it->cursor = 1u;
         uboot_erofs_dirent_fill(de, BR_INODE_DIR, ".", 1u);
@@ -667,7 +731,7 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
 
     for (;;) {
         if (it->pos >= (erofs_off_t)it->ino->vi.i_size) {
-            break;                          /* 文件读完: 穷尽 */
+            break;                          /* file fully read: exhausted */
         }
 
         const br_u32 blk = (br_u32)((erofs_off_t)it->pos >> sbi.blkszbits);
@@ -677,16 +741,18 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
                 return m;
             }
             if (m == 0) {
-                it->pos = it->ino->vi.i_size;   /* 越过末块: 收敛 */
+                it->pos = it->ino->vi.i_size;   /* past the last block: converge */
                 break;
             }
         }
 
         const br_u32 in_blk = (br_u32)erofs_blkoff((erofs_off_t)it->pos);
 
-        /* ★ 块的 dirent 数组以**块首第一条的 nameoff** 为界(`de_end`):
-         *   - 本块里 `in_blk >= de_end` 的位置已经属于名字区(读下去是垃圾) ⇒ 跳下一块;
-         *   - 否则 `in_blk` 必然落在数组里(数组是 12 字节步进的)。 */
+        /* ★ the block's dirent array is bounded by **the first dirent's nameoff**
+         *   (`de_end`):
+         *   - `in_blk >= de_end` is already inside the name area (reading on yields
+         *     garbage) ⇒ skip to the next block;
+         *   - otherwise `in_blk` must land in the array (which advances by 12 bytes). */
         if ((in_blk + (br_u32)sizeof(struct erofs_dirent)) > it->de_end) {
             it->pos = (erofs_off_t)(blk + 1u) * (erofs_off_t)erofs_blksiz();
             it->blk = UBOOT_EROFS_DIR_NO_BLK;
@@ -702,7 +768,7 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
         const br_u32 type     = uboot_erofs_type_from_ftype(dent->file_type);
         br_u32       de_namelen;
 
-        /* 推进游标(无论这条是否被采纳) */
+        /* advance the cursor (whether or not this entry is accepted) */
         it->pos = (erofs_off_t)blk * (erofs_off_t)erofs_blksiz() +
                   (erofs_off_t)(in_blk + (br_u32)sizeof(struct erofs_dirent));
 
@@ -713,7 +779,7 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
         }
 
         if (next_off < 0) {
-            /* 本块最后一条: 名字扫到 NUL, 上界 = 该块有效字节数 */
+            /* last entry of the block: scan the name to NUL, bound = block valid bytes */
             de_namelen = (br_u32)uboot_erofs_strnlen(de_name,
                                                      (br_size_t)(it->max - nameoff));
         } else {
@@ -725,20 +791,21 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
             de_namelen = (next_nameoff > nameoff) ? (next_nameoff - nameoff) : 0u;
         }
 
-        /* 损坏的条目: 与上游同款判据 */
+        /* corrupt entry: same criterion as upstream */
         if ((nameoff + de_namelen > it->max) || (de_namelen > EROFS_DIRENT_MAX_NAME)) {
             erofs_err("bogus dirent @ nid %llu", (unsigned long long)it->ino->vi.nid);
             return BR_ERR(EIO);
         }
         if (de_namelen == 0u) {
-            continue;                       /* 空名字不是合法目录项: 跳过 */
+            continue;                       /* empty name is not a valid dir entry: skip */
         }
         if (type == BR_INODE_NONE) {
-            continue;                       /* 设备文件/socket 等: 本件的 VFS 面没有它们 */
+            continue;                       /* device files/sockets etc.: this VFS face has none */
         }
         if (de_namelen >= (br_u32)BR_NAME_MAX) {
-            /* ★ 名字上界取舍(见文件头): 跳过并计数, 不让一条超长名字把整个 readdir
-             *   变成 -ENOSPC(vfs 的分量缓冲也装不下它)。 */
+            /* ★ name upper-bound trade-off (see file header): skip and count, so one
+             *   over-long name does not turn the whole readdir into -ENOSPC (the vfs
+             *   component buffer could not hold it either). */
             it->skipped++;
             continue;
         }
@@ -748,13 +815,14 @@ static br_s64 uboot_erofs_dir_read(br_file_t *f, void *buf, br_size_t n)
     }
 
     if (it->skipped != 0u) {
-        /* 只报一次(穷尽那一刻), 免得目录被反复读时刷屏 */
-        br_log_warn("uboot-erofs: %s 下有 %u 个名字超过 %u 字节, 已在本仓库的目录面上跳过",
+        /* report once only (at the moment of exhaustion), so repeated directory reads
+         * do not flood the log */
+        br_log_warn("uboot-erofs: %s has %u names over %u bytes, skipped on this repo's dir face",
                     (it->ino->path[0] != '\0') ? it->ino->path : "/",
                     (unsigned)it->skipped, (unsigned)BR_NAME_MAX - 1u);
         it->skipped = 0u;
     }
-    return 0;                               /* 穷尽 */
+    return 0;                               /* exhausted */
 }
 
 static int uboot_erofs_dir_close(br_file_t *f)
@@ -763,24 +831,24 @@ static int uboot_erofs_dir_close(br_file_t *f)
 
     if (it != BR_NULL) {
         br_free(it);
-        br_file_set_fpriv(f, BR_NULL);      /* 让二次 close 成为空操作 */
+        br_file_set_fpriv(f, BR_NULL);      /* make a second close a no-op */
     }
     return 0;
 }
 
 /* =====================================================================
- * ops 表
+ * ops tables
  * ===================================================================== */
 
 static const br_file_ops_t s_file_fops = {
     .open        = uboot_erofs_file_open,
     .read        = uboot_erofs_file_read,
-    .write       = uboot_erofs_file_write,   /* 填上但恒 -EROFS(只读 FS 的正确码) */
+    .write       = uboot_erofs_file_write,   /* filled in but always -EROFS (right code for a read-only FS) */
     .lseek       = uboot_erofs_file_lseek,
     .ioctl       = BR_NULL,
-    .fsync       = BR_NULL,                  /* 只读卷没有"落介质"这件事 */
+    .fsync       = BR_NULL,                  /* a read-only volume has no "flush to medium" */
     .poll        = BR_NULL,
-    .poll_attach = BR_NULL,                  /* v2 预留(wait-queue), v1 恒 NULL */
+    .poll_attach = BR_NULL,                  /* reserved for v2 (wait-queue); always NULL in v1 */
     .close       = uboot_erofs_file_close,
 };
 
@@ -798,13 +866,16 @@ static const br_file_ops_t s_dir_fops = {
 
 static br_inode_t *uboot_erofs_lookup(br_inode_t *dir, const char *name);
 
-/* 层 2。★ 名字空间变更的 8 个槽位**全部填上**且一律 -EROFS(只读 FS 的正确错误码,
- * 比 vfs 对空槽位给的 -ENOTSUP 更准 —— 调用方据此能区分"这个 FS 不支持 create"与
- * "这个卷是只读的")。`readlink` 是**只读**操作, 支持(EROFS 有 symlink)。
+/* Layer 2. ★ all 8 namespace-mutation slots are **filled** and always return -EROFS
+ * (the right error code for a read-only FS, more accurate than the -ENOTSUP the vfs
+ * gives for an empty slot — callers can then tell "this FS does not support create"
+ * from "this volume is read-only"). `readlink` is a **read-only** operation and is
+ * supported (EROFS has symlinks).
  *
- * ★ 为什么是 6 个不同签名的小函数而不是一个 void 变体: `br_inode_ops_t` 的每个槽位
- *   签名不同, C 不允许把 `int f(void)` 赋给 `int (*)(br_inode_t*, const char*)`
- *   (参数个数不同就是不同类型)⇒ 每个签名各写一个壳, 函数体一样(返回 -EROFS)。 */
+ * ★ Why 6 small functions with distinct signatures rather than one void variant: each
+ *   slot of `br_inode_ops_t` has a different signature, and C does not allow assigning
+ *   `int f(void)` to `int (*)(br_inode_t*, const char*)` (a different parameter count
+ *   is a different type) ⇒ one shell per signature, all with the same body (return -EROFS). */
 static int uboot_erofs_ro_create(br_inode_t *dir, const char *name, br_u32 flags,
                                  br_inode_t **out);
 static int uboot_erofs_ro_name  (br_inode_t *dir, const char *name);
@@ -831,23 +902,27 @@ static const br_inode_ops_t s_iops = {
 };
 
 /*
- * ★ 层 2 的第二张/第三张表: **非目录**节点也必须有一张 iops。
- *   契约头写得很清楚(br_vfs.h 的 br_inode 注释): "`getattr`/`setattr` 属**本层**
- *   (inode 级) —— 于是每个支持 `br_stat` 的 inode 都必须带一张 iops(哪怕只填 getattr)"。
- *   只给目录 iops 的后果是 `br_stat("/assets/hello.txt")` 得到 -ENOTSUP(实测),
- *   而不是文件属性 —— 这是本件第一版**真踩到**的一个契约细节。
+ * ★ layer 2's second/third tables: **non-directory** nodes must also have an iops.
+ *   The contract header says it clearly (br_inode comment in br_vfs.h): "`getattr`/
+ *   `setattr` belong to **this layer** (inode level) — so every inode supporting
+ *   `br_stat` must carry an iops (even if only getattr is filled)".
+ *   Giving iops only to directories made `br_stat("/assets/hello.txt")` return
+ *   -ENOTSUP (observed) instead of file attributes — a contract detail this file's
+ *   first version **actually hit**.
  *
- *   于是本件用三张表:
- *     s_iops       只给目录: 名字空间面(变更槽位一律 -EROFS) + getattr
- *     s_file_iops  只给普通文件: 只有 getattr(名字空间面为空 ⇒ BR_NULL = 不支持)
- *     s_link_iops  只给符号链接: getattr + readlink(链接**自己**的属性与目标串)
+ *   So this file uses three tables:
+ *     s_iops       directories only: namespace face (mutation slots always -EROFS) + getattr
+ *     s_file_iops  regular files only: getattr only (namespace face empty ⇒ BR_NULL = unsupported)
+ *     s_link_iops  symlinks only: getattr + readlink (the link's **own** attributes and target string)
  */
 static const br_inode_ops_t s_file_iops = {
     .getattr  = uboot_erofs_getattr,
-    /* ★ `.setattr` 也必须填: `br_truncate()` 走的是**文件自己**的 iops->setattr
-     *   (vfs 的 br_truncate 先 resolve_leaf 再调 ino->iops->setattr)。第一版这里留了
-     *   空槽位 ⇒ `br_truncate("/assets/hello.txt", 0)` 得到的是 vfs 对空槽位的 -ENOTSUP,
-     *   而不是只读卷该给的 -EROFS(实测: TC-EROFS-007 因此判红)。 */
+    /* ★ `.setattr` must be filled too: `br_truncate()` goes through the **file's own**
+     *   iops->setattr (the vfs br_truncate resolves the leaf, then calls
+     *   ino->iops->setattr). The first version left an empty slot here ⇒
+     *   `br_truncate("/assets/hello.txt", 0)` got the vfs's -ENOTSUP for an empty slot
+     *   instead of the -EROFS a read-only volume should give (observed: TC-EROFS-007
+     *   went red because of it). */
     .setattr  = uboot_erofs_setattr,
     .readlink = BR_NULL,
 };
@@ -858,8 +933,8 @@ static const br_inode_ops_t s_link_iops = {
     .readlink = uboot_erofs_readlink,
 };
 
-/* 层 1: super。`unmount` 是 v1 的签名先行槽位(运行时卸载不早于 v3)⇒ BR_NULL;
- * `sync` = 0: 只读卷没有脏数据。 */
+/* Layer 1: super. `unmount` is a signature-first slot in v1 (runtime unmount is not
+ * before v3) ⇒ BR_NULL; `sync` = 0: a read-only volume has no dirty data. */
 static int   uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root);
 static void  uboot_erofs_free_inode(br_inode_t *ino);
 static int   uboot_erofs_sync(void *fs_priv);
@@ -872,15 +947,18 @@ static const br_fs_ops_t s_fs_ops = {
 };
 
 /* =====================================================================
- * 层 2 实现
+ * layer 2 implementation
  * ===================================================================== */
 
 /*
- * lookup: 把"父 inode + 一个名字"翻成"相对挂载点的路径", 再交给上游的路径走查。
- * 未命中/名字超长/类型不认识都收敛为 BR_NULL(vfs 的 `resolve_norm` 靠 BR_NULL 区分
- * "不存在"与"失败" ⇒ 得到 -ENOENT)。超长名字本件在任务书里约定返回 -ENOSPC, 但
- * lookup 的签名**没有错误码通道**(返回 inode 指针), 所以这里只能 BR_NULL;
- * -ENOSPC 的口径落在 vfs 自己那里(`resolve_norm` 对超长分量给 -ENOSPC, 一致)。
+ * lookup: translate "parent inode + a name" into a "path relative to the mount
+ * point", then hand it to upstream's path walk.
+ * Miss / over-long name / unknown type all converge to BR_NULL (the vfs `resolve_norm`
+ * uses BR_NULL to tell "does not exist" from "failed" ⇒ gives -ENOENT). The task says
+ * over-long names should return -ENOSPC, but lookup's signature has **no error-code
+ * channel** (it returns an inode pointer), so only BR_NULL is possible here; the
+ * -ENOSPC reading lives in the vfs itself (`resolve_norm` gives -ENOSPC for an
+ * over-long component, consistent).
  */
 static br_inode_t *uboot_erofs_lookup(br_inode_t *dir, const char *name)
 {
@@ -901,11 +979,11 @@ static br_inode_t *uboot_erofs_lookup(br_inode_t *dir, const char *name)
     }
 
     if (uboot_erofs_strcmp(name, ".") == 0) {
-        return dir;                        /* 自己是瞬态节点, 直接回它(vfs 会 ino_put 一次) */
+        return dir;                        /* itself is a transient node; return it (vfs ino_put's once) */
     }
     rc = uboot_erofs_join(rel, (br_size_t)sizeof(rel), d->path, name);
     if (rc != 0) {
-        /* 名字超长(≥ BR_NAME_MAX): 本件的口径是"跳过/不存在"。 */
+        /* name too long (≥ BR_NAME_MAX): this file's reading is "skip / does not exist". */
         return BR_NULL;
     }
 
@@ -921,16 +999,16 @@ static br_inode_t *uboot_erofs_lookup(br_inode_t *dir, const char *name)
     } else if (type == BR_INODE_FILE) {
         fops = &s_file_fops;
     } else if (type == BR_INODE_SYMLINK) {
-        fops = BR_NULL;                    /* 链接"看得见但打不开"(vfs 会展开或 -ELOOP) */
+        fops = BR_NULL;                    /* link is "visible but not openable" (vfs expands or -ELOOP) */
     } else {
-        return BR_NULL;                    /* 设备文件/socket: 本件的 VFS 面没有它们 */
+        return BR_NULL;                    /* device files/sockets: this VFS face has none */
     }
 
     child = uboot_erofs_new(&vi, rel, fops);
     if (child == BR_NULL) {
         return BR_NULL;
     }
-    /* 每个节点都要有 getattr(见上面的说明) */
+    /* every node needs getattr (see the note above) */
     if (type == BR_INODE_DIR) {
         child->head.iops = &s_iops;
     } else if (type == BR_INODE_SYMLINK) {
@@ -953,17 +1031,18 @@ static int uboot_erofs_getattr(br_inode_t *ino, br_stat_t *st)
         return BR_ERR(EINVAL);
     }
 
-    /* 目录的 size 按本仓库的口径报 0(tmpfs 同款: `br_stat_t.size` 对目录没有意义);
-     * 链接的 size = 目标串长度(契约头如此), 但本件不展开目标、也不把目标串读出来
-     * 就能知道长度 —— `i_size` 就是它。 */
+    /* Directory size is reported as 0 per this repo's reading (same as tmpfs:
+     * `br_stat_t.size` is meaningless for directories); a link's size = target string
+     * length (so says the contract header), and this file knows that length without
+     * expanding the target or reading the target string out — `i_size` is it. */
     st->valid = BR_STAT_SIZE;
     st->type  = ino->type;
     st->size  = (ino->type == BR_INODE_DIR) ? 0u : n->vi.i_size;
-    st->nlink = 0u;                        /* 不置 BR_STAT_NLINK 位: 只读卷上它没有意义 */
+    st->nlink = 0u;                        /* BR_STAT_NLINK bit not set: meaningless on a read-only volume */
     return 0;
 }
 
-/* ---- 只读执法: 名字空间变更(6 个签名, 一个答复: -EROFS) ---- */
+/* ---- read-only enforcement: namespace mutation (6 signatures, one answer: -EROFS) ---- */
 
 static int uboot_erofs_ro_create(br_inode_t *dir, const char *name, br_u32 flags,
                                  br_inode_t **out)
@@ -1018,9 +1097,10 @@ static int uboot_erofs_setattr(br_inode_t *ino, const br_stat_t *st)
 }
 
 /*
- * readlink: EROFS 支持符号链接(目标串就存在 inode 的数据面里, 用 `erofs_pread` 读)。
- * 契约: 返回**全长**(截断不报错), `cap == 0` 或 `buf == NULL` 时只回报长度;
- * 非链接 ⇒ -EINVAL。
+ * readlink: EROFS supports symlinks (the target string lives in the inode's data
+ * face and is read with `erofs_pread`).
+ * Contract: return the **full length** (truncation is not an error); with `cap == 0`
+ * or `buf == NULL` only report the length; a non-link ⇒ -EINVAL.
  */
 static int uboot_erofs_readlink(br_inode_t *ino, char *buf, br_size_t cap)
 {
@@ -1048,23 +1128,25 @@ static int uboot_erofs_readlink(br_inode_t *ino, char *buf, br_size_t cap)
 
     const br_size_t cnt = ((br_size_t)len < cap) ? (br_size_t)len : (cap - 1u);
 
-    /* 只读 cnt 个字节(不读全长): 目标串可能比 cap 长, 读多了会越过调用方的缓冲。 */
+    /* read only cnt bytes (not the full length): the target may be longer than cap, and
+     * reading more would run past the caller's buffer. */
     rc = erofs_pread((struct erofs_inode *)&n->vi, buf, (erofs_off_t)cnt, 0);
     if (rc < 0) {
         return rc;
     }
     buf[cnt] = '\0';
-    return (int)len;                        /* 契约: 返回全长 */
+    return (int)len;                        /* contract: return the full length */
 }
 
 /* =====================================================================
- * 层 1 实现: mount / free_inode / sync
+ * layer 1 implementation: mount / free_inode / sync
  * ===================================================================== */
 
 static void uboot_erofs_free_inode(br_inode_t *ino)
 {
-    /* ★ 只读 FS 的瞬态节点就是一块 br_malloc 出来的包装(没有子对象)。
-     *   挂载表的根 inode **不会**被传进来(vfs 的 ino_put 按 is_root 分流)。 */
+    /* ★ a read-only FS's transient node is just a br_malloc'd wrapper (no subobjects).
+     *   The mount table's root inode is **not** passed in here (the vfs ino_put splits
+     *   on is_root). */
     if (ino != BR_NULL) {
         br_free(ino);
     }
@@ -1073,7 +1155,7 @@ static void uboot_erofs_free_inode(br_inode_t *ino)
 static int uboot_erofs_sync(void *fs_priv)
 {
     (void)fs_priv;
-    return 0;                              /* 只读卷: 没有脏数据要落 */
+    return 0;                              /* read-only volume: no dirty data to flush */
 }
 
 static int uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **root)
@@ -1082,55 +1164,59 @@ static int uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t *
     uboot_erofs_ino_t *r;
     int rc;
 
-    (void)fs_priv;                         /* 本件没有 FS 级记账体: 卷状态就是 sbi */
+    (void)fs_priv;                         /* no FS-level bookkeeping object: the volume state is sbi */
 
     if ((cfg == BR_NULL) || (root == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
     *root = BR_NULL;
 
-    /* ★ ADR-0030: 挂载点与源设备**都由 APP 决定**(经 cfg)。原先这里把挂载点钉死成
-     *   `BR_EROFS_MOUNT_PATH` 并在不匹配时报 -EINVAL —— 那是"FS 自带挂载计划"的残留。
-     *   EROFS 的卷与挂载点本来就无关(只与介质有关), 所以这里只要求两者非空。 */
+    /* ★ ADR-0030: both the mount point and the source device are **decided by the APP**
+     *   (via cfg). This used to pin the mount point to `BR_EROFS_MOUNT_PATH` and report
+     *   -EINVAL on mismatch — a leftover from "the FS carries its own mount plan".
+     *   An EROFS volume is unrelated to the mount point anyway (only to the medium), so
+     *   here we only require both to be non-null. */
     if ((cfg->path == BR_NULL) || (cfg->dev == BR_NULL)) {
-        br_log_error("uboot-erofs: mount 参数不全(path=%s dev=%s)",
+        br_log_error("uboot-erofs: incomplete mount args (path=%s dev=%s)",
                      (cfg->path != BR_NULL) ? cfg->path : "(null)",
                      (cfg->dev != BR_NULL) ? cfg->dev : "(null)");
         return BR_ERR(EINVAL);
     }
 
-    /* 1) 块设备: 按 APP 给的源设备名取 bdev 并记住几何(扇区大小/介质字节数) */
+    /* 1) block device: fetch the bdev by the source device name from the APP and
+     *    remember the geometry (sector size / medium byte count) */
     rc = uboot_erofs_bdev_bind(cfg->dev);
     if (rc != 0) {
-        return rc;                          /* 首败即停机(见 plugin.toml 的口径) */
+        return rc;                          /* first failure stops boot (see brick.toml) */
     }
 
-    /* 2) 超级块: magic 必须在**偏移 1024**(EROFS_SUPER_OFFSET)处 */
+    /* 2) superblock: the magic must be at **offset 1024** (EROFS_SUPER_OFFSET) */
     rc = erofs_read_superblock();
     if (rc != 0) {
         return rc;
     }
     if (erofs_blksiz() != EROFS_MAX_BLOCK_SIZE) {
-        /* 上游的压缩路径只支持 PAGE_SIZE 块; 未压缩面虽然支持 512/1024/2048, 但本件的
-         * 静态缓冲按 4 KiB 设计 ⇒ 统一要求 4 KiB(README 的裁剪口径写明了)。 */
-        br_log_error("uboot-erofs: 只支持 %u 字节块(镜像 blkszbits=%u)",
+        /* upstream's compressed path supports PAGE_SIZE blocks only; the uncompressed
+         * face supports 512/1024/2048, but this file's static buffers are designed for
+         * 4 KiB ⇒ require 4 KiB uniformly (stated in the README trimming notes). */
+        br_log_error("uboot-erofs: only %u-byte blocks supported (image blkszbits=%u)",
                      (unsigned)EROFS_MAX_BLOCK_SIZE, (unsigned)sbi.blkszbits);
         return BR_ERR(ENOTSUP);
     }
 
-    /* 3) 根 inode(路径 = 空串 = 卷根) */
+    /* 3) root inode (path = empty string = volume root) */
     vi.nid = 0;
     rc = erofs_ilookup("", &vi);
     if (rc != 0) {
-        br_log_error("uboot-erofs: 解析根 inode 失败 rc=%d", rc);
+        br_log_error("uboot-erofs: failed to parse root inode rc=%d", rc);
         return rc;
     }
     if (!S_ISDIR(vi.i_mode)) {
-        br_log_error("uboot-erofs: 根 inode 不是目录(mode=%o)", (unsigned)vi.i_mode);
+        br_log_error("uboot-erofs: root inode is not a directory (mode=%o)", (unsigned)vi.i_mode);
         return BR_ERR(EIO);
     }
 
-    /* 4) 造根 inode(由挂载表长期持有; 同样是 br_malloc, 只是永不 free) */
+    /* 4) build the root inode (held long-term by the mount table; br_malloc'd too, just never freed) */
     r = uboot_erofs_new(&vi, "", &s_dir_fops);
     if (r == BR_NULL) {
         return BR_ERR(ENOMEM);
@@ -1138,9 +1224,10 @@ static int uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t *
     r->head.iops = &s_iops;
     *root = &r->head;
 
-    /* ★ 这一行的措辞是**门禁契约的一部分**(tests/gates.toml 的 `erofs-test` 逐字要求
-     *   `uboot-erofs: /assets 就绪` 这个子串): 换措辞之前先去看那条 gate。 */
-    br_log_info("uboot-erofs: %s 就绪(%s; %s; %llu 块 × %u B; root_nid=%llu; %s)",
+    /* ★ the wording of this line is **part of the gate contract** (tests/gates.toml's
+     *   `erofs-test` literally requires the substring `uboot-erofs: /assets ready`):
+     *   check that gate before changing the wording. */
+    br_log_info("uboot-erofs: %s ready (%s; %s; %llu blocks x %u B; root_nid=%llu; %s)",
                 cfg->path, BR_EROFS_TYPE_NAME, BR_EROFS_DEV_NAME,
                 (unsigned long long)sbi.total_blocks,
                 (unsigned)erofs_blksiz(),
@@ -1151,28 +1238,30 @@ static int uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t *
 }
 
 /* =====================================================================
- * 生命周期钩子(symbol_prefix = uboot_erofs)
+ * lifecycle hooks (symbol_prefix = uboot_erofs)
  * ===================================================================== */
 
 int uboot_erofs_early_init(void)
 {
-    return 0;   /* 此刻无堆、无块设备: 真正的活都在 start */
+    return 0;   /* no heap, no block device yet: the real work is all in start */
 }
 
 int uboot_erofs_init(void)
 {
-    return 0;   /* 见 plugin.toml: 挂载落在 start(块设备由 uboot-mmc 的 start 注册,
-                 * 本插件在 [[dep]] 里声明了对它的 init 边 ⇒ 相位顺序由插件管理器保证) */
+    return 0;   /* see brick.toml: mounting happens in start (the block device is registered
+                 * by uboot-mmc's start, and this plugin declares a [[dep]] init edge on
+                 * it ⇒ phase order is guaranteed by the plugin manager) */
 }
 
 int uboot_erofs_start(void)
 {
-    /* ★ ADR-0030: 只**登记驱动**, 不挂载 —— 挂哪里、挂哪块卡由 APP 用 POSIX
-     *   `mount(source, target, "erofs", 0, NULL)` 决定。 */
+    /* ★ ADR-0030: only **register the driver**, do not mount — where to mount and which
+     *   card to mount are decided by the APP via POSIX
+     *   `mount(source, target, "erofs", 0, NULL)`. */
     const int rc = br_fs_driver_register("erofs", &s_fs_ops, BR_NULL);
 
     if (rc != 0) {
-        br_log_error("uboot-erofs: 注册驱动 erofs 失败 rc=%d(首败即停机)", rc);
+        br_log_error("uboot-erofs: driver 'erofs' registration failed rc=%d (first failure stops boot)", rc);
         return rc;
     }
     return 0;

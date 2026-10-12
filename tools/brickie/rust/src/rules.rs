@@ -1,14 +1,14 @@
-//! 分类学、名字契约、相位、特权与依赖方向规则(§3 / §7.2 / §7.3 / §8.3 / §8.4)。
+//! Taxonomy, name contract, phase, privilege and dependency-direction rules (§3 / §7.2 / §7.3 / §8.3 / §8.4).
 //!
-//! 本模块是**纯规则表**(无 IO、无诊断集合状态), 供 model.rs 与 check.rs(agent-B)
-//! 复用。凡"规则"都在这里, 不要把判定散到 L5。
+//! This module is a **pure rule table** (no IO, no diagnostic-set state), reused by model.rs
+//! and check.rs (agent-B). All "rules" live here; do not scatter decisions into L5.
 //!
-//! 编码纪律: 只用 BRV-D8 的已分配码; 未分配码的缺陷按裁定 R-9 用 `BRV-MF-0001`
-//! 并在 `rust/README.md` 登记缺口。
+//! Encoding discipline: use only codes allocated by BRV-D8; for unallocated-code defects use
+//! `BRV-MF-0001` per ruling R-9 and register the gap in `rust/README.md`.
 
 use crate::diag::{Diag, Severity};
 
-// ------------------------------------------------------------------ 枚举全集
+// ------------------------------------------------------------------ enum universe
 
 pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "platform"];
 pub const API_TYPES: &[&str] = &["native", "runtime_adapter", "third_party"];
@@ -29,7 +29,7 @@ pub const FREEZE_STATES: &[&str] = &["unfrozen", "frozen", "unfreezing"];
 pub const ENTRY_STATUSES: &[&str] = &["experimental", "frozen", "deprecated"];
 pub const RES_KINDS: &[&str] = &["ram", "stack"];
 
-/// v0.1 已交付的模板维度(`BRV-TAX-0014` 的判据, §8.4)。
+/// Template dimensions delivered in v0.1 (criterion for `BRV-TAX-0014`, §8.4).
 pub const TEMPLATE_API_TYPES: &[&str] = &["native"];
 pub const TEMPLATE_LANGS: &[&str] = &["c"];
 
@@ -37,12 +37,12 @@ pub fn in_list(list: &[&str], v: &str) -> bool {
     list.contains(&v)
 }
 
-/// 把列表渲染成 `a | b | c`, 供诊断 hint。
+/// Render a list as `a | b | c` for diagnostic hints.
 pub fn list_of(list: &[&str]) -> String {
     list.join(" | ")
 }
 
-// ------------------------------------------------------------------ 名字契约(§8.3)
+// ------------------------------------------------------------------ name contract (§8.3)
 
 fn is_alnum_lower(c: u8) -> bool {
     c.is_ascii_lowercase() || c.is_ascii_digit()
@@ -72,13 +72,13 @@ pub fn valid_plugin_name(name: &str) -> bool {
             i += 1;
         }
         if i == seg {
-            return false; // 分隔符后必须至少一个 [a-z0-9]
+            return false; // at least one [a-z0-9] required after a separator
         }
     }
     true
 }
 
-/// 名字的 namespace(第一个 `/` 之前); 无 `/` ⇒ 空串(裸名)。
+/// Name namespace (before the first `/`); no `/` ⇒ empty string (bare name).
 pub fn name_namespace(name: &str) -> &str {
     match name.find('/') {
         Some(p) => &name[..p],
@@ -86,7 +86,7 @@ pub fn name_namespace(name: &str) -> &str {
     }
 }
 
-/// 名字的 short(最后一个 `/` 之后)。
+/// Name short (after the last `/`).
 pub fn name_short(name: &str) -> &str {
     match name.rfind('/') {
         Some(p) => &name[p + 1..],
@@ -94,27 +94,27 @@ pub fn name_short(name: &str) -> &str {
     }
 }
 
-/// 是否推荐形态 `<namespace>/<short>`(§8.3 ①)。
+/// Whether the name uses the recommended `<namespace>/<short>` form (§8.3 ①).
 pub fn is_recommended_form(name: &str) -> bool {
     let ns = name_namespace(name);
     !ns.is_empty() && in_list(NAMESPACES, ns)
 }
 
-/// namespace → `plugin_type`(§8.3 ①)。
+/// namespace → `plugin_type` (§8.3 ①).
 pub fn namespace_plugin_type(ns: &str) -> Option<&'static str> {
     match ns {
         "app" => Some("app"),
         "iface" => Some("interface"),
         "platform" => Some("platform"),
         "sched" | "framework" | "io" | "fs" | "service" => Some("ability"),
-        // `runtime`(ADR-0015): POSIX 运行时一类"整套运行时"插件。plugin_type 仍是
-        // `ability`(它是能力插件), 与 `service` 的区别只在**体量与定位**, 不在类别学。
+        // `runtime` (ADR-0015): POSIX runtime, a "whole-runtime" plugin class. plugin_type is still
+        // `ability` (it is an ability plugin); it differs from `service` in **size and role**, not taxonomy.
         "runtime" => Some("ability"),
         _ => None,
     }
 }
 
-/// namespace → `subkind`(§8.3 ①; 仅 ability 系)。
+/// namespace → `subkind` (§8.3 ①; ability family only).
 pub fn namespace_subkind(ns: &str) -> Option<&'static str> {
     match ns {
         "sched" => Some("scheduler"),
@@ -122,14 +122,14 @@ pub fn namespace_subkind(ns: &str) -> Option<&'static str> {
         "io" => Some("io"),
         "fs" => Some("fs"),
         "service" => Some("service"),
-        // `runtime/posix` 的 subkind 仍是 `service`: 相位推导(ability + service ⇒ LATE)
-        // 与 D18 的"POSIX 运行时**服务**"定位都靠它。见 ADR-0015 §2.2。
+        // `runtime/posix` subkind is still `service`: phase derivation (ability + service ⇒ LATE)
+        // and D18's "POSIX runtime **service**" positioning both rely on it. See ADR-0015 §2.2.
         "runtime" => Some("service"),
         _ => None,
     }
 }
 
-/// 按名字 namespace 推导 `subkind`(§8.4)。裸名 / 非 ability namespace ⇒ `None`。
+/// Derive `subkind` from the name namespace (§8.4). Bare name / non-ability namespace ⇒ `None`.
 pub fn derive_subkind(name: &str) -> Option<&'static str> {
     let ns = name_namespace(name);
     if ns.is_empty() {
@@ -138,9 +138,9 @@ pub fn derive_subkind(name: &str) -> Option<&'static str> {
     namespace_subkind(ns)
 }
 
-// ------------------------------------------------------------------ 相位(§7.2 + 父 agent 澄清)
+// ------------------------------------------------------------------ phase (§7.2 + parent agent clarification)
 
-/// 相位序号: `EARLY=0 < CORE=1 < LATE=2 < APP=3`。
+/// Phase rank: `EARLY=0 < CORE=1 < LATE=2 < APP=3`.
 pub fn phase_rank(phase: &str) -> Option<u8> {
     match phase {
         "early" => Some(0),
@@ -151,18 +151,18 @@ pub fn phase_rank(phase: &str) -> Option<u8> {
     }
 }
 
-/// "service 形" ⇒ 第 ② 完成点在 LATE: `plugin_type = interface`
-/// 或 `plugin_type = ability` 且 `subkind = service`。
+/// "service-like" ⇒ completion point ② is LATE: `plugin_type = interface`
+/// or `plugin_type = ability` with `subkind = service`.
 pub fn is_service_like(plugin_type: &str, subkind: Option<&str>) -> bool {
     plugin_type == "interface" || (plugin_type == "ability" && subkind == Some("service"))
 }
 
-/// 推导 `[plugin].phase`(第 ② 个完成点)。
+/// Derive `[plugin].phase` (completion point ②).
 ///
-/// - 无 `init` 钩子 ⇒ `early`(② 与 ① 重合的特例)。
-/// - service 形(interface / ability.service)⇒ `late`。
-/// - `app` ⇒ `app`。
-/// - 其余(platform / ability 其它 subkind)⇒ `core`。
+/// - No `init` hook ⇒ `early` (special case where ② coincides with ①).
+/// - service-like (interface / ability.service) ⇒ `late`.
+/// - `app` ⇒ `app`.
+/// - Otherwise (platform / other ability subkinds) ⇒ `core`.
 pub fn derive_phase(plugin_type: &str, subkind: Option<&str>, has_init: bool) -> &'static str {
     if !has_init {
         return "early";
@@ -176,19 +176,19 @@ pub fn derive_phase(plugin_type: &str, subkind: Option<&str>, has_init: bool) ->
     }
 }
 
-/// `phase` 对给定 `plugin_type`/`subkind` 是否合法。`None` = 合法。
+/// Whether `phase` is legal for the given `plugin_type`/`subkind`. `None` = legal.
 ///
-/// 允许集(**父 agent 2026 澄清口径**):
-/// - `interface` 或 `ability.service` ⇒ `{early, late}`(给 `core` ⇒ 错)。
-/// - `platform` / `ability`(其它 subkind)⇒ `{early, core}`。
-/// - `app` ⇒ `{early, core, app}`(M0 的 `app/hello` 无 `init`、只有 `start`
-///   主循环, 声明 `phase = "app"` 必须通过)。
+/// Allowed sets (**parent agent 2026 clarification**):
+/// - `interface` or `ability.service` ⇒ `{early, late}` (`core` ⇒ error).
+/// - `platform` / `ability` (other subkinds) ⇒ `{early, core}`.
+/// - `app` ⇒ `{early, core, app}` (M0's `app/hello` has no `init`, only a `start`
+///   main loop, so `phase = "app"` must pass).
 ///
-/// `early` 恒合法 = "本插件没有 `init` 钩子"。
+/// `early` is always legal = "this plugin has no `init` hook".
 pub fn phase_reason(plugin_type: &str, subkind: Option<&str>, phase: &str) -> Option<String> {
     if !in_list(PHASES, phase) {
         return Some(format!(
-            "未知 phase `{phase}`; 合法值: {}(§7.2)",
+            "unknown phase `{phase}`; legal values: {}(§7.2)",
             list_of(PHASES)
         ));
     }
@@ -206,16 +206,16 @@ pub fn phase_reason(plugin_type: &str, subkind: Option<&str>, phase: &str) -> Op
         return None;
     }
     Some(format!(
-        "phase `{phase}` 与 `plugin_type = {plugin_type}`{}{} 不相容; 该组合的 `init` 完成点只允许 {}(`early` 恒可, 用于无 `init` 钩子) (§7.2)",
+        "phase `{phase}` is incompatible with `plugin_type = {plugin_type}`{}{}; this combination only allows init completion point {}(`early` always works, for plugins without an `init` hook) (§7.2)",
         subkind.map(|s| format!(" / `subkind = {s}`")).unwrap_or_default(),
         "",
         list_of(allowed)
     ))
 }
 
-// ------------------------------------------------------------------ 特权(§3.4)
+// ------------------------------------------------------------------ privilege (§3.4)
 
-/// 级别 → 序号(`P0`=0 … `P4`=4)。
+/// Level → rank (`P0`=0 … `P4`=4).
 pub fn level_rank(level: &str) -> Option<u8> {
     PRIV_LEVELS
         .iter()
@@ -227,7 +227,7 @@ pub fn level_name(rank: u8) -> &'static str {
     PRIV_LEVELS[(rank as usize).min(4)]
 }
 
-/// `plugin_type`/`subkind` 允许的最高特权级(§3.2 + §3.4)。
+/// Highest privilege level allowed for `plugin_type`/`subkind` (§3.2 + §3.4).
 pub fn max_privilege_level(plugin_type: &str, subkind: Option<&str>) -> &'static str {
     match plugin_type {
         "app" | "interface" => "P0",
@@ -243,7 +243,7 @@ pub fn max_privilege_level(plugin_type: &str, subkind: Option<&str>) -> &'static
     }
 }
 
-/// 一个 memory op 所需的最低级别(§3.4 正交表)。
+/// Minimum level required by a memory op (§3.4 orthogonal table).
 pub fn min_level_for_memory_op(op: &str) -> Option<u8> {
     match op {
         "alloc" | "free" | "flush" | "invalidate" => Some(2), // P2
@@ -252,16 +252,16 @@ pub fn min_level_for_memory_op(op: &str) -> Option<u8> {
     }
 }
 
-/// `(ops × granularity × region)` 组合是否合法(§3.4 正交表)。
+/// Whether an `(ops × granularity × region)` combination is legal (§3.4 orthogonal table).
 ///
-/// 非法 ⇒ `BRV-PRIV-0002`; 合法但所需级别高于声明级别 ⇒ `BRV-PRIV-0001`。
+/// Illegal ⇒ `BRV-PRIV-0002`; legal but required level exceeds declared level ⇒ `BRV-PRIV-0001`.
 pub fn memory_combo_legal(op: &str, granularity: &str, region: &str) -> bool {
     if !in_list(GRANULARITIES, granularity) || !in_list(REGIONS, region) {
         return false;
     }
     match op {
-        // alloc/free: 池生命周期(pool)只对 contig/page 两个专用池;
-        // 其余粒度允许 heap(仅 byte/page/region)/contig/page/dma。
+        // alloc/free: pool lifetime (pool) only for the two dedicated pools contig/page;
+        // other granularities allow heap (byte/page/region only)/contig/page/dma.
         "alloc" | "free" => {
             if granularity == "pool" {
                 matches!(region, "contig" | "page")
@@ -269,11 +269,11 @@ pub fn memory_combo_legal(op: &str, granularity: &str, region: &str) -> bool {
                 matches!(region, "heap" | "contig" | "page" | "dma")
             }
         }
-        // map/protect: MMU/页表面 ⇒ P4; regions = mmio / reserved / heap(仅恒等区属性)。
+        // map/protect: MMU/page tables ⇒ P4; regions = mmio / reserved / heap (identity region attributes only).
         "map" | "protect" | "unmap" => {
             matches!(granularity, "page" | "region") && matches!(region, "mmio" | "reserved" | "heap")
         }
-        // flush/invalidate: cache 维护。
+        // flush/invalidate: cache maintenance.
         "flush" | "invalidate" => {
             matches!(granularity, "byte" | "page" | "region")
                 && matches!(region, "dma" | "heap" | "contig")
@@ -282,7 +282,7 @@ pub fn memory_combo_legal(op: &str, granularity: &str, region: &str) -> bool {
     }
 }
 
-/// 一条 `[[privileged.memory]]` 声明(与 model 解耦的输入形状)。
+/// One `[[privileged.memory]]` declaration (input shape decoupled from model).
 #[derive(Clone, Debug, Default)]
 pub struct MemoryEntry {
     pub granularity: String,
@@ -290,25 +290,25 @@ pub struct MemoryEntry {
     pub regions: Vec<String>,
 }
 
-/// 特权声明校验的输入(与 model 解耦)。
+/// Input for privilege-declaration checking (decoupled from model).
 #[derive(Clone, Debug, Default)]
 pub struct PrivInput<'a> {
     pub plugin_type: &'a str,
     pub subkind: Option<&'a str>,
     pub target: &'a str,
     pub file: &'a str,
-    /// `[privileged].level`; `[privileged]` 存在时必填。
+    /// `[privileged].level`; required when `[privileged]` is present.
     pub level: Option<&'a str>,
     pub memory: &'a [MemoryEntry],
-    /// `[privileged.resources]` 是否有内容(IRQ/DMA/引脚/设备名 ⇒ P1+)。
+    /// Whether `[privileged.resources]` has content (IRQ/DMA/pin/device name ⇒ P1+).
     pub has_resources: bool,
 }
 
-/// 特权声明校验(§3.4 / §10 V-19)。返回诊断(码固定 `BRV-PRIV-0001/0002`)。
+/// Privilege-declaration check (§3.4 / §10 V-19). Returns diagnostics (codes fixed to `BRV-PRIV-0001/0002`).
 pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
     let mut out = Vec::new();
     if input.level.is_none() && input.memory.is_empty() && !input.has_resources {
-        return out; // 没有声明特权面
+        return out; // no privilege surface declared
     }
 
     let declared = match input.level {
@@ -316,7 +316,7 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
             if level_rank(l).is_none() {
                 out.push(
                     Diag::new(Severity::Error, format!(
-                        "未知特权级别 `{l}`; 合法值: {}(§3.4)",
+                        "unknown privilege level `{l}`; legal values: {}(§3.4)",
                         list_of(PRIV_LEVELS)
                     ))
                     .code("BRV-PRIV-0001")
@@ -331,24 +331,24 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
         }
         None => {
             out.push(
-                Diag::new(Severity::Error, "声明了特权面但缺 `[privileged].level`")
+                Diag::new(Severity::Error, "privilege surface declared but `[privileged].level` is missing")
                     .code("BRV-PRIV-0001")
                     .target(input.target)
                     .file(input.file)
                     .span("privileged.level")
-                    .hint(format!("合法值: {}", list_of(PRIV_LEVELS))),
+                    .hint(format!("legal values: {}", list_of(PRIV_LEVELS))),
             );
             return out;
         }
     };
 
-    // ① 声明的级别本身不得超过 plugin_type 允许的最高级。
+    // ① The declared level must not exceed the maximum allowed by plugin_type.
     let cap_name = max_privilege_level(input.plugin_type, input.subkind);
     let cap = level_rank(cap_name).unwrap_or(0);
     if declared > cap {
         out.push(
             Diag::new(Severity::Error, format!(
-                "`plugin_type = {}`{} 最多允许特权级 {cap_name}, 声明了 {}",
+                "`plugin_type = {}`{} allows at most privilege level {cap_name}, but {} was declared",
                 input.plugin_type,
                 input
                     .subkind
@@ -364,55 +364,55 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
         );
     }
 
-    // ② `[privileged.resources]`(IRQ/DMA/引脚/设备名)属 P1。
+    // ② `[privileged.resources]` (IRQ/DMA/pin/device name) is P1.
     if input.has_resources && declared < 1 {
         out.push(
             Diag::new(
                 Severity::Error,
-                "声明了 `[privileged.resources]`(IRQ/DMA/引脚/设备名)但级别是 P0; 资源独占属 P1",
+                "`[privileged.resources]` (IRQ/DMA/pin/device name) declared but level is P0; exclusive resources are P1",
             )
             .code("BRV-PRIV-0001")
             .target(input.target)
             .file(input.file)
             .span("privileged.resources")
-            .hint("§3.4: P1 resource 才允许资源独占声明"),
+            .hint("§3.4: only P1 resource may declare exclusive resources"),
         );
     }
 
-    // ③ 逐 memory 条目: 组合合法性 + 最低级别。
+    // ③ Per memory entry: combination legality + minimum level.
     for (mi, m) in input.memory.iter().enumerate() {
         if m.ops.is_empty() {
             out.push(
-                Diag::new(Severity::Error, "`[[privileged.memory]]` 缺 `ops`")
+                Diag::new(Severity::Error, "`[[privileged.memory]]` is missing `ops`")
                     .code("BRV-PRIV-0002")
                     .target(input.target)
                     .file(input.file)
                     .span(format!("privileged.memory[{mi}].ops"))
-                    .hint(format!("合法 op: {}", list_of(MEM_OPS))),
+                    .hint(format!("legal op: {}", list_of(MEM_OPS))),
             );
         }
         if m.regions.is_empty() {
             out.push(
-                Diag::new(Severity::Error, "`[[privileged.memory]]` 缺 `regions`")
+                Diag::new(Severity::Error, "`[[privileged.memory]]` is missing `regions`")
                     .code("BRV-PRIV-0002")
                     .target(input.target)
                     .file(input.file)
                     .span(format!("privileged.memory[{mi}].regions"))
-                    .hint(format!("合法 region: {}", list_of(REGIONS))),
+                    .hint(format!("legal region: {}", list_of(REGIONS))),
             );
         }
         for (oi, op) in m.ops.iter().enumerate() {
             if !in_list(MEM_OPS, op) {
                 out.push(
                     Diag::new(Severity::Error, format!(
-                        "未知 memory op `{op}`; 合法值: {}",
+                        "unknown memory op `{op}`; legal values: {}",
                         list_of(MEM_OPS)
                     ))
                     .code("BRV-PRIV-0002")
                     .target(input.target)
                     .file(input.file)
                     .span(format!("privileged.memory[{mi}].ops[{oi}]"))
-                    .hint("§3.4 正交表"),
+                    .hint("§3.4 orthogonal table"),
                 );
                 continue;
             }
@@ -420,14 +420,14 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
                 if !memory_combo_legal(op, &m.granularity, region) {
                     out.push(
                         Diag::new(Severity::Error, format!(
-                            "非法的 (op × granularity × region) 组合: `{op}` × `{}` × `{region}`",
+                            "illegal (op × granularity × region) combination: `{op}` × `{}` × `{region}`",
                             m.granularity
                         ))
                         .code("BRV-PRIV-0002")
                         .target(input.target)
                         .file(input.file)
                         .span(format!("privileged.memory[{mi}].regions[{ri}]"))
-                        .hint("§3.4 正交表: alloc/free→P2(池级只对 contig/page); map/protect/unmap→P4(page/region × mmio/reserved/heap); flush/invalidate→P2"),
+                        .hint("§3.4 orthogonal table: alloc/free→P2 (pool only for contig/page); map/protect/unmap→P4 (page/region × mmio/reserved/heap); flush/invalidate→P2"),
                     );
                 }
             }
@@ -435,7 +435,7 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
                 if declared < need {
                     out.push(
                         Diag::new(Severity::Error, format!(
-                            "op `{op}` 最低要求 {}, 但声明级别是 {}",
+                            "op `{op}` requires at least {}, but declared level is {}",
                             level_name(need),
                             level_name(declared)
                         ))
@@ -443,7 +443,7 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
                         .target(input.target)
                         .file(input.file)
                         .span(format!("privileged.memory[{mi}]"))
-                        .hint("§3.4: map/protect/unmap 属 P4(machine); alloc/free/flush/invalidate 属 P2"),
+                        .hint("§3.4: map/protect/unmap are P4 (machine); alloc/free/flush/invalidate are P2"),
                     );
                 }
             }
@@ -452,72 +452,72 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
     out
 }
 
-// ------------------------------------------------------------------ 依赖方向(§7.3)
+// ------------------------------------------------------------------ dependency direction (§7.3)
 
-/// `plugin_type` 方向表(§7.3): 消费者 → 提供者 是否许可。
+/// `plugin_type` direction table (§7.3): whether consumer → provider is permitted.
 ///
-/// 表里的 `—`(platform → platform)按"不适用/不许可"处理: `platform` 每镜像恰 1,
-/// 同代单版本政策下不可能自依赖。
+/// The `—` (platform → platform) entry is treated as "not applicable/not permitted": `platform`
+/// is exactly one per image, so self-dependency is impossible under single-version-per-generation.
 pub fn dep_direction_ok(consumer_pt: &str, provider_pt: &str, provider_is_third_party: bool) -> bool {
     match consumer_pt {
-        // platform: 全列 ✗(platform 是 SoC 级最底层, 不依赖任何插件)
+        // platform: all ✗ (platform is the lowest SoC level and depends on no plugin)
         "platform" => false,
-        // ability: platform ✅ / ability ✅(单向) / third_party ✅ / interface ✗
+        // ability: platform ✅ / ability ✅ (one-way) / third_party ✅ / interface ✗
         "ability" => {
             provider_is_third_party
                 || matches!(provider_pt, "platform" | "ability")
         }
-        // interface: platform/ability/interface ✅(仅再导出) / third_party ✗
+        // interface: platform/ability/interface ✅ (re-export only) / third_party ✗
         "interface" => {
             !provider_is_third_party && matches!(provider_pt, "platform" | "ability" | "interface")
         }
-        // app: 仅 interface ✅(不得直调 native ability / platform);
-        // **例外**: `api_type = third_party` 的 ability(如 `service/sqlite`)——
-        // §7.3 表的 app 行括注是"不得直调 **native**", 而 §10 V-12② 要求
-        // `app → service/sqlite` 必须通过(见 rust/README §10 S-13)。
+        // app: interface only ✅ (must not call native ability / platform directly);
+        // **exception**: ability with `api_type = third_party` (e.g. `service/sqlite`) —
+        // the app row in §7.3 says "must not call **native** directly", while §10 V-12② requires
+        // `app → service/sqlite` to pass (see rust/README §10 S-13).
         "app" => provider_pt == "interface" || provider_is_third_party,
         _ => false,
     }
 }
 
-/// `api_type` 禁则(§3.1; **只对有面的提供方** —— `app`/`interface` 是纯消费者)。
+/// `api_type` prohibitions (§3.1; **only for providers with a surface** — `app`/`interface` are pure consumers).
 ///
-/// 违规返回规则说明; 合法返回 `None`。
+/// Returns the rule explanation on violation; `None` when legal.
 pub fn api_type_edge_reason(
     consumer_pt: &str,
     consumer_api: &str,
     provider_api: &str,
     kind: &str,
 ) -> Option<String> {
-    // 纯消费者(app/interface)不参与 api_type 禁则(§3.1 口径收窄)。
+    // Pure consumers (app/interface) are exempt from api_type prohibitions (§3.1 narrowed scope).
     if !matches!(consumer_pt, "ability" | "platform") {
         return None;
     }
     if consumer_api == "native" && provider_api == "runtime_adapter" {
         return Some(
-            "禁则(2): `native` 不得依赖 `runtime_adapter` 的能力面(§3.1/§7.3)".to_string(),
+            "prohibition (2): `native` must not depend on the ability surface of `runtime_adapter` (§3.1/§7.3)".to_string(),
         );
     }
     if consumer_api == "native" && provider_api == "third_party" {
         return Some(
-            "`native` 插件不得依赖 `api_type = \"third_party\"` 的插件(§3.1 表 / §7.3 第四条)".to_string(),
+            "a `native` plugin must not depend on a plugin with `api_type = \"third_party\"` (§3.1 table / §7.3 clause 4)".to_string(),
         );
     }
     if consumer_api == "runtime_adapter" && provider_api == "third_party" && kind != "type" {
         return Some(format!(
-            "`runtime_adapter` 只允许对 `third_party` 声明 `kind = \"type\"` 的编译期类型边, 收到 `kind = \"{kind}\"`(§3.1 显式例外)"
+            "`runtime_adapter` may only declare a compile-time type edge with `kind = \"type\"` to `third_party`, got `kind = \"{kind}\"` (§3.1 explicit exception)"
         ));
     }
     None
 }
 
-/// 依赖边的完整判定(方向表 + api_type 禁则 + `allow_edges` 白名单)。
+/// Full dependency-edge decision (direction table + api_type prohibitions + `allow_edges` whitelist).
 ///
-/// `allow_edges` 为 `product.toml [lint].allow_edges` 的 `(consumer, provider)` 对;
-/// 它**只**豁免 `plugin_type` 方向表(框架件特例), **不**豁免 `api_type` 硬禁则。
+/// `allow_edges` is the `(consumer, provider)` list from `product.toml [lint].allow_edges`;
+/// it exempts **only** the `plugin_type` direction table (framework special case), **not** the hard `api_type` prohibitions.
 ///
-/// 返回 `Some(message)` = 违规。调用方按裁定 R-9 用 `BRV-MF-0001` 报码
-/// (BRV-D8 未给依赖方向禁则分配码; 已在 README 登记缺口)。
+/// `Some(message)` = violation. Callers report code `BRV-MF-0001` per ruling R-9
+/// (BRV-D8 allocated no code for dependency-direction prohibitions; gap registered in README).
 pub fn dep_edge_violation(
     consumer_name: &str,
     consumer_pt: &str,
@@ -535,16 +535,16 @@ pub fn dep_edge_violation(
 
     if !whitelisted && !dep_direction_ok(consumer_pt, provider_pt, provider_is_tp) {
         return Some(format!(
-            "依赖方向禁则(§7.3): `plugin_type = {consumer_pt}` 的 `{consumer_name}` 不得依赖 `plugin_type = {provider_pt}`{} 的 `{provider_name}`",
+            "dependency-direction prohibition (§7.3): `{consumer_name}` with `plugin_type = {consumer_pt}` must not depend on `{provider_name}` with `plugin_type = {provider_pt}`{}",
             if provider_is_tp { "(`api_type = third_party`)" } else { "" }
         ));
     }
     api_type_edge_reason(consumer_pt, consumer_api, provider_api, kind)
 }
 
-// ------------------------------------------------------------------ 导出面分类不变量(§3.5)
+// ------------------------------------------------------------------ export-surface classification invariants (§3.5)
 
-/// 一个 `[[export]]` 的只读视图(供 [`check_export_invariants`])。
+/// Read-only view of one `[[export]]` (for [`check_export_invariants`]).
 #[derive(Clone, Debug)]
 pub struct ExportView<'a> {
     pub api_iface: &'a str,
@@ -553,7 +553,7 @@ pub struct ExportView<'a> {
     pub symbols: &'a [String],
 }
 
-/// 判定 `reexport_of` 的元素形状 `<provider>#<unit>`(§6.1)。
+/// Check the shape of a `reexport_of` element: `<provider>#<unit>` (§6.1).
 pub fn valid_unit_ref(s: &str) -> bool {
     match s.split_once('#') {
         Some((provider, unit)) => {
@@ -563,26 +563,26 @@ pub fn valid_unit_ref(s: &str) -> bool {
     }
 }
 
-/// 导出面分类不变量(§3.5 不变量 1–4)。返回 `(export 下标, 码, 消息)`。
+/// Export-surface classification invariants (§3.5 invariants 1–4). Returns `(export index, code, message)`.
 ///
-/// 分工说明: 不变量 3 的"列表中每个被再导出单元的 `api_iface` **与自身相等**"
-/// 需要读**其它插件**的导出面 ⇒ 是跨文件判定, 归 agent-B(`iface`/`check`);
-/// 本函数只判单记录内可判的部分(非空 + 元素形状 + 反向不变量 4)。
+/// Split of duties: invariant 3's "every re-exported unit has an `api_iface` **equal to its own**"
+/// requires reading **other plugins**' export surfaces ⇒ a cross-file decision owned by agent-B
+/// (`iface`/`check`); this function only checks non-empty + element shape + inverse invariant 4.
 pub fn check_export_invariants(
     plugin_api_type: &str,
     exports: &[ExportView<'_>],
 ) -> Vec<(usize, &'static str, String)> {
     let mut out = Vec::new();
     for (i, e) in exports.iter().enumerate() {
-        // 不变量 1 + 2: api_iface 必须等于 plugin.api_type; third_party 不得抛异类面。
-        // 二者对 `third_party` 的场景做**分区**, 避免同一个问题报两条码。
+        // Invariants 1 + 2: api_iface must equal plugin.api_type; third_party must not export a foreign surface.
+        // The two **partition** the `third_party` case to avoid reporting one problem with two codes.
         if plugin_api_type == "third_party" {
             if e.api_iface != "third_party" {
                 out.push((
                     i,
                     "BRV-TAX-0017",
                     format!(
-                        "`api_type = third_party` 的插件不得抛出 `{}` 分类的接口面(不变量 2)",
+                        "a plugin with `api_type = third_party` must not export an interface surface classified as `{}` (invariant 2)",
                         e.api_iface
                     ),
                 ));
@@ -592,19 +592,19 @@ pub fn check_export_invariants(
                 i,
                 "BRV-TAX-0016",
                 format!(
-                    "`export.api_iface = {}` 必须等于 `[plugin].api_type = {}`(不变量 1)",
+                    "`export.api_iface = {}` must equal `[plugin].api_type = {}` (invariant 1)",
                     e.api_iface, plugin_api_type
                 ),
             ));
         }
 
-        // 不变量 3: form = skin ⇒ reexport_of 非空, 且每个元素形状合法。
+        // Invariant 3: form = skin ⇒ reexport_of non-empty and each element well-shaped.
         if e.form == "skin" {
             if e.reexport_of.is_empty() {
                 out.push((
                     i,
                     "BRV-TAX-0018",
-                    "`form = \"skin\"` 必须声明非空的 `reexport_of`(不变量 3)".to_string(),
+                    "`form = \"skin\"` must declare a non-empty `reexport_of` (invariant 3)".to_string(),
                 ));
             }
             for r in e.reexport_of {
@@ -612,18 +612,18 @@ pub fn check_export_invariants(
                     out.push((
                         i,
                         "BRV-TAX-0018",
-                        format!("`reexport_of` 元素 `{r}` 形状不符: 应为 `<provider>#<unit>`"),
+                        format!("`reexport_of` element `{r}` has a bad shape: expected `<provider>#<unit>`"),
                     ));
                 }
             }
         } else {
-            // 不变量 4: form != skin ⇒ 不得声明 reexport_of / symbols。
+            // Invariant 4: form != skin ⇒ must not declare reexport_of / symbols.
             if !e.reexport_of.is_empty() {
                 out.push((
                     i,
                     "BRV-TAX-0019",
                     format!(
-                        "`form = \"{}\"` 却声明了 `reexport_of`(只有 skin 允许; 不变量 4)",
+                        "`form = \"{}\"` declares `reexport_of` (only skin allows it; invariant 4)",
                         e.form
                     ),
                 ));
@@ -633,7 +633,7 @@ pub fn check_export_invariants(
                     i,
                     "BRV-TAX-0019",
                     format!(
-                        "`form = \"{}\"` 却声明了 `symbols`(只有 skin 允许; 不变量 4)",
+                        "`form = \"{}\"` declares `symbols` (only skin allows it; invariant 4)",
                         e.form
                     ),
                 ));
@@ -643,16 +643,16 @@ pub fn check_export_invariants(
     out
 }
 
-// ------------------------------------------------------------------ 模板可得性(§8.4)
+// ------------------------------------------------------------------ template availability (§8.4)
 
-/// v0.1 模板是否已交付。未交付 ⇒ `BRV-TAX-0014`(severity=info, 但命令未完成 ⇒ 退出码 2, G-1)。
+/// Whether the v0.1 template is delivered. Not delivered ⇒ `BRV-TAX-0014` (severity=info, but command incomplete ⇒ exit code 2, G-1).
 pub fn template_available(api_type: &str, lang: &str) -> bool {
     in_list(TEMPLATE_API_TYPES, api_type) && in_list(TEMPLATE_LANGS, lang)
 }
 
-/// 模板未交付的说明(hint 用)。
+/// Explanation for an undelivered template (for hints).
 pub fn template_unavailable_reason(api_type: &str, lang: &str) -> String {
     format!(
-        "v0.1 只交付 `native` × `c` 模板; 请求的是 `{api_type}` × `{lang}`(unavailable = v0.x 交付)"
+        "v0.1 delivers only the `native` × `c` template; requested `{api_type}` × `{lang}` (unavailable = delivered in v0.x)"
     )
 }

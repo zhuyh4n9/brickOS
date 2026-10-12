@@ -1,303 +1,303 @@
-# brickie — brickOS 组合期工具
+# brickie — brickOS composition-time toolchain
 
-> **`brickie check` 是"声明面完备性检查器"**: 它能保证"这个组合在**逻辑上**自洽",
-> **不**保证"这个组合**编得过 / 跑得对**"(`brickie-v0.1.md` §2)。
+> **`brickie check` is the "declaration-surface completeness checker"**: it guarantees the composition is **logically** self-consistent,
+> but **not** that the composition **compiles / runs correctly** (`brickie-v0.1.md` §2).
 >
-> 这句话是设计文档点名要写进 CLI 帮助与 README 的 —— 目的是避免 v0.x 用户误信。
+> The design doc explicitly requires this sentence in the CLI help and README — to prevent v0.x users from over-trusting it.
 
-设计文档(**权威**, 在 `brickOS-Design` 分支, 本分支没有 `docs/`): 按章节号读
-`docs/2-toolchain/brickie/brickie-v0.1.md`(下文写作 `§x.y`)。
-进度与工单: `docs/2-toolchain/brickie/checklist.md`。
-命名决策: `docs/decisions/0001-brickie-tool-naming.md`(**本工具叫 `brickie`, 不叫 `br`**;
-但 `br_*` / `BR_*` / `.br_plugins` 等**符号前缀是已分配标识符, 不随工具改名**)。
+Design doc (**authoritative**, on the `brickOS-Design` branch; this branch has no `docs/`): read by section number
+`docs/2-toolchain/brickie/brickie-v0.1.md` (written below as `§x.y`).
+Progress and work items: `docs/2-toolchain/brickie/checklist.md`.
+Naming decision: `docs/decisions/0001-brickie-tool-naming.md` (**this tool is `brickie`, not `br`**;
+but symbol prefixes such as `br_*` / `BR_*` / `.br_plugins` are **already-allocated identifiers that do not change with the tool name**).
 
-**跨语言接口的唯一权威是本目录的 [`docs/contract.md`](docs/contract.md)**: 三个进程的
-JSON 信封、诊断模型、文件归属、逐命令的 `args` 与 `data`/`schema` 字段表, 以及实现期
-裁定 **R-1…R-12**, 都在那里。本文件只描述**本仓库的现状与分工**, 协议本身不在此复制
-一份(复制出来的第二份真值正是契约要消灭的东西)。
+**The single authority for the cross-language interface is this directory's [`docs/contract.md`](docs/contract.md)**: the three processes'
+JSON envelope, diagnostic model, file ownership, per-command `args` and `data`/`schema` field tables, and the implementation-time
+rulings **R-1…R-12** are all there. This file only describes **this repo's current state and division of labor**; the protocol itself is not copied
+here (a second copy of the truth is exactly what the contract exists to eliminate).
 
 ---
 
-## 1. 现状(v0.1 命令面)
+## 1. Current state (v0.1 command surface)
 
-**L5(Python 前端)已全量交付**: `python/brickie/` 有 **29 条叶子命令 + 2 条全局开关**
-的完整 argparse 命令面, 编排 / 落盘 / 呈现 / 形状校验 / 退出码汇总逐条落地。按用途分
-**两条族 + 2 条全局开关**(构建族是 ADR-0004 长出来的第二族):
+**L5 (Python frontend) is fully delivered**: `python/brickie/` has a complete argparse command surface of **29 leaf commands + 2 global switches**,
+with orchestration / disk writes / presentation / shape validation / exit-code aggregation all implemented. By purpose it splits into
+**two families + 2 global switches** (the build family is the second family grown from ADR-0004):
 
-| 族 | 命令 | 作用 |
+| Family | Commands | Purpose |
 |---|---|---|
-| **骨架** | `new <ptype> <name>` · `init <product>` · `gen [--check]` | 生成插件/产品骨架; 重建 `build/gen/**` 生成物 |
-| **依赖与校验** | `dep {add,rm,tree,graph,why,index,closure}` · `check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release]` | 闭包/树/图/路径/反向索引 + 四域完备性 |
-| **版本与接口** | `ver {show,bump}` · `iface {list,show,diff,status,publish,freeze,deprecate,undeprecate,unfreeze,refreeze}` | 四段版本 + 单元快照 / 冻结窗口治理 |
-| **构建族(第二族)** | `build [--profile\|--jobs\|--backend\|--tag\|--dry-run\|--force\|--emit-backends\|--no-post]` · `clean [--all]` · `run` · `size` · `disasm` · `test [<name>\|--list]` | 声明面驱动的构建编排 + 执行 + 门禁(build/clean/run/size/disasm/test; core 侧另有 `judge` 只服 L5 内部调用) |
-| **全局开关** | `--version [--deps]` · `--json`(另有 `--root DIR`) | 指纹 / 机器可读输出 / 换根 |
+| **Scaffold** | `new <ptype> <name>` · `init <product>` · `gen [--check]` | Generate plugin/product skeletons; rebuild `build/gen/**` artifacts |
+| **Dependencies & validation** | `dep {add,rm,tree,graph,why,index,closure}` · `check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release]` | Closure/tree/graph/path/reverse index + four-domain completeness |
+| **Version & interface** | `ver {show,bump}` · `iface {list,show,diff,status,publish,freeze,deprecate,undeprecate,unfreeze,refreeze}` | Four-segment version + unit snapshot / freeze-window governance |
+| **Build family (second family)** | `build [--profile\|--jobs\|--backend\|--tag\|--dry-run\|--force\|--emit-backends\|--no-post]` · `clean [--all]` · `run` · `size` · `disasm` · `test [<name>\|--list]` | Declaration-surface-driven build orchestration + execution + gates (build/clean/run/size/disasm/test; core also has `judge`, serving only internal L5 calls) |
+| **Global switches** | `--version [--deps]` · `--json` (also `--root DIR`) | Fingerprint / machine-readable output / root override |
 
-> **v0.1「边界纪律」的适用面(裁定 R-13, contract §9)**: `brickie-v0.1.md` §0 写
-> "v0.1 任何命令**不得要求 cc/cargo/nm 在场**" —— 这句只约束**组合期**命令
-> (骨架 / 依赖与校验 / 版本与接口三族), 也就是"声明面完备性检查器"那一半。
-> **构建族是显式第二族**: 它按同一个声明面组合镜像并驱动交叉工具链,
-> "要求工具链在场"是它的**职责**, 不是纪律的例外条款。CI 的组合期作业仍然零编译依赖
-> (`make tools` / `brickie check` 不碰交叉工具链)。
+> **Scope of the v0.1 "boundary discipline" (ruling R-13, contract §9)**: `brickie-v0.1.md` §0 says
+> "no v0.1 command **may require cc/cargo/nm to be present**" — this sentence constrains only **composition-period** commands
+> (the three families scaffold / dependencies & validation / version & interface), i.e. the "declaration-surface completeness checker" half.
+> **The build family is an explicit second family**: it composes the image from the same declaration surface and drives the cross toolchain;
+> "requiring the toolchain to be present" is its **job**, not an exception clause to the discipline. CI composition-period jobs still have zero compilation dependencies
+> (`make tools` / `brickie check` do not touch the cross toolchain).
 
-**实现状态**(前端 = L5 的参数解析/编排/呈现; 原生侧 = 真正做判定的进程):
+**Implementation status** (frontend = L5 argument parsing/orchestration/presentation; native side = the processes that actually decide):
 
-| 命令 | L5 前端 | 原生侧 | 说明 |
+| Command | L5 frontend | Native side | Notes |
 |---|---|---|---|
-| `new` / `init` / `gen` | ✅ | `core plan-new` / `plan-init` / `gen-plan` ✅ + `gen render` ✅ | 两段式: core 给计划(路径+模板+变量), gen 出内容, L5 落盘 |
-| `dep add` / `dep rm` | ✅ | `core dep-add` / `dep-rm` ✅ | **只打印片段, 不写盘**(裁定 R-2) |
-| `check` | ✅ | `core check` ✅ | 四域 `deps/iface/tax/priv` + `summary`/`scope_results`; `--profile` 门禁 |
-| `dep tree/graph/why/index/closure` | ✅ | `core dep-*` / `closure` ✅ | 闭包是**纯函数**(环报完整结构化路径; 预算合计带 used/容量/预算三个数) |
-| `ver show` / `ver bump` | ✅ | `core ver-show` / `ver-bump` ✅ | 版本载体 = **单元快照**; 人写的 `plugin.toml` 只读(裁定 R-3) |
-| `iface *`(10 条) | ✅ | `core iface-*` ✅ | IFACE-IR + sha256 + 变更集 + 影响报告 + 冻结窗口(含 `unfreezing` 瞬态) |
-| `--version [--deps]` | ✅ | `core version` ✅ | core 缺席时 `--version` 降级打印前端版本 |
-| `build` / `clean` / `run` / `size` / `disasm` / `test` | ✅ | `core build/clean/run/size/disasm/test/judge` ✅ | **第二族**(ADR-0004 / 设计 ADR-0003 的 S1–S4): 声明面驱动构建 + L5 执行器(`runner.py`, 并发/超时/日志/进度); 工具解析 / 增量 / 门禁判据全在 core(裁定 R-14/R-15/R-16) |
+| `new` / `init` / `gen` | ✅ | `core plan-new` / `plan-init` / `gen-plan` ✅ + `gen render` ✅ | Two-stage: core provides the plan (paths + templates + vars), gen produces content, L5 writes to disk |
+| `dep add` / `dep rm` | ✅ | `core dep-add` / `dep-rm` ✅ | **Prints the snippet only, never writes to disk** (ruling R-2) |
+| `check` | ✅ | `core check` ✅ | Four domains `deps/iface/tax/priv` + `summary`/`scope_results`; `--profile` gate |
+| `dep tree/graph/why/index/closure` | ✅ | `core dep-*` / `closure` ✅ | Closure is a **pure function** (cycles report the full structured path; budget totals carry used/capacity/budget) |
+| `ver show` / `ver bump` | ✅ | `core ver-show` / `ver-bump` ✅ | Version carrier = **unit snapshot**; the human-written `brick.toml` is read-only (ruling R-3) |
+| `iface *` (10 commands) | ✅ | `core iface-*` ✅ | IFACE-IR + sha256 + change set + impact report + freeze window (incl. the `unfreezing` transient) |
+| `--version [--deps]` | ✅ | `core version` ✅ | When core is absent, `--version` degrades to printing the frontend version |
+| `build` / `clean` / `run` / `size` / `disasm` / `test` | ✅ | `core build/clean/run/size/disasm/test/judge` ✅ | **Second family** (ADR-0004 / design ADR-0003 S1–S4): declaration-surface-driven build + L5 executor (`runner.py`, concurrency/timeout/logging/progress); tool resolution / incremental / gate criteria all in core (rulings R-14/R-15/R-16) |
 
-> **判定在哪一侧**: 全部**判定**与 BRV 码都在 `rust/`(L0/L1); L5 只做参数解析、编排、
-> 落盘、形状校验、呈现与退出码汇总(V-18c 的静态检查会抓越界)。原生侧的领域自检:
-> `brickie-core --selftest` —— **485 cases**(`make core` 后跑 `build/host/<triple>/bin/brickie-core --selftest`),
-> 它**不需要 Python 解释器参与**(V-18a)。端到端回归见 `tests/run.sh`, 施工图 =
-> `tests/ACCEPTANCE.md` 的 V-1…V-19 矩阵 + 构建族 §V-B。
+> **Which side decides**: all **decisions** and BRV codes live in `rust/` (L0/L1); L5 only does argument parsing, orchestration,
+> disk writes, shape validation, presentation and exit-code aggregation (the V-18c static check catches overreach). The native side's domain self-check:
+> `brickie-core --selftest` — **485 cases** (after `make core`, run `build/host/<triple>/bin/brickie-core --selftest`),
+> it **does not need a Python interpreter** (V-18a). For end-to-end regression see `tests/run.sh`; the blueprint =
+> the V-1…V-19 matrix + build-family §V-B in `tests/ACCEPTANCE.md`.
 
-**明确不做**(设计 checklist §5.4; 这些名字**一条都不在** `--help` 里, 反向验收会抓):
-`api-dump` / `verify` / `iface check` / `dbg` / `pack`, 以及旧名 `add` / `show` / `env`。
+**Explicitly not done** (design checklist §5.4; **none of these names** appear in `--help`; reverse acceptance will catch them):
+`api-dump` / `verify` / `iface check` / `dbg` / `pack`, plus the old names `add` / `show` / `env`.
 
-> `build` / `test` / `run` 原在 §5.4 的"明确不做"名单里 —— 它们是 ADR-0004(设计
-> ADR-0003 的 S1–S4)**后来交付**的第二族, 所以从禁名名单里移除; 反向验收(`N-1`/`N-2`)
-> 已按新名单更新。
+> `build` / `test` / `run` were originally on §5.4's "explicitly not done" list — they are the second family
+> **delivered later** by ADR-0004 (design ADR-0003 S1–S4), so they were removed from the banned-name list; reverse acceptance (`N-1`/`N-2`)
+> has been updated to the new list.
 
-## 2. 目录结构(对照 §9.2)
+## 2. Directory structure (cf. §9.2)
 
 ```
 tools/brickie/
-├── Makefile              工具自身的构建入口(委派 cxx/ 与 cargo; 不重复编译规则)
-├── pyproject.toml        Python 包(brickie)与入口点
-├── freeze.py             打包器: python/** + templates/** + schema/** → 未压缩 tar → C 数组
-├── python/brickie/       L5 前端(命令面 / 编排 / 落盘 / 呈现 / 形状校验)+ runner.py(构建族执行器)
-├── rust/                 brickie-core: L0 模型 + L1 求解/版本/接口引擎 + 构建规划器(唯一判定处)
-├── cxx/                  L2 渲染器(main/render)+ L5 入口 ELF(launcher)
-├── templates/            骨架/描述符/产品模板(数据, 不是代码)
-│   ├── native/<plugin_type>/<lang>/     骨架: plugin.toml / src.c / include.h / smoke.toml / README.md
-│   ├── descriptor/<api_type>/<lang>/    描述符(与 plugin_type 正交)
-│   └── product/<lang>/                  产品骨架
-├── schema/*.schema.json  声明面**单条记录形状**的机器可读描述(plugin/product/lock/index/gates, 5 份)
-├── docs/contract.md      ★ 跨语言接口契约(唯一权威; 见 §3)
-└── tests/                run.sh(端到端)+ ACCEPTANCE.md(V-1…V-19 验收矩阵 + §V-B 构建族)
+├── Makefile              build entry for the tool itself (delegates to cxx/ and cargo; does not duplicate compile rules)
+├── pyproject.toml        Python package (brickie) and entry points
+├── freeze.py             packer: python/** + templates/** + schema/** → uncompressed tar → C array
+├── python/brickie/       L5 frontend (command surface / orchestration / disk writes / presentation / shape validation) + runner.py (build-family executor)
+├── rust/                 brickie-core: L0 model + L1 solver/version/interface engine + build planner (the only place that decides)
+├── cxx/                  L2 renderer (main/render) + L5 entry ELF (launcher)
+├── templates/            skeleton/descriptor/product templates (data, not code)
+│   ├── native/<plugin_type>/<lang>/     skeleton: brick.toml / src.c / include.h / smoke.toml / README.md
+│   ├── descriptor/<api_type>/<lang>/    descriptor (orthogonal to plugin_type)
+│   └── product/<lang>/                  product skeleton
+├── schema/*.schema.json  machine-readable description of the declaration surface's **single-record shape** (plugin/product/lock/index/gates, 5 files)
+├── docs/contract.md      ★ cross-language interface contract (single authority; see §3)
+└── tests/                run.sh (end-to-end) + ACCEPTANCE.md (V-1…V-19 acceptance matrix + build-family §V-B)
 ```
 
-**产物出树**(参考 Android 的 `out/host/...`; 由仓库根 `mk/host.mk` + `tools/host-detect.sh`
-决定)。源码树里只放源码, 编出来的东西一律在仓库级 `build/` 下:
+**Out-of-tree artifacts** (cf. Android's `out/host/...`; decided by the repo root's `mk/host.mk` + `tools/host-detect.sh`).
+The source tree holds only sources; everything built goes under the repo-level `build/`:
 
 ```
-build/host/<host-arch>/<host-os>/bin/brickie       ← L5 入口 ELF(嵌入载荷)
-                              …/bin/brickie-gen    ← L2 渲染器
-                              …/bin/brickie-core   ← L0/L1 Rust 核心
+build/host/<host-arch>/<host-os>/bin/brickie       ← L5 entry ELF (embedded payload)
+                              …/bin/brickie-gen    ← L2 renderer
+                              …/bin/brickie-core   ← L0/L1 Rust core
                               …/lib/libbrickie-gen.a
                               …/obj/cxx/*.o
-                              …/share/brickie/payload.tar   ← 嵌进 brickie 的载荷(供检查)
+                              …/share/brickie/payload.tar   ← payload embedded in brickie (for inspection)
 ```
 
-`<host-arch>` = `x86-64` / `aarch64` / …, `<host-os>` = `linux` / `darwin` / `win`。
-前端 `native.py` 按同一口径找两个原生工具(`BRICKIE_CORE` / `BRICKIE_GEN` /
-`BRICKIE_HOST_ARCH` / `BRICKIE_HOST_OS` 可覆盖), 不依赖源码树内的旧落点。
+`<host-arch>` = `x86-64` / `aarch64` / …, `<host-os>` = `linux` / `darwin` / `win`.
+The frontend `native.py` locates the two native tools by the same convention (`BRICKIE_CORE` / `BRICKIE_GEN` /
+`BRICKIE_HOST_ARCH` / `BRICKIE_HOST_OS` can override), and does not depend on old locations inside the source tree.
 
-**三个可执行的分工**(contract §1): `brickie`(C++ 启动器 + 嵌入载荷)、`brickie-core`
-(Rust)、`brickie-gen`(C++ 渲染器)。入口 ELF 是**单文件自包含**形态: `freeze.py` 把
+**Division of labor among the three executables** (contract §1): `brickie` (C++ launcher + embedded payload), `brickie-core`
+(Rust), `brickie-gen` (C++ renderer). The entry ELF is **single-file self-contained**: `freeze.py` packs
 
-- `python/brickie/**`(L5 前端)、`templates/**`(骨架模板)、`schema/**`(形状门输入),
-- **原生工具**(`cxx/Makefile` 的 `PAYLOAD_EMBEDS`: `brickie-gen` 必嵌, `brickie-core`
-  就位时条件嵌),
+- `python/brickie/**` (L5 frontend), `templates/**` (skeleton templates), `schema/**` (shape-gate input),
+- **native tools** (`cxx/Makefile`'s `PAYLOAD_EMBEDS`: `brickie-gen` always embedded, `brickie-core`
+  conditionally embedded when present),
 
-打成未压缩 ustar tar 后作为数据嵌入; 运行时解包到临时目录, 用系统 `python3` 解释嵌入
-代码, 并把 `BRICKIE_GEN` / `BRICKIE_CORE` 指到**解包出来的**原生工具。于是:
+into an uncompressed ustar tar embedded as data; at runtime it unpacks to a temporary directory, uses the system `python3` to interpret the embedded
+code, and points `BRICKIE_GEN` / `BRICKIE_CORE` at the **unpacked** native tools. Therefore:
 
-- 产物是真 ELF(魔数 `\x7fELF`), 与独立副本 `brickie-gen` / `brickie-core` 一起进种子;
-- **只拷 `brickie` 一个文件**即可运行 —— 不需要 `PYTHONPATH`、不需要源码树、
-  不需要同目录的原生工具、不需要 `g++`/`cargo`;
-- **零新增第三方依赖**(不用 PyInstaller/Nuitka), 载荷逐字节可复现。
+- The artifact is a real ELF (magic `\x7fELF`) and enters the seed together with the standalone copies `brickie-gen` / `brickie-core`;
+- **Copying only the single file `brickie`** is enough to run — no `PYTHONPATH`, no source tree,
+  no native tools in the same directory, no `g++`/`cargo`;
+- **Zero new third-party dependencies** (no PyInstaller/Nuitka); the payload is byte-for-byte reproducible.
 
-**自举种子**(`make prebuilt` 发布; 与 `build/host/**` 同构但**进版本库**):
+**Bootstrap seed** (published by `make prebuilt`; isomorphic to `build/host/**` but **committed to version control**):
 
 ```
-prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie        ← ★ 单文件自包含
-                                           /brickie-gen    ← L2 渲染器(冗余副本, 供开发态直用)
-                                           /brickie-core   ← L0/L1 核心(冗余副本)
+prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie        ← ★ single-file self-contained
+                                           /brickie-gen    ← L2 renderer (redundant copy, for direct dev-mode use)
+                                           /brickie-core   ← L0/L1 core (redundant copy)
 ```
 
-`brickie` 是"没有 `g++`/`cargo` 的全新 checkout 也能跑"的那一份, 也是将来 brickie
-自举管理自身编译的起点。开发态前端查找顺序(`native.py` 的 `_find_tool`):
-`$BRICKIE_GEN`/`$BRICKIE_CORE` → `build/host/...`(本机刚编的) → `prebuilts/...`(种子)
-→ `PATH`(每档都带 `*/*` 兜底)。详见 [prebuilts/README.md](../../prebuilts/README.md)。
+This `brickie` is the one that "runs from a fresh checkout without `g++`/`cargo`", and is also the starting point for future brickie
+self-hosting of its own compilation. Dev-mode frontend lookup order (`native.py`'s `_find_tool`):
+`$BRICKIE_GEN`/`$BRICKIE_CORE` → `build/host/...` (just built locally) → `prebuilts/...` (seed)
+→ `PATH` (each tier has a `*/*` fallback). See [prebuilts/README.md](../../prebuilts/README.md).
 
-## 3. 三语言分工与协议指针
+## 3. Three-language division of labor and protocol pointers
 
-| 层 | 语言 / 位置 | 职责 | 不许做 |
+| Layer | Language / location | Responsibility | Must not do |
 |---|---|---|---|
-| **L0 + L1** | Rust · `rust/`(`brickie-core`) | 模型 / 求解 / 版本 / IFACE-IR / 分类学 / 特权 / 预算 —— **一切判定与错误码**, 以及"机器拥有的文件"的**内容** | 写盘(内容交给 L5 落盘) |
-| **L5** | Python3 · `python/brickie/`(`brickie`) | argparse / 找二进制 / 调子进程 / 读写文件 / JSON 序列化 / 按 `schema/*.json` 做**单条记录形状**校验 / 文本呈现 / 退出码汇总 | 任何业务判定; 任何机器文件的内容拼接(contract §8) |
-| **L2** | C++ · `cxx/`(`brickie-gen`) | **只做模板渲染**: `templates_root` + `artifacts[{path,template,vars}]` → `files[{path,kind:"rendered",content,mode}]` | 一切判定(名字契约/相位/路径布局/版本全在 Rust) |
+| **L0 + L1** | Rust · `rust/` (`brickie-core`) | model / solver / version / IFACE-IR / taxonomy / privilege / budget — **all decisions and error codes**, plus the **content** of "machine-owned files" | Writing to disk (content is handed to L5 to write) |
+| **L5** | Python3 · `python/brickie/` (`brickie`) | argparse / locating binaries / spawning subprocesses / reading and writing files / JSON serialization / **single-record shape** validation against `schema/*.json` / text presentation / exit-code aggregation | Any business decision; concatenating the content of any machine file (contract §8) |
+| **L2** | C++ · `cxx/` (`brickie-gen`) | **template rendering only**: `templates_root` + `artifacts[{path,template,vars}]` → `files[{path,kind:"rendered",content,mode}]` | Any decision (name contract/phase/path layout/version are all in Rust) |
 
-**协议与裁定一律查 [`docs/contract.md`](docs/contract.md)**, 不在别处另立一份:
+**For protocol and rulings always consult [`docs/contract.md`](docs/contract.md)**; do not establish a second copy elsewhere:
 
-- §1 三个宿主可执行 · §2 信封与协议版本(`BRV-PROTO-0001/0002`) · §3 诊断(含构建族码
-  `BRV-BLD-0001..0012`) · §4 文件归属(§9.1.1 写路径纪律) · §5 `brickie-core` 命令与
-  `args`/`data` 字段表(**§5.4 = 构建族七条** `data.steps[i]` / `data.tools[i]`) ·
-  §6 `brickie-gen` 命令 · §7 声明面 schema(**§7.4 = `tests/gates.toml` 形状**) ·
-  §8 L5 边界 · §9 实现期裁定 R-1…R-16。
+- §1 the three host executables · §2 envelope and protocol version (`BRV-PROTO-0001/0002`) · §3 diagnostics (including build-family codes
+  `BRV-BLD-0001..0014`) · §4 file ownership (§9.1.1 write-path discipline) · §5 `brickie-core` commands and
+  the `args`/`data` field tables (**§5.4 = build-family seven** `data.steps[i]` / `data.tools[i]`) ·
+  §6 `brickie-gen` commands · §7 declaration-surface schema (**§7.4 = `tests/gates.toml` shape**) ·
+  §8 L5 boundary · §9 implementation-time rulings R-1…R-16.
 
-**三条最容易被写错、所以单独点名的纪律**:
+**Three disciplines most easily gotten wrong, called out separately**:
 
-1. **写路径**: `plugin.toml` / `product.toml` 是**只读输入**, 永不被改写; 机器只写
-   `api/iface/**`、`brickie.lock`、`build/index/**`、`build/gen/**`(contract §4)。
-2. **`dep add` / `dep rm` 不落盘**(裁定 **R-2**): 设计 §7.7 说"写 `plugin.toml`", 但
-   §9.1.1 规则 1 说永不改写人写文件 —— 取后者。命令只**打印**可直接粘贴的 TOML 片段
-   (`data.snippet`)。
-3. **构建族里 L5 只执行、不判定**(裁定 **R-14/R-15/R-16**): 用哪个编译器、要不要重编、
-   日志算红还是绿, 全部由 core 给; `runner.py` 只做"校验可执行 / 并发 / 超时 / 收日志 /
-   呈现进度"。连编译失败用的码都是 core 随步骤给的(`steps[i].fail_code`)。
+1. **Write paths**: `brick.toml` / `product.toml` are **read-only inputs**, never rewritten; the machine writes only
+   `api/iface/**`, `brickie.lock`, `build/index/**`, `build/gen/**` (contract §4).
+2. **`dep add` / `dep rm` do not write to disk** (ruling **R-2**): design §7.7 says "write `brick.toml`", but
+   §9.1.1 rule 1 says never rewrite human-written files — the latter wins. The command only **prints** a directly pasteable TOML snippet
+   (`data.snippet`).
+3. **In the build family L5 only executes, never decides** (rulings **R-14/R-15/R-16**): which compiler to use, whether to rebuild,
+   whether the log counts as red or green, all come from core; `runner.py` only does "validate executable / concurrency / timeout / collect logs /
+   present progress". Even the code used for a compile failure is given by core with the step (`steps[i].fail_code`).
 
-## 4. 构建与测试
-
-```sh
-make                 # = make cxx: 两个宿主 ELF(brickie-gen L2 + brickie L5 入口);
-                     #   brickie-core 若已在出树落点则条件嵌入, 否则提示后继续
-make core            # cargo 编 L0/L1 的 brickie-core → build/host/<triple>/bin/brickie-core
-make selftest        # brickie-gen --selftest: JSON 往返 / 渲染 / 路径与模式 / 载荷确定性
-make launcher-smoke  # 入口 ELF 自检: 嵌入载荷能不能起来(brickie --version)
-make test            # 渲染器 selftest + tests/run.sh 端到端(V-1…V-19 + §V-B 构建族 / 命令面全覆盖 / 纯度 / 快照)
-make prebuilt        # 发布**三件**种子 {brickie,brickie-gen,brickie-core}(cmp 相同则不写盘)
-make prebuilt-check  # 三件是否落后于源码(不改盘)
-```
-
-工具自身的构建入口**只编工具**; 镜像由 brickie 编(ADR-0004 / 设计 ADR-0003 的 S1–S4):
+## 4. Build and test
 
 ```sh
-build/host/<triple>/bin/brickie build            # 镜像入口: 组合期 check → gen → 编译 → 链接 → [build].post
-build/host/<triple>/bin/brickie build --dry-run  # 只打印计划(不需要编译器; 用例 V-B 用它)
-build/host/<triple>/bin/brickie test             # 跑 tests/gates.toml 的全部门禁
-build/host/<triple>/bin/brickie clean --all      # 清镜像侧派生物(不动 build/host 的工具)
+make                 # = make cxx: the two host ELFs (brickie-gen L2 + brickie L5 entry);
+                     #   brickie-core is conditionally embedded if already at its out-of-tree location, otherwise continue after a notice
+make core            # cargo-builds the L0/L1 brickie-core → build/host/<triple>/bin/brickie-core
+make selftest        # brickie-gen --selftest: JSON round-trip / render / paths and modes / payload determinism
+make launcher-smoke  # entry ELF self-check: can the embedded payload start up (brickie --version)
+make test            # renderer selftest + tests/run.sh end-to-end (V-1…V-19 + §V-B build family / full command-surface coverage / purity / snapshot)
+make prebuilt        # publish the **three-piece** seed {brickie,brickie-gen,brickie-core} (not written if cmp is identical)
+make prebuilt-check  # whether the three pieces lag behind the sources (does not touch disk)
 ```
 
-- **cargo 版本(≥ 1.83)**: `rust/Cargo.lock` 是 **version 4**; 发行版自带的旧 cargo
-  (如 Ubuntu 24.04 的 1.75)读不了它, 只会报 `lock file version 4 requires
-  -Znext-lockfile-bump`。`make core` 的选择序是 "显式 `CARGO=…` → 工作区自带的
-  `.toolchain`(`<repo>/.toolchain` 或 `<repo>/../.toolchain`)→ PATH", 并在太旧时
-  **当场 FAIL** 给出修法(而不是把 cargo 那句含糊的原始报错漏给用户)。
-- **cargo 出树**: `CARGO_HOME` / `CARGO_TARGET_DIR` 缺省指向
-  `prototype/build/{cargo-home,cargo-target}`(受管环境下 `$HOME/.cargo` 可能只读),
-  两个都可用环境变量覆盖; Rust 源码在 `rust/`, 产物拷到宿主 bin 落点。
-- **core 降级、门禁不降级**: `make` / `make cxx` / `make selftest` 在 Rust 未产出时
-  **照常成功**(载荷暂不含 core, 只打印提示); 而 `make prebuilt` 把 `brickie-core`
-  当**必需件** —— 缺 core ⇒ FAIL(自举种子必须三件齐), `prebuilt-check` 同样查三件。
-- **仓库根委派**: `make tools`(只编 L5/L2)、`make tools-core`(只编 Rust 核心)、
-  `make tools-test`(工具用例)、`make brickie-check` / `brickie-check-release` /
-  `make brickie-compose`(用入口 ELF 校验 / 重建生成物)。
-  **镜像侧已交给 brickie**(ADR-0004 / 设计 ADR-0003 的 S1–S4): 顶层 `make` 只编工具;
+The tool's own build entry **builds only the tool**; the image is built by brickie (ADR-0004 / design ADR-0003 S1–S4):
+
+```sh
+build/host/<triple>/bin/brickie build            # image entry: composition-period check → gen → compile → link → [build].post
+build/host/<triple>/bin/brickie build --dry-run  # print the plan only (needs no compiler; use case V-B uses it)
+build/host/<triple>/bin/brickie test             # run all gates in tests/gates.toml
+build/host/<triple>/bin/brickie clean --all      # clean image-side derivatives (leaves build/host tools alone)
+```
+
+- **cargo version (≥ 1.83)**: `rust/Cargo.lock` is **version 4**; an old distro cargo
+  (e.g. 1.75 on Ubuntu 24.04) cannot read it and only reports `lock file version 4 requires
+  -Znext-lockfile-bump`. `make core`'s selection order is "explicit `CARGO=…` → the workspace's own
+  `.toolchain` (`<repo>/.toolchain` or `<repo>/../.toolchain`) → PATH", and when too old it
+  **FAILs immediately** with a fix (instead of leaking cargo's vague raw error to the user).
+- **cargo out-of-tree**: `CARGO_HOME` / `CARGO_TARGET_DIR` default to
+  `prototype/build/{cargo-home,cargo-target}` (under managed environments `$HOME/.cargo` may be read-only),
+  both can be overridden by environment variable; Rust sources are in `rust/`, artifacts are copied to the host bin location.
+- **Core degrades, gates do not**: when Rust has not been built, `make` / `make cxx` / `make selftest`
+  **succeed as usual** (the payload temporarily excludes core; only a notice is printed); but `make prebuilt` treats `brickie-core`
+  as a **required piece** — missing core ⇒ FAIL (the bootstrap seed must have all three pieces); `prebuilt-check` also checks all three.
+- **Repo-root delegation**: `make tools` (builds only L5/L2), `make tools-core` (builds only the Rust core),
+  `make tools-test` (tool tests), `make brickie-check` / `brickie-check-release` /
+  `make brickie-compose` (validate / rebuild artifacts using the entry ELF).
+  **The image side is handed to brickie** (ADR-0004 / design ADR-0003 S1–S4): top-level `make` builds only the tool;
   `make all` / `run` / `smoke` / `irq-test` / `mem-test` / `string-test` / `dbg-test` /
-  `check-string` / `size` / `disasm` / `clean-brickos` 都是**薄委派**(调
-  `$(BRICKIE) build|run|test …|size|disasm|clean`), 真身在 `brickie build` 与
-  `tests/gates.toml`。镜像的源码集合 / 标志 / 规则**不再**出现在顶层 Makefile 里 ——
-  由 `product.toml [build]` + 各插件 `[build]` + platform 的 `[build.target]` 决定,
-  `make check-build` 的第 ② 条不变量会抓任何回退。
-  声明面红 ⇒ **`make` 在 ⓪ 止步**(退出码 1), 镜像不编 —— 这是纪律本身, 不是意外;
-  只编工具用 `make tools` / `make tools-core`。
+  `check-string` / `size` / `disasm` / `clean-brickos` are all **thin delegations** (calling
+  `$(BRICKIE) build|run|test …|size|disasm|clean`); the real thing lives in `brickie build` and
+  `tests/gates.toml`. The image's source set / flags / rules **no longer** appear in the top-level Makefile —
+  they are determined by `product.toml [build]` + each plugin's `[build]` + the platform's `[build.target]`,
+  and the ② invariant in `make check-build` catches any regression.
+  Declaration surface red ⇒ **`make` stops at ⓪** (exit code 1) and the image is not built — this is the discipline itself, not an accident;
+  to build only the tool use `make tools` / `make tools-core`.
 
-两种用法:
+Two usages:
 
 ```sh
-# (a) 入口 ELF: 自带 Python 代码、模板、schema 与两个原生工具
+# (a) entry ELF: carries the Python code, templates, schema and both native tools
 build/host/<host-arch>/<host-os>/bin/brickie check --root .
-# (b) 开发态: Python 源码直跑, 前端自己去 build/host/ 找原生工具
-python3 -m brickie check --root .   # 需 PYTHONPATH=python(或已装包)
-# 也可显式指定
+# (b) dev mode: run the Python sources directly; the frontend finds the native tools under build/host/ itself
+python3 -m brickie check --root .   # needs PYTHONPATH=python (or the package installed)
+# or specify explicitly
 BRICKIE_CORE=/path/to/brickie-core BRICKIE_GEN=/path/to/brickie-gen python3 -m brickie gen
 ```
 
-## 5. 诊断与退出码
+## 5. Diagnostics and exit codes
 
-退出码继承 `2-02` BR-D7 / 本篇 BRV-D9:
+Exit codes inherit `2-02` BR-D7 / this document's BRV-D9:
 
-| 码 | 含义 | v0.1 |
+| Code | Meaning | v0.1 |
 |---|---|---|
-| 0 | 成功 | ✅ |
-| 1 | 校验红(环 / 冲突 / 预算 / 版本 / 分类学 / 特权); **构建族**里步骤失败 / 门禁判红也折进这一档 | ✅ |
-| 2 | 用法或环境错(参数非法 / schema 不符 / 路径不存在 / 模板不可用 / 原生件缺失或协议不符 / 命令尚未实现 / 构建族找不到编译器或 QEMU) | ✅ |
-| 3 | 编译或运行失败 | ✗ **仍不用**: 构建族把"编译失败"折进 1(`BRV-BLD-0011`), 环境错折进 2(`BRV-BLD-0005`) —— 与 BRV-D9 的"三档"一致, 不新增第四档 |
+| 0 | Success | ✅ |
+| 1 | Validation red (cycles / conflicts / budget / version / taxonomy / privilege); in the **build family** a failed step / red gate also folds into this bucket | ✅ |
+| 2 | Usage or environment error (invalid arguments / schema mismatch / path does not exist / template unavailable / native artifact missing or protocol mismatch / command not yet implemented / build family cannot find compiler or QEMU) | ✅ |
+| 3 | Compile or run failure | ✗ **still unused**: the build family folds "compile failure" into 1 (`BRV-BLD-0011`) and environment errors into 2 (`BRV-BLD-0005`) — consistent with BRV-D9's "three buckets", no fourth bucket added |
 
-**严重度不决定退出码**: `severity ∈ {error,warning,info}` 只描述"这条信息有多重",
-退出码由"命令有没有完成"决定。两个已登记的判例: `BRV-TAX-0014`(所选模板 v0.1 未交付)
-是 `info`, 但**一件文件都没生成** ⇒ 退出码取 2; 用法/环境错(未知 `plugin_type`、
-缺 `--subkind`、名字契约违例、schema 形状不符…)带诊断但 **`code: null`** —— 它们是
-"用法错"这一档, 不是声明面诊断。
+**Severity does not determine the exit code**: `severity ∈ {error,warning,info}` only describes "how heavy this message is";
+the exit code is determined by "did the command complete". Two registered precedents: `BRV-TAX-0014` (the selected template is not delivered in v0.1)
+is `info`, but **not a single file was generated** ⇒ exit code 2; usage/environment errors (unknown `plugin_type`,
+missing `--subkind`, name-contract violation, schema shape mismatch…) carry a diagnostic but **`code: null`** — they are
+the "usage error" bucket, not declaration-surface diagnostics.
 
-原生工具的**进程**退出码恒为 0(除 `internal_error` 与崩溃): 业务结论只在响应的
-`exit_code` 里 —— 这样"工具故障"与"校验红"不会混成一件事(contract §2)。
+A native tool's **process** exit code is always 0 (except `internal_error` and crashes): the business conclusion is only in the response's
+`exit_code` — so "tool failure" and "validation red" do not get conflated (contract §2).
 
-已交付路径会发出的诊断(码全部取自设计 BRV-D8 的**已分配编码表**, 未自造):
+Diagnostics the delivered paths can emit (all codes taken from the design BRV-D8 **assigned code table**, none invented):
 
-| 码 | 严重度 | 触发 |
+| Code | Severity | Trigger |
 |---|---|---|
-| `BRV-TAX-0013` | warning | 插件名不符推荐形态 `<namespace>/<short>`(§8.3; 只对新增插件) |
-| `BRV-TAX-0014` | info | 所选 `api_type` 模板 v0.1 未交付(`runtime_adapter` / `third_party`) |
-| `BRV-TAX-0015` | error | `--subkind` 与按 namespace 的推导冲突(§8.4) |
-| `BRV-GEN-0002` | error | 生成目标已存在且非生成物目录, 或目标是**人写文件**(§8.4) |
-| `BRV-MF-0001` | error | 声明面必填字段缺失 / 字段形状不符 schema(形状门, 退出码 2) |
-| `BRV-BLD-0001..0012` | error(全绿判据是**无码 info**) | 构建族: 缺 `[build]` / 空 sources / 缺 `[build.target]` / 目标二义 / 工具缺失(退出码 2) / 单元缺 `[build]` / 字面源不存在 / 门禁名未知 / 门禁判红 / `[build]` 形状 / 步骤失败 / 正则超子集。逐条见 contract §3 |
+| `BRV-TAX-0013` | warning | plugin name does not match the recommended form `<namespace>/<short>` (§8.3; new plugins only) |
+| `BRV-TAX-0014` | info | selected `api_type` template not delivered in v0.1 (`runtime_adapter` / `third_party`) |
+| `BRV-TAX-0015` | error | `--subkind` conflicts with the namespace-derived value (§8.4) |
+| `BRV-GEN-0002` | error | generation target already exists and is not an artifact directory, or the target is a **human-written file** (§8.4) |
+| `BRV-MF-0001` | error | declaration-surface required field missing / field shape does not match schema (shape gate, exit code 2) |
+| `BRV-BLD-0001..0014` | error (the all-green criterion is a **code-less info**) | Build family: missing `[build]` / empty sources / missing `[build.target]` / ambiguous target / tool missing (exit code 2) / unit missing `[build]` / literal source does not exist / unknown gate name / gate red / `[build]` shape / step failure / regex beyond subset / artifact belongs to a non-closure plugin (info) / artifact is a **stale leftover** (info, ghost plugin). See contract §3 for each |
 
-## 6. 与设计文档的已知偏差 / 缺口(需要回灌)
+## 6. Known deviations / gaps vs the design doc (need backporting)
 
-| # | 设计文档说 | 本实现 | 为什么 |
+| # | Design doc says | This implementation | Why |
 |---|---|---|---|
-| D-1 | §9.2: `cxx/ # CMake: libbrickie-gen + brickie-gen` | 用等价的最小 **Makefile**(库/可执行两个产物的划分不变) | 本机无 cmake; 不引入构建系统依赖(与 §9.3 的"最小依赖集"同向) |
-| D-2 | §9.2: `templates/ # 骨架模板: <api_type>/<plugin_type>/<lang>/` | 骨架模板照此; 描述符另放 `templates/descriptor/<api_type>/<lang>/` | 描述符与 `plugin_type` **正交**(只随 `api_type` 与 `lang` 变), §9.2 的路径没覆盖这一维 |
-| D-3 | §13.2 的 A-3 / A-14 / BRV-Q7(未回灌); `1-01` §6.1 仍写 `ver[3]` | `plugin.toml` 与生成物**按四段版本** `COMPAT_GEN.MAJOR.MINOR.REVISE`(如 `0.1.0.0`) | 三段的描述符**表达不了**声明面; 生成物头部已把这条假定写明 |
-| D-4 | `4-02:29` 的宏形态矛盾(static vs 非 static)未定稿 | 生成物取 **`static const` + `.br_plugins`**(`3-01` §13.3 / CA-10), 并在头部注明备选 | 段收集只需 `used`+`section`, 不需外部链接; CA-10 是**已采纳的决策记录**且明写"插件导出面近零" |
-| D-5 | `3-05` §2 未定稿描述符头文件名 | 生成物 `#include "br_plugin.h"`, 并在头部注明未定稿 | 任何文档都没有给出文件名; 生成物**不被编译**(V-9), 它现在是声明面产物 |
-| D-6 | §9.2 / BRV-D5 **未规定工具自身原生件的落点**(只给了源码树) | 产物**出树**: `build/host/<host-arch>/<host-os>/{bin,lib,obj}`(参考 Android 的 `out/host/...`) | 需求方硬约束(工具 bin 不落源码树); 已回灌 BRV-D5 表 + §9.2 注 + `2-02` BR-D5, checklist §5.6 登记为 **G-6** |
-| D-7 | §9.2 / BRV-D5 **未规定"随源码提交的预编译件"**(只说了"生成物不进库") | **自举种子进库**: `prebuilts/seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}`(`make prebuilt` 发布) | 需求方硬约束(为"没有编译器也能起步"与将来 brickie 自举管理自身编译留种); 已立 ADR **0004** 并回灌 BRV-D5 表 + §9.2 + `2-02` BR-D5, checklist §5.6 登记为 **G-7** |
-| D-8 | §9.1/§9.2 把 L5 定为 **Python3** 进程(隐含"要解释器 + `PYTHONPATH`"), 且把 L2 生成器当作**独立可执行** | **Python 前端与原生工具编译进同一个 ELF**: 自写 `cxx/launcher.cpp` + `freeze.py`, 把 `python/brickie/**`、`templates/**`、`schema/**` 与两个原生工具(载荷 `bin/brickie-gen`、`bin/brickie-core`)全部嵌进 `brickie`(单文件自包含; 运行时仍用系统 `python3`, 环境变量指向解包件) | 需求方硬约束("brickie 的 python 代码也需要编译为 elf" + "brickie-gen 等工具均需要编译到 python 的 brickie elf 中"); 选零依赖入口而非 PyInstaller/Nuitka, 是为守住 §9.3 的"Python 零第三方依赖"纪律。已回灌 ADR **0004 §7** 与 checklist §5.6 **G-8** |
-| D-9 | §7.7 说 `dep add` / `dep rm` "写 `plugin.toml`" | **只打印 TOML 片段, 不写盘**(裁定 **R-2**); 覆盖写会抹掉注释, 且违反 §9.1.1 规则 1 | 人写文件是**唯一真值**; 切换成本 = 将来加 `--write`(contract §9 R-2) |
-| D-10 | 接口状态机的 `--note` **语义未裁定**(路径还是正文) | 前端按 CLI 口径把 `--note` 的值当**路径原样**传给 core(正文读取与校验归 core) | 与"参数即路径"的 CLI 一致性; 若核心改为收正文, 在 `cli.py` 的 `iface` args 一处加 `note_text`(单点切换) |
-| D-11 | BRV-D8 **未给下列缺陷分配专属码**: 生成物与重算不一致 / 渲染缺变量 / 依赖方向硬禁则 / 预算与独占冲突 / 重复 `[[dep]]` … | 按"就近"兜底: 形状与声明面错误用 `BRV-MF-0001`(消息里点名双方/差值), 其余用 **`code: null` 的用法错**(`exit_code 2`); **不自造码** | 编码表是设计资产, 自造码会让"码 → 规格"的映射失真; 缺口已由 L5/Rust 两侧分别登记, 待补码后逐一收口 |
-| D-12 | `[[dep]].phase` 的断言语义**自相矛盾**(§7.2 写 `rank(assertion) ≤ rank(provider)`, §8.1 写"提供方不晚于断言") | v0.1 **不执法**这一条(只做单记录形状与允许集校验), 等规格二选一后写死 | 两种读法结论相反, 先选一种会把另一半判例判错; 已登记缺口并在 `rust/README.md` 的缺口表可见 |
-| D-13 | §0: "v0.1 **任何命令**不得要求 cc/cargo/nm 在场"; §7.1 注: `plugin.toml [build]` "v0.1 只记录, v0.3 起被消费" | **构建族是显式第二族**, 提前消费 `[build]`/`[build.target]`(ADR-0004 / 设计 ADR-0003 的 S1–S4); 边界纪律按"只约束**组合期**命令"读(裁定 **R-13**) | 需求方要求 `brickie build` 接管镜像入口; 两族职责不同, 一句话管两族会自相矛盾。已回灌 contract §9 R-13 + `rust/README` S-B* |
-| D-14 | BRV-D8 **没有 BUILD 族** | 新开 `BRV-BLD-0001..0012`(逐条见 contract §3), 未自造形状之外的语义 | 门禁判据 / 工具解析 / 增量都需要可分辨的失败原因; 编码表待回灌(与 D-11 同向) |
-| D-15 | §9.2 把工具自身的构建入口(`cxx/ Makefile`)与镜像构建混在仓库根 Makefile 的"两段式"叙事里 | 顶层 `Makefile` **只编工具**; 镜像目标降级为**薄委派别名**(`make all|run|smoke|…` → `$(BRICKIE) build|run|test|…`), 真身在 `brickie build` + `tests/gates.toml`; 源码集合 / 标志 / 规则从 Makefile 移除, 由 `make check-build` 第 ② 条门禁钉死 | ADR-0003 的 S1+S4(构建归属转移 + Makefile 退役的缩减期); 迁移期保留别名是为了不打断现有 CI/习惯 |
+| D-1 | §9.2: `cxx/ # CMake: libbrickie-gen + brickie-gen` | an equivalent minimal **Makefile** (the library/executable two-artifact split is unchanged) | cmake is not available locally; no build-system dependency introduced (same direction as §9.3's "minimal dependency set") |
+| D-2 | §9.2: `templates/ # skeleton templates: <api_type>/<plugin_type>/<lang>/` | skeleton templates follow this; descriptors go in `templates/descriptor/<api_type>/<lang>/` | descriptors are **orthogonal** to `plugin_type` (they vary only with `api_type` and `lang`), and §9.2's path did not cover this dimension |
+| D-3 | §13.2's A-3 / A-14 / BRV-Q7 (not backported); `1-01` §6.1 still says `ver[3]` | `brick.toml` and artifacts use a **four-segment version** `COMPAT_GEN.MAJOR.MINOR.REVISE` (e.g. `0.1.0.0`) | a three-segment descriptor **cannot express** the declaration surface; the artifact header already states this assumption |
+| D-4 | the macro-form contradiction at `4-02:29` (static vs non-static) is not finalized | artifacts use **`static const` + `.br_plugins`** (`3-01` §13.3 / CA-10), and the header notes the alternative | section collection needs only `used`+`section`, not external linkage; CA-10 is an **adopted decision record** and explicitly says "the plugin export surface is near zero" |
+| D-5 | `3-05` §2 does not finalize the descriptor header filename | artifacts `#include "br_plugin.h"`, and the header notes that it is not finalized | no document gives the filename; artifacts are **not compiled** (V-9), they are now a declaration-surface product |
+| D-6 | §9.2 / BRV-D5 **do not specify where the tool's own native artifacts live** (only the source tree is given) | artifacts are **out of tree**: `build/host/<host-arch>/<host-os>/{bin,lib,obj}` (cf. Android's `out/host/...`) | hard requirement from the requester (tool bins must not land in the source tree); backported to the BRV-D5 table + §9.2 note + `2-02` BR-D5, registered in checklist §5.6 as **G-6** |
+| D-7 | §9.2 / BRV-D5 **do not specify "prebuilt binaries committed with the sources"** (they only say "artifacts do not enter the repo") | **the bootstrap seed enters the repo**: `prebuilts/seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}` (published by `make prebuilt`) | hard requirement from the requester (seeds "bootstrapping without a compiler" and future brickie self-hosting of its own compilation); ADR **0004** established and backported to the BRV-D5 table + §9.2 + `2-02` BR-D5, registered in checklist §5.6 as **G-7** |
+| D-8 | §9.1/§9.2 define L5 as a **Python3** process (implying "needs an interpreter + `PYTHONPATH`") and treat the L2 generator as a **standalone executable** | **the Python frontend and the native tools are compiled into the same ELF**: a self-written `cxx/launcher.cpp` + `freeze.py` embed `python/brickie/**`, `templates/**`, `schema/**` and both native tools (payload `bin/brickie-gen`, `bin/brickie-core`) entirely into `brickie` (single-file self-contained; at runtime the system `python3` is still used, with environment variables pointing at the unpacked pieces) | hard requirement from the requester ("brickie's python code also needs to be compiled to an elf" + "tools such as brickie-gen all need to be compiled into python's brickie elf"); a zero-dependency entry was chosen over PyInstaller/Nuitka to keep §9.3's "Python zero third-party dependencies" discipline. Backported to ADR **0004 §7** and checklist §5.6 **G-8** |
+| D-9 | §7.7 says `dep add` / `dep rm` "write `brick.toml`" | **print the TOML snippet only, do not write to disk** (ruling **R-2**); an overwrite would erase comments and violate §9.1.1 rule 1 | human-written files are the **single source of truth**; switch cost = adding `--write` later (contract §9 R-2) |
+| D-10 | the interface state machine's `--note` **semantics are not ruled on** (path or body) | the frontend follows the CLI convention and passes `--note`'s value to core **verbatim as a path** (body reading and validation belong to core) | consistency with the "an argument is a path" CLI rule; if the core switches to taking the body, add `note_text` in one place in `cli.py`'s `iface` args (single-point switch) |
+| D-11 | BRV-D8 **assigns no dedicated codes** to the following defects: artifact inconsistent with recomputation / render missing variable / hard dependency-direction prohibition / budget vs exclusive conflict / duplicate `[[dep]]` … | fall back "by proximity": shape and declaration-surface errors use `BRV-MF-0001` (naming both sides/the delta in the message), the rest use a **usage error with `code: null`** (`exit_code 2`); **no invented codes** | the code table is a design asset; inventing codes would distort the "code → spec" mapping; the gaps are registered separately on the L5 and Rust sides and will be closed one by one once codes are added |
+| D-12 | the assertion semantics of `[[dep]].phase` are **self-contradictory** (§7.2 writes `rank(assertion) ≤ rank(provider)`, §8.1 writes "the provider is no later than the assertion") | v0.1 **does not enforce** it (only single-record shape and allowed-set validation), pending the spec choosing one of the two | the two readings give opposite conclusions, so picking one first would misjudge the other half of the cases; the gap is registered and visible in `rust/README.md`'s gap table |
+| D-13 | §0: "no v0.1 **command** may require cc/cargo/nm to be present"; §7.1 note: `brick.toml [build]` "is only recorded in v0.1, consumed from v0.3" | **the build family is an explicit second family** that consumes `[build]`/`[build.target]` early (ADR-0004 / design ADR-0003 S1–S4); the boundary discipline is read as "constraining only **composition-period** commands" (ruling **R-13**) | the requester asked `brickie build` to take over the image entry; the two families have different responsibilities, and one sentence governing both would be self-contradictory. Backported to contract §9 R-13 + `rust/README` S-B* |
+| D-14 | BRV-D8 **has no BUILD family** | opened `BRV-BLD-0001..0014` (see contract §3 for each), with no semantics invented beyond the shape | gate criteria / tool resolution / incremental all need distinguishable failure reasons; the code table awaits backporting (same direction as D-11) |
+| D-15 | §9.2 mixes the tool's own build entry (`cxx/ Makefile`) and image building in the repo-root Makefile's "two-stage" narrative | the top-level `Makefile` **builds only the tool**; the image targets are downgraded to **thin delegation aliases** (`make all|run|smoke|…` → `$(BRICKIE) build|run|test|…`), with the real thing in `brickie build` + `tests/gates.toml`; the source set / flags / rules are removed from the Makefile and pinned by the ② gate in `make check-build` | ADR-0003 S1+S4 (transfer of build ownership + the reduction period of Makefile retirement); the aliases are kept during migration so as not to disrupt existing CI/habits |
 
-> 以上各条都**不是**"顺手多做一点", 而是 v0.1 命令面无法回避的落笔处; 每条都在生成物
-> 的文件头或契约里对读者可见, 并已登记进 checklist, 等规格拍板后改模板/引擎即可。
+> None of the above is "doing a bit extra on the side"; each is an unavoidable point of contact for the v0.1 command surface; each is visible to readers
+> in the artifact header or the contract, and is registered in the checklist; once the spec is decided, only the templates/engine change.
 
-## 7. 修改纪律
+## 7. Change discipline
 
-- **判定只归 L0/L1(`rust/`), 渲染只归 L2(`cxx/`), 编排只归 L5(`python/`)。**
-  别在 Python 里加业务规则, 也别在 C++ 渲染器里加条件判定 —— 这是 C9 与 §9.1 的硬约束,
-  由"粘合层纯度检查"与反向验收用例保证。
-- **生成物不手改。** 改 `plugin.toml` 后重建(`brickie gen`); 生成物与 golden 同纪律。
-- **模板是数据。** 想让四类骨架分化, 改 `templates/`, 不给渲染器加条件语法 ——
-  §9.2 用"按 `api_type`/`plugin_type`/`lang` 分目录"取代了模板语言。
-- **改了 `python/**`、`templates/**`、`schema/**` 或原生工具, 记得重发种子。**
-  它们都被 `freeze.py` 嵌进入口 ELF(`PAYLOAD_ROOTS = ("python","templates","schema")`),
-  所以 `make prebuilt` 不只是"重编 C++"—— 载荷变了 `brickie` 就变了;
-  `make prebuilt-check` 与端到端用例的"种子逐字节一致"会抓漏。
-- **启动器不碰业务。** `cxx/launcher.cpp` 只做"定位/解包/布环境/转发", 一行 Python 语义
-  都不许加; 载荷里的代码仍是同一个 `python/brickie/`(纪律同上)。
-- **改动先跑 `make selftest && make test`**(要连入口 ELF 一起验, 再跑 `make prebuilt`)。
+- **Decisions belong only to L0/L1 (`rust/`), rendering only to L2 (`cxx/`), orchestration only to L5 (`python/`).**
+  Do not add business rules in Python, and do not add conditional decisions in the C++ renderer — this is a hard constraint of C9 and §9.1,
+  enforced by the "glue-layer purity check" and reverse acceptance cases.
+- **Never hand-edit artifacts.** After changing `brick.toml`, rebuild (`brickie gen`); artifacts follow the same discipline as goldens.
+- **Templates are data.** To differentiate the four skeleton kinds, change `templates/`, do not add conditional syntax to the renderer —
+  §9.2 replaced a template language with "directories by `api_type`/`plugin_type`/`lang`".
+- **After changing `python/**`, `templates/**`, `schema/**` or a native tool, remember to republish the seed.**
+  They are all embedded into the entry ELF by `freeze.py` (`PAYLOAD_ROOTS = ("python","templates","schema")`),
+  so `make prebuilt` is not just "recompiling C++" — if the payload changes, `brickie` changes;
+  the "seed byte-for-byte identical" checks in `make prebuilt-check` and the end-to-end cases will catch an omission.
+- **The launcher does not touch business logic.** `cxx/launcher.cpp` only does "locate/unpack/set up environment/forward"; not one line of Python semantics
+  may be added; the code in the payload is still the same `python/brickie/` (same discipline as above).
+- **After a change first run `make selftest && make test`** (to verify together with the entry ELF, then run `make prebuilt`).
 
-## 8. L5(Python)前端的权威说明
+## 8. Authoritative description of the L5 (Python) frontend
 
-`python/brickie/` 的模块地图、逐命令状态、与两个原生工具的调用点、schema 形状校验的
-允许集、剩余 TODO 与契约缺口(T-*、G-*)**全部在
-[`python/brickie/README.md`](python/brickie/README.md)** —— 本节只留指针, 不复制内容。
-本文件 §1 的现状表是**跨三层**的总览; 两者冲突时, 以代码与 `docs/contract.md` 为准。
+The module map of `python/brickie/`, per-command status, call sites into the two native tools, the schema shape validation
+allowed set, remaining TODOs and contract gaps (T-*, G-*) are **all in
+[`python/brickie/README.md`](python/brickie/README.md)** — this section keeps only a pointer, it does not copy the content.
+The current-state table in §1 of this file is a **cross-layer** overview; if the two conflict, code and `docs/contract.md` win.
 
-## 9. 文档同步时的"待确认"清单(现已逐条收口)
+## 9. "To be confirmed" list from doc-sync time (now all closed)
 
-> 这一节是**文档同步与实现并行**时留下的台账。实现落地后逐条收口, 保留它是为了
-> 留下"曾经不一致过"的痕迹(而不是悄悄删掉)。
+> This section is the ledger left from when **doc sync and implementation ran in parallel**. It was closed item by item as the implementation landed; it is kept to
+> preserve the trace of "there used to be inconsistencies" (rather than quietly deleting it).
 
-| # | 写作时的状态 | 收口结果 |
+| # | State at writing time | Closing result |
 |---|---|---|
-| 1 | `rust/src/{solver,check,iface}.rs` 还是 `unimplemented` 空壳, `brickie check` 回 exit 2 | **已收口**: 15 条命令族落地, `brickie-core --selftest` = 432 cases; `check`/`dep *`/`ver *`/`iface *` 在原型树上实测 0 错误 |
-| 2 | 种子落后于源码(`prebuilt-check` 红) | **已收口**: 三件种子按最终源码重发, `make tools-prebuilt-check` 全 ok |
-| 3 | `schema.py` 的 docstring/查找清单仍写"包内镜像 `python/brickie/schema/`" | **已收口**: 查找顺序改为 `$BRICKIE_SCHEMA_ROOT` → `<tool_root>/schema`(规范位置) → 包内兼容读法(可选) → 仓库兜底 |
-| 4 | `cxx/Makefile` 的 `PAYLOAD_SRCS` 比 `freeze.py` 的 `PAYLOAD_ROOTS` 窄 ⇒ 改非 `.py`/schema 不重打载荷(静默不一致) | **已收口**: `PAYLOAD_SRCS` 改为按 `PAYLOAD_ROOTS = python templates schema` 同源列举(排除 `__pycache__`/`*.pyc`) |
-| 5 | 缺省 `make` 因 `brickie-check` 未实现而编不到镜像 | **已收口**: `brickie-check` 现为**真的**组合期校验(声明面红才止步); 原型树实测缺省 `make` 通过 |
+| 1 | `rust/src/{solver,check,iface}.rs` were still `unimplemented` stubs and `brickie check` returned exit 2 | **Closed**: 15 command families landed, `brickie-core --selftest` = 432 cases; `check`/`dep *`/`ver *`/`iface *` measured 0 errors on the prototype tree |
+| 2 | seed lagged behind the sources (`prebuilt-check` red) | **Closed**: the three seed pieces were republished from the final sources, `make tools-prebuilt-check` all ok |
+| 3 | `schema.py`'s docstring/lookup list still said "in-package mirror `python/brickie/schema/`" | **Closed**: lookup order changed to `$BRICKIE_SCHEMA_ROOT` → `<tool_root>/schema` (canonical location) → in-package compatibility read (optional) → repo fallback |
+| 4 | `cxx/Makefile`'s `PAYLOAD_SRCS` was narrower than `freeze.py`'s `PAYLOAD_ROOTS` ⇒ changing non-`.py`/schema files did not repack the payload (silent inconsistency) | **Closed**: `PAYLOAD_SRCS` now enumerates from the same source `PAYLOAD_ROOTS = python templates schema` (excluding `__pycache__`/`*.pyc`) |
+| 5 | default `make` could not build the image because `brickie-check` was unimplemented | **Closed**: `brickie-check` is now a **real** composition-period validation (it stops only on a red declaration surface); default `make` passes on the prototype tree |

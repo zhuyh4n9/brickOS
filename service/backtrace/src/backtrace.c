@@ -1,53 +1,58 @@
 /*
- * service/backtrace — 栈回溯捕获服务(实现)
+ * service/backtrace — stack backtrace capture service (implementation)
  *
- * 设计出处: `docs/5-debug/5-01-debug.md` §3:
- *   "捕获集: 寄存器组、TCB 全集 + **各线程栈**、trace 环 …" 与
- *   "host 工具: 离线分析(线程时序对照 trace、fault 解码、**栈回溯**)"。
- * 职责边界因此被设计划死: **target 只捕获, host 才符号化**
- *   (addr2line/llvm-symbolizer 把 pc 变成 函数+偏移) —— 本文件不携带也不生成
- *   符号表(那要两遍链接, 属 v1.x 的"离线解码"优化), 见 README 的归属边界。
+ * Design source: `docs/5-debug/5-01-debug.md` §3:
+ *   "capture set: register set, full TCB set + **per-thread stacks**, trace ring …" and
+ *   "host tool: offline analysis (thread timing against trace, fault decode, **stack backtrace**)".
+ * Responsibility boundary: **target only captures, host symbolizes**
+ *   (addr2line/llvm-symbolizer turns pc into function+offset) — this file neither carries nor
+ *   generates a symbol table (that needs two-pass linking, a v1.x "offline decode"
+ *   optimization); see README for the ownership boundary.
  *
- * 编译期前提: 全镜像以 `-fno-omit-frame-pointer` 编译(Makefile 的 CFLAGS) ——
- *   否则 x29 会被 -O2 当普通寄存器省掉, 链断在第一帧。这是本插件唯一的编译期前提。
+ * Build-time precondition: the whole image is compiled with `-fno-omit-frame-pointer`
+ *   (Makefile CFLAGS) — otherwise -O2 drops x29 as an ordinary register and the
+ *   chain breaks at frame 0. This is the plugin's only build-time precondition.
  *
- * aarch64 帧链约定(AAPCS64):
- *   函数序言 `stp x29, x30, [sp, #-16]!; mov x29, sp` ⇒ x29 指向保存区,
- *   `[x29]` = 调用者的 x29(上一帧 fp), `[x29 + 8]` = 返回地址(下一条要执行的 pc)。
- *   栈向低地址增长 ⇒ 沿链上行的 fp **严格递增**(这也是防环的主要护栏)。
+ * aarch64 frame chain convention (AAPCS64):
+ *   prologue `stp x29, x30, [sp, #-16]!; mov x29, sp` ⇒ x29 points at the save area,
+ *   `[x29]` = caller's x29 (previous frame fp), `[x29 + 8]` = return address (next pc).
+ *   Stack grows down ⇒ fp walking up the chain is **strictly increasing**
+ *   (also the main loop guard).
  *
- * ISR 安全: `br_bt_*` 全部 **thread-only**; fault 现场的捕获入口接收异常帧里的
- *   fp/pc(platform 的 fault 分派路径传入), 不自己再触发异常。
+ * ISR safety: `br_bt_*` are all **thread-only**; the fault-site capture entry takes
+ *   fp/pc from the exception frame (passed by the platform fault dispatch path) and
+ *   never raises an exception itself.
  */
 #include <br/debug/br_bt.h>
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 
-#include "backtrace_internal.h"    /* 自检用的内部视图(见该头; 生产路径不用它) */
+#include "backtrace_internal.h"    /* internal view for self-test (see that header; unused in production) */
 
-/* 无边界信息时的保守回退窗口: 以走查者当前 SP 为下界、SP + 1 MiB 为上界。
- * 真实启动栈只有几十 KiB(link.ld), 1 MiB 足够覆盖全部调用者帧, 又能挡住
- * "fp 被踩成一个远处的野值"这种最坏情况。 */
+/* Conservative fallback window when bounds are unknown: lower bound = walker's current SP,
+ * upper bound = SP + 1 MiB. The real boot stack is only tens of KiB (link.ld); 1 MiB covers
+ * every caller frame while blocking the worst case of "fp smashed to a far wild value". */
 #define BT_FALLBACK_STACK_BYTES  (1024u * 1024u)
 
 /* =====================================================================
- * 内部状态
+ * Internal state
  * ===================================================================== */
 
 static br_uintptr_t s_stack_bottom;
-static br_uintptr_t s_stack_top;     /* s_stack_top == 0 ⇒ 未设置边界 */
+static br_uintptr_t s_stack_top;     /* s_stack_top == 0 ⇒ bounds unset */
 
-static br_bt_frame_t s_last[BR_BT_MAX_FRAMES];   /* 最近一次捕获的快照 */
+static br_bt_frame_t s_last[BR_BT_MAX_FRAMES];   /* last capture snapshot */
 static br_u32        s_last_count;
 
 /* =====================================================================
- * 小工具
+ * Helpers
  * ===================================================================== */
 
-/* 本次走查的栈范围: 优先用 platform 设的边界; 否则回退到"当前 SP .. +1 MiB"。
- * 回退下界取走查者自己的 SP —— 它比任何被走查的调用者帧都低(栈向下增长),
- * 因此不会误杀合法帧; 代价是上界只能靠这个固定窗口保守估计。 */
+/* Stack range for this walk: prefer platform-set bounds; else fall back to
+ * "current SP .. +1 MiB". The fallback lower bound is the walker's own SP — lower
+ * than any walked caller frame (stack grows down), so it never kills a legit frame;
+ * the cost is that the upper bound is only this fixed conservative window. */
 static void bt_bounds(br_uintptr_t *lo, br_uintptr_t *hi)
 {
     if (s_stack_top != 0u) {
@@ -63,16 +68,16 @@ static void bt_bounds(br_uintptr_t *lo, br_uintptr_t *hi)
 }
 
 /* =====================================================================
- * 帧链走查
+ * Frame chain walk
  * ===================================================================== */
 
 /*
- * 从 (fp, pc) 起走 fp 链。第 0 帧 = 传入的 (pc, fp)。
- * 护栏(全部通过之后才允许解引用 fp, 不许先读后校验):
- *   ① fp != 0; ② fp 16 字节对齐(AAPCS64); ③ 在栈范围内;
- *   ④ 严格递增(next_fp > fp, 环/断裂即停); ⑤ 深度 < BR_BT_MAX_DEPTH;
- *   ⑥ 帧数 < max。
- * 返回写入 out 的帧数。
+ * Walk the fp chain from (fp, pc). Frame 0 = the passed (pc, fp).
+ * Guards (all must pass before dereferencing fp; never read before check):
+ *   ① fp != 0; ② fp 16-byte aligned (AAPCS64); ③ within the stack range;
+ *   ④ strictly increasing (next_fp > fp; stop on loop/break); ⑤ depth < BR_BT_MAX_DEPTH;
+ *   ⑥ frames < max.
+ * Returns the number of frames written to out.
  */
 static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
                       br_bt_frame_t *out, br_u32 max)
@@ -88,7 +93,7 @@ static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
     br_u32 depth = 0u;
 
     while ((depth < max) && (depth < BR_BT_MAX_DEPTH)) {
-        /* ---- 解引用前的护栏 ---- */
+        /* ---- guards before dereference ---- */
         if (fp == 0u) {
             break;
         }
@@ -99,13 +104,14 @@ static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
             break;
         }
         if ((depth > 0u) && (fp <= out[depth - 1u].fp)) {
-            break;   /* 必须严格上行 */
+            break;   /* must increase strictly */
         }
 
         out[depth].pc    = pc;
         out[depth].fp    = fp;
-        /* sp: fp + 16 是栈帧里的"规范位置"(保存区之后), 不是真实 SP ——
-         * 真 SP 在帧内会随函数体变化, 不具可移植语义。 */
+        /* sp: fp + 16 is the "canonical position" in the stack frame (past the save
+         * area), not the real SP — the real SP varies within the function body and
+         * has no portable meaning. */
         out[depth].sp    = fp + 16u;
         out[depth].depth = depth;
         depth++;
@@ -114,13 +120,13 @@ static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
             break;
         }
 
-        /* ---- 读上一帧 fp 与返回地址; 用 volatile 防编译器缓存(栈可能被改) ---- */
+        /* ---- read previous frame's fp and return address; volatile prevents compiler caching (stack may change) ---- */
         const volatile br_uintptr_t *frame = (const volatile br_uintptr_t *)fp;
         const br_uintptr_t next_fp = frame[0];
         const br_uintptr_t ret_pc  = frame[1];
 
         if (next_fp <= fp) {
-            break;   /* 链必须严格上行, 否则是环或已被踩坏 */
+            break;   /* chain must increase strictly, else it is a loop or smashed */
         }
         fp = next_fp;
         pc = ret_pc;
@@ -129,7 +135,7 @@ static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
     return depth;
 }
 
-/* 走查 + 落 static 快照(供 br_bt_last/dump 复用, 免得重复走栈) */
+/* Walk + store the static snapshot (reused by br_bt_last/dump to avoid re-walking) */
 static br_u32 bt_snapshot(br_uintptr_t fp, br_uintptr_t pc,
                           br_bt_frame_t *out, br_u32 max)
 {
@@ -146,12 +152,14 @@ static br_u32 bt_snapshot(br_uintptr_t fp, br_uintptr_t pc,
 }
 
 /* =====================================================================
- * 对外的捕获面
+ * Public capture surface
  * ===================================================================== */
 
-/* noinline 是**语义要求**而不是优化提示: 帧 0 的 fp 必须是本函数自己的帧,
- * 否则 `mov x29` 读到的是调用者的帧, 帧链就少了一层(TC-DBG-010 的探针判据)。
- * 头文件的声明面不含该属性, 故只加在定义上(ABI 不变)。 */
+/* noinline is a **semantic requirement**, not an optimization hint: frame 0's fp must
+ * be this function's own frame, else `mov x29` reads the caller's frame and the chain
+ * loses a level (probe criterion of TC-DBG-010).
+ * The header declaration does not carry the attribute, so it is only on the definition
+ * (ABI unchanged). */
 __attribute__((noinline))
 br_u32 br_bt_capture(br_bt_frame_t *out, br_u32 max)
 {
@@ -164,8 +172,9 @@ br_u32 br_bt_capture(br_bt_frame_t *out, br_u32 max)
     __asm__ volatile("mov %0, x29" : "=r"(fp));
     __asm__ volatile("mov %0, x30" : "=r"(lr));
 
-    /* 帧 0 的 pc 取 lr = "回到调用者后的下一条指令" —— 与帧链里其它帧
-     * (都存返回地址)口径一致, 因此不需要 +/- 4 的修正。 */
+    /* Frame 0's pc is lr = "next instruction after returning to the caller" — the same
+     * convention as the other chain frames (which store return addresses), so no +/- 4
+     * correction is needed. */
     return bt_snapshot(fp, lr, out, max);
 }
 
@@ -190,7 +199,7 @@ int br_bt_set_stack_bounds(br_uintptr_t bottom, br_uintptr_t top)
 }
 
 /* =====================================================================
- * 呈现
+ * Presentation
  * ===================================================================== */
 
 static void bt_emit(const br_bt_frame_t *fr, br_u32 n)
@@ -204,7 +213,7 @@ static void bt_emit(const br_bt_frame_t *fr, br_u32 n)
 
 br_u32 br_bt_print(void)
 {
-    /* 直接写 static 快照: capture 本来就会存一份, 省一个 512 B 的中间缓冲 */
+    /* Write the static snapshot directly: capture already stores one, saving a 512 B intermediate buffer */
     const br_u32 n = br_bt_capture(s_last, BR_BT_MAX_FRAMES);
     bt_emit(s_last, n);
     return n;
@@ -229,8 +238,9 @@ const br_bt_frame_t *br_bt_last(void)
 
 int br_bt_init(void)
 {
-    /* 清"最近一次捕获"快照。★ 不动栈边界: 边界由 platform 在 early_init 里按
-     * 链接脚本符号设置, 而 init 是 LATE 相 —— 在这里清零会把那次设置抹掉。 */
+    /* Clear the "last capture" snapshot. ★ Do not touch the stack bounds: the platform
+     * sets them in early_init from linker-script symbols, and init is the LATE phase —
+     * clearing them here would wipe that setup. */
     for (br_u32 i = 0u; i < BR_BT_MAX_FRAMES; i++) {
         s_last[i].pc    = 0u;
         s_last[i].fp    = 0u;
@@ -239,23 +249,27 @@ int br_bt_init(void)
     }
     s_last_count = 0u;
 
-    /* 不跨插件注册 trace 事件名: 声明面里没有 service/backtrace → service/trace 的
-     * [[dep]] 边(这一点已写进 br_bt.h 的 init 注释), 跨插件调用会引入未声明的依赖。
+    /* No cross-plugin trace event name registration: the declaration surface has no
+     * service/backtrace → service/trace [[dep]] edge (already noted in br_bt.h's init
+     * comment); a cross-plugin call would introduce an undeclared dependency.
      *
-     * ⚠ 栈边界**保持不变**: br_bt.h 的 init 注释写的是"清状态并复位栈范围", 但同一
-     *    头文件里 set_stack_bounds 的注释说 platform 在 **early_init** 调用它, 而
-     *    init 是 LATE 相 —— 在这里清零会把 early_init 那次设置抹掉。本实现按"不清
-     *    边界"落地(两处注释的顺序自洽读法), 措辞冲突已作为待确认项回报给主控。 */
+     * ⚠ Stack bounds stay **unchanged**: br_bt.h's init comment says "clear state and
+     *    reset the stack range", but set_stack_bounds' comment in the same header says
+     *    platform calls it in **early_init**, and init is LATE — clearing here would wipe
+     *    that setup. This implementation does not clear bounds (the self-consistent
+     *    reading of the two comments); the wording conflict was reported upstream. */
     return 0;
 }
 
 /* =====================================================================
- * 自检用的内部视图
+ * Internal view for self-test
  *
- * 见 `src/backtrace_internal.h` 的说明: 这两条**只**为 `backtrace_selftest.c` 存在 ——
- * 用例要把栈边界临时改窄再**原样复原**, 而"复原到未设置(0/0)"经公开的
- * `br_bt_set_stack_bounds` 表达不出来(它拒非法值)。★ 直接读写**生产状态本身**,
- * 不在别处留副本, 否则用例改的是副本的边界。
+ * See `src/backtrace_internal.h`: these two exist **only** for `backtrace_selftest.c` —
+ * a case narrows the stack bounds temporarily and **restores them exactly**, and
+ * "restore to unset (0/0)" cannot be expressed via the public
+ * `br_bt_set_stack_bounds` (it rejects invalid values). ★ They read/write the
+ * **production state itself**, with no copy kept elsewhere, else the case would be
+ * changing a copy's bounds.
  * ===================================================================== */
 
 void br_bt_internal_read_stack_bounds(br_uintptr_t *bottom, br_uintptr_t *top)
@@ -276,27 +290,28 @@ void br_bt_internal_restore_stack_bounds(br_uintptr_t bottom, br_uintptr_t top)
 
 
 /* =====================================================================
- * 插件生命周期钩子(名字 = symbol_prefix(short) + 相; 由生成物
- * `build/gen/service/backtrace/plugin_desc.c` 引用; 设计 1-01 §9 / 3-05 §2)
- * 自带原型满足 -Wmissing-prototypes(钩子名由生成器推导, 不进对外头与 [[export]])。
+ * Plugin lifecycle hooks (name = symbol_prefix(short) + phase; referenced by the
+ * generated `build/gen/service/backtrace/plugin_desc.c`; design 1-01 §9 / 3-05 §2)
+ * Self-declared prototypes satisfy -Wmissing-prototypes (hook names come from the
+ * generator, not the public header or [[export]]).
  * ===================================================================== */
 int backtrace_early_init(void);
 int backtrace_init(void);
 int backtrace_start(void);
 
-/* EARLY 相: 无动作(栈边界由 platform 在它的 early_init 里设置, 本插件不碰)。 */
+/* EARLY phase: no action (the platform sets stack bounds in its early_init; this plugin does not touch them). */
 int backtrace_early_init(void)
 {
     return 0;
 }
 
-/* LATE 相(Service 类别 ⇒ ② 完成点): 现有 init 的转调。 */
+/* LATE phase (Service category ⇒ ② completion point): delegating to the existing init. */
 int backtrace_init(void)
 {
     return br_bt_init();
 }
 
-/* START 相: 本服务没有需要"中断可用/可建线程"之后才做的事。 */
+/* START phase: this service has nothing to do once interrupts/threads are available. */
 int backtrace_start(void)
 {
     return 0;

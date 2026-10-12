@@ -1,31 +1,34 @@
 /*
- * brickOS prototype v0.2.0 — 上下文保存区的**机器可见**常量(asm ↔ C 的唯一真值桥)
+ * brickOS prototype v0.2.0 — **machine-visible** constants of the context save area
+ * (the single truth bridge between asm and C)
  *
- * 为什么单独一个头: `sched_internal.h` 的 `struct br_thread` 是 C 语法, 汇编器(cpp 之后的
- * gas)看不懂; 而 `switch.S` 又必须知道 `ctx[]` 的字节偏移与各槽位下标。若在 .S 里再抄一份
- * 数字, 就有了第二处真值 —— 布局一漂(比如有人往公共头中间插字段), 换栈之后才会以
- * "随机崩溃"暴露。这里把偏移写成宏, 由 `sched_core.c` 的 `_Static_assert` 在**编译期**
- * 与真布局对照(布局漂移 = 编译红, 不是运行期崩)。
+ * Why a separate header: `sched_internal.h`'s `struct br_thread` is C syntax, which the assembler
+ * (gas after cpp) cannot read, while `switch.S` must know the byte offset of `ctx[]` and the index
+ * of each slot. Copying the numbers again into the .S file would create a second truth — and once
+ * the layout drifts (say someone inserts a field in the middle of a public header), it surfaces
+ * only after the stack switch as "random crashes". Here the offsets are macros, checked against
+ * the real layout at **compile time** by `sched_core.c`'s `_Static_assert` (layout drift = a red
+ * build, not a runtime crash).
  *
- * 槽位语义(与 `sched_internal.h` 的 `ctx[13]` 注释**逐字一致**):
+ * Slot semantics (word-for-word identical to the `ctx[13]` comment in `sched_internal.h`):
  *   [0..9]  x19..x28
- *   [10]    x29(fp)   —— `-fno-omit-frame-pointer` 是 backtrace 的前提, 也是它的前提
- *   [11]    x30(lr)   —— 新线程首次进入时指向 trampoline
- *   [12]    sp        —— 线程自己的栈
+ *   [10]    x29(fp)   —— `-fno-omit-frame-pointer` is the premise of backtrace, and vice versa
+ *   [11]    x30(lr)   —— points at the trampoline on a new thread's first entry
+ *   [12]    sp        —— the thread's own stack
  */
 #ifndef BR_SCHED_CTX_H
 #define BR_SCHED_CTX_H
 
-/* `offsetof(struct br_thread, ctx)`: 由 sched_core.c 静态断言执法。 */
+/* `offsetof(struct br_thread, ctx)`: enforced by a static assertion in sched_core.c. */
 #define BR_THREAD_CTX_OFF 96u
 
-/* ctx[] 的槽位下标 */
+/* ctx[] slot indices */
 #define BR_CTX_X19_BASE 0u    /* [0..9] = x19..x28 */
 #define BR_CTX_X29      10u   /* fp */
-#define BR_CTX_X30      11u   /* lr; 新线程 = trampoline */
+#define BR_CTX_X30      11u   /* lr; new thread = trampoline */
 #define BR_CTX_SP       12u   /* sp */
 
-/* 新线程首次进入时 x19 里放的就是它的 TCB 指针(trampoline 读它); 与 x19 同槽。 */
+/* On a new thread's first entry x19 holds its TCB pointer (read by the trampoline); same slot as x19. */
 #define BR_CTX_X19_TCB  BR_CTX_X19_BASE
 
 #endif /* BR_SCHED_CTX_H */

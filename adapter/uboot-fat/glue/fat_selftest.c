@@ -1,27 +1,31 @@
 /*
- * adapter/uboot-fat — 一致性用例(TC-FAT-*, 共 8 条)
+ * adapter/uboot-fat — conformance cases (TC-FAT-*, 8 total)
  *
- * WORKAROUND(br-wa-test-001): `TC-FAT-*` 是**自编号** —— 设计 `6-01` 的用例表里整组
- * 不存在(属 7-storage 域的**新增面**); 与其余各族的编号债同一处登记。
+ * WORKAROUND(br-wa-test-001): `TC-FAT-*` are **locally numbered** — the whole group is absent from
+ * the case table of design `6-01` (a **new surface** of the 7-storage domain); registered in the
+ * same place as the numbering debt of the other families.
  *
- * ============================== 判据从哪来 ==============================
- * 三块 emmc 上的 FAT 卷由**宿主**在构建后门禁里造好(见 README 的"前置工件"), 每个卷里
- * 预置了下面这些文件(常量在 glue/fat_glue.h, 自检与 APP 共用同一份真值):
+ * ============================== where the criteria come from ==============================
+ * The FAT volumes on the three emmc devices are built by the **host** in a post-build gate (see
+ * "prerequisite artifacts" in the README); each volume is preloaded with the files below (constants
+ * in glue/fat_glue.h, shared as one source of truth by self-test and APP):
  *
- *   /fat12: hello.txt  = "fat12 hello\n";  dir/a.bin = 16 个 'A'
- *   /fat16: hello.txt  = "fat16 hello\n";  dir/a.bin = 256 个 'B'
- *   /fat32: hello.txt  = "fat32 hello\n";  dir/a.bin = 4096 个 'C';
+ *   /fat12: hello.txt  = "fat12 hello\n";  dir/a.bin = 16 'A's
+ *   /fat16: hello.txt  = "fat16 hello\n";  dir/a.bin = 256 'B's
+ *   /fat32: hello.txt  = "fat32 hello\n";  dir/a.bin = 4096 'C's;
  *           long name file.txt = "lfn\n"
  *
- * ★ 本套件**不删不改**这些宿主文件(tag 2/3 依赖它们); 自己的临时文件一律用 tcN_ 前缀。
+ * ★ This suite **never deletes or modifies** these host files (tags 2/3 depend on them); its own
+ *   temporary files always use the tcN_ prefix.
  *
- * ============================== 为什么不走内部状态 ==============================
- * 除了 TC-FAT-001 要看"BPB 判出的 FAT 类型与簇数"(那是**插件的事实**, 只能问插件),
- * 其余用例一律只经 VFS 的公开面(br_stat/br_open/br_file_xxx/br_opendir/…)驱动 ——
- * 判据是"经 VFS 真的能读回宿主写进去的字节", 而不是"某个内部函数返回了 0"。
+ * ============================== why not internal state ==============================
+ * Except TC-FAT-001, which inspects "the FAT type and cluster count derived from the BPB" (that is a
+ * **plugin fact**, so only the plugin can be asked), every case is driven solely through the public
+ * VFS surface (br_stat/br_open/br_file_xxx/br_opendir/…) — the criterion is "the bytes the host
+ * wrote can really be read back through VFS", not "some internal function returned 0".
  *
- * 契约: 返回失败项数(0 = 全绿); 打印 `[FATCONF] PASS/FAIL <tag> <desc>` 并以
- * `[FATCONF] SUMMARY pass=N fail=M` 收尾(与 uboot-mmc 的 [EMMCCONF] 同款)。
+ * Contract: returns the number of failures (0 = all green); prints `[FATCONF] PASS/FAIL <tag> <desc>`
+ * and ends with `[FATCONF] SUMMARY pass=N fail=M` (same shape as uboot-mmc's [EMMCCONF]).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -33,16 +37,18 @@
 
 int uboot_fat_selftest(void);
 
-/* ==================================================================== 计数与断言 */
+/* ==================================================================== counters and assertions */
 
 static br_u32 s_pass;
 static br_u32 s_fail;
 
 /*
- * 子判据诊断。每条用例只打一行 PASS/FAIL 是不够定位的(实测: TC-FAT-003/006/007 三条红,
- * 但"哪一步"完全看不出来)。所以每个分支在自己失败时补一行:
+ * Sub-criterion diagnostics. One PASS/FAIL line per case is not enough to localize (measured:
+ * TC-FAT-003/006/007 went red and "which step" was completely invisible). So each branch adds one
+ * line when it fails:
  *     [FATCONF]   <tag> <step> got=<> want=<>
- * 只在**失败**分支打 ⇒ 绿的路径日志不变长; 判据(SUMMARY 的计数)不受影响。
+ * Printed only on the **failure** branch ⇒ green paths keep the same log length; the criteria
+ * (SUMMARY counts) are unaffected.
  */
 static void fat_diag(const char *tag, const char *step, long got, long want)
 {
@@ -66,7 +72,7 @@ static void fat_conf(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* ==================================================================== 小工具 */
+/* ==================================================================== helpers */
 
 static br_bool fat_bytes_eq(const br_u8 *a, const br_u8 *b, br_size_t n)
 {
@@ -78,7 +84,7 @@ static br_bool fat_bytes_eq(const br_u8 *a, const br_u8 *b, br_size_t n)
     return BR_TRUE;
 }
 
-/* 造一个"宿主预置文件"的期望内容: base 是第 0 字节, 其后是 0..9 循环。 */
+/* Build the expected content of a "host-preloaded file": base is byte 0, then 0..9 repeating. */
 static void fat_make_pattern(br_u8 *dst, br_size_t n, br_u8 base)
 {
     if (n > 0u) {
@@ -89,7 +95,7 @@ static void fat_make_pattern(br_u8 *dst, br_size_t n, br_u8 base)
     }
 }
 
-/* 写一个新文件(不存在则建)。判据由调用方另给。 */
+/* Write a new file (creating it if absent). The caller supplies the criterion separately. */
 static int fat_write_all(const char *path, const void *buf, br_size_t n)
 {
     br_file_t *f = br_open(path, (br_u32)(BR_O_WRONLY | BR_O_CREAT | BR_O_TRUNC));
@@ -106,9 +112,10 @@ static int fat_write_all(const char *path, const void *buf, br_size_t n)
     return 0;
 }
 
-/* 打开并整文件读回, 与"宿主预置内容"的期望逐字节比对。
- * `want_len == 0` ⇒ 期望长度 = strlen(want)(宿主预置的短文本)。
- * 读法: 分块读到 EOF(而不是"一次读完")—— 判据是"**恰好** len 字节, 多一个字节也算错"。 */
+/* Open and read the whole file back, comparing byte by byte against the expected "host content".
+ * `want_len == 0` ⇒ expected length = strlen(want) (the host's short text files).
+ * Read style: in chunks until EOF (not "one big read") — the criterion is "**exactly** len bytes;
+ * one extra byte is wrong too". */
 static br_bool fat_read_verify(const char *path, const br_u8 *want, br_size_t want_len)
 {
     br_u8 buf[64];
@@ -147,7 +154,7 @@ static br_bool fat_read_verify(const char *path, const br_u8 *want, br_size_t wa
         }
         got += (br_size_t)r;
     }
-    /* 再读一次必须是 0(EOF) —— "文件里没有多余字节"的判据 */
+    /* One more read must return 0 (EOF) — the criterion for "no extra bytes in the file" */
     {
         const br_s64 r = br_file_read(f, buf, sizeof(buf));
 
@@ -159,13 +166,13 @@ static br_bool fat_read_verify(const char *path, const br_u8 *want, br_size_t wa
     return BR_TRUE;
 }
 
-/* path = dir + "/" + name(有界拼接; 超长 ⇒ 返回 -ENOSPC)。 */
+/* path = dir + "/" + name (bounded join; too long ⇒ -ENOSPC). */
 static int fat_join(char *out, br_size_t cap, const char *dir, const char *name)
 {
     return uboot_fat_join_path(dir, name, out, cap);
 }
 
-/* 在目录里找一条名字; 找到就填 *out 并返回 1, 否则返回 0。 */
+/* Find one name in a directory; on a hit fill *out and return 1, otherwise return 0. */
 static int fat_find_dirent(const char *dir, const char *name, br_dirent_t *out)
 {
     br_dir_t *d = br_opendir(dir);
@@ -188,7 +195,7 @@ static int fat_find_dirent(const char *dir, const char *name, br_dirent_t *out)
     return 0;
 }
 
-/* 挂载表里有这条挂载点吗(经公开面 br_mount_count/br_mount_path_at 观测) */
+/* Is this mount point in the mount table (observed via the public br_mount_count/br_mount_path_at) */
 static br_bool fat_mount_listed(const char *path)
 {
     const br_u32 n = br_mount_count();
@@ -203,7 +210,7 @@ static br_bool fat_mount_listed(const char *path)
     return BR_FALSE;
 }
 
-/* ==================================================================== 套件 */
+/* ==================================================================== suite */
 
 int uboot_fat_selftest(void)
 {
@@ -219,7 +226,8 @@ int uboot_fat_selftest(void)
 
     br_log_info("[FATCONF] uboot-fat conformance (3 volumes / FAT12-16-32 / VFS round-trip)");
 
-    /* ---- TC-FAT-001: 三个挂载点都在, 且每个卷的 BPB 判定与簇数符合预期 ---- */
+    /* ---- TC-FAT-001: all three mount points present, and each volume's BPB verdict and cluster
+     * count match expectations ---- */
     {
         uboot_fat_vol_info_t vi;
         br_bool ok = BR_TRUE;
@@ -244,7 +252,8 @@ int uboot_fat_selftest(void)
                         mnt[i], (vi.dev != BR_NULL) ? vi.dev : "?",
                         (vi.mnt != BR_NULL) ? vi.mnt : "?",
                         vi.fatsize, vi.clust_size_sectors, vi.max_clust);
-            /* 判据 = ①设备名对 ②BPB 判出的类型对 ③簇数落在该 FAT 类型的定义区间 */
+            /* criteria = ① device name matches ② BPB-derived type matches ③ cluster count falls in
+             * the range defined for that FAT type */
             if ((vi.mounted == BR_TRUE) && (vi.sector_size == UB_FAT_SECTOR_SIZE) &&
                 (vi.clust_size_sectors > 0u) && (vi.fatsize == want_type[i])) {
                 const br_bool in_range =
@@ -271,10 +280,10 @@ int uboot_fat_selftest(void)
             }
         }
         fat_conf((ok == BR_TRUE) && (vol_ok == (int)UB_FAT_VOL_MAX), "TC-FAT-001",
-                 "三个挂载点在场; 每个卷的 BPB 类型(12/16/32)与簇数区间自洽");
+                 "three mount points present; each volume's BPB type (12/16/32) and cluster range consistent");
     }
 
-    /* ---- TC-FAT-002: 每个卷读回宿主预置文件并逐字节比对 ---- */
+    /* ---- TC-FAT-002: read back each volume's host-preloaded file and compare byte by byte ---- */
     {
         static const char *const want[UB_FAT_VOL_MAX] = {
             UB_FAT_C12_HELLO, UB_FAT_C16_HELLO, UB_FAT_C32_HELLO
@@ -293,10 +302,11 @@ int uboot_fat_selftest(void)
                 ok = BR_FALSE;
             }
         }
-        fat_conf(ok, "TC-FAT-002", "三卷的宿主预置 hello.txt 逐字节读回一致");
+        fat_conf(ok, "TC-FAT-002", "host-preloaded hello.txt of all three volumes reads back byte-identical");
     }
 
-    /* ---- TC-FAT-003: 每卷 readdir 根: "."/".." 在场, 预置条目可见且 type/size 对 ---- */
+    /* ---- TC-FAT-003: readdir the root of each volume: "."/".." present, preloaded entries visible
+     * with correct type/size ---- */
     {
         static const struct {
             const char *mnt_path;
@@ -312,7 +322,7 @@ int uboot_fat_selftest(void)
             br_dirent_t de;
             br_stat_t   st;
 
-            /* "." 与 ".." 必须是头两条(与 fs/tmpfs 同款) */
+            /* "." and ".." must be the first two entries (same as fs/tmpfs) */
             {
                 br_dir_t *d = br_opendir(cases[i].mnt_path);
 
@@ -338,9 +348,10 @@ int uboot_fat_selftest(void)
                 (void)br_closedir(d);
             }
 
-            /* 名字比较是**大小写不敏感**的: FAT 的目录项只存 8.3 大写 + 两个"小写位",
-             * 而 mkfs/mcopy 造出来的项可能没置小写位 ⇒ readdir 报 "HELLO.TXT" 是合法的
-             * (走查本身也是大小写不敏感的, 见 TC-FAT-002 能读到 hello.txt)。 */
+            /* Name comparison is **case-insensitive**: FAT directory entries store 8.3 uppercase
+             * plus two "lowercase bits", and entries made by mkfs/mcopy may not set those bits ⇒
+             * readdir reporting "HELLO.TXT" is legal (lookup itself is also case-insensitive, see
+             * TC-FAT-002 managing to read hello.txt). */
             if (fat_find_dirent(cases[i].mnt_path, "hello.txt", &de) == 0) {
                 ok = BR_FALSE;
             } else if ((de.type != BR_INODE_FILE) ||
@@ -375,19 +386,19 @@ int uboot_fat_selftest(void)
             }
         }
         fat_conf(ok, "TC-FAT-003",
-                 "readdir 头两条是 ./..; hello.txt 与 dir/ 类型、长度与宿主一致");
+                 "readdir's first two entries are ./..; hello.txt and dir/ have host-matching type and length");
     }
 
-    /* ---- TC-FAT-004: /fat16 新建 → 三段写 → 关 → 重开读回比对 ---- */
+    /* ---- TC-FAT-004: /fat16 create → three-segment write → close → reopen and compare ---- */
     {
         static const char *const path = UB_FAT_MNT16 "/tc4_new.txt";
-        const br_size_t total = 3u * 512u;          /* 跨 3 个簇(16 MiB 卷的簇 = 1 扇区) */
+        const br_size_t total = 3u * 512u;          /* spans 3 clusters (cluster = 1 sector on a 16 MiB volume) */
         br_u8 content[3u * 512u];
         br_u8 back[3u * 512u];
         br_file_t *f;
         br_bool ok = BR_TRUE;
 
-        (void)br_unlink(path);                      /* 上次运行可能留下(镜像会持久) */
+        (void)br_unlink(path);                      /* a previous run may have left it (the image persists) */
         for (br_size_t i = 0u; i < total; i++) {
             content[i] = (br_u8)(0x40u + (br_u8)(i % 0x3fu));
         }
@@ -430,10 +441,10 @@ int uboot_fat_selftest(void)
                 ok = BR_FALSE;
             }
         }
-        fat_conf(ok, "TC-FAT-004", "新建文件三段写(1536 B)后重开读回逐字节一致");
+        fat_conf(ok, "TC-FAT-004", "new file written in three segments (1536 B) reads back byte-identical after reopen");
     }
 
-    /* ---- TC-FAT-005: lseek(SEEK_END/SET) 与 EOF 读返回 0 ---- */
+    /* ---- TC-FAT-005: lseek(SEEK_END/SET) and EOF read returns 0 ---- */
     {
         static const char *const path = UB_FAT_MNT12 "/hello.txt";
         const br_size_t len = uboot_fat_strlen(UB_FAT_C12_HELLO);
@@ -453,7 +464,7 @@ int uboot_fat_selftest(void)
                 ok = BR_FALSE;
             }
             p = br_file_read(f, &one, 1u);
-            if (p != 0) {                  /* EOF 读 = 0(成功) */
+            if (p != 0) {                  /* EOF read = 0 (success) */
                 fat_diag("TC-FAT-005", "eof_read", (long)p, 0);
                 ok = BR_FALSE;
             }
@@ -472,16 +483,16 @@ int uboot_fat_selftest(void)
                 ok = BR_FALSE;
             }
             p = br_file_lseek(f, -1, BR_SEEK_SET);
-            if (p >= 0) {                  /* 负偏移 ⇒ -EINVAL */
+            if (p >= 0) {                  /* negative offset ⇒ -EINVAL */
                 fat_diag("TC-FAT-005", "negative_seek", (long)p, (long)BR_ERR(EINVAL));
                 ok = BR_FALSE;
             }
             (void)br_file_close(f);
         }
-        fat_conf(ok, "TC-FAT-005", "SEEK_END/SET 定位正确; EOF 读返回 0; 负偏移被拒");
+        fat_conf(ok, "TC-FAT-005", "SEEK_END/SET position correctly; EOF read returns 0; negative offset rejected");
     }
 
-    /* ---- TC-FAT-006: /fat32 mkdir + 在其中建文件 + stat 校验 size/type ---- */
+    /* ---- TC-FAT-006: /fat32 mkdir + create a file in it + stat validates size/type ---- */
     {
         static const char *const dir   = UB_FAT_MNT32 "/tc6_dir";
         static const char *const path  = UB_FAT_MNT32 "/tc6_dir/f.bin";
@@ -519,10 +530,10 @@ int uboot_fat_selftest(void)
             
             ok = BR_FALSE;
         }
-        fat_conf(ok, "TC-FAT-006", "/fat32 mkdir + 建文件 + stat 的 size/type 与内容一致");
+        fat_conf(ok, "TC-FAT-006", "/fat32 mkdir + create file + stat size/type match the content");
     }
 
-    /* ---- TC-FAT-007: 改名后旧名 -ENOENT, 新名内容正确 ---- */
+    /* ---- TC-FAT-007: after rename the old name is -ENOENT and the new name has correct content ---- */
     {
         static const char *const oldp = UB_FAT_MNT16 "/tc7_a.txt";
         static const char *const newp = UB_FAT_MNT16 "/tc7_b.txt";
@@ -550,10 +561,10 @@ int uboot_fat_selftest(void)
             
             ok = BR_FALSE;
         }
-        fat_conf(ok, "TC-FAT-007", "改名后旧名 -ENOENT、新名内容逐字节一致");
+        fat_conf(ok, "TC-FAT-007", "after rename the old name is -ENOENT and the new name is byte-identical");
     }
 
-    /* ---- TC-FAT-008: unlink ⇒ -ENOENT; truncate 缩短后 size/内容对; sync == 0 ---- */
+    /* ---- TC-FAT-008: unlink ⇒ -ENOENT; truncate shrink then size/content match; sync == 0 ---- */
     {
         static const char *const path = UB_FAT_MNT16 "/tc8_trunc.txt";
         br_u8 content[1000];
@@ -600,7 +611,7 @@ int uboot_fat_selftest(void)
                 const br_s64 r = br_file_read(f, back, sizeof(back));
 
                 (void)br_file_close(f);
-                /* 读回必须**恰好**是新的长度: 多一个字节就说明簇链没被释放 */
+                /* The read-back must be **exactly** the new length: one extra byte means the cluster chain was not released */
                 if (r != (br_s64)sizeof(want)) {
                     fat_diag("TC-FAT-008", "shrink_read_len", (long)r, 300);
                     ok = BR_FALSE;
@@ -611,7 +622,8 @@ int uboot_fat_selftest(void)
                 }
             }
         }
-        /* 反向: 扩大 300 → 600, 新区域必须读回 0(显式清零, 不是上一个文件的残留) */
+        /* Reverse direction: grow 300 → 600, the new region must read back as 0 (explicitly zeroed,
+         * not leftovers from the previous file) */
         if (br_truncate(path, 600u) == 0) {
             f = br_open(path, BR_O_RDONLY);
             if (f != BR_NULL) {
@@ -648,9 +660,10 @@ int uboot_fat_selftest(void)
             fat_diag_str("TC-FAT-008", "stat_after_unlink", path, "(ENOENT)");
             ok = BR_FALSE;
         }
-        /* 卷级 sync = fs_ops.sync(先回写 FAT 缓存, 再让块设备 flush);
-         * ★ 它必须与**文件级 fsync**(br_file_ops.fsync)是同一条路径 —— 两者共用
-         *   uboot_fat_flush_volume(), 所以这里顺带把两条入口都走一遍。 */
+        /* Volume-level sync = fs_ops.sync (write back the FAT cache first, then let the block device
+         * flush);
+         * ★ it must be the same path as **file-level fsync** (br_file_ops.fsync) — both share
+         *   uboot_fat_flush_volume(), so both entry points are exercised here. */
         {
             const int rc = uboot_fat_test_sync(UB_FAT_MNT16);
 
@@ -679,10 +692,10 @@ int uboot_fat_selftest(void)
         if (br_file_fsync(BR_NULL) != BR_ERR(EINVAL)) {
             fat_diag("TC-FAT-008", "fsync(NULL)",
                      (long)br_file_fsync(BR_NULL), (long)BR_ERR(EINVAL));
-            ok = BR_FALSE;             /* 空句柄是参数错(契约: f == NULL ⇒ -EINVAL) */
+            ok = BR_FALSE;             /* a null handle is a bad argument (contract: f == NULL ⇒ -EINVAL) */
         }
         fat_conf(ok, "TC-FAT-008",
-                 "truncate 300↔600 后 size/内容一致; unlink ⇒ -ENOENT; 卷 sync 与文件 fsync 都 == 0");
+                 "truncate 300↔600 keeps size/content consistent; unlink ⇒ -ENOENT; volume sync and file fsync both == 0");
     }
 
     br_log_info("[FATCONF] SUMMARY pass=%u fail=%u total=%u",

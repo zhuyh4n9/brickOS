@@ -1,18 +1,18 @@
 #!/usr/bin/env bash
-# brickie v0.1 端到端用例的公共骨架(run.sh 与 purity.sh 共用)。
+# Shared skeleton for brickie v0.1 end-to-end cases (used by run.sh and purity.sh).
 #
-# 纪律:
-#   * 每个用例都在 `mktemp -d` 的临时目录里跑, 用例之间不共享状态;
-#   * 断言只走两条路: **退出码** + **结构化 JSON**(tests/jsonq.py)或关键文本;
-#   * 本文件不调用任何编译器(cc/g++/cargo/nm) —— V-9 的"零编译依赖"同样约束测试自身。
+# Discipline:
+#   * every case runs in a `mktemp -d` temp dir; cases share no state;
+#   * assertions take only two routes: **exit code** + **structured JSON** (tests/jsonq.py) or key text;
+#   * this file calls no compiler (cc/g++/cargo/nm) — V-9's "zero compile deps" binds the tests too.
 #
-# 依赖注入(由调用方在 source 之后设置/覆盖):
+# Dependency injection (set/overridden by the caller after source):
 #   TOOL_ROOT / REPO_ROOT / TESTS_DIR / TMPROOT / PY / CORE / GEN
 set -u
 
-# ------------------------------------------------------------------ 环境解析
-# 二进制定位顺序(**与 python/brickie/native.py 一致**): 本机出树优先, 退到自举种子。
-# 用例必须显式把 BRICKIE_CORE/BRICKIE_GEN 指到实际用的那份, 避免"前端自己找"带来的歧义。
+# ------------------------------------------------------------------ environment resolution
+# Binary lookup order (**same as python/brickie/native.py**): in-tree build first, then bootstrap seed.
+# Cases must explicitly point BRICKIE_CORE/BRICKIE_GEN at the copy actually used (no "self-lookup").
 pick_first() {
     local p
     for p in "$@"; do
@@ -42,7 +42,7 @@ resolve_env() {
     export TESTS_DIR TOOL_ROOT REPO_ROOT PY HOST_ARCH HOST_OS CORE GEN LAUNCHER SEED_LAUNCHER
 }
 
-# ------------------------------------------------------------------ 计数与报告
+# ------------------------------------------------------------------ counters and reporting
 PASS=0
 FAIL=0
 FAILLOG=""
@@ -58,38 +58,38 @@ bad() {
     { printf 'FAIL %s\n' "$1"; shift || true; for line in "$@"; do printf '     %s\n' "$line"; done; } >>"$FAILLOG"
 }
 
-# 断言: 字符串相等
-eq() { # eq <名称> <期望> <实得>
-    if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "期望: $2" "实得: $3"; fi
+# assertion: string equality
+eq() { # eq <name> <expected> <actual>
+    if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected: $2" "actual: $3"; fi
 }
 
-# 断言: 期望(参数 2)包含于实得(参数 3)
-contains() { # contains <名称> <片段> <全文>
+# assertion: expected (arg 2) is contained in actual (arg 3)
+contains() { # contains <name> <fragment> <full text>
     case "$3" in
         *"$2"*) ok "$1" ;;
-        *) bad "$1" "期望包含: $2" "实得: $(printf '%s' "$3" | head -c 300)" ;;
+        *) bad "$1" "expected to contain: $2" "actual: $(printf '%s' "$3" | head -c 300)" ;;
     esac
 }
 
-# 断言: 某文件里出现某模式 >=1 次
-grep_at_least() { # grep_at_least <名称> <模式> <文件>
+# assertion: a pattern occurs >=1 times in a file
+grep_at_least() { # grep_at_least <name> <pattern> <file>
     local n
     n="$(grep -cE -- "$2" "$3" 2>/dev/null || true)"
-    if [ "${n:-0}" -ge 1 ]; then ok "$1"; else bad "$1" "在 $3 里找不到模式: $2"; fi
+    if [ "${n:-0}" -ge 1 ]; then ok "$1"; else bad "$1" "pattern not found in $3: $2"; fi
 }
 
-grep_none() { # grep_none <名称> <模式> <文件...>
+grep_none() { # grep_none <name> <pattern> <file...>
     local label="$1" pat="$2"; shift 2
     local n
     n="$(grep -cE -- "$pat" "$@" 2>/dev/null | awk -F: '{s+=$NF} END{print s+0}')"
-    if [ "${n:-0}" -eq 0 ]; then ok "$label"; else bad "$label" "不该出现的模式命中 $n 次: $pat"; fi
+    if [ "${n:-0}" -eq 0 ]; then ok "$label"; else bad "$label" "forbidden pattern matched $n times: $pat"; fi
 }
 
-# ------------------------------------------------------------------ 工作区
+# ------------------------------------------------------------------ workspace
 new_work() { mktemp -d "$TMPROOT/work.XXXXXX"; }
 
-# 把夹具复制成一条用例的私有工作区
-cp_fx() { # cp_fx <夹具名> [目标父目录]
+# copy the fixture into a private workspace for one case
+cp_fx() { # cp_fx <fixture name> [target parent dir]
     local name="$1" parent="${2:-$TMPROOT}"
     local w
     w="$(mktemp -d "$parent/run.XXXXXX")"
@@ -97,13 +97,13 @@ cp_fx() { # cp_fx <夹具名> [目标父目录]
     printf '%s' "$w"
 }
 
-# ------------------------------------------------------------------ 跑 brickie
+# ------------------------------------------------------------------ running brickie
 OUT=""
 ERR=""
 RC=0
 
-# run_brickie <工作区> [args...]: 在工作区里跑前端; RC/OUT/ERR 为结果。
-# 默认走源码树前端(python3 -m brickie); BRICKIE_LAUNCHER 非空时改走入口 ELF。
+# run_brickie <workdir> [args...]: run the frontend in the workdir; RC/OUT/ERR hold the result.
+# Default is the source-tree frontend (python3 -m brickie); a non-empty BRICKIE_LAUNCHER uses the entry ELF.
 run_brickie() {
     local work="$1"; shift
     OUT="$TMPROOT/.last.out"
@@ -123,13 +123,13 @@ run_brickie() {
 }
 
 
-# ------------------------------------------------------------------ JSON 断言
+# ------------------------------------------------------------------ JSON assertions
 JSONQ="$TESTS_DIR/jsonq.py"
 JQ_RESP=""
 
-# run_json <工作区> [args...]: 跑一次 --json 并把响应留在 JQ_RESP。
-# 为了让用例能用**同一条** grep 走两种模式, 这里把 JSON 里的诊断投影成文本写进 ERR
-# (JSON 模式下进程的 stderr 本来就是空的; 诊断在信封里)。
+# run_json <workdir> [args...]: run once with --json and leave the response in JQ_RESP.
+# So a case can use **the same** grep for both modes, project the JSON diagnostics to text into ERR
+# (in JSON mode the process stderr is empty anyway; diagnostics live in the envelope).
 run_json() {
     local work="$1"; shift
     run_brickie "$work" "$@" --json
@@ -140,50 +140,50 @@ run_json() {
 
 jqget() { "$PY" "$JSONQ" get "$@"; }
 
-eqj() { # eqj <名称> <响应文件> <路径> <期望>
+eqj() { # eqj <name> <response file> <path> <expected>
     eq "$1" "$4" "$("$PY" "$JSONQ" get "$2" "$3")"
 }
 
-eqjc() { # eqjc <名称> <响应文件> <路径> <数量>
+eqjc() { # eqjc <name> <response file> <path> <count>
     eq "$1" "$4" "$("$PY" "$JSONQ" count "$2" "$3")"
 }
 
-hasj() { # hasj <名称> <响应文件> <路径>
+hasj() { # hasj <name> <response file> <path>
     eq "$1" "yes" "$("$PY" "$JSONQ" has "$2" "$3")"
 }
 
-keysj() { # keysj <名称> <响应文件> <路径> <键集合(逗号分隔, 已排序)>
+keysj() { # keysj <name> <response file> <path> <key set (comma separated, sorted)>
     eq "$1" "$4" "$("$PY" "$JSONQ" keys "$2" "$3")"
 }
 
-sortedj() { # 诊断数组按 (code,file,span,target) 有序
+sortedj() { # the diagnostics array is ordered by (code,file,span,target)
     eq "$1" "yes" "$("$PY" "$JSONQ" sorted "$2")"
 }
 
-snapj() { # snapj <快照名> <响应文件> —— 结构化快照(N-4)
-    # BRICKIE_SNAP_EMIT=1 时改为**重生成**基线(只在明确要更新协议快照时用)。
+snapj() { # snapj <snapshot name> <response file> — structured snapshot (N-4)
+    # With BRICKIE_SNAP_EMIT=1, **regenerate** the baseline instead (only when intentionally updating it).
     local name="$1" resp="$2"
     local detail
     if [ "${BRICKIE_SNAP_EMIT:-0}" = "1" ]; then
         if detail="$("$PY" "$JSONQ" snapshot --emit "$name" "$resp" 2>&1)"; then
-            ok "快照 $name(重生成)"
+            ok "snapshot $name (regenerated)"
         else
-            bad "快照 $name(重生成失败)" "$detail"
+            bad "snapshot $name (regeneration failed)" "$detail"
         fi
         return
     fi
     if detail="$("$PY" "$JSONQ" snapshot "$name" "$resp")"; then
-        ok "快照 $name"
+        ok "snapshot $name"
     else
-        bad "快照 $name" "$detail"
+        bad "snapshot $name" "$detail"
     fi
 }
 
-# ------------------------------------------------------------------ 文件级工具
-tree_hash() { # 目录内容指纹(路径 + sha256), 用来断言逐字节幂等
+# ------------------------------------------------------------------ file-level tools
+tree_hash() { # directory content fingerprint (path + sha256), used to assert byte-for-byte idempotence
     ( cd "$1" && find . -type f -not -name out -not -name err | LC_ALL=C sort \
         | xargs -r sha256sum )
 }
 
-# ------------------------------------------------------------------ 段落标题
+# ------------------------------------------------------------------ section headings
 section() { printf '\n=== %s ===\n' "$1"; }

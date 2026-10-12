@@ -1,35 +1,35 @@
 #!/usr/bin/env python3
-"""fetch-prebuilt — 把 prebuilts/toolchain/ 工具集取到本地(锁版本 + 校验 + 解压 + 落戳)。
+"""fetch-prebuilt — fetch the prebuilts/toolchain/ toolset locally (pinned versions + verify + unpack + stamp).
 
-## 为什么要有它
+## Why this exists
 
-`prebuilts/toolchain/` **不进版本库**(它是派生目录, 体积以 GB 计), 所以需要一条**可重放**的
-命令把它重建出来。可重放的含义是: 版本与 URL 钉在 `prebuilts/toolchain.lock.toml` 里,
-下载后**必须**校验 SHA256 —— 校验不过就报错退出, 绝不"凑合用一个差不多的"。
+`prebuilts/toolchain/` is **not committed** (it is a derived directory, GBs in size), so a **replayable**
+command is needed to rebuild it. Replayable means: versions and URLs are pinned in `prebuilts/toolchain.lock.toml`,
+and the download **must** be SHA256-verified — a mismatch aborts with an error, never "make do with something close".
 
-这条纪律对齐设计侧 `4-04`/`2-02` BR-D3 的修订口径:
-"每语言最小依赖集 + **锁版本** + **可离线复现**"。
+This discipline matches the revised wording of BR-D3 on the design side `4-04`/`2-02`:
+"minimal per-language dependency set + **pinned versions** + **offline reproducibility**".
 
-## 引导依赖(刻意压到最小)
+## Bootstrap dependencies (deliberately minimal)
 
-只依赖 **Python 3 标准库**: `urllib`(下载) + `hashlib`(校验) + `tarfile`/`lzma`/
-`compression.zstd`(解压) + `zipfile` + 自带的 ar 解析(.deb)。
-**不需要** curl / wget / tar / xz / zstd / ar / dpkg-deb / unzip。
+Depends only on the **Python 3 standard library**: `urllib` (download) + `hashlib` (verify) + `tarfile`/`lzma`/
+`compression.zstd` (unpack) + `zipfile` + its own ar parser (.deb).
+**No** curl / wget / tar / xz / zstd / ar / dpkg-deb / unzip needed.
 
-  * `compression.zstd` 是 Python **3.14** 起进标准库的。更低版本若碰到 zstd 压缩的
-    载荷(新发行版的 .deb 都是), 会退回调用 `zstd` 或 `tar --zstd` 命令。
+  * `compression.zstd` entered the standard library in Python **3.14**. Older versions facing a zstd-compressed
+    payload (all .deb files from new distros) fall back to calling the `zstd` or `tar --zstd` command.
 
-## 用法
+## Usage
 
-    python3 tools/fetch-prebuilt.py                 # 取齐缺失件
-    python3 tools/fetch-prebuilt.py <id> [...]      # 只取指定件
-    python3 tools/fetch-prebuilt.py --list          # 列清单(不下载)
-    python3 tools/fetch-prebuilt.py --check         # 只检查是否已就位(不下载)
-    python3 tools/fetch-prebuilt.py --verify        # 重算 cache 内文件的 SHA256
-    python3 tools/fetch-prebuilt.py --force         # 忽略缓存重下
-    python3 tools/fetch-prebuilt.py --print-hash <url>   # 取某 URL 的 sha256(维护锁用)
+    python3 tools/fetch-prebuilt.py                 # fetch all missing pieces
+    python3 tools/fetch-prebuilt.py <id> [...]      # fetch only the given pieces
+    python3 tools/fetch-prebuilt.py --list          # list (no download)
+    python3 tools/fetch-prebuilt.py --check         # only check what is in place (no download)
+    python3 tools/fetch-prebuilt.py --verify        # recompute SHA256 of cached files
+    python3 tools/fetch-prebuilt.py --force         # ignore the cache and re-download
+    python3 tools/fetch-prebuilt.py --print-hash <url>   # print the sha256 of a URL (for maintaining the lock)
 
-退出码: 0 成功 / 1 校验或解压失败 / 2 用法或环境错
+Exit codes: 0 success / 1 verify or unpack failure / 2 usage or environment error
 """
 
 from __future__ import annotations
@@ -50,17 +50,17 @@ import zipfile
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
-PREBUILT = REPO_ROOT / "prebuilts" / "toolchain"     # 派生侧(不进版本库); 见 ADR-0005
+PREBUILT = REPO_ROOT / "prebuilts" / "toolchain"     # derived side (not committed); see ADR-0005
 CACHE = PREBUILT / ".cache"
 STAMP = PREBUILT / ".stamp"
 LOCK = REPO_ROOT / "prebuilts/toolchain.lock.toml"
 TOOLCHAIN_MK = PREBUILT / "toolchain.mk"
-# 写进 toolchain.mk 的路径(相对仓库根), 由脚本自己算, 不硬编码
+# Paths written into toolchain.mk (repo-root relative), computed by the script, never hardcoded
 PREBUILT_REL = PREBUILT.relative_to(REPO_ROOT).as_posix()
 
-# 读块**故意小**: 慢链路上若按 1 MB 读, 一个 read() 要凑满 1 MB 才返回 ⇒
-# 落盘粒度就是 1 MB(进度不可见, 断线白收最多 1 MB)。64 KB 兼顾吞吐与可观测。
-# 配合 read1(): 有多少收多少, 不阻塞凑数。
+# The read block is **deliberately small**: on a slow link, reading 1 MB per read() means it returns only
+# once 1 MB is filled ⇒ 1 MB flush granularity (invisible progress, up to 1 MB lost on a disconnect).
+# 64 KB balances throughput and observability. Combined with read1(): take what is there, never block to fill.
 CHUNK = 1 << 16
 UA = "brickOS-fetch-prebuilts/toolchain/1 (+https://github.com/zhuyh4n9/brickOS)"
 
@@ -78,32 +78,32 @@ def human(n: int) -> str:
     return f"{n / 1048576:.1f} MB" if n >= 1048576 else f"{n / 1024:.0f} KB"
 
 
-# --------------------------------------------------------------------- 锁文件
+# --------------------------------------------------------------------- lock file
 
 def load_lock() -> dict:
     if not LOCK.is_file():
-        die(f"找不到锁文件 {LOCK}", 2)
+        die(f"lock file not found: {LOCK}", 2)
     with LOCK.open("rb") as fh:
         lock = tomllib.load(fh)
     if lock.get("version") != 1:
-        die(f"{LOCK.name}: 不认识的 version={lock.get('version')!r}(期望 1)", 2)
+        die(f"{LOCK.name}: unrecognized version={lock.get('version')!r} (expected 1)", 2)
     arts = lock.get("artifact") or []
     if not arts:
-        die(f"{LOCK.name}: 没有任何 [[artifact]] 条目", 2)
+        die(f"{LOCK.name}: no [[artifact]] entries at all", 2)
     seen: set[str] = set()
     for a in arts:
         for key in ("id", "url", "sha256", "kind", "filename", "into"):
             if not a.get(key):
-                die(f"{LOCK.name}: 条目缺 {key}: {a!r}", 2)
+                die(f"{LOCK.name}: entry missing {key}: {a!r}", 2)
         if a["id"] in seen:
-            die(f"{LOCK.name}: id 重复: {a['id']}", 2)
+            die(f"{LOCK.name}: duplicate id: {a['id']}", 2)
         seen.add(a["id"])
         if len(a["sha256"]) != 64 or any(c not in "0123456789abcdef" for c in a["sha256"]):
-            die(f"{LOCK.name}: {a['id']} 的 sha256 不是 64 位小写十六进制", 2)
+            die(f"{LOCK.name}: {a['id']}'s sha256 is not 64 lowercase hex digits", 2)
     return lock
 
 
-# ------------------------------------------------------------------ 下载/校验
+# ------------------------------------------------------------------ download / verify
 
 def sha256_of(path: Path) -> str:
     h = hashlib.sha256()
@@ -114,20 +114,22 @@ def sha256_of(path: Path) -> str:
 
 
 def download(url: str, dest: Path, expect_sha: str, *, attempts: int = 60) -> bool:
-    """断点续传 + 重试的下载; 成功(末尾 SHA256 匹配)返回 True。
+    """Resumable download with retries; returns True on success (trailing SHA256 matches).
 
-    **为什么续传必须写在这里**(踩过的坑): 早期版本把"缓存里那个文件校验不过"直接
-    当成 miss 并删掉重下 —— 结果把另一路正在续传的 14 MB 分片删了, 两路下载互相破坏。
-    分片的正确语义是"**尚未完成的下载**", 不是"坏缓存"。所以:
+    **Why resume must live here** (a pit we hit): an earlier version treated "the cached file fails
+    verification" as a miss and deleted it to re-download — that deleted a 14 MB partial chunk which
+    another path was resuming, so the two downloads destroyed each other. The correct meaning of a
+    partial chunk is "**an unfinished download**", not "a bad cache". Therefore:
 
-      * 分片**保留**, 用 HTTP Range 从它的大小接着下(服务器不支持 Range 则截断重来);
-      * 只在**整份下完之后**才判 SHA256;
-      * 校验不过**也不删** —— 留下供比对, 并提示用 `--force`(ADR-0002 §2-4)。
+      * keep the partial chunk and continue from its size with an HTTP Range (if the server ignores Range, truncate and restart);
+      * judge SHA256 only after the **whole file** has finished;
+      * a mismatch **does not delete** it either — keep it for comparison and suggest `--force` (ADR-0002 §2-4).
 
-    **首次取件必须先建目录**(踩过的坑): `prebuilts/toolchain/` 是**派生目录**、不进版本库,
-    所以一个全新 checkout 里它**根本不存在**; 而落点是 `<它>/.cache/<filename>` ——
-    不先 mkdir, `dest.open()` 每次都抛 FileNotFoundError, 被下面的 except 当成"网络中断"
-    吞掉, 于是 60 次重试各睡最多 15 s: 表现是"卡住十分钟然后报下载未完成"。
+    **The first fetch must create the directory** (a pit we hit): `prebuilts/toolchain/` is a **derived
+    directory** and is not committed, so in a fresh checkout it **does not exist at all**; the destination is
+    `<it>/.cache/<filename>` — without mkdir first, every `dest.open()` raises FileNotFoundError, which the
+    except below swallows as a "network interruption", so 60 retries each sleep up to 15 s: the symptom is
+    "hangs for ten minutes, then reports the download as unfinished".
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
 
@@ -148,8 +150,8 @@ def download(url: str, dest: Path, expect_sha: str, *, attempts: int = 60) -> bo
             with urllib.request.urlopen(req, timeout=60) as resp:
                 status = getattr(resp, "status", 200)
                 if have and status != 206:
-                    # 服务器忽略了 Range ⇒ 从头来, 且**必须截断**(否则会接出垃圾)
-                    print(f"    (服务器不支持续传, 从头下)")
+                    # server ignored Range ⇒ start over, and **must truncate** (otherwise garbage gets appended)
+                    print(f"    (server does not support resume, downloading from scratch)")
                     have, mode = 0, "wb"
                 total = 0
                 crange = resp.headers.get("Content-Range")
@@ -159,7 +161,7 @@ def download(url: str, dest: Path, expect_sha: str, *, attempts: int = 60) -> bo
                 elif clen:
                     total = have + int(clen)
                 done = have
-                read = getattr(resp, "read1", resp.read)   # read1: 有多少给多少
+                read = getattr(resp, "read1", resp.read)   # read1: return whatever is available
                 with dest.open(mode) as out:
                     while True:
                         chunk = read(CHUNK)
@@ -175,33 +177,33 @@ def download(url: str, dest: Path, expect_sha: str, *, attempts: int = 60) -> bo
                     print()
         except urllib.error.HTTPError as exc:
             if exc.code == 416 and have:
-                # 服务器认为已经给完了 ⇒ 拿现有文件去校验, 不要无限重试
+                # the server thinks it already sent everything ⇒ verify the existing file, do not retry forever
                 if expect_sha and sha256_of(dest) == expect_sha:
                     return True
-                print(f"    上游报告范围越界(416), 但现有文件校验不符 —— 停止")
+                print(f"    upstream reports range out of bounds (416), but the existing file does not verify — stopping")
                 return False
-            print(f"    第 {attempt} 次失败(HTTP {exc.code}), 重试…")
+            print(f"    attempt {attempt} failed (HTTP {exc.code}), retrying…")
             time.sleep(min(2 * attempt, 15))
             continue
         except (urllib.error.URLError, OSError, TimeoutError) as exc:
             got = dest.stat().st_size if dest.is_file() else 0
-            print(f"\n    第 {attempt} 次中断({type(exc).__name__}), 已收 {human(got)}, 续传…")
+            print(f"\n    attempt {attempt} interrupted ({type(exc).__name__}), got {human(got)}, resuming…")
             time.sleep(min(2 * attempt, 15))
             continue
 
         if not expect_sha:
-            return True                      # 只探哈希: 下完一轮即成功
+            return True                      # hash probe only: one completed round is success
         if sha256_of(dest) == expect_sha:
             return True
-        print("    本轮结束但 SHA256 未通过, 继续续传…")
+        print("    round finished but SHA256 did not match, resuming…")
 
     return bool(expect_sha) and dest.is_file() and sha256_of(dest) == expect_sha
 
 
-# --------------------------------------------------------------------- 解压
+# --------------------------------------------------------------------- unpacking
 
 def _zstd_reader(path: Path):
-    """返回可读的 zstd 流。优先标准库(Py3.14+), 否则退回外部命令。"""
+    """Return a readable zstd stream. Prefer the standard library (Py3.14+), else fall back to an external command."""
     try:
         from compression import zstd  # type: ignore[import-not-found]
         return zstd.ZstdFile(path, "rb")
@@ -211,18 +213,18 @@ def _zstd_reader(path: Path):
         return subprocess.Popen(["zstd", "-dc", str(path)], stdout=subprocess.PIPE).stdout
     if shutil.which("tar"):
         return subprocess.Popen(["tar", "--zstd", "-xOf", str(path)], stdout=subprocess.PIPE).stdout
-    die("需要 zstd 载荷, 但既没 compression.zstd 也没有 zstd/tar 命令(装 zstd, 或用 Python 3.14+)")
-    raise AssertionError  # 不可达
+    die("a zstd payload is required, but neither compression.zstd nor the zstd/tar command is available (install zstd, or use Python 3.14+)")
+    raise AssertionError  # unreachable
 
 
 def _open_tar(path: Path):
     if path.name.endswith(".tar.zst"):
         return tarfile.open(fileobj=_zstd_reader(path), mode="r|")
-    # ⚠ 必须是 `r|*`(**带星号**)。tarfile 的 mode 里 `r|` 的含义是「**未压缩**的 tar 流」,
-    #   透明压缩要 `r|*`。写成 `r|` 就会拿 xz 字节当 tar 头读 ⇒ ReadError: invalid header。
-    #   这个星号值 1.7 小时: 91.5 MB 下完之后卡在解压, 现象酷似"文件坏了", 而其实
-    #   文件的 SHA256 与上游官方值**逐位一致** —— 别删了重下, 改这一处即可。
-    return tarfile.open(path, mode="r|*")   # `*` = 透明压缩(xz/gz/bz2)
+    # ⚠ It must be `r|*` (**with the star**). In tarfile's mode, `r|` means "**uncompressed** tar stream";
+    #   transparent compression needs `r|*`. Writing `r|` reads xz bytes as a tar header ⇒ ReadError: invalid header.
+    #   That star cost 1.7 hours: after downloading 91.5 MB it hung in unpacking, looking exactly like a "corrupt file",
+    #   while the file's SHA256 matched the upstream official value **bit for bit** — do not delete and re-download, just fix this line.
+    return tarfile.open(path, mode="r|*")   # `*` = transparent compression (xz/gz/bz2)
 
 
 def _strip_member(member: tarfile.TarInfo, strip: int):
@@ -231,7 +233,7 @@ def _strip_member(member: tarfile.TarInfo, strip: int):
     parts = Path(member.name).parts
     if len(parts) <= strip:
         if member.isdir():
-            return None                       # 顶层目录本身: 跳过
+            return None                       # the top-level directory itself: skip
         return None
     member.name = str(Path(*parts[strip:]))
     if member.linkname:
@@ -248,10 +250,10 @@ def extract_tar(path: Path, dest: Path, strip: int) -> None:
             member = _strip_member(member, strip)
             if member is None:
                 return None
-            # 只保留可移植的成员类型; 拒绝绝对路径 / 逃逸到目录外
+            # Keep only portable member types; reject absolute paths / escapes outside the destination
             target = (dest / member.name).resolve()
             if not str(target).startswith(str(dest.resolve())):
-                die(f"压缩包含逃逸路径: {member.name}")
+                die(f"archive contains an escaping path: {member.name}")
             return tarfile.data_filter(member, str(dest))
         tar.extractall(path=dest, filter=flt)
 
@@ -262,15 +264,15 @@ def extract_zip(path: Path, dest: Path) -> None:
         for zinfo in zf.infolist():
             target = (dest / zinfo.filename).resolve()
             if not str(target).startswith(str(dest.resolve())):
-                die(f"zip 含逃逸路径: {zinfo.filename}")
+                die(f"zip contains an escaping path: {zinfo.filename}")
         zf.extractall(dest)
 
 
 def _ar_entries(path: Path):
-    """极简 ar 解析: 返回 (name, offset, size)。够读 .deb 用(成员名都短)。"""
+    """Minimal ar parser: yields (name, offset, size). Enough to read .deb files (member names are short)."""
     with path.open("rb") as fh:
         if fh.read(8) != b"!<arch>\n":
-            die(f"{path.name} 不是 ar 归档")
+            die(f"{path.name} is not an ar archive")
         while True:
             header = fh.read(60)
             if len(header) < 60:
@@ -279,14 +281,14 @@ def _ar_entries(path: Path):
             try:
                 size = int(header[48:58].decode("ascii").strip())
             except ValueError:
-                die(f"{path.name}: ar 成员 `{name}` 的大小字段非法")
+                die(f"{path.name}: ar member `{name}` has an invalid size field")
             offset = fh.tell()
             yield name.rstrip("/"), offset, size
             fh.seek(offset + size + (size & 1))
 
 
 def extract_deb(path: Path, dest: Path, strip: int, tmp: Path) -> None:
-    """从 .deb 里取出 data.tar.* 再解压。不依赖 ar / dpkg-deb。"""
+    """Extract data.tar.* from a .deb and unpack it. No dependency on ar / dpkg-deb."""
     data_entry = None
     with path.open("rb") as fh:
         for name, offset, size in _ar_entries(path):
@@ -296,7 +298,7 @@ def extract_deb(path: Path, dest: Path, strip: int, tmp: Path) -> None:
                 data_entry = (name, payload)
                 break
     if data_entry is None:
-        die(f"{path.name}: 找不到 data.tar.* 成员")
+        die(f"{path.name}: no data.tar.* member found")
     name, payload = data_entry
     tmp.mkdir(parents=True, exist_ok=True)
     inner = tmp / name
@@ -320,23 +322,24 @@ def extract(art: dict, blob: Path) -> None:
     elif kind == "deb":
         extract_deb(blob, dest, strip, CACHE / ".tmp")
     else:
-        die(f"{art['id']}: 不认识的 kind={kind!r}")
+        die(f"{art['id']}: unrecognized kind={kind!r}")
 
 
-# ------------------------------------------------------------------- 生成物
+# ------------------------------------------------------------------- generated output
 
 def write_toolchain_mk(lock: dict) -> None:
-    """据锁文件的 `[toolchain]` 表生成 Makefile 片段。
+    """Generate the Makefile snippet from the lock file's `[toolchain]` table.
 
-    **只声明真正就位的件**: 取件支持按 id 取(比如先只取 make/ninja), 那种状态下
-    PREBUILT_CROSS 指向的目录并不存在 —— 若照样宣告 `PREBUILT_READY := 1`,
-    Makefile 就会拿着一个空路径去编镜像。就位与否以**目录存在**为准, 不以意图为准。
+    **Declare only what is really in place**: fetching supports per-id selection (say only make/ninja
+    first), and in that state the directory PREBUILT_CROSS points to does not exist — declaring
+    `PREBUILT_READY := 1` anyway would make the Makefile build the image with an empty path. In-place or
+    not is judged by **directory existence**, never by intent.
     """
     tc = lock.get("toolchain") or {}
     arts = lock["artifact"]
     ready: dict[str, bool] = {}
     for key, rel in tc.items():
-        # 该路径归属哪一个 artifact(按 into 前缀最长匹配)
+        # Which artifact owns this path (longest matching `into` prefix)
         owner = None
         for art in arts:
             into = art["into"]
@@ -348,13 +351,13 @@ def write_toolchain_mk(lock: dict) -> None:
     all_ready = all(ready.values()) and all(is_ready(a) for a in arts)
 
     lines = [
-        "# 由 tools/fetch-prebuilt.py 生成 —— **勿手改**(改它请改 prebuilts/toolchain.lock.toml)",
+        "# Generated by tools/fetch-prebuilt.py — **do not edit by hand** (edit prebuilts/toolchain.lock.toml instead)",
         "#",
-        "# 作用: 把 prebuilts/toolchain/ 里各产物的**实际路径**告诉 Makefile, 免得 Makefile 去猜",
-        "# 发行包解出来的目录名。",
+        "# Purpose: tell the Makefile the **actual paths** of the artifacts under prebuilts/toolchain/, so it need not guess",
+        "# the directory names a distro package unpacks to.",
         "#",
-        "# 注意: Makefile **不信**这里的任何标记 —— 它逐个用 $(wildcard) 检查二进制是否",
-        "# 真的存在(prebuilts/toolchain/ 允许只取一部分)。下面的 READY 只用于人读与门禁。",
+        "# Note: the Makefile **trusts no marker** here — it checks each binary with $(wildcard)",
+        "# (prebuilts/toolchain/ may be partially fetched). The READY below is for humans and gates only.",
         "",
         f"PREBUILT_READY := {1 if all_ready else 0}",
         f"PREBUILT := {PREBUILT_REL}",
@@ -362,22 +365,22 @@ def write_toolchain_mk(lock: dict) -> None:
     ]
     for key, rel in sorted(tc.items()):
         var = "PREBUILT_" + key.upper()
-        mark = "" if ready[key] else "   # ← 尚未就位"
+        mark = "" if ready[key] else "   # ← not in place yet"
         lines.append(f"{var} := $(PREBUILT)/{rel}{mark}")
     lines.append("")
     TOOLCHAIN_MK.write_text("\n".join(lines), encoding="utf-8")
-    info(f"写出 {TOOLCHAIN_MK.relative_to(REPO_ROOT)}"
-         f"({'全部就位' if all_ready else '部分就位'})")
+    info(f"wrote {TOOLCHAIN_MK.relative_to(REPO_ROOT)}"
+         f"({'all in place' if all_ready else 'partially in place'})")
 
 
 def toolchain_probe(key: str, rel: str) -> Path:
-    """把 `[toolchain]` 的一项翻译成"应该存在的那个文件"。
+    """Translate one `[toolchain]` entry into "the file that should exist".
 
-    值分两类:
-      * **路径** —— 例如 `make/bin/make`, 直接判存在;
-      * **前缀** —— 以 `-` 结尾(如 `.../bin/aarch64-none-elf-`, 即 CROSS_COMPILE 前缀)。
-        它**不是文件**, 拿它 exists() 永远为假 —— 早期实现在一切正常时报 MISS toolchain.cross。
-        前缀的探针 = `<前缀>gcc`。
+    Values come in two kinds:
+      * **path** — e.g. `make/bin/make`, tested for existence directly;
+      * **prefix** — ending in `-` (e.g. `.../bin/aarch64-none-elf-`, the CROSS_COMPILE prefix).
+        It is **not a file**, so exists() on it is always false — an early implementation reported
+        MISS toolchain.cross even when everything was fine. The probe for a prefix = `<prefix>gcc`.
     """
     return PREBUILT / (rel + "gcc" if rel.endswith("-") else rel)
 
@@ -395,7 +398,7 @@ def is_ready(art: dict) -> bool:
     return (PREBUILT / art["into"]).is_dir()
 
 
-# --------------------------------------------------------------------- 主流程
+# --------------------------------------------------------------------- main flow
 
 def fetch_one(art: dict, *, force: bool, verify_only: bool) -> bool:
     aid = art["id"]
@@ -404,47 +407,47 @@ def fetch_one(art: dict, *, force: bool, verify_only: bool) -> bool:
 
     if verify_only:
         if not blob.is_file():
-            info("cache 里没有, 跳过")
+            info("not in the cache, skipping")
             return False
         got = sha256_of(blob)
         if got == art["sha256"]:
             info(f"SHA256 ok  {got[:16]}…")
             return True
-        info(f"SHA256 **不符**  期望 {art['sha256'][:16]}…  实得 {got[:16]}…")
+        info(f"SHA256 **MISMATCH**  expected {art['sha256'][:16]}…  got {got[:16]}…")
         return False
 
     if force and blob.is_file():
-        info("--force: 丢弃现有文件重下")
+        info("--force: discarding the existing file and re-downloading")
         blob.unlink()
 
     if blob.is_file() and sha256_of(blob) == art["sha256"]:
-        info(f"cache 命中且校验通过  {human(blob.stat().st_size)}")
+        info(f"cache hit and verification passed  {human(blob.stat().st_size)}")
     else:
         if blob.is_file():
-            # 分片 = **尚未完成的下载**, 不是坏缓存 ⇒ 续传, 不要删
-            info(f"发现未完成的分片 {human(blob.stat().st_size)}, 从这里续传")
-        info(f"下载 {art['url']}")
+            # A partial chunk = **an unfinished download**, not a bad cache ⇒ resume, do not delete
+            info(f"found an unfinished partial chunk {human(blob.stat().st_size)}, resuming from there")
+        info(f"downloading {art['url']}")
         if not download(art["url"], blob, art["sha256"]):
-            got = sha256_of(blob) if blob.is_file() else "(无文件)"
-            die(f"{aid}: 下载未完成或 SHA256 不符\n"
-                f"  期望 {art['sha256']}\n  实得 {got}\n"
-                f"  文件留在 {blob}: 供比对(上游换内容 ⇒ 显式更新锁文件); "
-                f"若本地已损坏 ⇒ 用 --force 重下")
+            got = sha256_of(blob) if blob.is_file() else "(no file)"
+            die(f"{aid}: download unfinished or SHA256 mismatch\n"
+                f"  expected {art['sha256']}\n  got {got}\n"
+                f"  file kept at {blob}: for comparison (if upstream changed content ⇒ update the lock explicitly); "
+                f"if the local copy is corrupt ⇒ re-download with --force")
         info(f"SHA256 ok  {human(blob.stat().st_size)}")
 
     if not is_ready(art):
-        info(f"解压 → prebuilts/toolchain/{art['into']}")
+        info(f"unpacking → prebuilts/toolchain/{art['into']}")
         extract(art, blob)
         STAMP.mkdir(parents=True, exist_ok=True)
         stamp_path(aid).write_text(art["sha256"] + "\n", encoding="utf-8")
     else:
-        info("已就位")
+        info("already in place")
     return True
 
 
 def check(lock: dict) -> int:
     bad = 0
-    print("prebuilt 就位检查:")
+    print("prebuilt in-place check:")
     for art in lock["artifact"]:
         ok = is_ready(art)
         print(f"  {'ok  ' if ok else 'MISS'} {art['id']:<20} prebuilts/toolchain/{art['into']}")
@@ -456,12 +459,12 @@ def check(lock: dict) -> int:
         shown = rel + "gcc" if rel.endswith("-") else rel
         print(f"  {'ok  ' if ok else 'MISS'} {'toolchain.' + key:<20} prebuilts/toolchain/{shown}")
         bad += 0 if ok else 1
-    print("PASS: prebuilt 已就位" if bad == 0 else f"FAIL: {bad} 项缺失(跑 make prebuilt 取件)")
+    print("PASS: prebuilt in place" if bad == 0 else f"FAIL: {bad} item(s) missing (run make prebuilt to fetch)")
     return 0 if bad == 0 else 1
 
 
 def print_hash(url: str) -> int:
-    """维护锁文件用: 下载并打印 sha256(不落盘到 prebuilts/toolchain/)。"""
+    """For maintaining the lock file: download and print the sha256 (not written under prebuilts/toolchain/)."""
     tmp = CACHE / ".tmp" / "hash-probe"
     tmp.parent.mkdir(parents=True, exist_ok=True)
     download(url, tmp, "")
@@ -471,14 +474,15 @@ def print_hash(url: str) -> int:
 
 
 def print_env(lock: dict) -> int:
-    """输出一份 **shell 片段**(供 `setup.sh` source): 工具链各 bin 目录与 CROSS_COMPILE 前缀。
+    """Print a **shell snippet** (for `setup.sh` to source): the toolchain bin dirs and the CROSS_COMPILE prefix.
 
-    **为什么由这里输出, 而不是让 setup.sh 自己拼路径**: 路径的唯一真值是锁文件
-    (`prebuilts/toolchain.lock.toml`), 而"某个条目解出来之后 bin 在哪"这条推理只应该有一处
-    实现。若 shell 侧再来一遍 glob/推导, 就又出现两个真值 —— 正是 ADR-0002 §7.3-1 记的那类坑。
+    **Why this is printed here instead of having setup.sh assemble paths**: the single source of truth for
+    paths is the lock file (`prebuilts/toolchain.lock.toml`), and the reasoning "where is bin after an entry is
+    unpacked" should be implemented in exactly one place. A second round of glob/derivation on the shell side
+    would create two truths again — the very trap recorded in ADR-0002 §7.3-1.
 
-    只读锁文件, **不要求已取件** ⇒ 全新 checkout(还没跑 `make prebuilt`)也能拿到路径,
-    由消费方自己去判断目录在不在。
+    Reads the lock file only, **does not require the fetch to have run** ⇒ a fresh checkout (that has not run
+    `make prebuilt`) still gets paths, and the consumer decides whether the directories exist.
     """
     tc = lock.get("toolchain") or {}
     prebuilt_rel = PREBUILT.relative_to(REPO_ROOT).as_posix()
@@ -497,8 +501,8 @@ def print_env(lock: dict) -> int:
             full = f"{prebuilt_rel}/{d}"
             if full not in bin_dirs:
                 bin_dirs.append(full)
-    print(f"# 由 tools/fetch-prebuilt.py --print-env 生成 —— 路径真值 = {LOCK.name}")
-    print("# 路径都是**仓库根相对**(消费方自行加上 $BRICKOS_ROOT) —— 免得忘加前缀拼错")
+    print(f"# generated by tools/fetch-prebuilt.py --print-env — path truth = {LOCK.name}")
+    print("# all paths are **repo-root relative** (the consumer prepends $BRICKOS_ROOT) — so a forgotten prefix cannot cause typos")
     print(f"PREBUILT_REL='{prebuilt_rel}'")
     print(f"PREBUILT_CROSS='{cross}'")
     print(f"PREBUILT_MAKE_BIN_DIR='{make_dir}'")
@@ -509,16 +513,16 @@ def print_env(lock: dict) -> int:
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(
         prog="fetch-prebuilt",
-        description="取 prebuilts/toolchain/ 工具集(锁版本 + SHA256 校验 + 解压)",
+        description="fetch the prebuilts/toolchain/ toolset (pinned versions + SHA256 verification + unpack)",
     )
-    ap.add_argument("ids", nargs="*", help="只取这些 id(缺省 = 全部)")
-    ap.add_argument("--list", action="store_true", help="列清单后退出")
-    ap.add_argument("--check", action="store_true", help="只检查是否已就位")
-    ap.add_argument("--verify", action="store_true", help="重算缓存文件的 SHA256")
-    ap.add_argument("--force", action="store_true", help="忽略缓存重下")
-    ap.add_argument("--print-hash", metavar="URL", help="下载并打印该 URL 的 sha256(维护锁用)")
+    ap.add_argument("ids", nargs="*", help="fetch only these ids (default = all)")
+    ap.add_argument("--list", action="store_true", help="list and exit")
+    ap.add_argument("--check", action="store_true", help="only check what is in place")
+    ap.add_argument("--verify", action="store_true", help="recompute SHA256 of cached files")
+    ap.add_argument("--force", action="store_true", help="ignore the cache and re-download")
+    ap.add_argument("--print-hash", metavar="URL", help="download and print the sha256 of a URL (for maintaining the lock)")
     ap.add_argument("--print-env", action="store_true",
-                    help="打印 shell 片段(工具链 bin 目录 + CROSS_COMPILE 前缀), 供 setup.sh source")
+                    help="print a shell snippet (toolchain bin dirs + CROSS_COMPILE prefix) for setup.sh to source")
     args = ap.parse_args(argv)
 
     if args.print_hash:
@@ -535,7 +539,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  {a['id']:<20} {a['version']:<12} {a['kind']:<8} → prebuilts/toolchain/{a['into']}")
             print(f"  {'':<20} {a['url']}")
             if a.get("why"):
-                print(f"  {'':<20} 用途: {a['why']}")
+                print(f"  {'':<20} purpose: {a['why']}")
         return 0
 
     if args.check:
@@ -546,7 +550,7 @@ def main(argv: list[str] | None = None) -> int:
         want = set(args.ids)
         unknown = want - {a["id"] for a in arts}
         if unknown:
-            die(f"未知 id: {', '.join(sorted(unknown))}(用 --list 看可用 id)", 2)
+            die(f"unknown id: {', '.join(sorted(unknown))} (use --list for available ids)", 2)
         arts = [a for a in arts if a["id"] in want]
 
     if args.verify:

@@ -71,7 +71,7 @@ v0.1.0 原来全程关中断(DAIF 全屏蔽)、没有中断控制器; `README` �
     `br_gicv3_info` / `br_gicv3_sgi_trigger` / `br_gicv3_readback_*` + INTID 分界宏 +
     `br_gicv3_cfg_t` 类型。
 - 流程仍是 `brickie check`(dev+release) → `brickie iface publish`(快照 + CHANGELOG + lock)
-  → `brickie gen`(描述符生成物); `plugin.toml` 里的 `hash` 由人从快照**抄回**(§9.1.1:
+  → `brickie gen`(描述符生成物); `brick.toml` 里的 `hash` 由人从快照**抄回**(§9.1.1:
   机器不改人写文件)。
 - `[privileged]` 如实登记: `level = "P4"`(machine: PIC/早期 console/MMU 归 platform),
   `resources.irq` 列出本板用到的线(SGI 0–2 / PPI 30 / SPI 33)。
