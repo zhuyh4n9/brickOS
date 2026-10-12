@@ -138,6 +138,7 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 | 2026-10-07 | 0.1.0 | `x86-64/linux` | 增补 **入口 ELF `brickie`**(Python 前端 + 模板嵌入二进制; 零依赖入口形态) |
 | 2026-10-07 | 0.1.0 | `x86-64/linux` | 原生工具 **`brickie-gen` 也嵌进 `brickie`** ⇒ 单文件自包含(只拷 `brickie` 即可运行) |
 | 2026-10-08 | 0.1.0 | `x86-64/linux` | 种子扩为**三件** `{brickie,brickie-gen,brickie-core}`: **L0/L1 `brickie-core` 进载荷与种子**, `schema/**` 一并进载荷(缺 core ⇒ `make tools-prebuilt` FAIL) |
+| 2026-10-12 | 0.1.0 | `x86-64/linux` | 换工具链重发: 编 `brickie-core` 的 rustc 由 1.93.1 变成**工作区自带的 1.99.0**(apt 的 cargo 1.75 读不了 `Cargo.lock` v4); `make core` 起**自动发现** `.toolchain`, 太旧的 cargo 当场 FAIL 并给出修法 |
 
 ### 5.1 当前种子指纹(实测)
 
@@ -147,9 +148,13 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 文件(`prebuilts/seed/brickie/x86-64/linux/bin/`) | 体积 | sha256 |
 |---|---|---|
-| `brickie` | 2 891 752 B(~2.76 MiB) | `484aad5371a169e3a60ec789971804ac54b95ccdc547d34a63cb7d969bf3cf85` |
-| `brickie-core` | 2 498 640 B(~2.38 MiB) | `7b1365b9e8b4fe1ed2c5e89a5bd1796a9ddb31c5d0a43172c7586f7f4c454469` |
-| `brickie-gen` | 167 952 B(~164 KiB) | `8d23c0c9e4279aee584f7d616708f3267efcfac8b6af52a0887454bb285ab709` |
+| `brickie` | 3 498 120 B(~3.34 MiB) | `97c1ea08c61c5d58ad0c74b6b2ecf52773e34f5d42f4ded74b59f09103dd1efc` |
+| `brickie-core` | 3 047 808 B(~2.91 MiB) | `95a543876c02f75ec129f1818cc0d17da00c1cf59c92392f512630e02ca0fc44` |
+| `brickie-gen` | 167 384 B(~163 KiB) | `cd77d34d1f8c44c71c70685fb643e9e8f8eaa564bf7d15253199350a18a3b92b` |
+
+> 这一份由 **rustc 1.99.0**(工作区自带的 `.toolchain`; `make core` 自动采用)编出 ——
+> `brickie --version --json` 的 `data.languages[0].version` 就是它。种子字节与 rustc 版本
+> 绑定, 换工具链必须重发, 上表随之刷新。
 
 > ✅ 这份种子与源码**一致**(`make tools-prebuilt-check` 三件全 ok)。门禁一旦报红,
 > 只说明种子落后于源码, **不是**回归: 跑一次 `make tools-prebuilt` 重新发布即可

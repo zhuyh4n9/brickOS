@@ -177,6 +177,11 @@ build/host/<triple>/bin/brickie test             # 跑 tests/gates.toml 的全�
 build/host/<triple>/bin/brickie clean --all      # 清镜像侧派生物(不动 build/host 的工具)
 ```
 
+- **cargo 版本(≥ 1.83)**: `rust/Cargo.lock` 是 **version 4**; 发行版自带的旧 cargo
+  (如 Ubuntu 24.04 的 1.75)读不了它, 只会报 `lock file version 4 requires
+  -Znext-lockfile-bump`。`make core` 的选择序是 "显式 `CARGO=…` → 工作区自带的
+  `.toolchain`(`<repo>/.toolchain` 或 `<repo>/../.toolchain`)→ PATH", 并在太旧时
+  **当场 FAIL** 给出修法(而不是把 cargo 那句含糊的原始报错漏给用户)。
 - **cargo 出树**: `CARGO_HOME` / `CARGO_TARGET_DIR` 缺省指向
   `prototype/build/{cargo-home,cargo-target}`(受管环境下 `$HOME/.cargo` 可能只读),
   两个都可用环境变量覆盖; Rust 源码在 `rust/`, 产物拷到宿主 bin 落点。

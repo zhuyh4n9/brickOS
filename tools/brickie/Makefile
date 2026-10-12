@@ -3,7 +3,9 @@
 #   make            构建两个宿主 ELF(出树): brickie-gen(L2) + brickie(L5 入口)
 #                   (Rust 核心 brickie-core 若已就位会被条件嵌进入口 ELF; 未就位则跳过)
 #   make core       用 cargo 编 L0/L1 的 brickie-core → 拷到 build/host/<triple>/bin/
-#                   (需要 rust/ 与 cargo; CARGO_HOME / CARGO_TARGET_DIR 指向可写出树目录)
+#                   (需要 rust/ 与 cargo ≥ 1.83 —— Cargo.lock 是 version 4; 选择序见下,
+#                    工作区自带的 .toolchain 会被自动采用; CARGO_HOME / CARGO_TARGET_DIR
+#                    指向可写出树目录)
 #   make selftest   跑生成器内置自检(JSON 往返 / 渲染 / 路径与模式 / 载荷确定性)
 #   make launcher-smoke  跑入口 ELF 的自检(嵌入载荷能否起来)
 #   make test       跑全部用例(生成器自检 + 端到端 tests/run.sh; run.sh 里已含 V-18 purity)
@@ -37,7 +39,47 @@ include ../../mk/host.mk
 CXX_DIR := cxx
 
 INSTALL ?= install
-CARGO   ?= cargo
+
+# ---------------------------------------------------------------- 宿主 Rust 工具链
+# 为什么"选 cargo"也要写出来: `rust/Cargo.lock` 是 **version 4**, 而 PATH 上的 cargo
+# 很可能是发行版自带的旧版本(如 Ubuntu 24.04 的 1.75) —— 它读不了 v4, 只会报
+# "lock file version 4 requires `-Znext-lockfile-bump`", 一句**照着做也没用**的错。
+# 这里把选择序显式化, 并在太旧时当场给出可执行的修法(而不是让 cargo 自己含糊地报)。
+#
+# 选择序(前者赢):
+#   1. 显式覆盖: 环境变量 `CARGO` / `make CARGO=/path/to/cargo …`;
+#   2. 工作区自带的 rustup 安装: `<repo>/.toolchain` 或 `<repo>/../.toolchain`
+#      (体积以 GB 计, **不进版本库**; 位置可用 RUST_TOOLCHAIN_DIR 覆盖);
+#   3. PATH 上的 `cargo`。
+# 走 2 时同时设 RUSTUP_HOME 并把它的 bin 前置进 PATH: rustup 的 shim 靠 RUSTUP_HOME 找
+# 工具链, 而 build.rs 里的 `rustc --version`(指纹来源)必须与 cargo 实际用的 rustc 同一份。
+# (注释必须单独占行 —— 写在赋值行尾会被 make 连同前面的空格一起算进变量值。)
+# Cargo.lock v4 的门槛: cargo 1.83
+RUST_MIN_CARGO_MINOR := 83
+
+RUST_TOOLCHAIN_DIR ?= $(firstword $(wildcard $(REPO_ROOT)/.toolchain $(REPO_ROOT)/../.toolchain))
+
+ifeq ($(origin CARGO),undefined)
+  ifneq ($(wildcard $(RUST_TOOLCHAIN_DIR)/cargo/bin/cargo),)
+    CARGO := $(RUST_TOOLCHAIN_DIR)/cargo/bin/cargo
+  endif
+endif
+CARGO ?= cargo
+
+# 只要 `$(CARGO)` 长得像 `<root>/cargo/bin/cargo` 且同级有 `<root>/rustup`, 就补环境:
+# 这样"显式 CARGO=…"与"自动发现"两条路都不必让用户自己去设 RUSTUP_HOME。
+# 用户已经显式给了 RUSTUP_HOME 时只前置 PATH, 不覆盖它。
+_RUST_TC_ROOT := $(patsubst %/cargo/bin/cargo,%,$(CARGO))
+_RUST_TC_ENV  :=
+ifneq ($(_RUST_TC_ROOT),$(CARGO))
+  _RUST_TC_PATH := PATH="$(_RUST_TC_ROOT)/cargo/bin:$$PATH"
+  ifeq ($(origin RUSTUP_HOME),undefined)
+    _RUST_TC_ENV := RUSTUP_HOME="$(_RUST_TC_ROOT)/rustup" $(_RUST_TC_PATH)
+  else
+    _RUST_TC_ENV := $(_RUST_TC_PATH)
+  endif
+endif
+
 # `$HOME/.cargo` 在受管环境里可能只读 ⇒ 把 CARGO_HOME / target 都放到可写的出树目录
 # (build/ 整体不进版本库)。两者都可用环境变量覆盖。
 CARGO_HOME       ?= $(abspath ../../build/cargo-home)
@@ -70,9 +112,22 @@ core:
 	    echo "      自举种子要求 {brickie,brickie-gen,brickie-core} 三件齐" >&2; \
 	    exit 1; \
 	fi; \
+	_ver=$$($(_RUST_TC_ENV) "$(CARGO)" --version 2>/dev/null); \
+	_rest=$${_ver#cargo }; _rest=$${_rest%% *}; \
+	_maj=$${_rest%%.*}; _min=$${_rest#*.}; _min=$${_min%%.*}; \
+	_num=$$(( _maj * 1000 + _min )) 2>/dev/null || _num=0; \
+	if [ "$$_num" -lt $$(( 1000 + $(RUST_MIN_CARGO_MINOR) )) ]; then \
+	    echo "FAIL: cargo 太旧或不可用: '$$_ver'(取自 $(CARGO))" >&2; \
+	    echo "      $(CORE_MANIFEST) 的 Cargo.lock 是 version 4, 需要 cargo ≥ 1.$(RUST_MIN_CARGO_MINOR);" >&2; \
+	    echo "      旧 cargo 的原始报错是 \"lock file version 4 requires -Znext-lockfile-bump\" —— 照它做没有用。" >&2; \
+	    echo "      修法: 装一份新 cargo, 或显式指定(如 make -C tools/brickie core CARGO=/path/to/cargo)," >&2; \
+	    echo "            或在工作区放一份 .toolchain($(REPO_ROOT)/.toolchain 或 $(REPO_ROOT)/../.toolchain)。" >&2; \
+	    exit 1; \
+	fi; \
 	mkdir -p "$(CARGO_HOME)" "$(CARGO_TARGET_DIR)" "$(HOST_BIN_DIR)"; \
-	CARGO_HOME="$(CARGO_HOME)" CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" \
-	    $(CARGO) build --release --manifest-path "$(CORE_MANIFEST)" -p $(CORE_PACKAGE) || exit $$?; \
+	echo "core: $$_ver($(CARGO)) → $(CORE_BIN)"; \
+	CARGO_HOME="$(CARGO_HOME)" CARGO_TARGET_DIR="$(CARGO_TARGET_DIR)" $(_RUST_TC_ENV) \
+	    "$(CARGO)" build --release --manifest-path "$(CORE_MANIFEST)" -p $(CORE_PACKAGE) || exit $$?; \
 	$(INSTALL) -m 0755 "$(CARGO_TARGET_DIR)/release/$(CORE_PACKAGE)" "$(CORE_BIN)" || exit $$?; \
 	echo "core: $(CORE_BIN)"
 

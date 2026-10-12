@@ -419,12 +419,14 @@ CI 里不想 `source` 就用 `eval "$(make -s env)"`(同一份片段)。
 > 工具链还没取件、工具还没编时, `setup.sh` 照样工作, 只是把缺失目录列出来并提示
 > `make prebuilt` / `make tools`(PATH 里放不存在的目录无害)。
 
-**工具段**只要宿主 `g++` + `python3`(≥3.11); L0/L1 的 Rust 核心另需 `cargo`, **都不需要
-交叉工具链**:
+**工具段**只要宿主 `g++` + `python3`(≥3.11); L0/L1 的 Rust 核心另需 `cargo ≥ 1.83`
+(`rust/Cargo.lock` 是 version 4 —— 更老的 cargo 只报 "lock file version 4 requires
+`-Znext-lockfile-bump`"; `make core` 会自动采用工作区自带的 `.toolchain`, 选不中时当场
+FAIL 给出修法, 见 `tools/brickie/Makefile`), **都不需要交叉工具链**:
 
 ```bash
 make tools              # 只编工具 L5/L2(没装交叉编译器的机器/CI 工具作业可用)
-make tools-core         # 只编 L0/L1 的 brickie-core(cargo; 出树到同一 bin 目录)
+make tools-core         # 只编 L0/L1 的 brickie-core(cargo ≥ 1.83; 出树到同一 bin 目录)
 make tools-test         # 工具自身用例: 渲染器自检 + 端到端回归(含 V-1…V-19 / §V-B 构建族)
 ```
 

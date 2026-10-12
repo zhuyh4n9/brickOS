@@ -16,11 +16,25 @@
 
 ## 1. 构建与自证
 
-`$HOME` 只读时 **必须**设一个可写的 `CARGO_HOME`(本机 `/home/zhuyh/.cargo` 不存在):
+工具链门槛: `Cargo.lock` 是 **version 4** ⇒ 需要 `cargo ≥ 1.83`(老 cargo 只会报
+`lock file version 4 requires -Znext-lockfile-bump`, 一句照着做也没用的错)。走仓库入口
+(`make core` / `make tools-prebuilt`)不必自己挑: `../Makefile` 的选择序是
+"显式 `CARGO=…` → 工作区自带的 `.toolchain`(`<repo>/.toolchain` 或 `<repo>/../.toolchain`)→
+PATH", 并在选中的 cargo 太旧时**当场 FAIL** 并给出修法。
+
+推荐走仓库入口(把产物直接放到宿主 bin 落点):
+
+```sh
+cd prototype/tools/brickie
+make core                      # = cargo build --release + 拷贝到 build/host/<triple>/bin/
+```
+
+`$HOME` 只读时 **必须**设一个可写的 `CARGO_HOME`(`make core` 已把两个 CARGO_* 都指到
+出树目录); 直接调 cargo 的等价做法:
 
 ```sh
 cd prototype/tools/brickie/rust
-export CARGO_HOME=/home/zhuyh/workspace/unikernel-dev/build/cargo-home
+export CARGO_HOME=$PWD/../../../build/cargo-home   # 与 make core 同一落点
 mkdir -p "$CARGO_HOME"
 cargo build --release          # 产物: rust/target/release/brickie-core
 ./target/release/brickie-core --selftest
@@ -32,11 +46,15 @@ cargo build --release          # 产物: rust/target/release/brickie-core
   - `CARGO_HOME=… cargo build --release --locked` ⇒ `Finished release ... in 3.9s`,
     **0 error / 0 warning**(全量重编, 非缓存命中)。
   - `brickie-core --selftest` ⇒ `ok 432 cases`, 退出码 0(首刀 247 ⇒ 第二刀 +185 条断言)。
-  - `echo '{"protocol":1,"command":"version","root":"."}' | brickie-core` ⇒ `exit_code:0`, `data.languages[0].version = "1.93.1"`。
+  - `echo '{"protocol":1,"command":"version","root":"."}' | brickie-core` ⇒ `exit_code:0`, `data.languages[0].version = "1.93.1"`(第二刀当时的工具链; 该字段**随构建它的 rustc 走**, 现由工作区 `.toolchain` 的 1.99.0 决定, 见 `prebuilts/README.md` §5.1)。
   - 端到端(真实 L5 CLI, `BRICKIE_CORE` 指向本刀产物): 造环 ⇒ 完整路径 + exit 1;
     `iface publish` 两次 ⇒ 第二次 `files=[]`; `iface status --check` 一致;
     `check --profile dev` 绿 / `release` 红; `unfreeze`/`refreeze` 空解冻 ⇒ 四段不动
     (输出摘录见仓库对话记录 / `§12`)。
+- 2026-10-12 复测(工具链换成工作区自带的 rustc 1.99.0 之后): `make tools-prebuilt` 绿
+  (宿主 g++ 13.3 + cargo 1.99.0, 由 `make core` 自动发现), 三件种子重发, 且
+  `make tools-prebuilt-check` 三件全 ok; 入口 ELF 仍可**单文件**独立运行
+  (`prebuilts/seed/brickie/x86-64/linux/bin/brickie --version` ⇒ `brickie 0.1.0`)。
 - **落点**: 本刀产物在 `rust/target/release/brickie-core`(`rust/.gitignore` 已忽略 `target/`)。
   按 G-6 应**出树**到 `build/host/<host-arch>/<host-os>/bin/brickie-core`(仓库根 Makefile
   由并行 agent 负责; 本目录的 Makefile 未动)。
