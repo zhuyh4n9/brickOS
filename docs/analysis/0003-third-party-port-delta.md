@@ -203,5 +203,34 @@ $ diff -u <upstream>/fs/erofs/erofs_fs.h <repo>/third_party/uboot-erofs/src/erof
 |---|---|---|
 | `mmc` 两件 `.c` 逐字化 | **低** | 结构性: 要搬回 DM/uclass、SD/UHS/HS200/HS400/tuning/RPMB/分区、`blk_desc` —— 与 ADR-0021/0022 的设计(bdev 形态/中断驱动/静态实例表)直接冲突 |
 | erofs/fat 各 `.c` 的**重排**对齐 tab | 中(纯机械) | 高 churn、零功能收益; 且这些文件**本来就不可能**逐字(见 §2.3) ⇒ 收益只是 diff 好看 |
-| `erofs_internal.h` 逐字化 | 中 | 与 `erofs_fs.h` 同类(纯定义)⇒ **下一个真正的候选**; 但需恢复 `list_head`/erofsfuse/mkfs 字段等大量本件不用的声明, 要先确认值不值 |
+| `erofs_internal.h` 逐字化 | **低(已判定不可行)** | 见 §9 —— 它**不是** `erofs_fs.h` 那类「盘上格式」, 而是**实现侧内部头**; 恢复上游原文得把 dentry 缓存与 mkfs buffer-head 两套**本件根本没有的子系统**的声明一并搬进来 |
 | `fat_internal.h` 里 `uboot_fat_fls` 等死助手清理 | 高(小) | 属 `adapter/`, 与本刀主题无关; 登记为小债 |
+
+## 9. 为什么「内部头」不能像 `erofs_fs.h` 那样逐字化
+
+本刀先前把 `erofs_internal.h` 列为「下一个真正的候选」(理由是它与 `erofs_fs.h` 一样是
+「纯定义的头」)。**这个判断是错的**, 复核后撤回。区别是原则性的:
+
+| 类别 | 例 | 能否逐字 | 为什么 |
+|---|---|---|---|
+| **盘上格式**(on-disk layout) | `erofs_fs.h` | ✅ **能, 且应该** | 它定义的是**介质上的字节**; 与上游不一致 = 读错盘。且它不依赖运行环境(只依赖整数类型/`round_up` 之类) |
+| **实现侧内部头** | `erofs_internal.h`、`*_internal.h`、`mmc_regs.h` | ❌ **不能** | 它描述的是**上游那份实现的内部结构**; 本件的实现架构不同(无 dentry 缓存 / 无 mkfs / 无 DM), 照搬声明 = 搬进不存在的子系统 |
+
+`erofs_internal.h` 的具体阻塞项(逐条 grep 核实; 这些符号在本件**只出现在说明注释里**):
+
+| 上游有、本件无 | 它属于哪个子系统 | 本件为什么没有 |
+|---|---|---|
+| `i_hash`/`i_subdirs`/`i_xattrs`(`struct list_head`) | inode/dentry 缓存 | 本件的 inode 是**瞬态路径包装**(ADR-0022 D-3, 设计 SD-3), 不做缓存 |
+| `i_count`/`i_parent`/`i_ino`/`i_srcpath` | erofsfuse / mkfs | 本件既不是 FUSE 也不是造镜像工具 |
+| `struct erofs_dentry` + `is_dot_dotdot()` + `IS_ROOT()` | dentry 层 | 本件没有 dentry 对象(同上) |
+| `struct erofs_buffer_head` | mkfs 的写缓冲 | 本件**只读** |
+| `erofs_sb_set_*`/`erofs_sb_clear_*`(由 `EROFS_FEATURE_FUNCS` 生成) | 运行期改特性位 | 本件只读, 只用 `has_*` |
+| `xattr_shared_*` 等字段 | xattr 共享区(只写者) | 本件不解析 xattr |
+
+**结论**: 逐字恢复它 = 往 `src/` 里加进 dentry 缓存与 mkfs 的**声明**(以及为编过它们所需的
+`list_head` 等类型), 而对应的**实现**在本件根本不存在。这恰是任务书禁止的「额外添加代码」。
+⇒ 判定: `erofs_internal.h` **保持现状**(裁剪 + 本件契约), 差异逐条登记, 不再作为收敛目标。
+
+> **可推广的判据**(供后续判断任何三方文件):
+> 逐字化只在「**该文件描述的是外部事实**(盘上格式 / 协议线格式 / 寄存器布局)」时才既可行又正确;
+> 一旦它描述的是「**上游实现自己的内部结构**」, 本件架构不同 ⇒ 逐字化等于把不存在的子系统搬进来。
