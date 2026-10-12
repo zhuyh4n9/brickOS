@@ -10,6 +10,10 @@
 > 对照基准: u-boot `nxp-imx/uboot-imx`, 分支 `lf_v2026.04`,
 > commit `bb41975aeb4cbd153b49c9fd62da1d64cd65968d`(与 `NOTICE` 一致)。
 
+> ★ **逐文件的取证底稿在 [`docs/analysis/0003-third-party-port-delta.md`](../analysis/0003-third-party-port-delta.md)**
+> (基准/复现命令、每个文件的相似度与变更行、差异性质、修掉的缺陷、还没做的)。
+> 本文只留**决策**与结论 —— 两者分开, 免得决策文档被表格淹没。
+
 ## 1. 背景: 隔离政策**只写在文档里**
 
 ADR-0021 D-3 起, 三个移植件声明 `api_type = "third_party"`, 政策是"目录级隔离":

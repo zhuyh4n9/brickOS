@@ -1,0 +1,207 @@
+# 三方移植件逐文件对照(相对 u-boot 钉死 commit)
+
+> 本文是 ADR-0024 的**取证底稿**: 逐文件给出"相对上游改了什么、还差多少、为什么"。
+> ADR 记的是**决策**, 本文记的是**事实与数字** —— 两者分开, 免得决策文档被 300 行表格淹没。
+>
+> 状态: 已落地。**没有任何 `src/` 文件与上游逐字节相同, 除了 `erofs_fs.h`** ——
+> 它是唯一的例外, 且只差一个 include(见 §4)。
+
+## 1. 基准与复现
+
+| 项 | 值 |
+|---|---|
+| 仓库 | `https://github.com/nxp-imx/uboot-imx` |
+| 分支 | `lf_v2026.04` |
+| **commit** | `bb41975aeb4cbd153b49c9fd62da1d64cd65968d` |
+| 快照 | `codeload` tarball, 41 546 项, **47 019 609 B** |
+| sha256(快照) | `9d060f32c84b15c1ae2e9903c300d51b3088898b3ad80b95bca74c67ef6a4a52` |
+
+```bash
+# 取基准(落点在 build/, 不进版本库) —— 与 ADR-0024 §2 同一条命令
+REF=build/uboot-ref/uboot-imx-bb41975aeb4cbd153b49c9fd62da1d64cd65968d
+mkdir -p build/uboot-ref && cd build/uboot-ref
+curl -sL -o uboot.tar.gz \
+  https://codeload.github.com/nxp-imx/uboot-imx/tar.gz/bb41975aeb4cbd153b49c9fd62da1d64cd65968d
+sha256sum uboot.tar.gz     # 期望 9d060f32…4a52
+tar xzf uboot.tar.gz "$(basename "$REF")"
+
+# 逐文件看差异(示例)
+diff -u "$REF/drivers/mmc/sdhci.c"  <repo>/third_party/uboot-mmc/src/sdhci_host.c | head
+diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/third_party/uboot-erofs/src/erofs_fs.h
+```
+
+### 1.1 两个口径, 别混用
+
+| 口径 | 定义 | 用途 | 陷阱 |
+|---|---|---|---|
+| **原始 diff** | `diff -u` 的增删行数 / `difflib` 行级相似度(**含**注释与空白) | 判断"能不能逐字" | 无 |
+| **归一化** | 去注释、去空白、折叠括号后再比 | 判断"逻辑上改了多少" | **会把"重排"洗掉** ⇒ 高估逐字可行性 |
+
+> ★ **方法论教训**(ADR-0024 §7.3 记过一次): 本刀先按归一化口径(erofs LZ4 段"实义行 ~90% 相同")
+> 把该段列为"下一步可逐字化", 后来用原始口径复测 —— 545 行里 **919 个变更行**(相似度 27.9%),
+> 绝大多数是重排。**结论相反**。判"能不能逐字"必须用原始口径。
+
+## 2. 逐文件对照表
+
+指标 = 原始口径行级相似度(`difflib.SequenceMatcher`, 未归一化)。`变更行` = `diff` 增删行数。
+
+> ⚠ 头文件的数字要**谨慎读**: `*_internal.h` 是"本件的内部契约", 它把上游若干头的内容
+> (类型/宏/原型/结构体)**重排 + 裁剪 + 补充**到一处 ⇒ 相似度天然低, 但不代表逻辑差异大。
+> 同理 `erofs_internal.h` 与上游 `decompress.h` 也有交叉(单独比只有 4.0%, 但
+> `z_erofs_decompress_req` 确实搬进来了)。**判断"改了什么"请看各表的差异性质, 而不是只看百分比。**
+
+### 2.1 `third_party/uboot-mmc`
+
+| `src/` 文件 | 行 | 上游对应物 | 上游行 | 相似度 | 变更行 | 判定 |
+|---|---|---|---|---|---|---|
+| `mmc_core.c` | 409 | `drivers/mmc/mmc.c` **+ `mmc_write.c`** | 3352+254 | 4.7% | 3753 | **重写** |
+| `sdhci_host.c` | 560 | `drivers/mmc/sdhci.c` + `sdhci-adma.c` | 1050+87 | 10.3% | 1600 | **重写** |
+| `mmc_regs.h` | 203 | `include/mmc.h` + `include/sdhci.h` | 1093+546 | 5.1% | 1288 | 摘录子集 |
+| `emmc_internal.h` | 134 | `drivers/mmc/mmc_private.h` | 135 | 12.6% | 219 | 改写 |
+
+- **为什么"重写"**: 上游的 mmc/SDHCI 是 **u-boot DM 形态**(`udevice`/`blk_desc`/`uclass`),
+  且以 `udelay()` **轮询** `INT_STATUS` 完成一次传输; 本件是裸机 unikernel, 出口是
+  `br_bdev_ops_t`, 传输是**中断驱动 + 信号量**(ADR-0021 D-4), 主机层是**静态实例表**
+  (ADR-0022, 四块卡)。这是**结构性**差异, 不是改名能收敛的: 要逐字就得把
+  DM/uclass、SD/UHS/HS200/HS400/tuning/RPMB/分区、`blk_desc` 整族搬回来。
+- `mmc_regs.h` 是**摘录**(只留本件用到的常量)⇒ 结构上不可能逐字; 但它逐条对齐上游数值,
+  唯一的**值错**已修(见 §3)。
+- 上游来源 **`mmc_write.c`** 是审计补上的: 早先 `NOTICE` 把写路径也记在 `mmc.c` 名下, 不准。
+
+### 2.2 `third_party/uboot-fat`
+
+| `src/` 文件 | 行 | 上游对应物 | 上游行 | 相似度 | 变更行 | 判定 |
+|---|---|---|---|---|---|---|
+| `fat_core.c` | 1523 | `fs/fat/fat.c` | 1448 | 21.8% | 2691 | 派生 |
+| `fat_write.c` | 2290 | `fs/fat/fat_write.c` | 2179 | 25.4% | 3853 | 派生 |
+| `fat_internal.h` | 349 | `fs/fat/fat.c`(仅 `fat_itr`/`fat_dir` 两段照抄)+ 本件契约 | 1448 | 4.9% | 1777 | 混合 |
+
+- 归一化后 fat 是**三件里最贴近上游的**(实义行 ~76%/~66% 相同); 相似度低主要是
+  **重排**(4 空格替代 tab)与无 libc 的改名(`uboot_fat_strlen` 之类)。
+- **本件新增**(上游没有): `uboot_fat_truncate()` 160 行 —— 上游只有"从 pos 写 size 字节",
+  而本项目 VFS 契约要 `setattr(BR_STAT_SIZE)`。**已评估"搬去 `adapter/`"的代价并放弃**,
+  理由是实测结论(ADR-0024 §5): 需把 4 个 static 提升为全局, 且它要写可变全局
+  `total_sector`(不变量 = "每个入口从卷刷新")⇒ 跨 TU 共享会把该不变量扩散出去。
+
+### 2.3 `third_party/uboot-erofs`
+
+| `src/` 文件 | 行 | 上游对应物 | 上游行 | 相似度 | 变更行 | 判定 |
+|---|---|---|---|---|---|---|
+| **`erofs_fs.h`** | 472 | `fs/erofs/erofs_fs.h` | 466 | **98.3%** | **16** | ✅ **逐字**(仅 include, 见 §4) |
+| `erofs_super.c` | 139 | `fs/erofs/super.c` | 108 | 19.8% | 202 | 派生 |
+| `erofs_namei.c` | 344 | `fs/erofs/namei.c` | 266 | 17.4% | 574 | 派生 |
+| `erofs_data.c` | 447 | `fs/erofs/data.c` | 359 | 17.9% | 752 | 派生 |
+| `erofs_zmap.c` | 815 | `fs/erofs/zmap.c` | 698 | 17.1% | 1399 | 派生 |
+| `erofs_decompress.c` | 710 | `fs/erofs/decompress.c` **+ `lib/lz4.c`** | 181+546 | 27.9%(LZ4 段) | 919(段) | 派生(两文件合并) |
+| `erofs_internal.h` | 476 | `fs/erofs/internal.h` | 397 | 25.7% | 737 | 派生(大幅裁剪) |
+
+- `erofs_decompress.c` 是**两个上游文件的合并**(`decompress.c` + `lib/lz4.c`), 且本件有意把
+  `LZ4_decompress_safe*` 收成 `static`(不污染镜像符号空间)⇒ **整文件永远不可能逐字**。
+- 各 `.c` 的差异性质(逐条): ① 全文件重排(K&R→Allman, tab→4 空格); ② 无 libc/u-boot 的
+  接地(`malloc`→`br_malloc`, `printf`→`br_log_*`, `IS_ERR/ERR_PTR`→出参); ③ **删**多设备
+  (`extra_devices`)与 deflate/zstd; ④ **栈纪律**: 上游 `char buf[4096]` 与内嵌 4 KiB
+  `mpage` 的 `struct erofs_map_blocks` 提到文件域静态; ⑤ errno 名字由 core 提供(ADR-0023)。
+
+## 3. 审计核实并修掉的缺陷(逐条留证)
+
+| # | 位置 | 事实 | 判据 | 处置 |
+|---|---|---|---|---|
+| R-1 | `mmc_regs.h` | `EXT_CSD_CMD_SET_NORMAL 0u`, 上游 `include/mmc.h:249` 是 `(1 << 0)` | 直接 `grep` 两侧 | 改为 `(1u << 0)` |
+| R-2 | `erofs_zmap.c` | `z_erofs_reload_indexes()` 读进 `map->mpage`, 两个解析器却读 `uboot_erofs_scratch()` —— **两个不同缓冲、中间无拷贝**; `mpage` 全文只写不读 | `grep -rn mpage` 全树 + 确认无拷贝 | 读点改 scratch |
+| R-3 | 11 个 `src/` 文件 | 上游每个文件都有 `SPDX-License-Identifier`, 派生件全丢 | `grep -c SPDX` 两侧 | 按上游逐文件补回 |
+| R-4 | `erofs_fs.h` | 裁剪把 `erofs_xattr_ibody_size()` 的 `sizeof(struct …)` 换成魔数 `12u`, `EROFS_XATTR_ALIGN` 换成 `4u`; 该函数**有读者**(`namei.c:74,110` → `xattr_isize` → inline 数据定位) | 恢复上游后由 `BUILD_BUG_ON(... != 12)` + 适配层 `_Static_assert` 双钉 | 恢复 `sizeof()` |
+| R-5 | `erofs_super.c` | 写了 `sbi->available_compr_algs` / `lz4_max_distance` —— **上游该 commit 从头到尾没有赋过值, 且无任何读者**(全树只有字段声明); 本件抄的是 Linux 内核 `super.c` 的口径 | `grep -rn` 两侧 + 确认无读者 | **删除**(见 §5) |
+
+> R-2 与 R-4 都是"看起来只是裁剪/改名, 实际会读错盘"的类型 —— 这类才是审计的价值所在。
+> R-4/R-5 的完整论证见 ADR-0024 §7/§9。
+
+## 4. 唯一做到逐字的文件: `erofs_fs.h`
+
+```
+$ diff -u <upstream>/fs/erofs/erofs_fs.h <repo>/third_party/uboot-erofs/src/erofs_fs.h
+-（只有这 5 行被删）
+-#include <asm/unaligned.h>
+-#include <fs.h>
+-#include <part.h>
+-#include <stdint.h>
+-#include <compiler.h>
++（换成这 1 行 + 10 行说明注释）
++#include "erofs_compat.h"
+```
+
+**除这 5 行 include 外, 466 行与上游逐字节相同(含缩进)。** 收敛过程:
+
+| | 相对上游的变更行 | 相似度 |
+|---|---|---|
+| 收敛前 | 529 | — |
+| 收敛后 | **16** | **98.3%** |
+
+代价与前提(两个必须**照搬上游**的机制, 否则上游原文编不过 —— 详见 ADR-0024 §7.1):
+
+1. `BUILD_BUG_ON` **不能**是 `_Static_assert`: 上游最后一条自检是
+   `BUILD_BUG_ON(__builtin_constant_p(fmh) ? fmh != cpu_to_le64(1ULL<<63) : 0)`, 而 `fmh`
+   是函数内 `const` 局部量、**不是整型常量表达式** ⇒ `_Static_assert` 报
+   "expression in static assertion is not constant"。适配层照搬了 u-boot 的
+   "函数体内 `if` + `__compiletime_error`"机制。
+2. `__packed`(上游写成**位置属性** `} __packed u1;`)、`__maybe_unused`、`BIT` 由 u-boot 的
+   `<compiler.h>`/`<linux/bitops.h>` 提供, 适配层必须补齐。
+
+### 4.1 附带发现: 上游那份布局自检**是死的**
+
+上游 `erofs_check_ondisk_layout_definitions()` 是 `static inline` 而**上游从不调用它**
+(该 commit 全树 grep 只有定义处)⇒ GCC 不实例化 ⇒ 里面的 `__compiletime_error` 永不诊断。
+本插件早先改写成**文件域 `_Static_assert`** 的版本反而**更强**。
+
+处置: **定义**留 `src/`(与上游逐字), **判据**放 `adapter/erofs_vfs.c` 的文件域
+`_Static_assert` 表。负例已实测: 改错任一 `== N` ⇒ 编译失败并打出可读消息。
+(先试过"取上游函数地址强制实例化"—— 断言确实被激活, 但上游那句复合字面量在本项目的
+`-Wall -Wextra -Werror` 下触发 `-Wuninitialized`, 为编过一句原文得压制告警 ⇒ 放弃。)
+
+## 5. 已删除的"上游没有的代码"
+
+| 位置 | 是什么 | 为什么删 |
+|---|---|---|
+| `erofs_super.c` 的压缩字段初始化(11 行) | 抄自 Linux 内核口径, 填 `available_compr_algs`/`lz4_max_distance` | 上游**没有**这段, 且填完**无人读** ⇒ 纯粹是"额外添加的代码"(任务书明令禁止)。删除后 `erofs-test`(含 LZ4 压缩夹具)仍全绿 ⇒ 证实无用 |
+
+**已验证但**判定为"非缺陷、保留"的两处(免得后来者误"修"):
+
+| 位置 | 事实 | 结论 |
+|---|---|---|
+| `fat_core.c:43` / `fat_write.c:48` 的 `#define LOG_CATEGORY LOGC_FS`, 而 `LOGC_FS` 全树未定义 | 这一行是**上游自己的**(`fat.c:11`/`fat_write.c:8`); `LOGC_FS` 定义在 u-boot 的 `include/log.h`, 本件不引入日志分类体系 | **忠实保留, 不是 bug**: `LOG_CATEGORY` 在本件从不被展开, 无副作用。删它反而**偏离**上游 |
+| `fat_compat.h` 里的 `uboot_fat_fls`/`uboot_fat_ilog2`/`uboot_fat_get_unaligned_le32` 无引用 | 属 `adapter/`(我们的代码), 不是上游派生件 | 可清理, 但与本刀(隔离/收敛)无关, 登记为小债 |
+
+## 6. 当前布局与判据
+
+| 插件 | `src/`(上游派生) | `adapter/`(本项目) |
+|---|---|---|
+| uboot-mmc | `mmc_core.c` `sdhci_host.c` `mmc_regs.h` `emmc_internal.h` | `mmc_compat.h` `emmc_bdev.c` `emmc_selftest.c` |
+| uboot-fat | `fat_core.c` `fat_write.c` `fat_internal.h` | `fat_compat.h` `fat_vfs.c` `fat_selftest.c` |
+| uboot-erofs | `erofs_{super,namei,data,zmap,decompress}.c` `erofs_fs.h` `erofs_internal.h` | `erofs_compat.h` `erofs_vfs.c` `erofs_selftest.c` |
+
+- 三个 `plugin.toml` 均为 `sources = ["src/*.c", "adapter/*.c"]` + `includes = ["src","adapter"]`;
+- **单向依赖**: `src/` 不出现 `#include <br/...>`(运行环境只经适配层入口头);
+- 判据 = `tools/check-third-party-isolation.sh`(四条机械判据, 注册于 `tests/gates.toml`)。
+
+## 7. 验证
+
+| 项 | 结果 |
+|---|---|
+| `brickie build` | 全绿(含强制重链) |
+| `brickie check` | 0 错误 / 0 警告 / 1 提示 |
+| `brickie test` | **门禁全绿(全部)**: 宿主 7 + QEMU 11(含 `emmc`/`fat`/`erofs`)+ 脚本 7 |
+| `make tools-prebuilt-check` | 三件全 ok |
+| 布局自检负例 | 改错 `== N` ⇒ 编译失败(已实测) |
+| 隔离门禁 | PASS |
+
+> ★ 无回归的核实手法: 自检 pass 内有**既有**间歇 race(`TC-POSIX-016`/`APP-PT-006`/FAT 写闭环
+> = `br-wa-boot-002`), 所以判据不能是"跑一次全绿"。用 `git stash` 隔离出**改动前**的树、
+> 对同一门禁重复 25 次: **改动前同样 1/25 复现同样两条** ⇒ 与本刀无关。
+
+## 8. 还没做(按"值不值得"排序)
+
+| 项 | 可行性 | 为什么没做 |
+|---|---|---|
+| `mmc` 两件 `.c` 逐字化 | **低** | 结构性: 要搬回 DM/uclass、SD/UHS/HS200/HS400/tuning/RPMB/分区、`blk_desc` —— 与 ADR-0021/0022 的设计(bdev 形态/中断驱动/静态实例表)直接冲突 |
+| erofs/fat 各 `.c` 的**重排**对齐 tab | 中(纯机械) | 高 churn、零功能收益; 且这些文件**本来就不可能**逐字(见 §2.3) ⇒ 收益只是 diff 好看 |
+| `erofs_internal.h` 逐字化 | 中 | 与 `erofs_fs.h` 同类(纯定义)⇒ **下一个真正的候选**; 但需恢复 `list_head`/erofsfuse/mkfs 字段等大量本件不用的声明, 要先确认值不值 |
+| `fat_internal.h` 里 `uboot_fat_fls` 等死助手清理 | 高(小) | 属 `adapter/`, 与本刀主题无关; 登记为小债 |

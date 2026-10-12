@@ -129,16 +129,11 @@ int erofs_read_superblock(void)
      * (没有消费者 —— u-boot 的 erofs 只回答 uuid, 而本件连 uuid 都不往上抛)。 */
     memcpy(&sbi->uuid, dsb->uuid, sizeof(dsb->uuid));
 
-    /* 压缩相关的两个字段: 上游把它们读进 sbi, 但**压缩配置项本身**(COMPR_CFGS)在
-     * u-boot 侧没有被解析 —— 本件同样只记录, 由 zmap 的 map header 说话。 */
-    if (erofs_sb_has_compr_cfgs()) {
-        sbi->available_compr_algs = le16_to_cpu(dsb->u1.available_compr_algs);
-    } else {
-        sbi->available_compr_algs = (u16)(1u << Z_EROFS_COMPRESSION_LZ4);
-        if (sbi->inos != 0u) {
-            sbi->lz4_max_distance = le16_to_cpu(dsb->u1.lz4_max_distance);
-        }
-    }
+    /* ★ 本件**不**写 `sbi->available_compr_algs` / `sbi->lz4_max_distance`(ADR-0024 §9)。
+     *   上游这个 commit 从头到尾**没有**给它们赋过值, 也没有任何读者(全树 grep 只有
+     *   `erofs_fs.h`/`internal.h` 的字段声明)。本件早先抄了一段(Linux 内核 super.c 的
+     *   口径)去填它们, 但填完没人读 —— 那正是"上游没有的代码" ⇒ 已删, 恢复上游语义。
+     *   压缩算法的判定一律由 zmap 的 map header 说话(上游亦然)。 */
 
     return erofs_init_devices(sbi, dsb);
 }
