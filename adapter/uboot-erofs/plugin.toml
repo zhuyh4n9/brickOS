@@ -50,9 +50,6 @@ kind     = "ram"
 used_kib = 16
 notes    = "超级块/映射/解压的静态缓冲(4 KiB 块缓冲 + LZ4 输出缓冲); 运行期 inode 与目录流走 core 堆"
 
-[[mount]]
-path  = "/assets"
-order = 5
 
 [[dep]]
 name  = "framework/vfs-core"
@@ -74,16 +71,17 @@ kind  = "init"
 cases = 8
 
 [build]
-# ★ 三个目录, 分工是**硬边界**(见 ADAPTER-NOTES.md):
-#     src/     上游 u-boot `fs/erofs/**` + `lib/lz4.c` 的派生件
-#              (**只**放有上游对应物的文件);
-#     compat/  运行环境接地(u-boot 风格的环境 → brickOS): `erofs_compat.h`;
+# ★ 两个目录, 分工是**硬边界**(见 ADAPTER-NOTES.md; ADR-0026):
+#     compat/  运行环境接地(u-boot 风格的环境 → brickOS): `erofs_env.h`(唯一实现)
+#              + 每个 u-boot 头名一个薄壳(`compat/linux/*.h`、`compat/u-boot/lz4.h`);
 #     glue/    brickOS 对接: 块层 shim(字节偏移→扇区)+ VFS 四层 ops + 生命周期钩子
-#              (`erofs_vfs.c`)、一致性用例(`erofs_selftest.c`)。
-#   依赖方向单向: `src/` 只经 `compat/erofs_compat.h` 拿运行环境, **不**直接 include
-#   任何 `<br/...>`(判据 = `tools/check-third-party-isolation.sh`)。
-# ★ `includes` 是给同一插件内各目录互相找头用的(`src/erofs_internal.h` include
-#   `compat/erofs_compat.h`, `glue/*.c` include `src/erofs_internal.h`)。
+#              (`erofs_vfs.c`)、内部契约(`erofs_glue.h`)、一致性用例(`erofs_selftest.c`)。
+#   ★ **本插件不含上游源码的任何副本**: 上游原件在 `third_party/uboot-imx/`, 由下面的
+#     `sources` **直接编译**(不复制、不改动)。判据 = `tools/check-third-party-pristine.sh`
+#     的逐字节哈希锁(任一字节被改 ⇒ 红) + `tools/check-adapter-copies.py` 的
+#     "adapter/ 与 vendor 的行级相似度不得越线"(堵"抄一份改名再改缩进").
+# ★ `includes` 是给同一插件内各目录互相找头用的: `glue/erofs_glue.h` include
+#   `compat/erofs_env.h` 与上游 `internal.h`; `glue/*.c` include `glue/erofs_glue.h`。
 #   本件没有 `include/`, 所以不抛对外头(消费面仍是 vfs/bdev 的 native 面)。
 # ★ **vendor 代码的告警口径**(适配决策, 不是给上游开脱):
 #   上游 `fs/erofs/**` 是 u-boot 的代码, 它按 u-boot 自己的 `-W...` 集合写(那份**不含**

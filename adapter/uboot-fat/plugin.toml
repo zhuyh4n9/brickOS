@@ -1,13 +1,47 @@
 # adapter/uboot-fat — u-boot FAT 移植(plugin_type = ability, subkind = fs)
 #
-# WORKAROUND(br-wa-tp-001): 本件全部源码是 u-boot `fs/fat/**`(GPL-2.0+)的移植/改写,
-#   按 `api_type = "third_party"` 目录级隔离(自带 LICENSE/NOTICE)。残余许可风险 ——
-#   静态链进同一镜像后整镜像在分发时仍构成 GPL 组合作品 —— 与 uboot-mmc 同源, 同一处登记。
+# ============================ 第三方隔离(ADR-0026 D-1..D-3) ============================
+# 本插件用到的上游源码是 u-boot NXP 分支(`nxp-imx/uboot-imx`, branch `lf_v2026.04`,
+# commit `bb41975aeb4cbd153b49c9fd62da1d64cd65968d`)的 FAT12/16/32 实现 —— 它是
+# **GPL-2.0+**(Copyright 2002 Marcus Sundberg / rjones@nexus-tech.net /
+# kharris@nexus-tech.net; 写路径 Copyright Donggeun Kim / Samsung)。因此:
+#   - 本插件(且**只有**本插件)声明 `api_type = "third_party"` /
+#     `license = "GPL-2.0-or-later"`; 来源与偏离逐条列在 `NOTICE`, 全文在 `LICENSE.GPL-2.0`;
+#   - `framework/**`、`platform/**`、`core/**` 保持 WTFPL, **不含** GPL 代码;
+#   - ⚠ 残余风险(与 uboot-mmc/uboot-erofs 同款, 如实记录): 静态链进同一镜像后, 整镜像在
+#     分发时仍构成 GPL 组合作品; "目录隔离"解决的是**代码归属清晰**, 不是许可传染。
+#     登记在 `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。
+# WORKAROUND(br-wa-tp-001): 上面这条残余许可风险的登记点。
 #
-# ★ 为什么本件**必须**是 third_party(不是二选一): 工具链禁 `native` 依赖 `third_party`
-#   (`rules.rs::api_type_edge_reason`), 而本件的挂载必须发生在 `adapter/uboot-mmc`
-#   的 start 相之后(块设备在那时才注册) ⇒ 那条顺序只能由
-#   `[[dep]] adapter/uboot-mmc kind = "init"` 表达。逐条账见 ADR-0022 D-1。
+# ★ 上游源码**原样参与编译, 没有副本**(ADR-0026 D-2): `sources` 直接指向
+#   `third_party/uboot-imx/`(只读 vendor 树, 逐字节 = 上游, 由
+#   `adapter/third-party-upstream.lock` 的 sha256 锁 + `tools/check-third-party-pristine.sh` 守)。
+#   我们提供的是**环境**(`compat/`)与**对接**(`glue/`), 不改上游一个字。
+#
+# ★ 为什么只编 `fs/fat/fat_write.c` **一个**文件: 它第 23 行 `#include "fat.c"` ⇒ 读+写在同
+#   一个编译单元里(上游的设计)。再单独编 `fat.c` 会**重复符号**。同目录的相对 include 会自然
+#   解析到 vendor 的 `fs/fat/fat.c`。
+#
+# 设计/行为依据(实现是上游原件, 但对接面按本项目契约):
+#   - `docs/7-storage/7-03-concrete-fs.md`(FAT = 可写介质 FS);
+#   - `framework/vfs-core/include/br/vfs/br_vfs.h`(四层 ops 契约; 本件的唯一权威);
+#   - `docs/decisions/0009-vfs-storage-stack.md`(SD-3: inode 瞬态 = 路径包装);
+#   - `docs/decisions/0026-third-party-vendor-and-adapter.md`(D-1..D-5 与 §5)。
+#
+# ★ 依赖面(方向都合法: third_party 消费者不受 native→third_party 禁则约束):
+#   - `framework/vfs-core`(init): 实现 `br_fs_ops`/`br_inode_ops`/`br_file_ops` 并注册三个挂载点;
+#   - `framework/bdev-core`(init): `br_bdev_get("emmc0/1/2")` 取块设备;
+#   - `adapter/uboot-mmc`(init): 它在本插件之前注册三块设备 —— 相位的先后由这条 init 边保证
+#     (本插件的挂载落在 start 相, 与它同相, 拓扑序在它之后)。
+#
+# ★ 为什么驱动登记在 `start` 相而不是 `core` 相
+#   块设备是在 `adapter/uboot-mmc` 的 start 相里注册的(中断驱动意味着 CORE 相等不到中断)。
+#   本插件只消费块设备, 所以"设备在不在"这件事只有到 start 相才有答案。
+#
+# ★ ADR-0030 起: 本件在 start 相**只登记驱动**(`br_fs_driver_register("fat", …)`), 不再
+#   自己 `br_mount_register`; 上面三条 `[[mount]]` 是**给挂载计划的声明**, 由 APP 侧按计划
+#   调 `mount("emmc0", "/fat12", "fat", 0, NULL)` 等把卷认领进来(卷 = (源设备, 挂载点) 对)。
+#   于是 `fat-test` 的三卷挂载判据依赖那份计划的落地(判据本身未放宽)。
 schema = 1
 
 [plugin]
@@ -18,26 +52,17 @@ subkind     = "fs"
 lang        = "c"
 phase       = "core"
 version     = "0.1.0.0"
-summary     = "u-boot FAT 移植(GPL-2.0+): FAT12/16/32 读写齐, 三卷 emmc0/1/2 挂 /fat12 /fat16 /fat32"
+summary     = "u-boot FAT 原样编译(GPL-2.0+): FAT12/16/32 读写齐, 三卷 emmc0/1/2 挂 /fat12 /fat16 /fat32"
 license     = "GPL-2.0-or-later"
 sched_class = "SAFE_PREEMPT"
 
 [[res]]
 kind     = "ram"
 used_kib = 80
-notes    = "静态 FAT 记账 + 扇区/簇缓冲; 运行期 inode 与目录流走 core 堆"
+notes    = "上游块缓冲(每卷 512 B 引导扇区 + 上游按需 3 KiB FAT 缓存)+ 瞬态 inode 与目录流走 core 堆"
 
-[[mount]]
-path  = "/fat12"
-order = 2
 
-[[mount]]
-path  = "/fat16"
-order = 3
 
-[[mount]]
-path  = "/fat32"
-order = 4
 
 [[dep]]
 name  = "framework/vfs-core"
@@ -51,21 +76,46 @@ kind  = "init"
 
 [[dep]]
 name  = "adapter/uboot-mmc"
-range = ">=0.1.0"
+range  = ">=0.1.0"
 kind  = "init"
 
 [selftest]
+# ADR-0010: 表在场 = 本插件有自检。用例: TC-FAT-001..008。
 cases = 8
 
 [build]
-# ★ 三个目录, 分工是**硬边界**(见 ADAPTER-NOTES.md):
-#     src/     上游 u-boot `fs/fat/**` 的派生件(`fat_core.c`/`fat_write.c` +
-#              内部契约 `fat_internal.h`);
-#     compat/  运行环境接地(u-boot 风格的环境 → brickOS): `fat_compat.h`
-#              (类型/工具宏 + 字符串小工具 + 盘上结构);
-#     glue/    brickOS 对接: VFS 四层 ops + 生命周期钩子(`fat_vfs.c`)、
-#              一致性用例(`fat_selftest.c`)。
-#   依赖方向单向: `src/` 只经 `compat/fat_compat.h` 拿运行环境, **不**直接 include
-#   任何 `<br/...>`(判据 = `tools/check-third-party-isolation.sh`)。
-sources  = ["src/*.c", "glue/*.c"]
-includes = ["src", "compat", "glue"]
+# ★ 两件事, 分工是**硬边界**(见 ADAPTER-NOTES.md):
+#     compat/  u-boot 运行环境: 每个上游头名一个薄壳(全部接到 `fat_env.h`), 以及三个
+#              **转发壳**(`<fat.h>`/`<fs.h>`/`<rtc_def.h>` → vendor 原件 —— 盘上格式
+#              只有一处真值); `rtc_def.h` 是为 vendored `fs.h` 新引入的上游原件(已补锁);
+#     glue/    本项目对接: 块层 shim + 卷表 + BPB 观测(`fat_blk.c`)、VFS 四层 ops + 生命周期
+#              (`fat_vfs.c`)、TC-FAT-001..008(`fat_selftest.c`)。
+#   依赖方向单向: 上游 .c 只经 `compat/fat_env.h` 拿运行环境(**不**直接 include 任何
+#   `<br/...>`; 判据 = tools/check-third-party-pristine.sh 判据 ⑤ 与 ADR-0026 D-3)。
+# ★ `includes` = `compat` + `glue`。**不要**把 `third_party/uboot-imx/include` 加进来:
+#   brickie 的 `-I` 按字典序排, 那条会盖住 `compat/` 里的同名壳(`<fs.h>`/`<part.h>` 会被
+#   解析到 u-boot 的真头, 而那份还要 `<asm/byteorder.h>`/`<rtc_def.h>` 之类)。
+# ★ **vendor 代码的告警口径**(适配决策, 不是给上游开脱):
+#   上游按 u-boot 自己的 `-W...` 集合写(那份**不含**本项目的 `-Wshadow`/`-Wpointer-arith`/
+#   `-Wmissing-prototypes`/`-Wsign-compare`/`-Wunused-parameter`)。事实: 上游 `fat.c` 里
+#   `fsdata`/`itr` 之类的形参名故意遮蔽同名类型或外层变量, `buffer` 对 `void *` 做算术,
+#   多处函数没有前置原型(单编译单元的写法), 指针与整数之间来回强转。
+#   ⇒ 编 vendor 代码时**按它的口径**: 关掉这几条。**不能**为了过我们的告警去改上游
+#   (那正是 ADR-0026 要消灭的"就地改三方件")。
+cflags = [
+  "-Wno-shadow",
+  "-Wno-pointer-arith",
+  "-Wno-missing-prototypes",
+  "-Wno-sign-compare",
+  "-Wno-unused-parameter",
+  "-Wno-int-to-pointer-cast",
+  "-Wno-pointer-to-int-cast",
+]
+
+sources  = [
+  # 上游 FAT —— **原样编译, 没有副本**(一个编译单元同时含读+写: 该文件 include "fat.c")
+  "../../third_party/uboot-imx/fs/fat/fat_write.c",
+  # 适配层: 块层/卷表/BPB 观测 + VFS 对接 + 自检(本项目代码)
+  "glue/*.c",
+]
+includes = ["compat", "glue"]

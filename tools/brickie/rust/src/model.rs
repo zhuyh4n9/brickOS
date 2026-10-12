@@ -139,6 +139,22 @@ pub struct PrivilegedDecl {
     pub resources: PrivilegedResources,
 }
 
+/// `[[mount]]` 一条(ADR-0030: **APP 的挂载计划**)。
+///
+/// 从前这个表挂在 FS 插件上, 表示"本插件挂在哪"; 现在它归**消费者**(APP), 表示
+/// "要挂什么、挂在哪" —— FS 插件只注册驱动(fstype), 不再自带挂载点。
+#[derive(Clone, Debug, Default)]
+pub struct MountDecl {
+    /// POSIX `mount()` 第 1 参: 源设备名(介质类 FS 用; 无介质留空)。
+    pub source: Option<String>,
+    /// POSIX `mount()` 第 2 参: 挂载点(绝对路径)。
+    pub target: String,
+    /// POSIX `mount()` 第 3 参: 驱动名(`"tmpfs"`/`"devfs"`/`"fat"`/`"erofs"`)。
+    pub fstype: String,
+    /// 生成期排序键(APP 必须按它升序挂: 先 "/" 再子挂载点)。
+    pub order: i64,
+}
+
 /// `[build]`(`brickie build` 消费它 —— ADR-0004 / 设计 ADR-0003 的 S1–S3)。
 #[derive(Clone, Debug, Default)]
 pub struct BuildDecl {
@@ -242,6 +258,8 @@ pub struct Plugin {
     pub deps: Vec<Dep>,
     pub exports: Vec<Export>,
     pub privileged: Option<PrivilegedDecl>,
+    /// `[[mount]]` 逐条(APP 的挂载计划; ADR-0030)。
+    pub mounts: Vec<MountDecl>,
     pub build: Option<BuildDecl>,
     /// `[build.target]`(仅 platform 插件; `brickie build` 的目标事实)。
     pub build_target: Option<BuildTarget>,
@@ -738,6 +756,84 @@ fn int_array(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d
             }
         },
     }
+}
+
+/// 解析 `[[mount]]` 数组(ADR-0030)。
+///
+/// 形状: `[[mount]] source = "emmc0" / target = "/fat12" / fstype = "fat" / order = 2`
+///   - `target` / `fstype` **必填**(缺一个就是"挂不上"或"挂什么不知道");
+///   - `source` 可省(= 无介质 FS, 如 tmpfs/devfs);
+///   - `order` 可省(缺省 0); 同 order 时按声明顺序稳定排序。
+/// 归属: 只允许 `plugin_type = "app"` 声明 —— 挂载计划归消费者。
+fn parse_mounts(
+    top: &toml::Table,
+    name: &str,
+    file: &str,
+    plugin_type: &str,
+    d: &mut Diags,
+) -> Vec<MountDecl> {
+    let Some(arr) = top.get("mount") else {
+        return Vec::new();
+    };
+    let Some(items) = arr.as_array() else {
+        d.shape(
+            "BRV-MF-0001",
+            name,
+            file,
+            "mount",
+            "`[[mount]]` 形状不符: 期望表数组".to_string(),
+            "写成 `[[mount]]` 后跟 source/target/fstype/order",
+        );
+        return Vec::new();
+    };
+    if plugin_type != "app" && !items.is_empty() {
+        d.shape(
+            "BRV-MF-0001",
+            name,
+            file,
+            "mount",
+            format!(
+                "`[[mount]]` 只允许 `plugin_type = \"app\"` 声明(本件是 `{plugin_type}`)"
+            ),
+            "ADR-0030: 挂载计划归**消费者**(APP); FS 插件只注册驱动(fstype), 不声明挂载点",
+        );
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for (i, it) in items.iter().enumerate() {
+        let Some(tb) = it.as_table() else {
+            d.shape(
+                "BRV-MF-0001",
+                name,
+                file,
+                format!("mount[{i}]"),
+                "`[[mount]]` 元素不是表".to_string(),
+                "contract §7 字段表",
+            );
+            continue;
+        };
+        let span = format!("mount[{i}]");
+        let target = opt_str(tb, "target", name, file, &span, d);
+        let fstype = opt_str(tb, "fstype", name, file, &span, d);
+        let (Some(target), Some(fstype)) = (target, fstype) else {
+            d.shape(
+                "BRV-MF-0001",
+                name,
+                file,
+                span,
+                "`[[mount]]` 缺必填字段(target / fstype)".to_string(),
+                "target = 挂载点(绝对路径), fstype = 驱动名(如 \"fat\")",
+            );
+            continue;
+        };
+        out.push(MountDecl {
+            source: opt_str(tb, "source", name, file, &span, d),
+            target,
+            fstype,
+            order: opt_int(tb, "order", name, file, &span, d).unwrap_or(0),
+        });
+    }
+    out
 }
 
 fn opt_table<'a>(t: &'a toml::Table, key: &str) -> Option<&'a toml::Table> {
@@ -1309,6 +1405,12 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             resources,
         });
     }
+
+    // ---- [[mount]](ADR-0030: **消费者**的挂载计划) ----
+    // ★ 为什么只对 app 报"缺 fstype"这类错: 从前 [[mount]] 在 FS 插件上表示"我挂在哪",
+    //   现在它归 APP。为了不把旧写法静默吃掉(那会让"以为挂了、其实没挂"), 这里对
+    //   **非 app** 插件声明 [[mount]] 报一条 shape 错并指路。
+    p.mounts = parse_mounts(top, &p.name, &file, &p.plugin_type, d);
 
     // ---- [build] ----
     if let Some(bt) = opt_table(top, "build") {

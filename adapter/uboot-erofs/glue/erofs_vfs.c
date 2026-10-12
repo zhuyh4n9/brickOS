@@ -157,29 +157,35 @@ int uboot_erofs_start(void);
  * 非 static: 自检要经它读盘上字节做判据(只读地看几何, 不写任何字段)。 */
 br_erofs_dev_t uboot_erofs_dev;
 
-int uboot_erofs_bdev_bind(void)
+/* ★ ADR-0030: 介质名由**调用方**给(APP 的 `mount(source, ...)` 传进来, 经 `cfg->dev`),
+ * 不再写死 `BR_EROFS_DEV_NAME` —— 于是"挂哪块卡上的 EROFS"是 APP 的决定, 不是本件的常量。 */
+int uboot_erofs_bdev_bind(const char *dev_name)
 {
     void *priv = BR_NULL;
 
-    const br_bdev_ops_t *ops = br_bdev_get(BR_EROFS_DEV_NAME, &priv);
+    if (dev_name == BR_NULL) {
+        br_log_error("uboot-erofs: mount 未给源设备(cfg->dev 为空)");
+        return BR_ERR(EINVAL);
+    }
+    const br_bdev_ops_t *ops = br_bdev_get(dev_name, &priv);
     if ((ops == BR_NULL) || (priv == BR_NULL)) {
-        br_log_error("uboot-erofs: 找不到块设备 %s", BR_EROFS_DEV_NAME);
+        br_log_error("uboot-erofs: 找不到块设备 %s", dev_name);
         return BR_ERR(ENODEV);
     }
     if ((ops->read == BR_NULL) || (ops->geometry == BR_NULL)) {
-        br_log_error("uboot-erofs: %s 的 bdev ops 缺 read/geometry 槽位", BR_EROFS_DEV_NAME);
+        br_log_error("uboot-erofs: %s 的 bdev ops 缺 read/geometry 槽位", dev_name);
         return BR_ERR(EINVAL);
     }
 
     br_bdev_geom_t g;
     const int grc = ops->geometry(priv, &g);
     if (grc != 0) {
-        br_log_error("uboot-erofs: %s geometry() 失败 rc=%d", BR_EROFS_DEV_NAME, grc);
+        br_log_error("uboot-erofs: %s geometry() 失败 rc=%d", dev_name, grc);
         return grc;
     }
     if ((g.sector_size == 0u) || (g.n_sectors == 0u) || (g.max_rw == 0u)) {
         br_log_error("uboot-erofs: %s 几何非法(sector=%u n=%llu max_rw=%u)",
-                     BR_EROFS_DEV_NAME, (unsigned)g.sector_size,
+                     dev_name, (unsigned)g.sector_size,
                      (unsigned long long)g.n_sectors, (unsigned)g.max_rw);
         return BR_ERR(EINVAL);
     }
@@ -1083,16 +1089,18 @@ static int uboot_erofs_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t *
     }
     *root = BR_NULL;
 
-    /* 挂载点校验: 与 fs/tmpfs 刻意不同 —— 本件的**卷**与挂载点无关, 但"挂在哪"是
-     * manifest 的事实。这里只做自洽检查(不匹配就报 -EINVAL, 而不是默默挂错地方)。 */
-    if ((cfg->path == BR_NULL) || (uboot_erofs_strcmp(cfg->path, BR_EROFS_MOUNT_PATH) != 0)) {
-        br_log_error("uboot-erofs: 挂载点必须是 %s(实得 %s)", BR_EROFS_MOUNT_PATH,
-                     (cfg->path != BR_NULL) ? cfg->path : "(null)");
+    /* ★ ADR-0030: 挂载点与源设备**都由 APP 决定**(经 cfg)。原先这里把挂载点钉死成
+     *   `BR_EROFS_MOUNT_PATH` 并在不匹配时报 -EINVAL —— 那是"FS 自带挂载计划"的残留。
+     *   EROFS 的卷与挂载点本来就无关(只与介质有关), 所以这里只要求两者非空。 */
+    if ((cfg->path == BR_NULL) || (cfg->dev == BR_NULL)) {
+        br_log_error("uboot-erofs: mount 参数不全(path=%s dev=%s)",
+                     (cfg->path != BR_NULL) ? cfg->path : "(null)",
+                     (cfg->dev != BR_NULL) ? cfg->dev : "(null)");
         return BR_ERR(EINVAL);
     }
 
-    /* 1) 块设备: 取 emmc3 并记住几何(扇区大小/介质字节数) */
-    rc = uboot_erofs_bdev_bind();
+    /* 1) 块设备: 按 APP 给的源设备名取 bdev 并记住几何(扇区大小/介质字节数) */
+    rc = uboot_erofs_bdev_bind(cfg->dev);
     if (rc != 0) {
         return rc;                          /* 首败即停机(见 plugin.toml 的口径) */
     }
@@ -1159,12 +1167,12 @@ int uboot_erofs_init(void)
 
 int uboot_erofs_start(void)
 {
-    const int rc = br_mount_register(BR_EROFS_MOUNT_PATH, &s_fs_ops, BR_NULL);
+    /* ★ ADR-0030: 只**登记驱动**, 不挂载 —— 挂哪里、挂哪块卡由 APP 用 POSIX
+     *   `mount(source, target, "erofs", 0, NULL)` 决定。 */
+    const int rc = br_fs_driver_register("erofs", &s_fs_ops, BR_NULL);
 
     if (rc != 0) {
-        /* ★ 首败即停机是**刻意的**(任务书): 卷挂不上就没有 /assets, 与其让
-         *   APP 在半残的命名空间里跑, 不如在这里停住并把原因打出来。 */
-        br_log_error("uboot-erofs: 挂载 %s 失败 rc=%d(首败即停机)", BR_EROFS_MOUNT_PATH, rc);
+        br_log_error("uboot-erofs: 注册驱动 erofs 失败 rc=%d(首败即停机)", rc);
         return rc;
     }
     return 0;

@@ -36,9 +36,6 @@ used_kib = 2
 notes    = "静态部分只有根 inode + iops/fops 表; 设备节点 inode 在 lookup 时从 core 堆现造(约 48 B/次)"
 
 # ---- 挂载计划(设计 `7-03` §6; 同 tmpfs: 工具侧尚不消费, 欠债 br-wa-fs-001) ----
-[[mount]]
-path  = "/dev"
-order = 2
 
 # ---- 结构依赖(四条 init 边; 逐条理由见文件头的"依赖面三条") ----
 [[dep]]

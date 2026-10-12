@@ -309,14 +309,16 @@ require = ["ok   errno 表"]
 name = "check-workarounds"
 argv = ["bash", "tools/check-workarounds.sh"]
 
-# check-third-party-pristine: third_party 是**只读 vendor 树**的门禁(ADR-0025)。
+# check-third-party-pristine: third_party 是**只读 vendor 树**的门禁(ADR-0025 / ADR-0026)。
 # ★ 它守的是"三方代码与 brickOS 代码必须隔离"这条政策, 且把它做**可机械判定**:
 #   ① 锁元数据齐; ② vendor 树**逐字节等于锁里的 sha256**(任一字节被改 ⇒ 红);
 #   ③ 锁里每条都在磁盘上(丢了也红); ④ vendor 树里没有锁外的文件(塞东西也红);
-#   ⑤ third_party/ 下没有 plugin.toml; ⑥ 无人 include 三方件的头(vendor 只是参照物,
-#   不参与编译 —— 参与编译的是 adapter/ 里的移植件)。
+#   ⑤ third_party/ 下没有 plugin.toml; ⑥ 无人以**绝对路径** include 三方件的头
+#   (ADR-0026 起 vendor 的 `.c` **确实参与编译** —— 各 plugin.toml 的 `sources` 直接指向
+#   它们; 需要 vendor 的头时经 adapter/*/compat/ 的相对路径**转发壳**)。
 #   ★ 为什么必须有这条: 上一轮反复犯的正是"顺手改一行三方件让它编过"(加注释/SPDX、
 #     改 include、删裁剪)。纪律写在文档里拦不住, 写成 hash 锁才拦得住。
+#   ★ 它还有**另一半**(ADR-0029): `check-adapter-copies` 守"adapter/ 里不许有 vendor 源码副本"。
 # check-posix-conformance: iface/posix 与 **POSIX 一致**的门禁(ADR-0028)。
 # ★ 它守的是"APP 看见的 POSIX 面必须与真 POSIX 一致" —— 不一致的后果不是编不过, 而是
 #   **静默错值**(类型宽度不同 ⇒ 布局不同)、**flag 位含义不同**(常量不同)、
@@ -324,6 +326,19 @@ argv = ["bash", "tools/check-workarounds.sh"]
 #   ① 类型宽度 ② 常量值 ③ 函数签名(赋值兼容) ④ struct stat/dirent 的必需成员与类型宽度。
 #   ★ **不**比字段偏移: POSIX 不规定 struct stat 的成员顺序, 拿 glibc 的偏移当判据
 #     会把"glibc 的 ABI"误当成"POSIX 的要求"。少数有意偏离走白名单 + 写明理由。
+# check-mount-ownership: **挂载归属**门禁(ADR-0030)。
+# ★ 它守的是"挂载由 APP 决定"这条新分工: FS 插件只登记**驱动**(fstype 名 → ops),
+#   APP 用 POSIX mount() 按名挂载, 计划写在 APP 自己的 [[mount]] 里。
+#   两条机械判据: ① fs/ 与 adapter/ 里无人 br_mount_register(不许自挂载);
+#   ② [[mount]] 只出现在 app/ 的声明面(挂载计划归消费者) —— 加上一条正面判据:
+#   APP 的 [[mount]] 必须真的被 brickie 生成成可执行入口(mount_plan_apply)。
+#   ★ 为什么必须机械: 谁再往 FS 里写一行 br_mount_register, 功能测试**照旧能挂上**,
+#     只是挂载又变回 FS 自己的决定 —— 没人会发现(ADR-0030 之前正是这样)。
+[[script]]
+name = "check-mount-ownership"
+argv = ["bash", "tools/check-mount-ownership.sh"]
+require = ["PASS: 挂载归属正确"]
+
 [[script]]
 name = "check-posix-conformance"
 argv = ["bash", "tools/check-posix-conformance.sh"]
@@ -333,6 +348,19 @@ require = ["PASS: iface/posix 与 POSIX 一致"]
 name = "check-third-party-pristine"
 argv = ["bash", "tools/check-third-party-pristine.sh"]
 require = ["PASS: third_party 只读 vendor 树"]
+
+# check-adapter-copies: **adapter/ 里不许夹带三方件源码副本**的门禁(ADR-0026 D-3 / ADR-0029)。
+# ★ 它守的是三方件纪律的**另一半**: `check-third-party-pristine` 盯的是 vendor 侧
+#   ("原件一个字节都没被改"), 而"**把上游抄一份到 adapter/ 再改名改缩进**"在文件系统上
+#   与"写适配层"长得一模一样 —— 上一轮的 `adapter/uboot-fat/src/fat_core.c` 与上游
+#   `fs/fat/fat.c` 的行级相似度就有 0.58。判据(归一化去空行/纯注释/预处理行 后算
+#   `difflib` 行级相似度): adapter 的任一 .c/.h 与任一 vendor .c/.h **≥ 0.30 且双方
+#   都 ≥ 30 行** ⇒ 红, 除非在脚本里**具名豁免并写明理由**(豁免是记账, 不是消音)。
+#   正例已实测: 迁移前的两个 `src/fat_*.c` 报红; 迁移后全树最高远低于阈值。
+[[script]]
+name = "check-adapter-copies"
+argv = ["python3", "tools/check-adapter-copies.py"]
+require = ["PASS: adapter 无三方件源码副本"]
 
 [[script]]
 name = "check-build"

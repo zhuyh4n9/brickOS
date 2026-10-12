@@ -1355,19 +1355,22 @@ int tmpfs_early_init(void)
 }
 
 /*
- * CORE 相: 挂 rootfs。堆此时已就绪(这就是"绝不在 init 之前 br_malloc"的由来:
- * mount 里所有分配都发生在 br_mount_register → s_fs_ops.mount 这条链上)。
+ * CORE 相: 把 tmpfs 登记为**驱动**(不挂载)。
+ *
+ * ★ ADR-0030: **挂载由 APP 决定**。本件只说"我叫 tmpfs、我的 ops 是这些";
+ *   APP 用 POSIX `mount(NULL, "/", "tmpfs", 0, NULL)` 把根挂起来。
+ *   于是"挂在哪里"不再写死在 FS 里 —— 同一个 tmpfs 可以被挂到任何挂载点。
  *
  * init 自己**不建树**: 建根 inode 与预建目录是 super 层 mount 槽位的职责, 由
- * `br_mount_register` 在检查参数/规范化路径之后调用(契约如此: 建 cfg → ops->mount →
- * 记录槽位)。这里只负责"注册"这一件事, 失败原样上传负 errno(首败即停机由插件管理器执行)。
+ * `br_vfs_mount` 在查到驱动、检查参数之后调用(契约如此: 建 cfg → ops->mount → 记录槽位)。
+ * 这里只负责"登记驱动"这一件事, 失败原样上传负 errno(首败即停机由插件管理器执行)。
  */
 int tmpfs_init(void)
 {
-    const int rc = br_mount_register(TMPFS_MOUNT_PATH, &s_fs_ops, (void *)&s_fs);
+    const int rc = br_fs_driver_register("tmpfs", &s_fs_ops, (void *)&s_fs);
 
     if (rc != 0) {
-        br_log_error("tmpfs: register %s failed (%d)", TMPFS_MOUNT_PATH, rc);
+        br_log_error("tmpfs: register driver failed (%d)", rc);
         return rc;
     }
     return 0;

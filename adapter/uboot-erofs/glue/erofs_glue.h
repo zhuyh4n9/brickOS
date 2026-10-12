@@ -20,7 +20,9 @@
 #include "internal.h"          /* 上游 fs/erofs/internal.h */
 
 /* ---- 挂载期事实 ---- */
-#define BR_EROFS_DEV_NAME    "emmc3"      /* bdev 名(见 platform 的 QEMU 参数) */
+/* ★ ADR-0030: 本件**不再自带设备名** —— 源设备由 APP 的 [[mount]].source 给。
+ *   下面这个常量只留给自检当夹具名(与 app 的挂载计划一致)。 */
+#define BR_EROFS_DEV_NAME    "emmc3"      /* 自检夹具用的 bdev 名 */
 #define BR_EROFS_MOUNT_PATH  "/assets"    /* 挂载点(plugin.toml 的 [[mount]] 与这里两处真值) */
 #define BR_EROFS_TYPE_NAME   "erofs"      /* 诊断用 */
 
@@ -42,7 +44,7 @@ typedef struct br_erofs_dev {
 } br_erofs_dev_t;
 
 extern br_erofs_dev_t uboot_erofs_dev;      /* 挂载期绑定; 自检只读它 */
-int  uboot_erofs_bdev_bind(void);           /* 取 emmc3 并记住几何 */
+int  uboot_erofs_bdev_bind(const char *dev_name);  /* 按 APP 给的源设备名取 bdev 并记住几何 */
 
 /* 共享 4 KiB 中转缓冲(谁写谁负责, 见 erofs_vfs.c 的说明)。 */
 u8  *uboot_erofs_scratch(void);

@@ -254,4 +254,28 @@ br_u32 br_plugin_init_failures(void);
  * 都在 core/selftest/。
  */
 
+/*
+ * ==================================================================== 挂载计划(ADR-0030)
+ *
+ * **挂载由 APP 决定**: FS 插件只向 vfs-core 注册**驱动**(fstype 名 → ops);
+ * APP 在自己的 `plugin.toml` 里用 `[[mount]]` **声明**"要挂什么、挂在哪", brickie 把
+ * 那张表生成到本插件的描述符里, APP 的 start 相逐条执行 POSIX `mount()`。
+ *
+ * 于是"挂载计划"只有**一个**真值(APP 的声明面), 而不是"FS 插件自带一份 + manifest
+ * 一份"(见 br-wa-fs-001: 两处真值改一处不报错, 只会静默挂错设备)。
+ *
+ * 字段与 POSIX `mount(source, target, fstype, flags, data)` 一一对应:
+ *   `source` = mount() 的第 1 参(介质类 FS 的设备名; tmpfs/devfs 传 BR_NULL)
+ *   `target` = 第 2 参(挂载点)
+ *   `fstype` = 第 3 参(驱动名, 如 "tmpfs"/"fat"/"erofs")
+ *   `order`  = **仅用于生成期排序**(APP 必须按 order 升序挂: 先 "/" 再 "/dev"…);
+ *              它不是 POSIX 的参数, 所以不进 mount() 调用。
+ */
+typedef struct br_mount_plan {
+    const char *source;     /* BR_NULL = 无介质 */
+    const char *target;
+    const char *fstype;
+    br_u32      order;
+} br_mount_plan_t;
+
 #endif /* BR_CORE_BR_PLUGIN_H */

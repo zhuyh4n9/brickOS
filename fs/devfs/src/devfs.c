@@ -317,20 +317,20 @@ int devfs_early_init(void)
 }
 
 /*
- * CORE 相: 挂载 /dev。
- * 顺序前提(挂载计划, 设计 `7-03` §6): tmpfs 先挂 "/", 于是挂载点 /dev 由 vfs-core
- * 在 `br_mount_register` 里**自动 mkdir**(本插件不做这件事, 也不该做 —— 那是挂载表
- * 的职责)。这条前提由 manifest 的 init 边 `fs/devfs → fs/tmpfs` 保证(拓扑序)。
+ * CORE 相: 把 devfs 登记为**驱动**(不挂载)。
+ *
+ * ★ ADR-0030: **挂载由 APP 决定**。本件只说"我叫 devfs"; APP 用 POSIX
+ *   `mount(NULL, "/dev", "devfs", 0, NULL)` 把它挂到 /dev。
+ *   顺序前提也随之归 APP: "/" 必须先挂(tmpfs), 否则 /dev 这个挂载点没有父 FS 承接
+ *   —— `br_vfs_mount` 会返回 -ENODEV(挂载点的自动 mkdir 由 vfs-core 做)。
  */
 int devfs_init(void)
 {
-    const int rc = br_mount_register(BR_DEVFS_MOUNT_PATH, &s_fs_ops, BR_NULL);
+    const int rc = br_fs_driver_register("devfs", &s_fs_ops, BR_NULL);
     if (rc != BR_OK) {
-        br_log_error("devfs: 挂载 %s 失败 rc=%d", BR_DEVFS_MOUNT_PATH, rc);
+        br_log_error("devfs: register driver failed rc=%d", rc);
         return rc;      /* 首败即停机由插件管理器执行(裁定 G6) */
     }
-    br_log_info("devfs: %s mounted (%u device(s) visible so far)",
-                BR_DEVFS_MOUNT_PATH, br_dev_count());
     return 0;
 }
 

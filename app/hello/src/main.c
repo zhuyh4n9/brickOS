@@ -709,12 +709,29 @@ int hello_init(void)
  * ★ 自检不由 APP 驱动(ADR-0010): 各插件 selftest 由 core 在全部 start 之后统一跑;
  *   本文件里的 `[APPCONF]` 是 **APP 自己的多线程样例**, 不是插件自检。
  */
+/* ==================================================================== 挂载(ADR-0030)
+ *
+ * ★ **挂载由 APP 决定**: FS 插件只向 vfs-core 注册驱动(`"tmpfs"`/`"devfs"`/`"fat"`/
+ *   `"erofs"`), 不再自己挂载。要挂什么、挂在哪, 写在本插件的 `plugin.toml` 的
+ *   `[[mount]]` 里; brickie 把那张表 + 遍历生成成 `hello_mount_plan_apply()`(见
+ *   `include/hello/hello.h` 的说明: APP 不许 include core 头, 所以表不进 APP 源码)。
+ *
+ * ★ 为什么在 start 相而不是 init:
+ *   ① 介质类 FS 的 `mount()` 要块设备, 而 bdev 由 `adapter/uboot-mmc` 在**它的** start
+ *      相注册; 非 APP 的 start 全部跑完才轮到 APP(插件管理器的相位规则)⇒ 这里最早可用。
+ *   ② 挂载点次序: 生成时已按 `order` 排序("/" 最前), 否则子挂载点没有父 FS 承接(-ENODEV)。
+ */
 int hello_start(void)
 {
     br_log_info("%s %s -- core MainLoop (POSIX threads + interrupt heartbeat + logging)",
                 BR_PROTOTYPE_NAME, BR_VERSION_STRING);
     br_log_info("clock: %lu Hz (arch timer), %lu ticks/ms (exact integer conversion)",
                 br_clock_freq_hz(), br_clock_ticks_per_ms());
+
+    /* ① 先把本 APP 声明的挂载计划执行掉 —— 之后才有命名空间可看 */
+    if (hello_mount_plan_apply() != 0) {
+        return -1;
+    }
 
     /*
      * ★ 介质类 FS 的端到端样例在**这里**跑(而不是 APP 线程里): 此刻只有一条控制流,

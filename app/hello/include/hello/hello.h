@@ -25,4 +25,16 @@ int hello_init(void);
 /* START 相(全局开中断后, **最后**一个 start): 自检序列 + MainLoop。不返回。 */
 int hello_start(void);
 
+/*
+ * 挂载计划的应用入口(ADR-0030)。**定义在生成物里**(`build/gen/app/hello/plugin_desc.c`)。
+ *
+ * ★ 为什么是一个函数而不是让 APP 自己遍历那张表: 挂载计划的元素类型 `br_mount_plan_t`
+ *   属 core 契约, 而 **APP 不许 include core 头**(ADR-0020: APP 只依赖 Interface)。
+ *   所以"表 + 遍历 + 调 POSIX mount()"整套放进生成物, APP 只调这一个入口 ——
+ *   计划仍是**声明式**的(本插件的 `plugin.toml` 的 `[[mount]]`), 单一真值不变。
+ *
+ * 返回 0 或 -1(errno 已置)。APP 应在 start 相、**任何文件操作之前**调用它。
+ */
+int hello_mount_plan_apply(void);
+
 #endif /* BR_APP_HELLO_HELLO_H */

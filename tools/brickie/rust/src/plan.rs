@@ -88,6 +88,18 @@ pub struct PluginFacts<'a> {
     /// = 插件声明了 `[selftest]` **且** 产品开关(含名单)放行。为假时生成物写
     /// `BR_PLUGIN_NO_HOOK` ⇒ 测试代码无人引用 ⇒ `--gc-sections` 把它整段裁出镜像。
     pub emit_selftest: bool,
+    /// `[[mount]]` 逐条(ADR-0030: **本插件**(APP)的挂载计划)。
+    /// 生成物把它发射成一张表, APP 的 start 相逐条调 POSIX `mount()` 执行。
+    pub mounts: Vec<MountFact>,
+}
+
+/// `[[mount]]` 一条(生成期事实; 见 `model::MountDecl`)。
+#[derive(Clone, Debug)]
+pub struct MountFact {
+    pub source: Option<String>,
+    pub target: String,
+    pub fstype: String,
+    pub order: i64,
 }
 
 /// `descriptor_include` 的回落值: 元契约头(任何组合里都存在)。
@@ -147,6 +159,76 @@ fn dep_phase_const(kind: &str, phase: Option<&str>) -> &'static str {
 }
 
 /// 依赖数组的 C 文本 + `.deps` 的取值表达式(无边 ⇒ `BR_NULL`)。
+/// 发射挂载计划表(ADR-0030)。空计划 ⇒ 两个空串(模板据此不发任何东西)。
+///
+/// 表名 = `<symbol_prefix>mount_plan`(与描述符同前缀, 便于 APP 引用)。
+/// `source` 为空 ⇒ 发射 `BR_NULL`(无介质 FS)。
+fn mount_plan_decl(prefix: &str, mounts: &[MountFact]) -> (String, String) {
+    if mounts.is_empty() {
+        return (String::new(), String::new());
+    }
+    let mut sorted: Vec<&MountFact> = mounts.iter().collect();
+    sorted.sort_by_key(|m| m.order); // 稳定排序: 同 order 保持声明顺序
+    let mut out = String::new();
+    out.push_str(
+        "/*\n * 挂载计划(来自 plugin.toml 的 [[mount]]; ADR-0030) —— **由本 APP 执行**。\n"
+    );
+    out.push_str(
+        " *\n * ★ 为什么发射成\"表 + 应用函数\"而不是让 APP 自己遍历:\n"
+    );
+    out.push_str(
+        " *   APP 不许 include core 头(ADR-0020: APP 只依赖 Interface)⇒ `br_mount_plan_t`\n"
+    );
+    out.push_str(
+        " *   不能出现在 APP 源码里。所以表与遍历都放在本生成物里, APP 只调一个\n"
+    );
+    out.push_str(
+        " *   `int <prefix>mount_plan_apply(void)`(原型在 APP 自己的对外头里)。\n"
+    );
+    out.push_str(
+        " * `order` 只用于生成期排序(必须\"先 / 再子挂载点\"), 不进 mount() 调用。 */\n"
+    );
+    out.push_str("#include <sys/mount.h>   /* POSIX mount() */\n");
+    out.push_str("#include <errno.h>\n");
+    out.push_str("#include <stddef.h>   /* NULL */\n");
+    out.push_str("#include <br/core/br_log.h>\n\n");
+    out.push_str(&format!(
+        "static const br_mount_plan_t {prefix}mount_plan[] = {{\n"
+    ));
+    for m in &sorted {
+        let src = match &m.source {
+            Some(s) => format!("\"{s}\""),
+            None => "BR_NULL".to_string(),
+        };
+        out.push_str(&format!(
+            "    {{ .source = {}, .target = \"{}\", .fstype = \"{}\", .order = {}u }},\n",
+            src, m.target, m.fstype, m.order
+        ));
+    }
+    out.push_str("};\n\n");
+    out.push_str(
+        "/* 逐条执行挂载计划。返回 0 或 -1(errno 已置, 首败即停机是刻意的:\n * 少一个卷就让 APP 在半残的命名空间里跑, 只会把\"挂载失败\"变成别处的\"文件不存在\")。 */\n",
+    );
+    out.push_str(&format!("int {prefix}mount_plan_apply(void)\n{{\n"));
+    out.push_str(&format!(
+        "    for (br_u32 i = 0u; i < {}u; i++) {{\n", sorted.len()
+    ));
+    out.push_str("        const br_mount_plan_t *m = &");
+    out.push_str(prefix);
+    out.push_str("mount_plan[i];\n");
+    out.push_str("        if (mount(m->source, m->target, m->fstype, 0ul, NULL) != 0) {\n");
+    out.push_str("            br_log_error(\"mount(%s, %s, %s) 失败 errno=%d(首败即停机)\",\n");
+    out.push_str("                         (m->source != NULL) ? m->source : \"-\", m->target,\n");
+    out.push_str("                         m->fstype, errno);\n");
+    out.push_str("            return -1;\n");
+    out.push_str("        }\n");
+    out.push_str("        br_log_info(\"mounted %s (fstype=%s)\", m->target, m->fstype);\n");
+    out.push_str("    }\n    return 0;\n}\n");
+    let n = format!("const br_u32 {prefix}mount_plan_n = {}u;\n", sorted.len());
+    out.push_str(&n);
+    (out, format!("{prefix}mount_plan_n"))
+}
+
 fn deps_decl(tag: &str, deps: &[DepFact]) -> (String, String) {
     if deps.is_empty() {
         return (String::new(), "BR_NULL".to_string());
@@ -347,6 +429,11 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     let (deps_array, deps_expr) = deps_decl(&dtag, &f.deps);
     v.insert("deps_array".into(), deps_array);
     v.insert("deps_expr".into(), deps_expr);
+    // 挂载计划(ADR-0030): 发一张表 + 长度。APP 的 start 相逐条执行 POSIX mount()。
+    // 按 order 稳定排序(同 order 保持声明顺序)⇒ "先挂 / 再挂 /dev" 这条前提可复现。
+    let (mount_plan, mount_plan_n) = mount_plan_decl(&sym, &f.mounts);
+    v.insert("mount_plan".into(), mount_plan);
+    v.insert("mount_plan_n".into(), mount_plan_n);
     v.insert("export_api_iface".into(), f.api_type.to_string());
     v.insert("export_form".into(), "api".into()); // §8.4 / 裁定 G-3
     v.insert("export_name".into(), short.clone());
@@ -655,6 +742,7 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         ),
         has_init: true,
         emit_selftest: false,
+        mounts: Vec::new(),
     };
     let vars = plugin_vars(&facts);
     let mut artifacts: Vec<Artifact> = plugin_paths(&facts)
@@ -752,6 +840,7 @@ pub fn plan_init(
         decl_include: format!("{short}/{short}.h", short = rules::name_short(&app)),
         has_init: true,
         emit_selftest: false,
+        mounts: Vec::new(),
     };
     let app_vars = plugin_vars(&app_facts);
     for (path, kind, template) in plugin_paths(&app_facts) {
@@ -901,6 +990,17 @@ pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
         // 缺省**不发**: 只有 gen_plan(知道产品开关)会把它打开。
         // 这样 plan_new/plan_init 的骨架期预测也自然是"不带自检"。
         emit_selftest: false,
+        // 挂载计划(ADR-0030): 从 plugin.toml 的 [[mount]] 逐条带过来。
+        mounts: p
+            .mounts
+            .iter()
+            .map(|m| MountFact {
+                source: m.source.clone(),
+                target: m.target.clone(),
+                fstype: m.fstype.clone(),
+                order: m.order,
+            })
+            .collect(),
     }
 }
 

@@ -6,7 +6,7 @@
  *
  * ============================== 判据从哪来 ==============================
  * 三块 emmc 上的 FAT 卷由**宿主**在构建后门禁里造好(见 README 的"前置工件"), 每个卷里
- * 预置了下面这些文件(常量在 fat_internal.h, 自检与 APP 共用同一份真值):
+ * 预置了下面这些文件(常量在 glue/fat_glue.h, 自检与 APP 共用同一份真值):
  *
  *   /fat12: hello.txt  = "fat12 hello\n";  dir/a.bin = 16 个 'A'
  *   /fat16: hello.txt  = "fat16 hello\n";  dir/a.bin = 256 个 'B'
@@ -29,7 +29,7 @@
 #include <br/core/br_types.h>
 #include <br/vfs/br_vfs.h>
 
-#include "fat_internal.h"
+#include "fat_glue.h"
 
 int uboot_fat_selftest(void);
 

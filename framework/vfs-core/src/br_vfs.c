@@ -724,19 +724,31 @@ static int mount_with_dev(const char *path, const br_fs_ops_t *ops, void *fs_pri
             return rc;
         }
     }
-    const br_fs_cfg_t cfg = { .path = norm, .dev = dev, .opts = BR_NULL };
+    /* ★ `cfg.path` 必须是**长期存活**的缓冲, 不能是这里的栈缓冲 `norm`。
+     *   为什么: 介质类 FS 会把 `cfg->path`(与 `cfg->dev`)记进自己的卷表, 挂载返回后
+     *   在**自检相**还要用(如 `uboot-fat` 的 `vol_info`/`sync`)。给栈缓冲的话, mount
+     *   一返回它就失效 —— 症状是"挂载那一刻日志完全正常, 自检却报 vol_info_failed /
+     *   sync_rc=-2"(实测踩到)。
+     *   解法: 先把规范化路径写进**挂载表的槽位**(它的生命周期 = 到关机), 再把 `cfg.path`
+     *   指过去。槽位在 mount 失败时回退(不占用)。 */
+    vfs_mount_t *m = &s_mounts[s_mount_n];
+    vfs_str_copy(m->path, norm, (br_size_t)sizeof(m->path));
+    m->len = (br_u32)vfs_str_len(m->path);
+
+    const br_fs_cfg_t cfg = { .path = m->path, .dev = dev, .opts = BR_NULL };
     br_inode_t *root = BR_NULL;
     rc = ops->mount(fs_priv, &cfg, &root);
     if (rc != BR_OK) {
+        m->path[0] = '\0';      /* 回退: 不留下"看起来已挂"的半状态 */
+        m->len = 0u;
         return rc;
     }
     if (root == BR_NULL) {
+        m->path[0] = '\0';
+        m->len = 0u;
         return BR_ERR(EINVAL);
     }
-    vfs_mount_t *m = &s_mounts[s_mount_n];
     m->used = BR_TRUE;
-    vfs_str_copy(m->path, norm, (br_size_t)sizeof(m->path));
-    m->len  = (br_u32)vfs_str_len(m->path);
     m->ops  = ops;
     m->priv = fs_priv;
     m->root = root;
