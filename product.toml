@@ -56,23 +56,23 @@ plugins = [
   #   POSIX 运行时被裁掉的产品(极小 native 组合)仍能单独带上 fd 表。删掉它 `check` 依然 0 错。
   "framework/file-table",
   # ★ ADR-0021: 块设备子分类框架(bdev-core)。与 cdev-core 并列的存储域第二条设备链;
-  #   本刀先落框架件(暂无驱动消费者), eMMC 驱动(third_party/uboot-mmc)随后接入。
+  #   本刀先落框架件(暂无驱动消费者), eMMC 驱动(adapter/uboot-mmc)随后接入。
   "framework/bdev-core",
   # ★ ADR-0021 D-2: 通用 PCI(e) 机制(枚举/BAR 分配)。它依赖 platform 读板级事实;
   #   本刀先落它并单独验证(枚举到 sdhci-pci), eMMC 驱动随后以 init 边消费它。
   "framework/pci-core",
   # ★ ADR-0021 D-3: 第三方模块隔离 —— 移植自 u-boot(GPL-2.0+)的 eMMC/SDHCI 驱动。
   #   它是闭包内**唯一**的 third_party 插件; 框架件与平台侧保持 WTFPL。
-  "third_party/uboot-mmc",
+  "adapter/uboot-mmc",
   # ★ ADR-0022: 文件系统这一刀的两件移植件(同源同许可: nxp-imx u-boot `fs/fat` 与
   #   `fs/erofs`, GPL-2.0+)。它们**必须**是 third_party: 工具链禁 `native` 依赖
   #   `third_party`(rules.rs::api_type_edge_reason), 而两件都要在 `uboot-mmc` 的 start 相
-  #   (全局开中断后)之后才谈得上挂载 —— 那条顺序只能经 `[[dep]] third_party/uboot-mmc`
+  #   (全局开中断后)之后才谈得上挂载 —— 那条顺序只能经 `[[dep]] adapter/uboot-mmc`
   #   表达。于是 eMMC 与其上的文件系统构成一个**自洽的第三方子图**:
   #     uboot-mmc(块设备)→ uboot-fat(可写卷 ×3)/ uboot-erofs(只读镜像 ×1)
   #   四条卷的分工与设备名见 platform 的 `[build.target.qemu].extra` 与 ADR-0022。
-  "third_party/uboot-fat",
-  "third_party/uboot-erofs",
+  "adapter/uboot-fat",
+  "adapter/uboot-erofs",
   "fs/tmpfs",
   "fs/devfs",
   "io/uart-pl011",

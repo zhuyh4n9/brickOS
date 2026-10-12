@@ -3,8 +3,8 @@
 #
 # ============================ 为什么要有它 ============================
 # 门禁要在 QEMU 里验证两件事:
-#   ① 第三方 FAT 移植件(third_party/uboot-fat)能读写真卷;
-#   ② 第三方 EROFS 移植件(third_party/uboot-erofs)能读真镜像(未压缩 + LZ4)。
+#   ① 第三方 FAT 移植件(adapter/uboot-fat)能读写真卷;
+#   ② 第三方 EROFS 移植件(adapter/uboot-erofs)能读真镜像(未压缩 + LZ4)。
 # 两者的判据都必须建立在**外部权威工具造出来的字节**上 —— 自研 mkfs 与自研 reader 互为
 # 镜像, 谁也证明不了谁。所以这里的镜像是 `mkfs.fat`(dosfstools)与 `mkfs.erofs`
 # (erofs-utils)造的, 版本与 sha256 钉在 `prebuilts/toolchain.lock.toml` 里。
@@ -21,7 +21,7 @@
 #   emmc3  16 MiB  EROFS 镜像(未压缩 + LZ4) + 卡尾 512 KiB 设备级擦写区 → 挂 /assets
 #
 # ★ 三条**跨件不变量**(改这里必须同步改那一侧; 由本脚本的断言与自检的判据两侧夹住):
-#   1. 每个 FAT 卷的卷标与文件内容 = `third_party/uboot-fat/src/fat_internal.h` 里的常量;
+#   1. 每个 FAT 卷的卷标与文件内容 = `adapter/uboot-fat/src/fat_internal.h` 里的常量;
 #   2. EROFS 镜像 ≤ 1 MiB(assert), 而擦写区从 **LBA 4096(2 MiB)** 起
 #      (`BR_EMMC_SCRATCH_LBA`) ⇒ "镜像与擦写区永不重叠"这条性质是**算出来的**, 不是约定;
 #   3. 四块卡的名字/顺序 = `platform/qemu-aarch64/plugin.toml` 的 `[build.target.qemu].extra`

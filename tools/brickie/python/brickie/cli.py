@@ -1219,6 +1219,10 @@ def main(argv: list[str] | None = None) -> int:
         result = _dispatch(ns)
     except UsageError as exc:
         return _report_failure(ns, _command_path(ns), _error_diagnostic(str(exc)))
+    except runner.StepError as exc:
+        # 步骤**起不来**(可执行不在场 / 工具太旧这类环境错)。不接住的话它会以 Python
+        # 回溯的形式漏出去 —— 而这类话是给人看的修法, 不是栈。
+        return _report_failure(ns, _command_path(ns), _error_diagnostic(str(exc), exc.code))
     except NativeError as exc:
         return _report_failure(ns, _command_path(ns), _error_diagnostic(str(exc), exc.code))
     except writer.WriteError as exc:

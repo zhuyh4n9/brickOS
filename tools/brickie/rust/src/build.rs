@@ -114,6 +114,9 @@ struct Unit {
     /// 相对 root 的 include 目录。
     includes: Vec<String>,
     defines: Vec<String>,
+    /// 单元自己的编译标志(`[build].cflags`), 接在**产品级** cflags **之后** ——
+    /// 于是它可以关掉产品级开着的告警(如 vendor 代码的 `-Wno-shadow`)。
+    cflags: Vec<String>,
     plugin: Option<String>,
 }
 
@@ -597,6 +600,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         sources: core_sources,
         includes: pb.core_includes.clone(),
         defines: Vec::new(),
+        cflags: Vec::new(),
         plugin: None,
     });
 
@@ -634,6 +638,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                 .map(|i| format!("{dir}/{i}"))
                 .collect(),
             defines: b.defines.clone(),
+            cflags: b.cflags.clone(),
             plugin: Some(p.name.clone()),
         });
     }
@@ -671,6 +676,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                     .map(|p| format!("{}/{}", plugin_dir_of(&p.name), "include"))
                     .collect(),
                 defines: Vec::new(),
+                cflags: Vec::new(),
                 plugin: None,
             });
         }
@@ -1046,6 +1052,17 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
             argv.extend(ctx.cflags.clone());
             if arch_in_cflags {
                 argv.extend(arch_flags.clone());
+            }
+            // ★ 单元级 cflags 接在产品级**之后**: 顺序有意义 —— 后面的 `-Wno-*`
+            //   才能关掉前面 `-Wall -Wextra -Werror` 里的某几条(vendor 代码用)。
+            {
+                let unit_cflags: Vec<String> = ctx
+                    .units
+                    .iter()
+                    .find(|u| &u.name == unit)
+                    .map(|u| u.cflags.clone())
+                    .unwrap_or_default();
+                argv.extend(unit_cflags);
             }
             let unit_defines: Vec<String> = ctx
                 .units

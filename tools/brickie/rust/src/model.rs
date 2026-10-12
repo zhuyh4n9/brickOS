@@ -148,6 +148,10 @@ pub struct BuildDecl {
     pub includes: Vec<String>,
     /// 额外的 `-D<name>`(可选; 产品级 `[build]` 里也有同名键)。
     pub defines: Vec<String>,
+    /// 本插件自己的编译标志。接在**产品级** `cflags` 之后 ⇒ 可以用来关掉某几条告警。
+    /// 用途(vendor 代码): 上游 u-boot 的 `fs/erofs/**` 按 u-boot 自己的告警集合写,
+    /// 不含本项目的 `-Wshadow`/`-Wpointer-arith`/… ⇒ 编它得按它的口径。
+    pub cflags: Vec<String>,
 }
 
 /// platform 插件的 `[build.target]`: **目标事实**(arch / 交叉前缀 / 链接脚本 / QEMU 型号)。
@@ -1312,6 +1316,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             sources: str_array(bt, "sources", &p.name, &file, "build", d),
             includes: str_array(bt, "includes", &p.name, &file, "build", d),
             defines: str_array(bt, "defines", &p.name, &file, "build", d),
+            cflags: str_array(bt, "cflags", &p.name, &file, "build", d),
         });
         // `[build.target]`: 目标事实。只允许 platform 声明(§8.3 ④ 的"每镜像恰一个")。
         if let Some(tt) = opt_table(bt, "target") {

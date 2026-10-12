@@ -309,16 +309,18 @@ require = ["ok   errno 表"]
 name = "check-workarounds"
 argv = ["bash", "tools/check-workarounds.sh"]
 
-# check-third-party-isolation: 第三方模块**双向隔离**门禁(ADR-0024)。
-# ★ 它守的是"三方代码与 brickOS 代码必须隔离"这条政策 —— 在此之前它**只写在文档里**。
-#   四条机械判据: ① 每个三方插件都有 src/(上游派生)+ adapter/(本项目适配);
-#   ② src/ 不许直接 include <br/...>(运行环境只能经 adapter/ 的适配头取);
-#   ③ third_party/ 之外不许 include 三方件的头(框架/平台不得反向依赖);
-#   ④ src/ 每个文件都带 SPDX-License-Identifier(署名回归的判据)。
+# check-third-party-pristine: third_party 是**只读 vendor 树**的门禁(ADR-0025)。
+# ★ 它守的是"三方代码与 brickOS 代码必须隔离"这条政策, 且把它做**可机械判定**:
+#   ① 锁元数据齐; ② vendor 树**逐字节等于锁里的 sha256**(任一字节被改 ⇒ 红);
+#   ③ 锁里每条都在磁盘上(丢了也红); ④ vendor 树里没有锁外的文件(塞东西也红);
+#   ⑤ third_party/ 下没有 plugin.toml; ⑥ 无人 include 三方件的头(vendor 只是参照物,
+#   不参与编译 —— 参与编译的是 adapter/ 里的移植件)。
+#   ★ 为什么必须有这条: 上一轮反复犯的正是"顺手改一行三方件让它编过"(加注释/SPDX、
+#     改 include、删裁剪)。纪律写在文档里拦不住, 写成 hash 锁才拦得住。
 [[script]]
-name = "check-third-party-isolation"
-argv = ["bash", "tools/check-third-party-isolation.sh"]
-require = ["PASS: 第三方模块双向隔离"]
+name = "check-third-party-pristine"
+argv = ["bash", "tools/check-third-party-pristine.sh"]
+require = ["PASS: third_party 只读 vendor 树"]
 
 [[script]]
 name = "check-build"
@@ -457,7 +459,7 @@ require   = [
   "\\[DEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[CDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   # ★ ADR-0021: 块设备子分类框架(bdev-core)。与 CDEVCONF 并列的存储域第二条设备链;
-  #   驱动接入(third_party/uboot-mmc)后其端到端套件另开门禁。
+  #   驱动接入(adapter/uboot-mmc)后其端到端套件另开门禁。
   "\\[BDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[IOCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -525,7 +527,7 @@ require_tags = [
   "TC-EMMC-005", "TC-EMMC-006", "TC-EMMC-007", "TC-EMMC-008",
 ]
 
-# fat-test: **第三方 FAT 移植件**(third_party/uboot-fat)的端到端门禁(ADR-0022)。
+# fat-test: **第三方 FAT 移植件**(adapter/uboot-fat)的端到端门禁(ADR-0022)。
 # 判据 = 三卷都挂上 + `[FATCONF]` 摘要全绿 + 8 条用例逐条点名。
 # 它证明的是"真介质上的真 FAT 卷": 卷由宿主用 mkfs.fat + mcopy 造(外部权威工具),
 # 驱动读出来的字节要能逐字节对上宿主放进去的内容 —— 自研 mkfs 与自研 reader 互为镜像
@@ -556,7 +558,7 @@ require_tags = [
   "TC-FAT-005", "TC-FAT-006", "TC-FAT-007", "TC-FAT-008",
 ]
 
-# erofs-test: **第三方 EROFS 移植件**(third_party/uboot-erofs)的端到端门禁(ADR-0022)。
+# erofs-test: **第三方 EROFS 移植件**(adapter/uboot-erofs)的端到端门禁(ADR-0022)。
 # 判据 = /assets 挂上 + `[EROFCONF]` 摘要全绿 + 8 条用例逐条点名。
 # 它证明两条读路径都真的能读**外部工具造出来的**镜像:
 #   未压缩(FLAT_INLINE / FLAT_PLAIN: hello.txt、dir/a.bin、dir/sub/deep.txt)

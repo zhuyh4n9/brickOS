@@ -8,6 +8,8 @@
   (裁定 S-B1: 生成物 make/ninja 要把解析结果烧进去, 所以解析只能在 core);
 * 工具候选序、增量口径、日志红绿判据同样在 core;
 * 本模块只做四件事: **校验可执行**、**并发编排**、**超时/收日志**、**呈现进度**。
+  其中"校验可执行"也包含一条**能力预检**(`check_device_models`): 平台要的设备模型这份 QEMU
+  到底有没有 —— 有已知硬边界的那种(见 `EMMC_MIN_QEMU`), 就在起进程**之前**把话说清楚。
 
 ## 编排口径
 
@@ -22,6 +24,7 @@ QEMU 门禁步骤声明 ``expect_timeout: true``: 镜像本来就跑到被掐 �
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -31,6 +34,17 @@ from pathlib import Path
 
 #: 单个步骤的日志上限(超过就截断, 免得 8 MiB 的日志进 JSON 信封)。
 MAX_LOG_BYTES = 4 * 1024 * 1024
+
+#: `-device emmc`(eMMC 卡模型)可用的**最低** QEMU。为什么是 10.2 而不是 9.1:
+#: 卡模型 9.1 就进了 QEMU, 但当时 `emmc_class_init()` 里写着 `dc->user_creatable = false`
+#: (注释 "Reason: Soldered on board"), 于是 `-device emmc` 被判成"不可插拔的设备类型";
+#: 那一行直到 **10.2.0** 才删掉。旧版给的现象是一句
+#: `'emmc' is not a valid device model name`(既不提版本, 也不给修法)。
+EMMC_MIN_QEMU = (10, 2)
+
+#: `路径 → (major, minor)`。一次命令面里会有十几个 QEMU 门禁步骤, 而"这份二进制是什么版本"
+#: 一次运行内不会变 —— 别为了同一句话 fork 十几次 `--version`。
+_QEMU_VERSION_CACHE: dict[str, tuple[int, int] | None] = {}
 
 
 class StepError(RuntimeError):
@@ -86,6 +100,67 @@ def resolve_exe(root: Path, exe: str, what: str, code: str | None) -> str:
     raise StepError(f"{what}: PATH 上找不到可执行文件 `{exe}`", code)
 
 
+def _device_drivers(argv: list[str]) -> list[str]:
+    """取 ``-device <driver>[,prop=…]`` 里的 driver(只看紧跟在 ``-device`` 后面的那一个)。
+
+    刻意只认**成对**的形态: 免得把别的参数里恰好出现的 `emmc` 字样当成设备模型。
+    """
+    drivers: list[str] = []
+    for i, arg in enumerate(argv):
+        if arg == "-device" and i + 1 < len(argv):
+            drivers.append(argv[i + 1].split(",", 1)[0])
+    return drivers
+
+
+def _qemu_version(exe: str) -> tuple[int, int] | None:
+    """问出 ``(major, minor)``; 问不出来(不是 QEMU / 不认 ``--version``)返回 ``None``。"""
+    if exe in _QEMU_VERSION_CACHE:
+        return _QEMU_VERSION_CACHE[exe]
+    version: tuple[int, int] | None = None
+    try:
+        proc = subprocess.run(
+            [exe, "--version"],
+            text=True,
+            capture_output=True,
+            timeout=10,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
+    else:
+        match = re.search(r"version (\d+)\.(\d+)", proc.stdout or "")
+        if match:
+            version = (int(match.group(1)), int(match.group(2)))
+    _QEMU_VERSION_CACHE[exe] = version
+    return version
+
+
+def check_device_models(exe: str, argv: list[str], label: str, code: str | None) -> None:
+    """起进程**之前**的能力预检: 平台点名的设备模型, 这份 QEMU 有没有。
+
+    目前只有一条已知硬边界 —— 要 `-device emmc` 就必须 QEMU >= 10.2(`EMMC_MIN_QEMU`)。
+    问不出版本(不是 QEMU / 不认识 `--version`)就**不拦**: 预检只在"确定太旧"时说话,
+    剩下的交给真执行去报(预检不该变成第二个判定源)。
+    """
+    if "emmc" not in _device_drivers(argv):
+        return
+    got = _qemu_version(exe)
+    if got is None or got >= EMMC_MIN_QEMU:
+        return
+    want = f"{EMMC_MIN_QEMU[0]}.{EMMC_MIN_QEMU[1]}"
+    raise StepError(
+        f"{label}: 这份 QEMU 太旧({got[0]}.{got[1]}), 它没有可插拔的 `-device emmc`\n"
+        f"  二进制: {exe}\n"
+        f"  需要: QEMU >= {want} —— eMMC 卡模型 9.1 就进了 QEMU, 但那时\n"
+        f"        `emmc_class_init()` 里写着 `dc->user_creatable = false`, 10.2 才删掉;\n"
+        f"        旧版只会吐一句 \"'emmc' is not a valid device model name\"。\n"
+        f"  修法: bash tools/fetch-qemu.sh"
+        f"(就地解包 10.2.1 到 prebuilts/toolchain/, 无需 root),\n"
+        f"        或把 [build.target.qemu].binary 指到一份 >= {want} 的 qemu-system-aarch64",
+        code,
+    )
+
+
 def _exec_one(
     root: Path,
     step: dict,
@@ -115,6 +190,8 @@ def _exec_one(
     exe = resolve_exe(root, argv[0], label, step.get("tool_code"))
     argv = [exe] + argv[1:]
     result.argv = argv
+    # 设备模型的能力预检(见 EMMC_MIN_QEMU): 失败是**环境错**, 不是判定。
+    check_device_models(exe, argv, label, step.get("tool_code"))
 
     # 产物目录的父目录要自己建: 编译器不会替我们建(第一次编一个新目录时踩到过)。
     # 这是**编排**而不是判定 —— core 只声明"这个步骤写出哪些文件"。
