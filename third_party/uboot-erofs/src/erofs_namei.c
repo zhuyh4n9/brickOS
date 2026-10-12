@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * third_party/uboot-erofs — inode 解析与路径走查(移植自 u-boot `fs/erofs/namei.c`, GPL-2.0+)
  *

@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * third_party/uboot-fat — 插件内部契约(**唯一**声明处; 不导出)
  *
@@ -35,9 +36,7 @@
 #ifndef BR_THIRD_PARTY_UBOOT_FAT_INTERNAL_H
 #define BR_THIRD_PARTY_UBOOT_FAT_INTERNAL_H
 
-#include <br/dev/br_bdev.h>
-#include <br/vfs/br_vfs.h>
-
+/* ★ 不直接 include `<br/...>`: 运行环境(bdev 与 VFS 契约)由适配层入口兑现。 */
 #include "fat_compat.h"
 
 /* ==================================================================== 卷事实(编译期常量) */

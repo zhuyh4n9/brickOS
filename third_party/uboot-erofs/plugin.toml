@@ -74,7 +74,13 @@ kind  = "init"
 cases = 8
 
 [build]
-# ★ 无 `includes`: 本件不抛对外头(不导出 API; 消费面是 vfs/bdev 的 native 面)。
-#   内部契约(`erofs_internal.h` / `erofs_compat.h` / `erofs_fs.h`)放 `src/`,
-#   不构成插件对外面。
-sources  = ["src/*.c"]
+# ★ 两个源目录, 分工是**硬边界**(见 adapter/README.md):
+#     src/      上游 u-boot `fs/erofs/**` + `lib/lz4.c` 的派生件(**只**放有上游对应物的文件);
+#     adapter/  brickOS 侧适配层: 兼容层(`erofs_compat.h`)、块层 shim 与 VFS 对接
+#               (`erofs_vfs.c`)、一致性用例(`erofs_selftest.c`)。
+#   依赖方向单向: `src/` 只用 `adapter/` 兑现的那几个符号, 反向不许。
+# ★ `includes` 是给**同一插件内**两个目录互相找头用的(`src/erofs_internal.h`
+#   include `adapter/erofs_compat.h`, `adapter/*.c` include `src/erofs_internal.h`)。
+#   本件没有 `include/`, 所以不抛对外头(消费面仍是 vfs/bdev 的 native 面)。
+sources  = ["src/*.c", "adapter/*.c"]
+includes = ["src", "adapter"]

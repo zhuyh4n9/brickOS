@@ -45,6 +45,10 @@
 #include <br/core/br_log.h>
 #include <br/core/br_mem.h>
 #include <br/core/br_types.h>
+/* 块设备与 VFS 契约: 上游从 `part.h`/`blk.h` 拿, 本件从这两件拿。**只有本头**
+ * (适配层入口)可以 include `<br/...>` —— `src/` 下的上游派生件一律经本头取环境。 */
+#include <br/dev/br_bdev.h>
+#include <br/vfs/br_vfs.h>
 
 /* ==================================================================== 小端前提 */
 /* 上游的 `FAT2CPU16/32`、`le16_to_cpu()` 在本件里是**恒等**函数 —— 只有当目标真的小端时

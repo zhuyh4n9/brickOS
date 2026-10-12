@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * third_party/uboot-erofs — 压缩映射迭代(移植自 u-boot `fs/erofs/zmap.c`, GPL-2.0+)
  *
@@ -179,14 +180,19 @@ static int z_erofs_reload_indexes(struct z_erofs_maprecorder *m,
                                   erofs_blk_t eblk)
 {
     int ret;
-    struct erofs_map_blocks *const map = m->map;
 
     /* ★ 偏离 1: 两个条件缺一不可 —— "这块已经读过" **且** "scratch 里还是它"。 */
     if (s_z_scratch_valid && (m->index == eblk)) {
         return 0;
     }
 
-    ret = erofs_blk_read(map->mpage, eblk, 1);
+    /* ★ 偏离 1 的**唯一读点**: 索引块必须读进 `uboot_erofs_scratch()` —— 两个解析器
+     *   (`legacy_load_cluster_from_disk` / `compact_load_cluster_from_disk`)都从
+     *   scratch 取字节。上游这里是 `map->mpage`, 本件把 mpage 让给了共享 scratch,
+     *   所以读点与解析点必须同一个缓冲: 读进 `map->mpage` 而解析 scratch ⇒ 解析到
+     *   的是上一块残留(压缩镜像走这条路)。
+     *   (`struct erofs_map_blocks.mpage` 因此在本件里没有读者, 见 erofs_internal.h。) */
+    ret = erofs_blk_read(uboot_erofs_scratch(), eblk, 1);
     if (ret < 0) {
         return BR_ERR(BR_EIO);
     }

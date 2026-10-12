@@ -13,24 +13,24 @@
 emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 third_party/uboot-mmc 注册)
         │  br_bdev_get("emmc3") + geometry() → {512 B 扇区, n_sectors, max_rw=64}
         ▼
-  src/erofs_super.c   偏移 1024 处找 magic 0xE0F5E1E2 → blkszbits/meta_blkaddr/root_nid
+  src/erofs_super.c       偏移 1024 处找 magic 0xE0F5E1E2 → blkszbits/meta_blkaddr/root_nid
         ▼
-  src/erofs_vfs.c §①  块层 shim: 字节偏移 → 扇区; 单次 ≤ max_rw(逐扇区, 整扇区中转)
+  adapter/erofs_vfs.c §①  块层 shim: 字节偏移 → 扇区; 单次 ≤ max_rw(逐扇区, 整扇区中转)
         ▼
-  src/erofs_namei.c   inode 解析(32 B COMPACT / 64 B EXTENDED)+ 目录块内名字查找
-  src/erofs_data.c    平面/stub 映射 + chunk 映射 + 读路径(erofs_pread)
-  src/erofs_zmap.c    压缩映射迭代(4B/2B 紧凑索引、big pcluster、lookbehind)
+  src/erofs_namei.c       inode 解析(32 B COMPACT / 64 B EXTENDED)+ 目录块内名字查找
+  src/erofs_data.c        平面/stub 映射 + chunk 映射 + 读路径(erofs_pread)
+  src/erofs_zmap.c        压缩映射迭代(4B/2B 紧凑索引、big pcluster、lookbehind)
   src/erofs_decompress.c  INTERLACED / SHIFTED / **LZ4**(自带解码器)
         ▼
-  src/erofs_vfs.c §②  br_fs_ops.mount → 根 inode; lookup → 瞬态路径包装; read → erofs_pread
+  adapter/erofs_vfs.c §②  br_fs_ops.mount → 根 inode; lookup → 瞬态路径包装; read → erofs_pread
         ▼
   framework/vfs-core  /assets/hello.txt 等路径对 APP 可见
 ```
 
 **分层依据**是上游的文件边界: `super/namei/data/zmap/decompress` 各一件(逐字对应
-上游同名文件), `fs.c` 对应 `erofs_vfs.c`(它在本项目里有两位读者 —— 块设备与 VFS,
-于是分两节: 块层 shim 与四层 ops)。`erofs_compat.h` / `erofs_internal.h` / `erofs_fs.h`
-是上游 `internal.h` + `erofs_fs.h` 的对应物(兼容层 / 内部契约 / on-disk 真值)。
+上游同名文件), `fs.c` 对应 `adapter/erofs_vfs.c`(它在本项目里有两位读者 —— 块设备与 VFS,
+于是分两节: 块层 shim 与四层 ops)。`adapter/erofs_compat.h` / `src/erofs_internal.h` /
+`src/erofs_fs.h` 是上游 `internal.h` + `erofs_fs.h` 的对应物(兼容层 / 内部契约 / on-disk 真值)。
 
 ## 2. 卷与接口(私有契约, 不导出)
 
@@ -48,7 +48,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 third_party/uboot-mmc �
 
 | # | 偏离 | 为什么 |
 |---|---|---|
-| 1 | 兼容层自持(`erofs_compat.h`), 无 libc / 无 u-boot | 裸机 unikernel |
+| 1 | 兼容层自持(`adapter/erofs_compat.h`), 无 libc / 无 u-boot | 裸机 unikernel |
 | 2 | `IS_ENABLED(CONFIG_*)` 拆掉, 改运行期算法分派 | 任务书硬约束; 也让"镜像用了哪种算法"变成运行期事实 |
 | 3 | 4 KiB 缓冲与 `struct erofs_map_blocks` 提到**文件域静态** | 内核对 APP 线程的栈是 4 KiB 量级; 上游那几处一放就把栈用光 |
 | 4 | 索引块缓存的判据从 `map->index` 改挂到 `z_erofs_maprecorder.index` + 一个"scratch 有效"标志 | 上游的缓存靠"每次构造新 map"成立; 缓冲变静态后必须显式失效 |
@@ -73,7 +73,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 third_party/uboot-mmc �
   (返回 inode 指针), 所以 FS 侧只能 `BR_NULL`。
 - 同理, `path[UBOOT_EROFS_REL_PATH_MAX]`(256 B)放不下的相对路径也返回 `BR_NULL`。
 
-## 5. 一致性用例(`TC-EROFS-*`, `src/erofs_selftest.c`)
+## 5. 一致性用例(`TC-EROFS-*`, `adapter/erofs_selftest.c`)
 
 8 条, 判据都经**公开面**(`br_stat`/`br_open`/`br_file_read`/`br_file_lseek`/`br_opendir`/
 `br_readdir`/`br_unlink`/`br_mkdir`)或**盘上事实**(直接读偏移 1024 的 magic)。
@@ -105,8 +105,26 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 third_party/uboot-mmc �
 | `framework/bdev-core` | init | `br_bdev_get("emmc3")` 取块设备 |
 | `third_party/uboot-mmc` | init | 它注册 `emmc3`; 这条**init 边**保证拓扑序在本插件之前 |
 
-`src/*.c` 七件: `erofs_super.c` / `erofs_namei.c` / `erofs_data.c` / `erofs_zmap.c` /
-`erofs_decompress.c` / `erofs_vfs.c`(块层 shim + VFS 对接) / `erofs_selftest.c`。
+`src/*.c` 五件(上游派生): `erofs_super.c` / `erofs_namei.c` / `erofs_data.c` /
+`erofs_zmap.c` / `erofs_decompress.c`; `adapter/*.c` 两件(本项目): `erofs_vfs.c`
+(块层 shim + VFS 对接) / `erofs_selftest.c`, 另有 `adapter/erofs_compat.h`(唯一的运行环境入口)。
+
+## 6.1 `src/` 与 `adapter/` 的拆分(单向依赖)
+
+GPL 边界靠**依赖方向**而非目录名维持:
+
+- `src/`(**上游派生**, GPL-2.0+): `erofs_super.c` / `erofs_namei.c` / `erofs_data.c` /
+  `erofs_zmap.c` / `erofs_decompress.c` / `erofs_fs.h` / `erofs_internal.h` —— 逐字对应
+  u-boot `fs/erofs/**` + `lib/lz4.c`, 不含任何 `#include <br/...>`;
+- `adapter/`(**本项目**): `erofs_compat.h`(运行环境的**唯一**入口)、`erofs_vfs.c`
+  (块层 shim + 四层 ops)、`erofs_selftest.c`(TC-EROFS-*)。
+
+依赖**单向** `src/` → `adapter/`: `src/erofs_internal.h` include `adapter/erofs_compat.h`
+取运行环境; `adapter/*.c` 反过来 include `src/erofs_internal.h` 是允许的(适配层当然要认识
+被适配的代码)。[plugin.toml](plugin.toml) 据此收 `sources = ["src/*.c", "adapter/*.c"]` /
+`includes = ["src", "adapter"]`, 门禁 `tools/check-third-party-isolation.sh`
+(见 `tests/gates.toml`)机械地守住这条边界。完整理由与逐文件归属见
+[`adapter/README.md`](adapter/README.md)。
 
 ## 7. 门禁契约(改日志措辞前先看这里)
 

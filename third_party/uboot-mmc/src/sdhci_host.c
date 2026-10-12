@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * third_party/uboot-mmc — 通用 SDHCI 主机驱动(移植自 u-boot `drivers/mmc/sdhci.c`
  * + `sdhci-adma.c` + `include/sdhci.h`)
@@ -20,14 +21,7 @@
  *     共享的只有那张只读的 ops 表。
  *   - 裁掉: DM/DT(gpio/regulator/clk)/UHS 电压与 tuning/SDMA/64 位 ADMA/quirks(按本平台固定选择)。
  */
-#include <br/core/br_error.h>
-#include <br/core/br_irq.h>
-#include <br/core/br_log.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_mm.h>
-#include <br/core/br_sync.h>
-#include <br/core/br_time.h>
-#include <br/core/br_types.h>
+#include "mmc_compat.h"   /* 适配层: u-boot 运行环境 → brickOS(唯一入口) */
 
 #include "emmc_internal.h"
 

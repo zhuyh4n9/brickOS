@@ -12,6 +12,9 @@ third_party/uboot-erofs — 第三方来源与许可说明
 
 逐文件对照(源 → 本目录)
 ------------------------
+★ 本目录分两侧(见 `adapter/README.md`): `src/` = 上游派生件; `adapter/` = 本项目写的
+  适配层(无上游对应物)。下表逐条标明归属, 免得把两侧混为一谈。
+
   fs/erofs/super.c        (108 行, GPL-2.0+)
       → src/erofs_super.c       超级块解析 / 特性位校验 / 布局兼容性
   fs/erofs/namei.c        (266 行, GPL-2.0+)
@@ -27,7 +30,7 @@ third_party/uboot-erofs — 第三方来源与许可说明
   fs/erofs/erofs_fs.h     (466 行, **GPL-2.0-only OR Apache-2.0**)
       → src/erofs_fs.h          on-disk 格式(改名/裁剪后保留; SPDX 与版权行原样保留)
   fs/erofs/fs.c           (273 行, GPL-2.0+)
-      → src/erofs_vfs.c         ①块层 shim(u-boot 的 blk_desc/fs_devread → br_bdev_ops)
+      → adapter/erofs_vfs.c     ①块层 shim(u-boot 的 blk_desc/fs_devread → br_bdev_ops)
                                 ②VFS 对接(四层 ops)+ 生命周期钩子
                                 (上游 fs.c 的两半在本项目里都归"与外界对接", 合为一件)
   lib/lz4.c               (546 行, **GPL 2.0+ OR BSD-2-Clause**, Copyright 2011-2016 Yann Collet)
@@ -51,11 +54,11 @@ third_party/uboot-erofs — 第三方来源与许可说明
   其余 u-boot 依赖                : `linux/compat.h`、`linux/{stat,bug,err,printk,log2}.h`、
                                     `<asm/unaligned.h>`、`<inttypes.h>`、u-boot 的
                                     `blk-uclass`/`fs_internal.h`/DM —— 全部换成
-                                    `src/erofs_compat.h` 的最小接地。
+                                    `adapter/erofs_compat.h` 的最小接地。
 
 改写要点(相对上游的**有意偏离**)
 --------------------------------
-  1. **没有 libc / 没有 u-boot**: 类型与工具宏在 `src/erofs_compat.h` 里接地;
+  1. **没有 libc / 没有 u-boot**: 类型与工具宏在 `adapter/erofs_compat.h` 里接地;
      `malloc/calloc/realloc/free` → `br_malloc/br_calloc/br_realloc/br_free`;
      `printf/pr_err/pr_info/pr_debug` → `br_log_error/info/debug`;
      `strlen/strcmp/strnlen/strchr` 自己写(`static inline` + `uboot_erofs_` 前缀, 再用宏
@@ -93,6 +96,11 @@ third_party/uboot-erofs — 第三方来源与许可说明
     - `lib/lz4.c`           : **GPL 2.0+ OR BSD-2-Clause**
                               (Copyright (C) 2011-2016, Yann Collet; BSD 全文随源码保留)
   本移植件统一以 **GPL-2.0-or-later** 分发(全文见同目录 `LICENSE.GPL-2.0`)。
+  ★ `src/` 下每个文件都带与对应上游文件一致的 SPDX 标识(ADR-0024 D-4; 判据 =
+  `tools/check-third-party-isolation.sh`)。
+  ★ `src/erofs_decompress.c` 是**两个上游文件的合并**(`fs/erofs/decompress.c` +
+  `lib/lz4.c`), 两者许可不同 ⇒ 用 REUSE 口径的**段标识**: 文件头 `GPL-2.0+`,
+  LZ4 段之前另挂 `GPL 2.0+ OR BSD-2-Clause`(BSD 全文本来就在该段内)。
   本目录与 `third_party/uboot-mmc` 是整个 brickOS 原型树内的 GPL 代码;
   `framework/**`、`platform/**` 等保持 WTFPL。残余风险(静态链接后整镜像构成 GPL
   组合作品)登记在 `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。

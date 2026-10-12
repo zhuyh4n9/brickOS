@@ -78,6 +78,13 @@ kind  = "type"
 cases = 8
 
 [build]
-# ★ 无 `includes`: 本件不抛对外头(不导出 API; 消费面是 bdev/PCIe 的 native 面)。
-#   内部契约(`emmc_internal.h`/`sdhci_regs.h` 等)放 `src/`, 不构成插件对外面。
-sources  = ["src/*.c"]
+# ★ 两个源目录, 分工是**硬边界**(见 adapter/README.md):
+#     src/      上游 u-boot `drivers/mmc/**` 的派生件(`mmc_core.c`/`sdhci_host.c` +
+#               寄存器摘录 `mmc_regs.h` + 内部契约 `emmc_internal.h`);
+#     adapter/  brickOS 侧适配层: 运行环境契约(`mmc_compat.h`)、bdev/PCIe 对接与
+#               生命周期钩子(`emmc_bdev.c`)、一致性用例(`emmc_selftest.c`)。
+#   依赖方向单向: `src/` 只经 `adapter/mmc_compat.h` 拿运行环境, **不**直接 include
+#   任何 `<br/...>`(判据 = `tools/check-third-party-isolation.sh`)。
+# ★ `includes` 是给同一插件内两个目录互相找头用的; 本件没有 `include/`, 不抛对外头。
+sources  = ["src/*.c", "adapter/*.c"]
+includes = ["src", "adapter"]

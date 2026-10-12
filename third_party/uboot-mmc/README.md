@@ -15,11 +15,11 @@ QEMU virt ── PCIe(GPEX) ── sdhci-pci(1b36:0007) ── emmc(8 MiB raw)
                                    ▼
         framework/pci-core ──枚举/BAR 分配/INTx swizzle──► br_sdhci_probe(base, virq)
                                    ▼
-        src/sdhci_host.c   寄存器/命令/数据(ADMA2 或 PIO)/中断  ◄── platform 的 BH 分发
+        src/sdhci_host.c     寄存器/命令/数据(ADMA2 或 PIO)/中断  ◄── platform 的 BH 分发
                                    ▼   br_mmc_host_ops_t {send_cmd, set_ios}
-        src/mmc_core.c     CMD0/1/2/3/7/8/9/16/17/18/24/25 + EXT_CSD + 块读写
+        src/mmc_core.c       CMD0/1/2/3/7/8/9/16/17/18/24/25 + EXT_CSD + 块读写
                                    ▼
-        src/emmc_bdev.c    实现 br_bdev_ops → br_bdev_register("emmc0")
+        adapter/emmc_bdev.c  实现 br_bdev_ops → br_bdev_register("emmc0")
                                    ▼
         framework/bdev-core → dev-core → /dev/emmc0(看得见、打不开: raw 面属 v2)
 ```
@@ -63,7 +63,7 @@ QEMU virt ── PCIe(GPEX) ── sdhci-pci(1b36:0007) ── emmc(8 MiB raw)
 | ioctl | `BR_EMMC_IOC_GET_INFO`(`BR_IOR('e',0,br_emmc_info_t)`)、`BR_EMMC_IOC_SET_PATH`(`BR_IOW('e',1,br_u32)`) |
 | 总线 | 1-bit @400 kHz 识别 → 4-bit → HS 52 MHz(卡声明支持时) |
 
-## 5. 一致性用例(`TC-EMMC-*`,`src/emmc_selftest.c`)
+## 5. 一致性用例(`TC-EMMC-*`,`adapter/emmc_selftest.c`)
 
 只经公开面(`br_bdev_get` + `br_dev_*` + ioctl)驱动, 且**一律先写后读**
 (门禁镜像跨次运行持久, 不能假设任何扇区的内容):
@@ -90,7 +90,23 @@ QEMU virt ── PCIe(GPEX) ── sdhci-pci(1b36:0007) ── emmc(8 MiB raw)
 | `framework/pci-core` | init | 取 sdhci-pci 的 BAR0 与 INTx virq |
 | `framework/dev-core` / `framework/vfs-core` | type | ioctl 编码宏 / `br_dev.h` 的类型引用 |
 
-`src/*.c` 四件: `mmc_core.c` / `sdhci_host.c` / `emmc_bdev.c` / `emmc_selftest.c`。
+`src/*.c` 两件(上游派生): `mmc_core.c` / `sdhci_host.c`; `adapter/*.c` 两件(本项目):
+`emmc_bdev.c` / `emmc_selftest.c`, 另有 `adapter/mmc_compat.h`(唯一的运行环境入口)。
+
+## 6.1 `src/` 与 `adapter/` 的拆分(单向依赖)
+
+GPL 边界靠**依赖方向**而非目录名维持:
+
+- `src/`(**上游派生**, GPL-2.0+): `mmc_core.c` / `sdhci_host.c` / `mmc_regs.h` /
+  `emmc_internal.h` —— 逐字对应 u-boot `drivers/mmc/**`, 不含任何 `#include <br/...>`;
+- `adapter/`(**本项目**): `mmc_compat.h`(**唯一**提供 br_types/br_log/br_time/br_irq/
+  br_mem/br_mm/br_sync 的地方)、`emmc_bdev.c`、`emmc_selftest.c`。
+
+依赖**单向** `src/` → `adapter/`: `src/` 只经 `mmc_compat.h` 取运行环境; `adapter/` 反过来
+include `src/` 的头是允许的(适配层当然要认识被适配的代码)。[plugin.toml](plugin.toml) 据此收
+`sources = ["src/*.c", "adapter/*.c"]` / `includes = ["src", "adapter"]`, 门禁
+`tools/check-third-party-isolation.sh`(见 `tests/gates.toml`)机械地守住这条边界。
+完整理由与逐文件归属见 [`adapter/README.md`](adapter/README.md)。
 
 ## 7. 移植过程中踩到并修掉的平台缺陷
 

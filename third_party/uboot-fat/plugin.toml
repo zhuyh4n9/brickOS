@@ -58,4 +58,11 @@ kind  = "init"
 cases = 8
 
 [build]
-sources  = ["src/*.c"]
+# ★ 两个源目录, 分工是**硬边界**(见 adapter/README.md):
+#     src/      上游 u-boot `fs/fat/**` 的派生件(`fat_core.c`/`fat_write.c` + 内部契约
+#               `fat_internal.h`);
+#     adapter/  brickOS 侧适配层: 兼容层(`fat_compat.h`)、VFS 对接(`fat_vfs.c`)、
+#               一致性用例(`fat_selftest.c`)。
+#   依赖方向单向: `src/` 只用 `adapter/` 兑现的符号, 反向不许。
+sources  = ["src/*.c", "adapter/*.c"]
+includes = ["src", "adapter"]

@@ -309,6 +309,17 @@ require = ["ok   errno 表"]
 name = "check-workarounds"
 argv = ["bash", "tools/check-workarounds.sh"]
 
+# check-third-party-isolation: 第三方模块**双向隔离**门禁(ADR-0024)。
+# ★ 它守的是"三方代码与 brickOS 代码必须隔离"这条政策 —— 在此之前它**只写在文档里**。
+#   四条机械判据: ① 每个三方插件都有 src/(上游派生)+ adapter/(本项目适配);
+#   ② src/ 不许直接 include <br/...>(运行环境只能经 adapter/ 的适配头取);
+#   ③ third_party/ 之外不许 include 三方件的头(框架/平台不得反向依赖);
+#   ④ src/ 每个文件都带 SPDX-License-Identifier(署名回归的判据)。
+[[script]]
+name = "check-third-party-isolation"
+argv = ["bash", "tools/check-third-party-isolation.sh"]
+require = ["PASS: 第三方模块双向隔离"]
+
 [[script]]
 name = "check-build"
 argv = ["bash", "tools/check-build.sh"]

@@ -11,6 +11,9 @@ third_party/uboot-fat — 第三方来源与许可说明
 
 逐文件对照(源 → 本目录)
 ------------------------
+★ 本目录分两侧(见 `adapter/README.md`): `src/` = 上游派生件; `adapter/` = 本项目写的
+  适配层(无上游对应物)。下表逐条标明归属, 免得把两侧混为一谈。
+
   fs/fat/fat.c         (1448 行, GPL-2.0+, Copyright 2002 Marcus Sundberg /
                         rjones@nexus-tech.net / kharris@nexus-tech.net)
       → src/fat_core.c  读路径整段: 卷识别(引导扇区/BPB/FAT 类型判定)、FAT 表读取、
@@ -22,15 +25,15 @@ third_party/uboot-fat — 第三方来源与许可说明
                         set_contents、unlink/mkdir/rename; **外加** uboot_fat_truncate()
                         (上游没有这个函数 —— 本件用上游的同一套原语拼出来的)
   include/fat.h        (GPL-2.0+)
-      → src/fat_compat.h 盘上结构(boot_sector/volume_info/dir_entry/dir_slot/nameext/
+      → adapter/fat_compat.h 盘上结构(boot_sector/volume_info/dir_entry/dir_slot/nameext/
                          fsdata)+ 属性位 + FAT 判据宏,FATBUF* 上界;**数值逐字对齐**
   include/fs.h         (GPL-2.0+)
   fs/fat/fat_write.c   (fat_dir 类型)
       → src/fat_internal.h 目录流(fat_dir)与迭代器(fat_itr)的内部形态;
                             `struct fs_dirent` 与本项目的 `br_dirent_t` 的对接说明
   (无上游对应)
-      → src/fat_vfs.c    VFS 契约对接(br_fs_ops/br_inode_ops/br_file_ops)+ 生命周期钩子
-      → src/fat_selftest.c  TC-FAT-001..008
+      → adapter/fat_vfs.c    VFS 契约对接(br_fs_ops/br_inode_ops/br_file_ops)+ 生命周期钩子
+      → adapter/fat_selftest.c  TC-FAT-001..008
 
 未移植清单(明确**不**做的)
 --------------------------
@@ -109,6 +112,8 @@ third_party/uboot-fat — 第三方来源与许可说明
 ----
   上游文件均标 `SPDX-License-Identifier: GPL-2.0+`(即 GPL-2.0 或更新版本)。
   本移植件同样以 **GPL-2.0-or-later** 分发, 全文见同目录 `LICENSE.GPL-2.0`。
+  ★ `src/` 下每个文件都带与对应上游文件一致的 SPDX 标识(ADR-0024 D-4; 判据 =
+  `tools/check-third-party-isolation.sh`)。上游每个文件都有, 派生件丢了它就是署名回归。
   ⚠ 本目录与 `third_party/uboot-mmc`、`third_party/uboot-erofs` 一样, 是 brickOS 原型树内
   的 GPL 代码区; `framework/**`、`core/**`、`platform/**` 保持 WTFPL。残余风险(静态链接后
   整镜像构成 GPL 组合作品)登记在 `../../WORKAROUNDS.md` 的 `br-wa-tp-001`。

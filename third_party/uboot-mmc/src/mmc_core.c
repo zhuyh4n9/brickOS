@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * third_party/uboot-mmc — MMC 协议核心(移植自 u-boot `drivers/mmc/mmc.c`)
  *
@@ -10,10 +11,7 @@
  * 对照位置(便于回溯): mmc_go_idle / mmc_send_op_cond(_iter) / mmc_send_ext_csd /
  * __mmc_switch / mmc_set_card_speed / mmc_read_blocks / mmc_bread / mmc_set_blocklen。
  */
-#include <br/core/br_error.h>
-#include <br/core/br_log.h>
-#include <br/core/br_time.h>
-#include <br/core/br_types.h>
+#include "mmc_compat.h"   /* 适配层: u-boot 运行环境 → brickOS(唯一入口) */
 
 #include "emmc_internal.h"
 

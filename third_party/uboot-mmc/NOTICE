@@ -11,17 +11,30 @@ third_party/uboot-mmc — 第三方来源与许可说明
 
 逐文件对照(源 → 本目录)
 ------------------------
+★ 本目录分两侧(见 `adapter/README.md`): `src/` = 上游派生件; `adapter/` = 本项目写的
+  适配层(无上游对应物)。下表**逐条标明归属**, 免得把两侧混为一谈。
+
   drivers/mmc/mmc.c          (3352 行, GPL-2.0+, Copyright 2008 Freescale / 2020 NXP / Andy Fleming)
       → src/mmc_core.c       协议核心: CMD0/1/2/3/7/8/9/12/13/16/17/18/24/25、EXT_CSD、块读写
+  drivers/mmc/mmc_write.c    (254 行, GPL-2.0+)
+      → src/mmc_core.c       写路径(`mmc_write_blocks`/`mmc_bwrite`)—— ★ 先前漏列, ADR-0024 §2 补
   drivers/mmc/sdhci.c        (1050 行, GPL-2.0+, Copyright 2011 Marvell)
       → src/sdhci_host.c     SDHCI 寄存器/命令/数据传输/时钟/复位/上电
   drivers/mmc/sdhci-adma.c   (87 行, GPL-2.0+)
       → src/sdhci_host.c     的 ADMA2 描述符构造(sdhci_prepare_adma)
   include/mmc.h              (1093 行, GPL-2.0+)
+      → src/mmc_regs.h       命令码/响应位/OCR/EXT_CSD 偏移(摘录子集)
+      → src/emmc_internal.h  `struct mmc_cmd`/`struct mmc_data` 的对应物
+                             (`br_mmc_cmd_t`/`br_mmc_data_t`)—— ★ 先前误记为出自 mmc_private.h
   include/sdhci.h            (546 行, GPL-2.0+)
-      → src/mmc_regs.h       命令码/响应位/OCR/EXT_CSD 偏移/SDHCI 寄存器/中断位(摘录子集)
+      → src/mmc_regs.h       SDHCI 寄存器/中断位(摘录子集)
   drivers/mmc/mmc_private.h  (135 行, GPL-2.0+)
-      → src/emmc_internal.h  内部原型(改写)
+      → src/emmc_internal.h  内部原型(改写; ★ 该上游文件**只有原型**, 不含结构体)
+
+  ---- 以下**无**上游对应物, 纯本项目代码(故归 `adapter/`) ----
+  adapter/mmc_compat.h       适配层入口头: u-boot 运行环境 → brickOS 的唯一落点
+  adapter/emmc_bdev.c        bdev 对接 + PCIe 枚举 + 生命周期钩子
+  adapter/emmc_selftest.c    TC-EMMC-*(经 bdev API 的端到端)
 
 **未移植**: `drivers/mmc/mmc-uclass.c`(u-boot DM/uclass/blk 粘合层)、
 `drivers/mmc/fsl_esdhc*.c`(NXP i.MX 专有主机, 与 QEMU 的通用 `sdhci-pci` 无关)、
@@ -42,6 +55,8 @@ SD/UHS/HS200/HS400/tuning/RPMB/BKOPS/SPI 等分支。
 ----
   上游文件均标 `SPDX-License-Identifier: GPL-2.0+`(即 GPL-2.0 或更新版本)。
   本移植件同样以 **GPL-2.0-or-later** 分发, 全文见同目录 `LICENSE.GPL-2.0`。
+  ★ `src/` 下每个文件都带与对应上游文件一致的 SPDX 标识(ADR-0024 D-4; 判据 =
+  `tools/check-third-party-isolation.sh`)。上游每个文件都有, 派生件丢了它就是署名回归。
   本目录是整个 brickOS 原型树内**唯一**的 GPL 代码; `framework/**`、`platform/**` 等保持
   WTFPL。残余风险(静态链接后整镜像构成 GPL 组合作品)登记在
   `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。

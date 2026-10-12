@@ -16,7 +16,7 @@
                       └───────────────────────────┬────────────────────────────────┘
                                                   │ br_fs_ops / br_inode_ops / br_file_ops
                       ┌───────────────────────────▼────────────────────────────────┐
-                      │ src/fat_vfs.c   瞬态路径包装 inode;目录 read 产出 br_dirent_t │
+                      │ adapter/fat_vfs.c  瞬态路径包装 inode;目录 read br_dirent_t │
                       └───────────────────────────┬────────────────────────────────┘
                                                   │ 路径风格的上游 API(fat_read_file / …)
               ┌───────────────────────────────────┴─────────────────────────────────┐
@@ -141,7 +141,7 @@ struct uboot_fat_ino {          /* 每次 lookup/create 造一个, free_inode �
    覆盖真正的 FAT)。这三条合起来保证"APP 跑完一轮建/写/改名/删之后, 本插件的用例"
    与"同一序列里每一步"看到的是同一份盘上事实。
 
-## 6. 一致性用例(`TC-FAT-*`, [src/fat_selftest.c](src/fat_selftest.c))
+## 6. 一致性用例(`TC-FAT-*`, [adapter/fat_selftest.c](adapter/fat_selftest.c))
 
 | id | 判据 |
 |---|---|
@@ -186,10 +186,27 @@ struct uboot_fat_ino {          /* 每次 lookup/create 造一个, free_inode �
 | `framework/bdev-core` | init | `br_bdev_get` 取三块块设备 |
 | `third_party/uboot-mmc` | init | 三块块设备(emmc0/1/2)由它在自己的 start 相注册 |
 
-`src/*.c` 四件: `fat_core.c` / `fat_write.c` / `fat_vfs.c` / `fat_selftest.c`;
-私有头两件: `fat_compat.h`(u-boot/Linux 式类型与工具宏 + 字符串小工具)、
-`fat_internal.h`(**唯一**的跨文件声明处)。**不导出 API**(没有 `[[export]]`, 也没有
-`[build].includes`)—— 它的消费面就是 VFS 契约本身。
+`src/*.c` 两件(上游派生): `fat_core.c` / `fat_write.c`; `adapter/*.c` 两件(本项目):
+`fat_vfs.c` / `fat_selftest.c`; 私有头两件: `adapter/fat_compat.h`(u-boot/Linux 式类型与
+工具宏 + 字符串小工具)、`src/fat_internal.h`(**唯一**的跨文件声明处)。**不导出 API**
+(没有 `[[export]]`; `[build].includes = ["src", "adapter"]` 只给**同一插件内**两个目录
+互相找头用, 不抛对外头)—— 它的消费面就是 VFS 契约本身。
+
+## 8.1 `src/` 与 `adapter/` 的拆分(单向依赖)
+
+GPL 边界靠**依赖方向**而非目录名维持:
+
+- `src/`(**上游派生**, GPL-2.0+): `fat_core.c` / `fat_write.c` / `fat_internal.h`
+  —— 逐字对应 u-boot `fs/fat/**`, 不含任何 `#include <br/...>`;
+- `adapter/`(**本项目**): `fat_compat.h`(u-boot/Linux 式运行环境的**唯一**入口)、
+  `fat_vfs.c`(四层 VFS ops 对接)、`fat_selftest.c`(TC-FAT-*)。
+
+依赖**单向** `src/` → `adapter/`: `src/` 只经 `fat_compat.h` 取运行环境; `adapter/` 反过来
+include `src/fat_internal.h` 是允许的(适配层当然要认识被适配的代码)。
+[plugin.toml](plugin.toml) 据此收 `sources = ["src/*.c", "adapter/*.c"]` /
+`includes = ["src", "adapter"]`, 门禁 `tools/check-third-party-isolation.sh`
+(见 `tests/gates.toml`)机械地守住这条边界。完整理由与逐文件归属见
+[`adapter/README.md`](adapter/README.md)。
 
 ## 9. 欠债(如实登记)
 > **WORKAROUND(br-wa-emmc-002)**: 本件的**写面端到端用例只在 FAT16 卷上做全**(FAT12/FAT32 只跑了读路径), 且 FAT32 的 FSInfo 空闲簇计数不维护 —— 逐条欠债与退出条件见 `WORKAROUNDS.md`。

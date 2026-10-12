@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * third_party/uboot-mmc — MMC/SD 协议常量与 SDHCI 寄存器(私有)
  *
@@ -10,7 +11,7 @@
 #ifndef BR_THIRD_PARTY_UBOOT_MMC_REGS_H
 #define BR_THIRD_PARTY_UBOOT_MMC_REGS_H
 
-#include <br/core/br_types.h>
+#include "mmc_compat.h"   /* 适配层: u-boot 运行环境 → brickOS(唯一入口) */
 
 /* ==================================================================== MMC 命令 */
 #define MMC_CMD_GO_IDLE_STATE        0u
@@ -69,7 +70,7 @@
 #define EXT_CSD_CARD_TYPE     196u
 #define EXT_CSD_SEC_CNT       212u   /* 4 字节小端: 512 B 扇区数 */
 
-#define EXT_CSD_CMD_SET_NORMAL 0u
+#define EXT_CSD_CMD_SET_NORMAL (1u << 0)   /* 上游 include/mmc.h: (1 << 0) */
 #define EXT_CSD_TIMING_LEGACY  0u
 #define EXT_CSD_TIMING_HS      1u
 #define EXT_CSD_BUS_WIDTH_1    0u    /* 1-bit */

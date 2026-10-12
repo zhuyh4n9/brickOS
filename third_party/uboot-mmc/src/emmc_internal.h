@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * third_party/uboot-mmc — 插件内部契约(不导出)
  *
@@ -10,7 +11,7 @@
 #ifndef BR_THIRD_PARTY_UBOOT_MMC_INTERNAL_H
 #define BR_THIRD_PARTY_UBOOT_MMC_INTERNAL_H
 
-#include <br/core/br_types.h>
+#include "mmc_compat.h"   /* 适配层: u-boot 运行环境 → brickOS(唯一入口) */
 
 #include "mmc_regs.h"
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * third_party/uboot-erofs — 读路径与平面映射(移植自 u-boot `fs/erofs/data.c`, GPL-2.0+)
  *

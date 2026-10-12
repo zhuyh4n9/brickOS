@@ -47,9 +47,7 @@
  */
 #define LOG_CATEGORY LOGC_FS
 
-#include <br/core/br_error.h>
-#include <br/core/br_log.h>
-#include <br/core/br_mem.h>
+#include "fat_compat.h"    /* 适配层: u-boot 运行环境 → brickOS(唯一入口) */
 
 #include "fat_internal.h"
 

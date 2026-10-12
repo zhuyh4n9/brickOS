@@ -48,6 +48,9 @@
 #include <br/core/br_log.h>
 #include <br/core/br_mem.h>
 #include <br/core/br_types.h>
+/* 块设备契约: 上游从 `blk.h` 拿, 本件从这里拿。**只有本头**(适配层入口)可以
+ * include `<br/...>` —— `src/` 下的上游派生件一律经本头取环境。 */
+#include <br/dev/br_bdev.h>
 
 /* 上游代码里混用两套拼写(`u32` 与 `uint32_t` —— 前者来自 u-boot 的 linux/types.h,
  * 后者来自 <stdint.h>`)。裸机不带宿主头, 这里给出**与 br_* 同宽**的别名。 */

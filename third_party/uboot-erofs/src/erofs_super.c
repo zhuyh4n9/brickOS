@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * third_party/uboot-erofs — 超级块(移植自 u-boot `fs/erofs/super.c`, GPL-2.0+)
  *

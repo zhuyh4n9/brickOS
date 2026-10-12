@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0+ */
 /*
  * third_party/uboot-erofs — 插件内部契约(不导出)
  *
@@ -44,8 +45,7 @@
 #ifndef BR_THIRD_PARTY_UBOOT_EROFS_INTERNAL_H
 #define BR_THIRD_PARTY_UBOOT_EROFS_INTERNAL_H
 
-#include <br/dev/br_bdev.h>
-
+/* ★ 不直接 include `<br/...>`: 运行环境(含 `br_bdev_ops_t`)由适配层入口兑现。 */
 #include "erofs_compat.h"
 #include "erofs_fs.h"
 
