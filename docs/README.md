@@ -32,6 +32,7 @@
 | | | [`7-03-concrete-fs.md`](7-storage/7-03-concrete-fs.md) 具体文件系统(tmpfs/devfs/littlefs/EROFS) | 成文 |
 | 8 | **device**(设备域) | [`8-01-device.md`](8-device/8-01-device.md) 设备体系与三种组合形态(形态 A/B/C)/ 子分类 / 驱动契约(SD-2~14) | 成文 |
 | | | [`8-02-netdev-porting-gap.md`](8-device/8-02-netdev-porting-gap.md) **netdev 与网络驱动移植: 差距分析**(O-S5 的前置; 移植边界 = netif) | 分析稿 |
+| | | [`8-03-usb-libusb-porting-gap.md`](8-device/8-03-usb-libusb-porting-gap.md) **USB 主机栈与 libusb 移植: 差距分析**(O-S9 的前置; libusb 不含 HCD/USB 核心, 成本在它下面的栈) | 分析稿 |
 | 9 | **app**(应用) | [`9-01-app.md`](9-app/9-01-app.md) 单 APP 模型/入口/生命周期 | 骨架 |
 | | | [`9-02-hsm-sample.md`](9-app/9-02-hsm-sample.md) **HSM 完整样例**(v1.x/M5, D24–D26: 第二产品域纵向切片 + 域支撑矩阵/资产边界) | 成文 |
 | 10 | **interface management** | [`10-01-interface.md`](10-interface/10-01-interface.md) 接口插件(严格叶子/再导出) | 骨架 |
