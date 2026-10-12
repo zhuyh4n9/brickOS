@@ -14,6 +14,11 @@
 > (基准/复现命令、每个文件的相似度与变更行、差异性质、修掉的缺陷、还没做的)。
 > 本文只留**决策**与结论 —— 两者分开, 免得决策文档被表格淹没。
 
+> ⚠ **结构已被 [ADR-0026](0026-third-party-vendor-and-adapter.md) 取代**(部分):
+> 本文的**隔离判据**仍然有效, 但"把改写过的上游放在插件目录的 `src/`"这套结构不行 ——
+> 那仍然是改上游代码。现在 `third_party/` 只放**逐字节上游原件**(哈希锁),
+> 一切适配在 `adapter/`。本文的逐文件对照报告仍有效(它记录的正是"改写副本改了什么")。
+
 ## 1. 背景: 隔离政策**只写在文档里**
 
 ADR-0021 D-3 起, 三个移植件声明 `api_type = "third_party"`, 政策是"目录级隔离":
@@ -46,7 +51,7 @@ curl -sL -o uboot.tar.gz \
 # ↑ sha256 = 9d060f32c84b15c1ae2e9903c300d51b3088898b3ad80b95bca74c67ef6a4a52 (47 019 609 B)
 tar xzf uboot.tar.gz "$(basename $REF)/{drivers/mmc,include,fs/fat,fs/erofs,lib/lz4.c}"
 # 逐文件对照:
-diff -u "$REF/drivers/mmc/sdhci.c" third_party/uboot-mmc/src/sdhci_host.c | head
+diff -u "$REF/drivers/mmc/sdhci.c" adapter/uboot-mmc/src/sdhci_host.c | head
 ```
 
 | 插件 | 文件 | 上游对应物 | 重合度 | 判定 |

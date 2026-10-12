@@ -26,8 +26,8 @@ sha256sum uboot.tar.gz     # 期望 9d060f32…4a52
 tar xzf uboot.tar.gz "$(basename "$REF")"
 
 # 逐文件看差异(示例)
-diff -u "$REF/drivers/mmc/sdhci.c"  <repo>/third_party/uboot-mmc/src/sdhci_host.c | head
-diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/third_party/uboot-erofs/src/erofs_fs.h
+diff -u "$REF/drivers/mmc/sdhci.c"  <repo>/adapter/uboot-mmc/src/sdhci_host.c | head
+diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/adapter/uboot-erofs/src/erofs_fs.h
 ```
 
 ### 1.1 两个口径, 别混用
@@ -50,7 +50,7 @@ diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/third_party/uboot-erofs/src/erofs_fs.
 > 同理 `erofs_internal.h` 与上游 `decompress.h` 也有交叉(单独比只有 4.0%, 但
 > `z_erofs_decompress_req` 确实搬进来了)。**判断"改了什么"请看各表的差异性质, 而不是只看百分比。**
 
-### 2.1 `third_party/uboot-mmc`
+### 2.1 `adapter/uboot-mmc`
 
 | `src/` 文件 | 行 | 上游对应物 | 上游行 | 相似度 | 变更行 | 判定 |
 |---|---|---|---|---|---|---|
@@ -68,7 +68,7 @@ diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/third_party/uboot-erofs/src/erofs_fs.
   唯一的**值错**已修(见 §3)。
 - 上游来源 **`mmc_write.c`** 是审计补上的: 早先 `NOTICE` 把写路径也记在 `mmc.c` 名下, 不准。
 
-### 2.2 `third_party/uboot-fat`
+### 2.2 `adapter/uboot-fat`
 
 | `src/` 文件 | 行 | 上游对应物 | 上游行 | 相似度 | 变更行 | 判定 |
 |---|---|---|---|---|---|---|
@@ -83,7 +83,7 @@ diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/third_party/uboot-erofs/src/erofs_fs.
   理由是实测结论(ADR-0024 §5): 需把 4 个 static 提升为全局, 且它要写可变全局
   `total_sector`(不变量 = "每个入口从卷刷新")⇒ 跨 TU 共享会把该不变量扩散出去。
 
-### 2.3 `third_party/uboot-erofs`
+### 2.3 `adapter/uboot-erofs`
 
 | `src/` 文件 | 行 | 上游对应物 | 上游行 | 相似度 | 变更行 | 判定 |
 |---|---|---|---|---|---|---|
@@ -157,7 +157,7 @@ R-1 是"抄错一个常量值"。这类错误**最隐蔽也最危险**(值错 = 
 ## 4. 唯一做到逐字的文件: `erofs_fs.h`
 
 ```
-$ diff -u <upstream>/fs/erofs/erofs_fs.h <repo>/third_party/uboot-erofs/src/erofs_fs.h
+$ diff -u <upstream>/fs/erofs/erofs_fs.h <repo>/adapter/uboot-erofs/src/erofs_fs.h
 -（只有这 5 行被删）
 -#include <asm/unaligned.h>
 -#include <fs.h>
