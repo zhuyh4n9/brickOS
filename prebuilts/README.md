@@ -139,6 +139,7 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 | 2026-10-07 | 0.1.0 | `x86-64/linux` | 原生工具 **`brickie-gen` 也嵌进 `brickie`** ⇒ 单文件自包含(只拷 `brickie` 即可运行) |
 | 2026-10-08 | 0.1.0 | `x86-64/linux` | 种子扩为**三件** `{brickie,brickie-gen,brickie-core}`: **L0/L1 `brickie-core` 进载荷与种子**, `schema/**` 一并进载荷(缺 core ⇒ `make tools-prebuilt` FAIL) |
 | 2026-10-12 | 0.1.0 | `x86-64/linux` | 换工具链重发: 编 `brickie-core` 的 rustc 由 1.93.1 变成**工作区自带的 1.99.0**(apt 的 cargo 1.75 读不了 `Cargo.lock` v4); `make core` 起**自动发现** `.toolchain`, 太旧的 cargo 当场 FAIL 并给出修法 |
+| 2026-10-12 | 0.1.0 | `x86-64/linux` | 入口 ELF 与 core 重发: `brickie-core` 增 **vendor 代码的单元级 cflags**(`[build].cflags` 以前被解析但被丢掉)与 **APP 挂载计划**的生成(`br_mount_plan_t` 表 + `mount_plan_apply()`); 工具链改动 ⇒ 三件一起重发。★ 本行与 §5.1 的表**必须同一次改**(重发种子的人负责刷新指纹) |
 
 ### 5.1 当前种子指纹(实测)
 
@@ -148,8 +149,8 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 文件(`prebuilts/seed/brickie/x86-64/linux/bin/`) | 体积 | sha256 |
 |---|---|---|
-| `brickie` | 3 498 120 B(~3.34 MiB) | `97c1ea08c61c5d58ad0c74b6b2ecf52773e34f5d42f4ded74b59f09103dd1efc` |
-| `brickie-core` | 3 047 808 B(~2.91 MiB) | `95a543876c02f75ec129f1818cc0d17da00c1cf59c92392f512630e02ca0fc44` |
+| `brickie` | 3 522 696 B(~3.36 MiB) | `c580c7fcde9a714bb5951dfcbd916da08f23a7db2087a7322a849baff06650d4` |
+| `brickie-core` | 3 068 960 B(~2.93 MiB) | `61e432d31212d6478d697c0408bbbc771493e56ee9ff1666cd67fde66b4753f6` |
 | `brickie-gen` | 167 384 B(~163 KiB) | `cd77d34d1f8c44c71c70685fb643e9e8f8eaa564bf7d15253199350a18a3b92b` |
 
 > 这一份由 **rustc 1.99.0**(工作区自带的 `.toolchain`; `make core` 自动采用)编出 ——
