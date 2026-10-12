@@ -145,7 +145,7 @@ SD/UHS/HS200/HS400/tuning/RPMB/分区、`blk_desc` 一起搬回来, 与本项目
 | 项 | 为什么没做 |
 |---|---|
 | `uboot-mmc` 的 `.c` 按上游重写 | 见 §2 末: 要连 DM/SD/UHS/RPMB/电源整族搬回来, 与本项目形态冲突; 且**本环境无法验证运行期行为** |
-| `fat_write.c` 的 `uboot_fat_truncate()`(上游没有, 160 行)搬去 `adapter/` | 它与上游写路径共用同一批 **static** 原语(`set_fatent_value`/`flush_dir`/`find_empty_cluster`), 搬出去要么导出内部符号、要么复制逻辑 —— 后者更坏。**已知的边界不纯**, 登记在此 |
+| `fat_write.c` 的 `uboot_fat_truncate()`(上游没有, 160 行)搬去 `adapter/` | **实测过代价后放弃**(不是没试): 它调用 `src/` 的 19 个原语, 其中 **4 个是 static**(`set_contents`/`dentry_set_time`/`normalize_longname`/`ub_fat_path_copy`)且被本 TU 其他函数共用 ⇒ 得提升为全局并进 `fat_internal.h`; 更要紧的是它要写 `total_sector` —— 那是**可变文件域全局**(上游的静态全局, 本件由**每个入口**从卷刷新 `total_sector = uboot_fat_vol_total_sect()`)。跨 TU 共享它, 等于把"每个入口记得刷新"这条不变量扩散到 `adapter/`, 忘一次就是静默的越界判定错。**为 160 行的归属清晰付这个价不划算** ⇒ 保留原位, 边界不纯如实登记 |
 | mmc 的两处行为偏离: `MMC_RSP_BUSY` 未等 `DATA_END`(上游 `sdhci.c:262` 会等)、136 位响应缺 `<<8` 与字节拼接(上游 `sdhci.c:46-53`) | CID/CSD 目前被丢弃 ⇒ 后者是潜伏; 前者影响 CMD6/CMD12 完成判定。**改了无法验证**(见下), 单独立项 |
 | 审计发现的 min 级问题: `uboot_fat_fls`/`ilog2`/`get_unaligned_le32` 死代码; `check_path_prefix` 疑似 `fs.fatbuf` 泄漏; `LOGC_FS` 未定义 | 与本刀主题(隔离)无关, 无运行期判据 |
 
