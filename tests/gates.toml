@@ -498,7 +498,7 @@ require_tags = [
 #   [VFSCONF] storage-domain suite (mount table/walk chain/file surface/dir surface, called by APP start)
 #   [DEVCONF] generic device registry (framework/dev-core start)
 #   [CDEVCONF] char-device subclass and adaptation layer (framework/cdev-core start)
-#   [IOCONF]  full PL011 round-trip through /dev/uart0 (io/uart-pl011 start)
+#   [IOCONF]  full PL011 round-trip through /dev/uart0 (driver/uart-pl011 start)
 # `vfs: mount /` and `vfs: mount /dev` evidence "the mount plan really executed" (not just summaries);
 # non-zero `irq_ticks` ensures all this happens after the START phase with IRQs enabled.
 [[gate]]

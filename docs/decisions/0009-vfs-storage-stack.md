@@ -1,10 +1,10 @@
-# 0009 — VFS 存储栈: framework/vfs-core + fs/tmpfs + fs/devfs(+ dev-core / cdev-core / io/uart-pl011)
+# 0009 — VFS 存储栈: framework/vfs-core + fs/tmpfs + fs/devfs(+ dev-core / cdev-core / driver/uart-pl011)
 
 > 状态: **已落地**(v0.2.0, QEMU virt aarch64; 存储/设备域四套用例全绿 ——
 > `[VFSCONF] 13/0`、`[DEVCONF] 6/0`、`[CDEVCONF] 8/0`、`[IOCONF] 12/0`;
 > `brickie test fs-test` 与既有六道门禁全绿)。
 > 影响面(**新插件 6 件**): `framework/vfs-core/**`、`framework/dev-core/**`、
-> `framework/cdev-core/**`、`fs/tmpfs/**`、`fs/devfs/**`、`io/uart-pl011/**`;
+> `framework/cdev-core/**`、`fs/tmpfs/**`、`fs/devfs/**`、`driver/uart-pl011/**`;
 > `core/c_core/include/br/core/br_error.h`(**只加不破**: 补 5 个存储域错误码);
 > `app/hello/src/main.c`(APP 的 start 接线存储域总套件);
 > `product.toml`(`[select]` 追加 3 件 + `[lint].allow_edges` 追加 1 条);
@@ -22,7 +22,7 @@
 设计侧 v1.0 的存储栈是**能力框架 = 插件**(D19)的一个完整实例:
 
 ```
-器件(io/uart-pl011)
+器件(driver/uart-pl011)
   → 设备类(framework/cdev-core: br_cdev_ops / br_flash_ops)
     → dev-core(通用设备: 唯一扁平命名空间 + 子分类注册协议 + open_file 钩子)
       → fs/devfs(/dev 节点, 注册表的投影)
@@ -39,7 +39,7 @@
 | `framework/cdev-core` | framework | `1-03` §1 "cdev-core 框架件" |
 | `fs/tmpfs` | fs | `1-03` §1 "fs/tmpfs: rootfs" |
 | `fs/devfs` | fs | `1-03` §1 "fs/devfs: /dev 设备节点" |
-| `io/uart-pl011` | io | `1-03` §1 "io/uart-pl011: M0 轮询 console → M2 注册 cdev" |
+| `driver/uart-pl011` | io | `1-03` §1 "io/uart-pl011: M0 轮询 console → M2 注册 cdev"(**引文保留设计侧拼写**; 原型侧 = `driver/uart-pl011`, 见 ADR-0032) |
 
 **为什么连框架件一起做**: `fs/devfs` 是 dev-core 注册表的**投影**, 打开设备经 cdev-core 的
 `open_file` 钩子(设计 `7-03` §3 / `8-01` §2)。缺了 dev-core/cdev-core, `/dev` 永远是空目录,
@@ -61,8 +61,8 @@
 | `framework/cdev-core → framework/dev-core` | init | `8-01` §1.3 依赖表 |
 | `framework/cdev-core → framework/vfs-core` | **type** | 适配层返回 `br_file_ops_t`(O-S7 的类型成本) |
 | `framework/dev-core → framework/vfs-core` | **type** | `open_file` 钩子签名引用 `br_file_ops`(设计 §1.3 原话"仅头文件") |
-| `io/uart-pl011 → framework/cdev-core` | init | `8-01` §6: 驱动向 cdev-core 注册 |
-| `io/uart-pl011 → framework/dev-core` | **type** | 用它的 ioctl 编码宏与命名规则 |
+| `driver/uart-pl011 → framework/cdev-core` | init | `8-01` §6: 驱动向 cdev-core 注册 |
+| `driver/uart-pl011 → framework/dev-core` | **type** | 用它的 ioctl 编码宏与命名规则 |
 | `app/hello → framework/vfs-core` | init | **M0/M2 引导例外**, 见 §2.5 |
 
 * **两条 `type` 边是刻意的**(裁定 1): 设计 `1-01` §7.2 明说 `dev-core → vfs-core` 必须写成
@@ -137,7 +137,7 @@ lookup 链与名字空间变更还需要:
 
 数值沿用 Linux/aarch64 编号(与 `br_error.h` 的既有口径一致), 便于 svc-posix 零转换映射。
 
-### 2.7 收口: `io/uart-pl011` 为什么是"轮询 cdev"而不是"中断 tty"
+### 2.7 收口: `driver/uart-pl011` 为什么是"轮询 cdev"而不是"中断 tty"
 
 设计 `1-03` §1 写的是 "M0: 早期轮询 console(**不注册设备**)→ M2: 中断 tty(**注册 cdev**)"。
 本刀交付: **注册 cdev + 轮询式会话**(不开 UART 中断)。
@@ -192,7 +192,7 @@ lookup 链与名字空间变更还需要:
 9. **tmpfs 的配额(128 KiB 数据 / 48 节点)是编译期常量**, 与 `br-wa-mem-001` 同源但**不另立
    条目**: `[[res]].ram_kib` 已经是声明面的预算真值, 缺的同样是"预算 → 代码"的生成链路,
    与 `br-wa-fs-001` 一起还。tmpfs 的 `README` 与源码注释都写了这个退出条件。
-10. **`[[res]].stack` 不该给不开线程的驱动声明**: `io/uart-pl011` 初版声明了 1 KiB 栈,
+10. **`[[res]].stack` 不该给不开线程的驱动声明**: `driver/uart-pl011` 初版声明了 1 KiB 栈,
     被 `brickie check` 判红("Σ stack_kib = 5 超出 platform 容量 4")—— 平台的栈容量是
     **给插件自己的线程**的预算, 而不开线程的驱动的 ops 全跑在**调用者的**栈上。已删掉该条。
     这条值得写进 `4-03` 的 manifest 语义(将来)。
@@ -218,7 +218,7 @@ lookup 链与名字空间变更还需要:
 | `br_open` 只有一个出口, 用全局 errno | 原型是单核协作式, 全局 errno 会在切换点被覆盖; 出参形式没有这个问题 |
 | flash/bdev 也给 `open_file`(返回 `-ENOTSUP` 的 fops) | "看得见打不开"要靠 `fops == BR_NULL` 表达才**机械可判**(TC-CDEV-008); 给一个"只会返回 ENOTSUP 的 fops"会让判据消失 |
 | 把存储域套件放进 `service/dump` 的 LATE init(像 DBGCONF 那样) | DBGCONF 是**调试域**自己的套件(它测的就是那几个调试插件); 存储域是**别的域**, 塞进 dump 会让"dump 拥有 VFS"这种假依赖出现在声明面 |
-| 给 `io/uart-pl011` 打开 UART 中断 | 中断 tty 需要 bh/work-queue(Stage 2), 且本刀判据是"能经 devfs 打开"; 已登记 `br-wa-io-001`, 不假装做完 |
+| 给 `driver/uart-pl011` 打开 UART 中断 | 中断 tty 需要 bh/work-queue(Stage 2), 且本刀判据是"能经 devfs 打开"; 已登记 `br-wa-io-001`, 不假装做完 |
 | `SET_BAUD` 直接重写 `CR` 常量 | platform 的 console 拥有同一根 UART 的线路配置; 读改写才能保住 console 的设置(实现已如此) |
 
 ## 5. 后果与遗留项(诚实清单)

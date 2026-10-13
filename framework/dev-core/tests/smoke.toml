@@ -63,7 +63,7 @@ platform = ["qemu-aarch64"]
 
 [[case]]
 id       = "TC-DEV-005"
-pre      = "注册表里至少有 1 条(组合含 io/uart-pl011 时即满足); 表空时只走'不适用'分支"
+pre      = "注册表里至少有 1 条(组合含 driver/uart-pl011 时即满足); 表空时只走'不适用'分支"
 steps    = [
     "取 br_dev_name_at(0) 与 br_dev_entry_at(0)",
     "br_dev_add(该名字, 该 entry) == -EEXIST(唯一性执法)",

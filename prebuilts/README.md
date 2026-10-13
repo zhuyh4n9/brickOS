@@ -144,6 +144,7 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 | 2026-10-12 | 0.1.0 | `x86-64/linux` | 入口 ELF 增补**运行前设备模型预检**: 步骤 argv 里出现 `-device emmc` 而解析到的 QEMU < **10.2** 时, 不再把 QEMU 那句 `'emmc' is not a valid device model name` 原样漏给用户, 而是当场给出原因(eMMC 卡模型 9.1 就有, 10.2 才成为**可插拔**设备)与修法(`tools/fetch-qemu.sh`); 顺带把 `runner.StepError` 在 CLI 里接住。只动了 `brickie` 的 Python 载荷 ⇒ `brickie-core`/`brickie-gen` 两件**逐字节未变** |
 | 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以**追平源码**: 库里那份种子的 `brickie-core` 比当前源码编出来的小 ~125 KiB(`2 951 624` vs `3 077 392` B), 即 `9849fe0`(brick.toml 改名 + 注释英文化)**发布了与自身源码不符的种子** ⇒ `make tools-prebuilt-check` 红。本次 `make tools-prebuilt` 重发三件, 并同一次刷新 §5.1(该检查现已 3/3 ok)。 |
 | 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0031(`core` 成为第一类插件)**: `brickie-core` 的规则表/schema 加 `plugin_type = "core"`(基数判据 `BRV-TAX-0020`)、模板加 `templates/native/core/c/`、`plan.rs` 增 `early_hook`/`start_hook` 变量、`product.toml [build]` 去掉 `core_sources`/`core_includes`; `brickie` 的负载(模板 + schema)随之变化 ⇒ 三件一起重发并同一次刷新 §5.1。 |
+| 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0032(命名空间 `io/` → `driver/` + `driver/` ⇒ `api_type = native` 的 `BRV-TAX-0021`)**: `brickie-core` 的 `NAMESPACES`/两个命名空间映射/`is_driver_namespace`/`validate_driver_namespace` 与 `driver/⇒io`、`driver/⇒native` 正负例; `product.toml [build]` 无变化, 但插件身份与接口单元改名(`io/uart-pl011` → `driver/uart-pl011`)也改变了入口 ELF 的负载可见面 ⇒ 三件一起重发并同一次刷新 §5.1。 |
 
 ### 5.1 当前种子指纹(实测)
 
@@ -153,8 +154,8 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 文件(`prebuilts/seed/brickie/x86-64/linux/bin/`) | 体积 | sha256 |
 |---|---|---|
-| `brickie` | 3 547 272 B(~3.38 MiB) | `bd6d33a77d1c92fb99420d4c8391ad151dfa727d536ad19522dfc00f106b92cd` |
-| `brickie-core` | 3 092 480 B(~2.95 MiB) | `a5dba3afacbedd9c43db05b3bf5f45ff144c3503b9f9f0974a19680e42d57e42` |
+| `brickie` | 3 547 272 B(~3.38 MiB) | `2fc22f0b03d47fe302ba1e98d588db9a1ea5f9b34abf990353ac595d99ffee4f` |
+| `brickie-core` | 3 095 808 B(~2.95 MiB) | `de842c65a51bd746c8a0e3d11a6db502024a5fd5895a5a8d05d45be49e8e3eae` |
 | `brickie-gen` | 167 384 B(~163 KiB) | `a7a433b4b88ccc0d5f2152bbeed090e818c4f0e6adfd98ef0d28e49e9469e673` |
 
 > 这一份由 **rustc 1.99.0**(工作区自带的 `.toolchain`; `make core` 自动采用)编出 ——

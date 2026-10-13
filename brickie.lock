@@ -1,5 +1,5 @@
 # brickie:generated
-# brickie.lock — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+# brickie.lock — machine-owned file, do not edit by hand; byte-identical across runs on the same input (contract §4)
 
 schema = 1
 
@@ -8,11 +8,36 @@ profile = "dev"
 
 [lock.product]
 name = "brickos-prototype"
-version = "0.1.0.0"
+version = "0.2.0.0"
 stage = "dev"
 
 [[lock.plugins]]
+name = "adapter/uboot-erofs"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "adapter/uboot-fat"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "adapter/uboot-mmc"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
 name = "app/hello"
+version = "0.1.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "core/c_core"
+version = "0.2.0.0"
+compat_gen = 0
+
+[[lock.plugins]]
+name = "driver/uart-pl011"
 version = "0.1.0.0"
 compat_gen = 0
 
@@ -67,11 +92,6 @@ version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.plugins]]
-name = "io/uart-pl011"
-version = "0.1.0.0"
-compat_gen = 0
-
-[[lock.plugins]]
 name = "platform/qemu-aarch64"
 version = "0.1.0.0"
 compat_gen = 0
@@ -115,6 +135,17 @@ compat_gen = 0
 name = "service/trace"
 version = "0.1.0.0"
 compat_gen = 0
+
+[[lock.units]]
+id = "driver/uart-pl011#uart-pl011"
+provider = "driver/uart-pl011"
+unit = "uart-pl011"
+api_iface = "native"
+version = "0.1.1.0"
+compat_gen = 0
+hash = "sha256:4617512c19c3384978a21dd86e091da180dc8ca72b2086b314d6f99e56e7f187"
+hash_scope = "decl"
+truth = "decl"
 
 [[lock.units]]
 id = "framework/bdev-core#bdev"
@@ -201,17 +232,6 @@ api_iface = "runtime_adapter"
 version = "0.1.0.0"
 compat_gen = 0
 hash = "sha256:7ccb8d3d4a6ef85aad5e08604d14102a635f19974fcad8f517a71537838ede2f"
-hash_scope = "decl"
-truth = "decl"
-
-[[lock.units]]
-id = "io/uart-pl011#uart-pl011"
-provider = "io/uart-pl011"
-unit = "uart-pl011"
-api_iface = "native"
-version = "0.1.1.0"
-compat_gen = 0
-hash = "sha256:b948dff0255343ade247c86ff2133951feef5cde5e8158ffb597a65e44a5b2d9"
 hash_scope = "decl"
 truth = "decl"
 

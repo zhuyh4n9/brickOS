@@ -1073,6 +1073,9 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     // subkind derivation and conflicts (BRV-TAX-0015)
     validate_subkind(&mut p, d);
 
+    // Namespace ⇔ provenance: `driver/` holds **own** drivers (BRV-TAX-0021).
+    validate_driver_namespace(&p, d);
+
     if !p.phase.is_empty() && !p.plugin_type.is_empty() {
         if let Some(reason) = rules::phase_reason(&p.plugin_type, p.subkind.as_deref(), &p.phase) {
             d.shape("BRV-MF-0001", &p.name, &file, "plugin.phase", reason, "§7.2");
@@ -1374,6 +1377,30 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     }
 
     Some(p)
+}
+
+/// `driver/` is where this repo's **own** device drivers live (`BRV-TAX-0021`). Provenance is
+/// already an axis of its own (`api_type`), so the namespace pins it: a ported driver is
+/// `api_type = "third_party"` and belongs in `adapter/`, and a plugin that only *adapts* an
+/// existing runtime is `runtime_adapter`. Error ⇒ exit code 1.
+fn validate_driver_namespace(p: &Plugin, d: &mut Diags) {
+    if p.api_type.is_empty() || !rules::is_driver_namespace(&p.name) {
+        return;
+    }
+    if p.api_type != "native" {
+        d.coded(
+            "BRV-TAX-0021",
+            Severity::Error,
+            &p.name,
+            &p.file,
+            "plugin.name",
+            format!(
+                "`driver/` is the namespace of this repo's own device drivers, so `api_type` must be `native`, got `{}`",
+                p.api_type
+            ),
+            "§8.3/§3.1: `driver/` = own (native) driver; a ported driver is `api_type = \"third_party\"` and belongs in `adapter/`, an adapter of an existing runtime is `runtime_adapter`",
+        );
+    }
 }
 
 /// `subkind` derivation and conflicts (§8.4 / `BRV-TAX-0015`; error ⇒ exit code 1).

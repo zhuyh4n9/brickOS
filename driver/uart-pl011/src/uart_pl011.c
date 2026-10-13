@@ -5,7 +5,7 @@
  * channel. v1 is a polling cdev, not an interrupt tty: WORKAROUND(br-wa-io-001); TC-IO-* cases
  * live in src/uart_selftest.c. Every function here is thread-only (never called from an ISR).
  */
-#include <br/io/br_uart_pl011.h>
+#include <br/driver/br_uart_pl011.h>
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>

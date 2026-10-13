@@ -1,10 +1,10 @@
 # brickie:generated
-# api/iface 快照 api/iface/io/uart-pl011/uart-pl011.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+# api/iface snapshot api/iface/driver/uart-pl011/uart-pl011.toml — machine-owned file, do not edit by hand; byte-identical across runs on the same input (contract §4)
 
 schema = 1
-unit = "io/uart-pl011#uart-pl011"
-provider = "io/uart-pl011"
-NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+unit = "driver/uart-pl011#uart-pl011"
+provider = "driver/uart-pl011"
+NOT_ABI = "declaration-surface hash ≠ proof of ABI compatibility (v0.1 truth=decl, §6.6/RV-3)"
 
 [unit_meta]
 api_iface = "native"
@@ -13,7 +13,7 @@ version = "0.1.1.0"
 compat_gen = 0
 freeze_state = "unfrozen"
 status = "experimental"
-hash = "sha256:b948dff0255343ade247c86ff2133951feef5cde5e8158ffb597a65e44a5b2d9"
+hash = "sha256:4617512c19c3384978a21dd86e091da180dc8ca72b2086b314d6f99e56e7f187"
 hash_scope = "decl"
 truth = "decl"
 strict_params = false

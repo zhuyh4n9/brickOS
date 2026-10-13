@@ -33,7 +33,7 @@
 | `[SYNCCONF]` | `core/c_core/src/sync/sync.c` | APP 的 `start` |
 | `[VFSCONF]` | `framework/vfs-core/src/br_vfs.c` | APP 的 `start`(靠 `allow_edges` 豁免) |
 | `[IRQCONF]`/`[MEMCONF]` | `platform/…/src/{irq_conf,mm_conf}.c` | platform 自己的 `start` |
-| `[DEVCONF]`/`[CDEVCONF]`/`[IOCONF]` | `framework/{dev,cdev}-core`、`io/uart-pl011` | 各自的 `start` |
+| `[DEVCONF]`/`[CDEVCONF]`/`[IOCONF]` | `framework/{dev,cdev}-core`、`driver/uart-pl011` | 各自的 `start` |
 | `[DBGCONF]` | `service/dump/src/dump.c` | dump 的 **LATE init**(还要转调另外四件) |
 
 四类问题:

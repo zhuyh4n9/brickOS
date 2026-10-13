@@ -1,12 +1,12 @@
 /*
- * PL011 UART char device -- public face of io/uart-pl011. Registers the same PL011 as a cdev so
+ * PL011 UART char device -- public face of driver/uart-pl011. Registers the same PL011 as a cdev so
  * /dev/uart0 is openable by br_open, while platform console_pl011.c keeps the M0 early console
  * and panic channel. v1 is a polling cdev, not an interrupt tty: WORKAROUND(br-wa-io-001).
  * QEMU virt: base 0x0900_0000, refclk 24 MHz, 115200 8N1 => IBRD=13 FBRD=1 (same constants in
  * the console, each side _Static_assert-checked).
  */
-#ifndef BR_IO_BR_UART_PL011_H
-#define BR_IO_BR_UART_PL011_H
+#ifndef BR_DRIVER_BR_UART_PL011_H
+#define BR_DRIVER_BR_UART_PL011_H
 
 #include <br/core/br_types.h>
 #include <br/dev/br_dev.h>
@@ -47,4 +47,4 @@ int uart_pl011_start(void);
  * by core's br_plugin_manager_selftest() via the descriptor's .selftest hook. They are not part of
  * the golden interface face: adding a case must not be an interface change. */
 
-#endif /* BR_IO_BR_UART_PL011_H */
+#endif /* BR_DRIVER_BR_UART_PL011_H */

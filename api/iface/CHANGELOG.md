@@ -150,3 +150,6 @@
 ## platform/qemu-aarch64#pci-host v0.1.0.0 (compat_gen=0)
 - hash: sha256:5d0cfc218c1365a114da4683102957599a6efdac8f1b693dbcef465b93581e2a
 - 变更: 首次发布(建档)
+
+## driver/uart-pl011#uart-pl011 v0.1.1.0 (compat_gen=0)
+- hash: sha256:4617512c19c3384978a21dd86e091da180dc8ca72b2086b314d6f99e56e7f187

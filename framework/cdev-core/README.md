@@ -38,7 +38,7 @@ ops 布局入 golden(后补字段 = 二进制不兼容 ⇒ 槽位一次占齐): 
 
 8 例 `TC-CDEV-001..008`(名字非法不污染注册表 / 必填槽位缺失 / 未注册取回不动出参 / 已注册 cdev 往返 / 重名 ⇒ `-EEXIST` / 适配层槽位形状 / flash 前置校验 / flash 无文件面)。由钩子 `cdev_core_selftest()`(描述符 `.selftest`)在**全部 `start()` 之后**被 `br_plugin_manager_selftest()` 统一调用(返回失败项数; 失败不停机)。TC-CDEV-004/005/006 的被测对象是内部机制本身, 经 `src/cdev_internal.h` 的两个访问器读(它们**转调**生产实现, 不复制逻辑)。门禁 `fs-test` 要求 `\[CDEVCONF\] SUMMARY pass=[0-9]* fail=0 ` 且禁止 `[CDEVCONF] FAIL`。
 
-与 dev-core 同型, 用例刻意**不登记测试设备**(无注销 API ⇒ 一旦登记就永远出现在 `/dev` 里): 正面登记路径由真实驱动覆盖(`io/uart-pl011` 登记 `uart0`); 组合里没有 cdev 设备时 `TC-CDEV-004/005` 只走"不适用"分支并在日志里写明前提。
+与 dev-core 同型, 用例刻意**不登记测试设备**(无注销 API ⇒ 一旦登记就永远出现在 `/dev` 里): 正面登记路径由真实驱动覆盖(`driver/uart-pl011` 登记 `uart0`); 组合里没有 cdev 设备时 `TC-CDEV-004/005` 只走"不适用"分支并在日志里写明前提。
 
 ## 目录
 

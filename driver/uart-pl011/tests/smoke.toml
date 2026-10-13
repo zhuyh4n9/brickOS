@@ -1,4 +1,4 @@
-# io/uart-pl011 — conformance 用例(人写)
+# driver/uart-pl011 — conformance 用例(人写)
 #
 # 与 `uart_pl011_selftest()`(src/uart_selftest.c)里的 TC-IO-001..012 一一对应:
 # 红绿由 in-image 套件打 `[IOCONF] PASS/FAIL`, 末尾 SUMMARY; 该钩子在描述符里, 由
@@ -11,7 +11,7 @@ schema = 1
 
 [[case]]
 id       = "TC-IO-001"
-pre      = "START 相; io/uart-pl011 的 CORE init 已 br_cdev_register('uart0'), devfs 已挂 '/dev'"
+pre      = "START 相; driver/uart-pl011 的 CORE init 已 br_cdev_register('uart0'), devfs 已挂 '/dev'"
 steps    = [
     "br_stat('/dev/uart0', &st) == 0",
     "st.type == BR_INODE_FILE(设备节点是文件 inode)",

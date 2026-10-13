@@ -37,7 +37,7 @@
 
 6 例 `TC-DEV-001..006`(命名规则反例枚举 / 非法登记不污染注册表 / 查找缺失 ⇒ `BR_NULL` / 枚举与查找同源往返 / 重名 ⇒ `-EEXIST` / ioctl 位布局)。由钩子 `dev_core_selftest()`(描述符 `.selftest`)在**全部 `start()` 之后**被 `br_plugin_manager_selftest()` 统一调用(返回失败项数; 失败不停机)。本件判据全部走公开 API, 因此**没有** `src/dev_internal.h`(那种头只为"公开 API 表达不出来"的判据存在)。门禁 `fs-test` 要求 `\[DEVCONF\] SUMMARY pass=[0-9]* fail=0 ` 且禁止 `[DEVCONF] FAIL`。
 
-用例刻意**不造测试设备**: dev-core 没有注销 API, 一旦登记就永远出现在 `/dev` 里; 正面登记路径由真实驱动覆盖(`io/uart-pl011` 在 CORE init 里登记 `uart0`), 本套件只确认"坏输入进不来 + 条数不变"。表空时 `TC-DEV-005` 只走"不适用"分支并在描述里写明前提。
+用例刻意**不造测试设备**: dev-core 没有注销 API, 一旦登记就永远出现在 `/dev` 里; 正面登记路径由真实驱动覆盖(`driver/uart-pl011` 在 CORE init 里登记 `uart0`), 本套件只确认"坏输入进不来 + 条数不变"。表空时 `TC-DEV-005` 只走"不适用"分支并在描述里写明前提。
 
 ## 目录
 

@@ -6,7 +6,7 @@ use crate::diag::{Diag, Severity};
 pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "platform", "core"];
 pub const API_TYPES: &[&str] = &["native", "runtime_adapter", "third_party"];
 pub const SUBKINDS: &[&str] = &["scheduler", "framework", "io", "fs", "service"];
-pub const NAMESPACES: &[&str] = &["app", "iface", "platform", "core", "sched", "framework", "io", "fs", "service", "runtime"];
+pub const NAMESPACES: &[&str] = &["app", "iface", "platform", "core", "sched", "framework", "driver", "fs", "service", "runtime"];
 pub const PHASES: &[&str] = &["early", "core", "late", "app"];
 pub const SCHED_CLASSES: &[&str] = &["SAFE_PREEMPT", "COOP_ONLY", "TT_SAFE"];
 pub const SCHED_KINDS: &[&str] = &["coop", "preempt", "tt"];
@@ -97,7 +97,7 @@ pub fn namespace_plugin_type(ns: &str) -> Option<&'static str> {
         // `core` is a namespace of implementations (`core/c_core`, future `core/r_core`), not a
         // language marker: the type is the same and exactly one of them is in an image.
         "core" => Some("core"),
-        "sched" | "framework" | "io" | "fs" | "service" => Some("ability"),
+        "sched" | "framework" | "driver" | "fs" | "service" => Some("ability"),
         // `runtime` is an ability plugin; it differs from `service` in size and role, not taxonomy.
         "runtime" => Some("ability"),
         _ => None,
@@ -108,13 +108,21 @@ pub fn namespace_subkind(ns: &str) -> Option<&'static str> {
     match ns {
         "sched" => Some("scheduler"),
         "framework" => Some("framework"),
-        "io" => Some("io"),
+        // `driver/` = where this repo's **own** (native) device drivers live; the capability they
+        // provide is still `subkind = "io"` -- namespace says where it lives, subkind what it is.
+        // Ported third-party drivers stay in `adapter/` with `api_type = "third_party"`.
+        "driver" => Some("io"),
         "fs" => Some("fs"),
         "service" => Some("service"),
         // `runtime/posix` is `service`, so phase derivation (ability + service ⇒ LATE) holds.
         "runtime" => Some("service"),
         _ => None,
     }
+}
+
+/// Whether the name lives in the `driver/` namespace (own drivers: `api_type` must be `native`).
+pub fn is_driver_namespace(name: &str) -> bool {
+    name_namespace(name) == "driver"
 }
 
 /// Derive `subkind` from the name namespace. Bare name / non-ability namespace ⇒ `None`.

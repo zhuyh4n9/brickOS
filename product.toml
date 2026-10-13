@@ -25,11 +25,11 @@ stage   = "dev"                 # dev | release; CLI overrides (§7.5)
 #                    (same "closure readability" trade-off as framework/file-table).
 #   service/dump -> service/{trace,backtrace,hexdump,memleak}
 #   fs/devfs     -> framework/{dev-core,cdev-core,vfs-core} + fs/tmpfs (parent FS of mount points)
-#   io/uart-pl011-> framework/{cdev-core,dev-core,vfs-core}
+#   driver/uart-pl011-> framework/{cdev-core,dev-core,vfs-core}
 #   fs/tmpfs     -> framework/vfs-core
 #                          ↓
 #   framework/{vfs-core,dev-core,cdev-core}   (storage/device domain framework parts, ADR-0009)
-# * Why list fs/devfs and io/uart-pl011 directly instead of only tmpfs: in design `1-03` §1's v1.0
+# * Why list fs/devfs and driver/uart-pl011 directly instead of only tmpfs: in design `1-03` §1's v1.0
 #   plugin list all three (tmpfs rootfs / devfs /dev / uart-pl011 tty) are **selection items** —
 #   dropping devfs yields form B of `8-01` §1.2 (device frameworks only, no /dev namespace);
 #   and "mount plan containing / or /dev pulls it in" (§1 note) has no generation path here
@@ -82,7 +82,7 @@ plugins = [
   "adapter/uboot-erofs",
   "fs/tmpfs",
   "fs/devfs",
-  "io/uart-pl011",
+  "driver/uart-pl011",
 ]
 
 [selftest]

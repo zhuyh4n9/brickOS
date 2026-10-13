@@ -1,7 +1,7 @@
 schema = 1
 
 [plugin]
-name        = "io/uart-pl011"
+name        = "driver/uart-pl011"
 plugin_type = "ability"
 api_type    = "native"
 subkind     = "io"
@@ -40,7 +40,7 @@ name         = "uart-pl011"
 version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
-hash         = "sha256:b948dff0255343ade247c86ff2133951feef5cde5e8158ffb597a65e44a5b2d9"
+hash         = "sha256:4617512c19c3384978a21dd86e091da180dc8ca72b2086b314d6f99e56e7f187"
 status       = "experimental"
 
 [[export.entries]]

@@ -68,13 +68,13 @@
 
 | u-boot 文件 | 行数 | 职责 | 结论 | 移植后落点 |
 |---|---|---|---|---|
-| `drivers/mmc/mmc.c` | 3352 | MMC/SD 协议核心:初始化序列、CID/CSD/EXT_CSD、块读写、switch、总线宽度/时钟、分区 | **改写移植(主体可保留)**;裁掉 SD/UHS/HS200/HS400/tuning/RPMB/BKOPS 分支后约 900~1200 行 | `io/emmc/src/mmc_core.c` |
-| `include/mmc.h` | 1093 | 结构体/命令码/EXT_CSD 字段/能力位 | **摘录移植**:只取 `mmc_cmd/mmc_data` + 命令码 + 用到的 EXT_CSD 偏移 | `io/emmc/src/mmc_regs.h`(私有) |
+| `drivers/mmc/mmc.c` | 3352 | MMC/SD 协议核心:初始化序列、CID/CSD/EXT_CSD、块读写、switch、总线宽度/时钟、分区 | **改写移植(主体可保留)**;裁掉 SD/UHS/HS200/HS400/tuning/RPMB/BKOPS 分支后约 900~1200 行 | `driver/emmc/src/mmc_core.c` |
+| `include/mmc.h` | 1093 | 结构体/命令码/EXT_CSD 字段/能力位 | **摘录移植**:只取 `mmc_cmd/mmc_data` + 命令码 + 用到的 EXT_CSD 偏移 | `driver/emmc/src/mmc_regs.h`(私有) |
 | `drivers/mmc/mmc-uclass.c` | 553 | DM 绑定、`mmc_of_parse`、`blk` 设备创建 | **不移植**(换成 bdev 注册 + 静态平台数据) | — |
-| `drivers/mmc/mmc_private.h` | 135 | 内部原型 + `mmc_bread/bwrite` | **部分**:`mmc_send_status/poll_for_busy/set_blocklen` 原型保留 | `io/emmc/src/mmc_internal.h` |
-| `drivers/mmc/sdhci.c` | 1050 | 通用 SDHCI 主机:`send_command`/`transfer_data`/`set_ios`/`set_clock`/`set_power`/DMA | **改写移植(高价值)**;裁掉 DT/regulator/gpio/quirks/UHS;约 500~700 行 | `io/emmc/src/sdhci_host.c` |
-| `include/sdhci.h` | 546 | SDHCI 寄存器/位域/`sdhci_host` | **摘录移植**:寄存器偏移 + 用到的位;丢掉 `struct udevice` 字段与无关 ops | `io/emmc/src/sdhci_regs.h`(私有) |
-| `drivers/mmc/sdhci-adma.c` | 87 | ADMA2 描述符表构造 | **几乎原样移植**(`memalign/flush_cache` 替换) | `io/emmc/src/sdhci_adma.c` |
+| `drivers/mmc/mmc_private.h` | 135 | 内部原型 + `mmc_bread/bwrite` | **部分**:`mmc_send_status/poll_for_busy/set_blocklen` 原型保留 | `driver/emmc/src/mmc_internal.h` |
+| `drivers/mmc/sdhci.c` | 1050 | 通用 SDHCI 主机:`send_command`/`transfer_data`/`set_ios`/`set_clock`/`set_power`/DMA | **改写移植(高价值)**;裁掉 DT/regulator/gpio/quirks/UHS;约 500~700 行 | `driver/emmc/src/sdhci_host.c` |
+| `include/sdhci.h` | 546 | SDHCI 寄存器/位域/`sdhci_host` | **摘录移植**:寄存器偏移 + 用到的位;丢掉 `struct udevice` 字段与无关 ops | `driver/emmc/src/sdhci_regs.h`(私有) |
+| `drivers/mmc/sdhci-adma.c` | 87 | ADMA2 描述符表构造 | **几乎原样移植**(`memalign/flush_cache` 替换) | `driver/emmc/src/sdhci_adma.c` |
 | `drivers/mmc/fsl_esdhc*.c` | — | NXP i.MX 专有主机 | **不移植**(QEMU 用通用 sdhci-pci) | — |
 
 > **"通用 eMMC 驱动"的实际形状** = `mmc.c`(协议)+ `sdhci.c`(主机)+ `sdhci-adma.c`(DMA 表)。
@@ -91,7 +91,7 @@
 | `flush_cache/invalidate_dcache_range` | `br_mm_cache_flush/br_mm_cache_invalidate` | ✅ 语义等价 |
 | `udelay/mdelay/get_timer/timer_get_us/time_after` | `br_delay_us/br_delay_ms/br_clock_now` | ✅(需核对早期相位可用性) |
 | `printf/debug/log_err/log_warning` | `br_log_info/warn/error/debug` | ✅ |
-| `readl/writel/readb/writeb` | 直接 `*(volatile br_u32 *)`(照 `io/uart-pl011`) | ✅(注意 MMIO 是 Device 属性、`-mstrict-align`、只用对齐访问) |
+| `readl/writel/readb/writeb` | 直接 `*(volatile br_u32 *)`(照 `driver/uart-pl011`) | ✅(注意 MMIO 是 Device 属性、`-mstrict-align`、只用对齐访问) |
 | errno `-EIO/-ETIMEDOUT/-ENOMEM/-EINVAL/-ENOSYS/-ENODEV` | `BR_ERR(BR_E*)` | ✅ |
 | `-ECOMM` | **无** | ⚠ 需补 `BR_ECOMM = 70`(append-only)或映射 `-EIO` |
 | `struct udevice` / `mmc_get_ops` / `dev_read_*` | 无 | 🔁 用 host-ops 结构体 + 静态平台数据取代 |
@@ -137,7 +137,7 @@ image/stack/heap/contig/page/dma/reserved/GICD/GICR/UART0。
 4. **region 声明**:把 ECAM + MMIO 窗口加进 `memmap.c` 的 region 表(Device 属性)。
 5. **QEMU 参数**:`machine` 追加 `highmem=off`;`extra` 追加 `-drive … -device sdhci-pci -device emmc,…`。
 6. **门禁镜像**:需要一块 eMMC 后备镜像(空 raw 写后读校验即可,v1 不需要预置文件系统)。
-7. **(可选)对外 API**:给 `io/emmc` 一个"取 BAR 基址"的口子。两种归属见 §7 开放问题 3。
+7. **(可选)对外 API**:给 `driver/emmc` 一个"取 BAR 基址"的口子。两种归属见 §7 开放问题 3。
 
 ### 4.4 为什么 `highmem=off` 是关键简化
 
@@ -193,7 +193,7 @@ eMMC 模型(`hw/sd/sd.c`):`EXT_CSD_CARD_TYPE = 0b11`(仅 26/52 MHz)、`EXT_CSD_R
   并把 `SDHCI_SIGNAL_ENABLE` 写 0 —— **不产生中断**。
 - 设计 `7-02 §5` 的时序图是 virtio-blk 的 ISR→bh→唤醒。若要在 eMMC 上对齐,需自研:开 `SIGNAL_ENABLE`、
   PCIe INTx(SPI 35)路由、ISR 只清源、bh 里完成传输、`br_sem_give` 唤醒。这是**增量**,不是移植内容。
-- 建议 v1 轮询(与 u-boot 一致、与当前 `io/uart-pl011` 的"v1 轮询"口径一致),中断留 v2 并在 ADR 登记。
+- 建议 v1 轮询(与 u-boot 一致、与当前 `driver/uart-pl011` 的"v1 轮询"口径一致),中断留 v2 并在 ADR 登记。
 
 ---
 
@@ -251,13 +251,13 @@ platform/qemu-aarch64           ← PCIe 枚举(唯一平台新能力)
   src/pci_gpex.c                  ECAM 读写 + 枚举 + BAR 分配 + command 使能
   include/br/platform/br_pci.h    br_pci_find(vendor,device) → {bar0, ...}  (归属见开放问题 3)
 
-io/emmc                         ← 新 I/O 插件(三层,内部分文件)
+driver/emmc                         ← 新 I/O 插件(三层,内部分文件)
   src/mmc_core.c                  CMD/ACMD 状态机、CID/CSD/EXT_CSD、块读写(host-ops 之上)
   src/mmc_internal.h / mmc_regs.h
   src/sdhci_host.c                SDHCI 寄存器/命令/数据传输/set_ios/clock/power(PIO 先行 → ADMA2)
   src/sdhci_regs.h / sdhci_adma.c
   src/emmc_bdev.c                 适配:read(ins)→lba+n_lba;write;flush;geometry;br_bdev_register
-  include/br/io/br_emmc.h         器件契约:设备名、几何上限、ioctl(可选 GET_INFO)
+  include/br/driver/br_emmc.h         器件契约:设备名、几何上限、ioctl(可选 GET_INFO)
   src/emmc_selftest.c             TC-EMMC-*(经 bdev API 的端到端)
 
 tests/gates.toml                ← 新增 `emmc-test` 门禁(或并入 fs-test)
@@ -275,7 +275,7 @@ product.toml                    ← [select] 加 3 件;允许边(若 app/EMMC �
 |---|---|---|
 | **P0** | `framework/bdev-core` | `[BDEVCONF] SUMMARY pass=N fail=0`;宿主 `bdev-test` 绿;`brickie check` 0 错 |
 | **P1** | platform PCIe(ECAM+枚举+BAR)+ `highmem=off` + region | 自检打印 `pci: found 1b36:0007 bar0=0x1…`;既有 7 道门禁回归绿(机器参数变更的影响面) |
-| **P2** | `io/emmc` 协议核心 + 假 host 宿主用例 | 宿主用例覆盖:go_idle→op_cond→CID→RCA→CSD→EXT_CSD→select→set_blocklen→单/多块读写 |
+| **P2** | `driver/emmc` 协议核心 + 假 host 宿主用例 | 宿主用例覆盖:go_idle→op_cond→CID→RCA→CSD→EXT_CSD→select→set_blocklen→单/多块读写 |
 | **P3** | SDHCI 主机(PIO)+ 真机 init/几何 | QEMU 日志:容量/块长/总线宽度正确;写后读回校验一致 |
 | **P4** | bdev 对接 + 门禁 | `[EMMCCONF] pass=N fail=0`;`/dev/emmc0` 在 devfs 可见;`brickie test emmc-test` 绿 |
 | **P5(可选)** | ADMA2 / 中断 / CACHE_FLUSH / 分区 / RPMB | 按需另立刀 |
@@ -297,7 +297,7 @@ P4 ≈ 0.3 kLOC;加用例/清单/文档 ≈ 0.6 kLOC ⇒ **总量约 3~4 kLOC + 
 | 6 | DMA 路径先做哪个? | **PIO 先行**(协议正确性优先),ADMA2 第二;SDMA 可不做 |
 | 7 | `flush` 口径? | v1 = 等卡不忙 + 返回 0,如实写"未实现 CACHE_FLUSH";P5 再补 CMD6 |
 | 8 | eMMC 分区/RPMB? | v1 只 user area |
-| 9 | 插件拆分:`io/emmc` 一件 vs `io/mmc` + `io/sdhci` 两件? | **一件 `io/emmc`**(内部三层分文件);两插件会让"通用主机 vs 器件"过早固化,且当前只有一个消费者 |
+| 9 | 插件拆分:`driver/emmc` 一件 vs `driver/mmc` + `driver/sdhci` 两件? | **一件 `driver/emmc`**(内部三层分文件);两插件会让"通用主机 vs 器件"过早固化,且当前只有一个消费者 |
 | 10 | 门禁镜像从哪来? | 门禁脚本用 `dd` 造空 raw 镜像,用例写特征模式再读回校验(不依赖外部文件系统镜像) |
 | 11 | bdev-core 是否顺带做分区映射器? | **不做**(SD-9 是 v1.x),先留设计 |
 

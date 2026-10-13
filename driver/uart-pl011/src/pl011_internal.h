@@ -1,5 +1,5 @@
 /*
- * io/uart-pl011 plugin-private contract (src/, not include/: not exported, not a device
+ * driver/uart-pl011 plugin-private contract (src/, not include/: not exported, not a device
  * contract). Holds the platform data truth shared by src/uart_pl011.c and src/uart_selftest.c,
  * so the TC-IO-003 facts (base/refclk/baud) have one source instead of "copy equals copy".
  * No register accessors here: the suite observes the device only through the /dev/uart0 file API.

@@ -232,7 +232,7 @@ fn name_and_subkind(h: &mut Harness) {
         "app/hsm",
         "platform/qemu-aarch64",
         "framework/cdev-core",
-        "io/virtio-hsm",
+        "driver/virtio-hsm",
         "fs/tmpfs",
     ] {
         h.check(rules::valid_plugin_name(ok), format!("name contract accepts `{ok}`"));
@@ -251,11 +251,14 @@ fn name_and_subkind(h: &mut Harness) {
     h.eq(rules::derive_subkind("service/crypto"), Some("service"), "subkind: service/⇒service");
     h.eq(rules::derive_subkind("sched/coop"), Some("scheduler"), "subkind: sched/⇒scheduler");
     h.eq(rules::derive_subkind("framework/dev-core"), Some("framework"), "subkind: framework/");
-    h.eq(rules::derive_subkind("io/virtio-hsm"), Some("io"), "subkind: io/");
+    h.eq(rules::derive_subkind("driver/virtio-hsm"), Some("io"), "subkind: driver/⇒io (ADR-0032)");
     h.eq(rules::derive_subkind("fs/tmpfs"), Some("fs"), "subkind: fs/");
     h.eq(rules::derive_subkind("sched-coop"), None, "subkind: bare name cannot be derived");
     h.eq(rules::derive_subkind("iface/min"), None, "subkind: iface/ has no subkind");
     h.eq(rules::derive_subkind("runtime/posix"), Some("service"), "subkind: runtime/⇒service");
+    h.check(rules::is_recommended_form("driver/uart-pl011"), "recommended form: driver/uart-pl011 (ADR-0032)");
+    h.check(!rules::is_recommended_form("io/uart-pl011"), "the old `io/` namespace is no longer recommended (ADR-0032)");
+    h.eq(rules::namespace_plugin_type("driver"), Some("ability"), "driver/⇒ability (ADR-0032)");
 
     h.eq(rules::namespace_plugin_type("iface"), Some("interface"), "namespace: iface⇒interface");
     h.eq(rules::namespace_plugin_type("sched"), Some("ability"), "namespace: sched⇒ability");
@@ -504,6 +507,46 @@ fn export_invariant_cases(h: &mut Harness) {
     );
     h.check(rules::valid_unit_ref("service/crypto#crypto"), "unit ref shape");
     h.check(!rules::valid_unit_ref("service/crypto"), "unit ref missing #");
+}
+
+/// `driver/` namespace ⇔ `api_type = "native"` (`BRV-TAX-0021`, ADR-0032).
+fn driver_namespace_cases(h: &mut Harness) {
+    let ok = tmpdir("drv-ok");
+    write(&ok, "driver/uart/brick.toml", &ability_toml("driver/uart", "io", "core", ""));
+    let tree = model::load_tree(&ok);
+    h.check(
+        !tree.diags.items().iter().any(|x| x.code.as_deref() == Some("BRV-TAX-0021")),
+        "driver/: a native driver is not reported",
+    );
+
+    let bad = tmpdir("drv-third-party");
+    write(
+        &bad,
+        "driver/uart/brick.toml",
+        "schema = 1\n[plugin]\nname = \"driver/uart\"\nplugin_type = \"ability\"\n\
+         api_type = \"third_party\"\nsubkind = \"io\"\nlang = \"c\"\nphase = \"core\"\n\
+         version = \"0.1.0.0\"\n",
+    );
+    let tree = model::load_tree(&bad);
+    h.check(
+        tree.diags.items().iter().any(|x| x.code.as_deref() == Some("BRV-TAX-0021")),
+        "driver/: api_type = third_party ⇒ BRV-TAX-0021 (ported drivers belong in adapter/)",
+    );
+
+    // The rule is about the `driver/` namespace only: `adapter/` keeps third_party.
+    let adapter = tmpdir("drv-adapter-ok");
+    write(
+        &adapter,
+        "adapter/uboot-mmc/brick.toml",
+        "schema = 1\n[plugin]\nname = \"adapter/uboot-mmc\"\nplugin_type = \"ability\"\n\
+         api_type = \"third_party\"\nsubkind = \"io\"\nlang = \"c\"\nphase = \"core\"\n\
+         version = \"0.1.0.0\"\n",
+    );
+    let tree = model::load_tree(&adapter);
+    h.check(
+        !tree.diags.items().iter().any(|x| x.code.as_deref() == Some("BRV-TAX-0021")),
+        "driver/: adapter/third_party is untouched by the rule",
+    );
 }
 
 fn model_cases(h: &mut Harness) {
@@ -2044,6 +2087,7 @@ pub fn run() -> i32 {
     dep_direction_cases(&mut h);
     export_invariant_cases(&mut h);
     model_cases(&mut h);
+    driver_namespace_cases(&mut h);
     snapshot_and_lock_cases(&mut h);
     plan_cases(&mut h);
     emit_cases(&mut h);

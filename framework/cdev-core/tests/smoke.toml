@@ -48,7 +48,7 @@ platform = ["qemu-aarch64"]
 
 [[case]]
 id       = "TC-CDEV-004"
-pre      = "组合含至少一个 cdev(io/uart-pl011 登记的 uart0); 无 cdev 时只走'不适用'分支"
+pre      = "组合含至少一个 cdev(driver/uart-pl011 登记的 uart0); 无 cdev 时只走'不适用'分支"
 steps    = [
     "遍历注册表: 跳过 class_id != BR_CLASS_CDEV 或 open_file != cdev 适配层的条目(如 flash 子型)",
     "对每条 name: br_cdev_get(name, &priv) 非 NULL",

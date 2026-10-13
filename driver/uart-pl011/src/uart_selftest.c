@@ -1,11 +1,11 @@
 /*
- * io/uart-pl011 self-test suite: conformance cases TC-IO-* driven only through the public API
+ * driver/uart-pl011 self-test suite: conformance cases TC-IO-* driven only through the public API
  * (br_stat / br_open_err / br_file_* / ioctl). The only non-public input is the platform data in
  * src/pl011_internal.h, which is the object under test rather than a copy of it.
  * Returns the number of failures (0 = green) and logs `[IOCONF] PASS/FAIL ...` + SUMMARY; a
  * failure does not halt. WORKAROUND(br-wa-test-001): the TC-IO-* ids are self-assigned.
  */
-#include <br/io/br_uart_pl011.h>
+#include <br/driver/br_uart_pl011.h>
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>

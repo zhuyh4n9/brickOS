@@ -35,7 +35,7 @@
 - 并发未加锁。
 
 ## 一致性用例
-本件**没有自己的套件** —— 它由 vfs-core 的 `[VFSCONF]` 在 `/dev` 上**泛型地**验证, 不认任何设备名(认设备名是用例该在**器件插件**里做的事, 见 `io/uart-pl011`):
+本件**没有自己的套件** —— 它由 vfs-core 的 `[VFSCONF]` 在 `/dev` 上**泛型地**验证, 不认任何设备名(认设备名是用例该在**器件插件**里做的事, 见 `driver/uart-pl011`):
 
 - `TC-VFS-013`: 找到非根挂载(`/dev`)→ `br_opendir`/`br_readdir` **可枚举**(条目数 ≥ 2, 含 `.`/`..`)→ 每个节点 `br_stat` 成功 → `br_open(O_RDONLY|O_NONBLOCK)` 只回"成功(有文件面)"或 `-ENOTSUP`(没有文件面); 别的 errno 一律判红(不放宽)。
 - `TC-VFS-012`: 挂载点本身不可 `rmdir`/`unlink` ⇒ `-EBUSY`(卸载不早于 v3)。

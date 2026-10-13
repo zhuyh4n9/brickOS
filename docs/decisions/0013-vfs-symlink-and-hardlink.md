@@ -7,7 +7,7 @@
 > `br_fstat`/`br_lstat`/`br_symlink`/`br_readlink`/`br_link`; `src/br_vfs.c`: 走查链改成
 > **可展开符号链接的重启式解析** + 布局守卫; `src/vfs_internal.h`: 路径上界 64 → 128);
 > `fs/tmpfs/src/tmpfs.c`(**数据体引用计数** = 硬链接; `symlink`/`readlink`/`link` 三个槽位;
-> `unlink` 认符号链接); `io/uart-pl011/src/uart_selftest.c`(`br_stat_t` 布局变更的具名初始化);
+> `unlink` 认符号链接); `driver/uart-pl011/src/uart_selftest.c`(`br_stat_t` 布局变更的具名初始化);
 > `framework/vfs-core/brick.toml`(导出面 + 结构布局); `tests/gates.toml`(`fs-test` 的 tag 名单)。
 > 设计依据: `7-01-vfs.md` §1(SD-1 统一可打开模型)/§2(SD-15/D23 四层 ops; 原文把
 > `symlink/readlink/mknod` 写作"v2 预留: 槽位未占; 到 v2 再 append")、`7-01` §4.1、
