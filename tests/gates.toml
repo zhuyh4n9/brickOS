@@ -151,9 +151,23 @@ includes = ["core/include", "framework/file-table/include", "tests/host"]
 #   read (the driver's strongest claim: one I/O sector <= max_rw); selftest phase went ~0.2 s -> ~1.5 s.
 #   Also `tick=2 ` itself waits for two 1 s heartbeats => 3 s no longer suffices (measured: the selftest
 #   SUMMARY landed at exactly 2.97 s, so tick=2 never made it).
+#
+# ------------------------------------------------------------------ how the QEMU gate timeouts are chosen
+# * Chosen from **measured headroom**, not by feel (measured 2026-10-13): every QEMU gate runs the
+#   *same* image, and the selftest pass finishes (`[SELFTEST] SUMMARY`) at **~5.6-5.7 s** of guest time
+#   (`ran=18 skipped=6 fails=0`; five gates measured -- smoke/irq/sync/sched/fs -- all in 5.57-5.71 s).
+#   But an occasional multi-second stall does happen (the known `br-wa-boot-002`: the selftest pass runs
+#   concurrently with threads started in the start phase, and when device access collides an SDHCI
+#   command waits out its full timeout -- observed as a single ~2 s wait in the log), so completion can
+#   drift past 8 s.
+#   Hence the old 6/8/10 s tiers **truncated the log intermittently**, with a confusing symptom: **no
+#   FAIL at all**, just a missing `[SELFTEST] SUMMARY` plus a batch of `require_tags` (the criteria then
+#   read as "N unsatisfied").
+#   => give **20 s** uniformly (~3.5x headroom; same reasoning as the 30 s device-class gates).
+#   * If a gate ever really hangs, 20 s is only 14 s slower than 6 s -- cheap insurance against a false red.
 [[gate]]
 name      = "smoke"
-timeout_s = 12
+timeout_s = 20
 log       = "build/logs/smoke.log"
 require   = [
   # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
@@ -219,9 +233,12 @@ require_tags = [
 ]
 
 # irq-test: **per-case** gate (trimming a case is red too — that is the split from smoke).
+# * the old 6 s budget only reached ~5.2 s of guest time, i.e. it cut the log mid-selftest (same
+#   confusing symptom as above: no FAIL at all, just missing `[SELFTEST] SUMMARY` / `require_tags`).
+#   Measured: 6 s => truncated 3/3 times; 20 s => completes, `[TASKCONF] SUMMARY pass=14 fail=0`.
 [[gate]]
 name      = "irq-test"
-timeout_s = 6
+timeout_s = 20
 log       = "build/logs/irq.log"
 require   = [
   # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
@@ -250,7 +267,7 @@ require_tags = [
 # dbg-test: memory-mapping and debug-plugin summaries both all green, with no case tag missing.
 [[gate]]
 name      = "dbg-test"
-timeout_s = 8
+timeout_s = 20
 log       = "build/logs/dbg.log"
 require   = [
   # * Replaces the old `DBG-INIT` case (ADR-0010): that exception asserted things about dump **calling on**
@@ -385,7 +402,7 @@ require = ["ok   fs images"]
 # with no framework registered sync.c only prints SKIP + some tags => this gate **honestly goes red**
 [[gate]]
 name      = "sync-test"
-timeout_s = 8
+timeout_s = 20
 log       = "build/logs/sync.log"
 require   = [
   # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
@@ -413,7 +430,7 @@ require_tags = [
 # `[PLGCONF] FAIL` and `[PANIC]` are forbidden patterns — a first-failure panic prints [PANIC], matching
 [[gate]]
 name      = "plugin-test"
-timeout_s = 8
+timeout_s = 20
 log       = "build/logs/plugin.log"
 require   = [
   # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
@@ -449,7 +466,7 @@ require_tags = [
 # `irq_ticks=[1-9]` evidences "the timer heartbeat really runs after START" and gives timeout scanning a tick source.
 [[gate]]
 name      = "sched-test"
-timeout_s = 8
+timeout_s = 20
 log       = "build/logs/sched.log"
 require   = [
   # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
@@ -486,7 +503,7 @@ require_tags = [
 # non-zero `irq_ticks` ensures all this happens after the START phase with IRQs enabled.
 [[gate]]
 name      = "fs-test"
-timeout_s = 10
+timeout_s = 20
 log       = "build/logs/fs.log"
 require   = [
   # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the

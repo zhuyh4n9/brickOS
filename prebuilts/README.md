@@ -58,6 +58,7 @@ prebuilts/
 |---|---|---|---|
 | `prebuilts/seed/` | `brickie` 自己的**自举种子**(预编译件) | **是**(资产) | `make tools-prebuilt`(ADR-0004) |
 | `prebuilts/toolchain/` | **外部工具链**: 下载缓存 `.cache/` + 解压结果(`arm-gnu-toolchain-*`/`make`/`ninja`)+ `toolchain.mk`(体积以 GB 计) | **否**(`.gitignore` 一条规则覆盖整个子目录) | `make prebuilt` / `python3 tools/fetch-prebuilt.py`(锁版本 + SHA256; ADR-0002) |
+| `prebuilts/toolchain/qemu/` + `prebuilts/toolchain/bin/` | **宿主兼容垫片**: 宿主自带 QEMU < 10.2 时补一份 10.2.1(`-device emmc` 的硬前提, 见主 README) | **否**(同上一条规则) | `bash tools/fetch-qemu.sh`(**自带 PIN 表 + SHA256**; 不写进 `toolchain.lock.toml` —— 那份锁管交叉工具链) |
 
 > **为什么不再用两个顶层目录**(`prebuilt/` 单数 vs `prebuilts/` 复数): 两个名字只差一个 `s` 而语义相反,
 > 是个反复踩的脚。现按"**一个顶层目录 + 子目录分侧**"收敛, 见 ADR-0005(它取代 ADR-0002 §2-1 与 ADR-0004 §2 的"不合并"条文)。
@@ -140,6 +141,7 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 | 2026-10-08 | 0.1.0 | `x86-64/linux` | 种子扩为**三件** `{brickie,brickie-gen,brickie-core}`: **L0/L1 `brickie-core` 进载荷与种子**, `schema/**` 一并进载荷(缺 core ⇒ `make tools-prebuilt` FAIL) |
 | 2026-10-12 | 0.1.0 | `x86-64/linux` | 换工具链重发: 编 `brickie-core` 的 rustc 由 1.93.1 变成**工作区自带的 1.99.0**(apt 的 cargo 1.75 读不了 `Cargo.lock` v4); `make core` 起**自动发现** `.toolchain`, 太旧的 cargo 当场 FAIL 并给出修法 |
 | 2026-10-12 | 0.1.0 | `x86-64/linux` | 入口 ELF 与 core 重发: `brickie-core` 增 **vendor 代码的单元级 cflags**(`[build].cflags` 以前被解析但被丢掉)与 **APP 挂载计划**的生成(`br_mount_plan_t` 表 + `mount_plan_apply()`); 工具链改动 ⇒ 三件一起重发。★ 本行与 §5.1 的表**必须同一次改**(重发种子的人负责刷新指纹) |
+| 2026-10-12 | 0.1.0 | `x86-64/linux` | 入口 ELF 增补**运行前设备模型预检**: 步骤 argv 里出现 `-device emmc` 而解析到的 QEMU < **10.2** 时, 不再把 QEMU 那句 `'emmc' is not a valid device model name` 原样漏给用户, 而是当场给出原因(eMMC 卡模型 9.1 就有, 10.2 才成为**可插拔**设备)与修法(`tools/fetch-qemu.sh`); 顺带把 `runner.StepError` 在 CLI 里接住。只动了 `brickie` 的 Python 载荷 ⇒ `brickie-core`/`brickie-gen` 两件**逐字节未变** |
 
 ### 5.1 当前种子指纹(实测)
 
