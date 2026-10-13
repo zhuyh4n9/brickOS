@@ -1,7 +1,7 @@
 /*
  * Core-private prototypes for the compiler support routines: not public surface (GCC emits the
  * calls itself). Kept in an internal header to satisfy -Wmissing-prototypes without adding names
- * to core/include/br/core/.
+ * to core/c_core/include/br/core/.
  * They must stay in core: it needs memset in the EARLY phase, while the POSIX runtime that owns
  * the POSIX symbol surface is a LATE-phase service, so the sets cannot be unified.
  */

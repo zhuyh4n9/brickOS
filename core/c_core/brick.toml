@@ -1,0 +1,39 @@
+schema = 1
+
+[plugin]
+name        = "core/c_core"
+plugin_type = "core"
+api_type    = "native"
+lang        = "c"
+phase       = "early"
+# Explicit prefix so the descriptor's hooks carry the core's own names (`br_core_*`): the only one
+# it actually emits is `.selftest = br_core_selftest` (the suite entry in selftest/).
+symbol_prefix = "br_core_"
+version     = "0.2.0.0"
+summary     = "内核本体(C 实现): 四阶段启动链 br_core_main + 插件管理器(扫段/拓扑/四相/自检) + 中断框架/内存/调度框架/同步/日志"
+license     = "WTFPL"
+
+# `core` is mandatory and singular: exactly one `plugin_type = "core"` plugin per image (solver
+# enforces it, the manager re-proves it at runtime). It defines **no lifecycle** -- early_init /
+# init / start are emitted as BR_PLUGIN_NO_HOOK -- because it is the plugin that *drives* the
+# others: `br_core_main()` runs the boot chain and `br_plugin_manager_*()` drives the phases.
+# The `core/` namespace holds implementations; `core/c_core` is the C one (an `r_core` for the
+# Rust implementation is planned).
+
+[[res]]
+kind     = "ram"
+used_kib = 16
+notes    = "静态部分: 中断描述符池/运行期表/域池 ≈ 8.3 KiB + trace 环 256×16 B = 4 KiB + 插件表/边表 + 工作队列 + 同步原语状态; 页表与三池本体不在本项(归 platform 的容量声明)"
+
+# No `[compat]`: `compat.core` is how the *other* plugins pin the core they are written against,
+# and the core cannot be compatible with itself. `[plugin].version` above is what they resolve to.
+
+# Self-test is **not** a lifecycle phase: the core plugin declares its suite here like any other
+# plugin, and the generated descriptor emits `.selftest = br_core_selftest` (the suite entry in
+# selftest/). Off ⇒ the product switch writes NO_HOOK and the suite is not compiled.
+[selftest]
+cases = 42
+
+[build]
+sources  = ["src/*.c", "src/*/*.c", "src/*/*.S"]
+includes = ["include"]

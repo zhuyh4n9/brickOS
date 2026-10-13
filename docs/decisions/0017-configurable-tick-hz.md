@@ -7,8 +7,8 @@
 > `tools/brickie/rust/src/model.rs`(解析 `[kernel].hz`)、
 > `tools/brickie/rust/src/build.rs`(`config_defines`: 转成 `-DBR_CFG_TICK_HZ=<hz>` 下发到全部 C 编译单元)、
 > `tools/brickie/templates/product/c/product.toml.tmpl` 与 `docs/contract.md` §7.2/R-18(声明面文档)、
-> `core/include/br/core/br_time.h`(`BR_CFG_TICK_HZ` 缺省 + `_Static_assert` + `BR_CFG_TICK_PERIOD_US`
-> + `br_clock_tick_hz()`)、`core/src/time.c`(实现 getter)、
+> `core/c_core/include/br/core/br_time.h`(`BR_CFG_TICK_HZ` 缺省 + `_Static_assert` + `BR_CFG_TICK_PERIOD_US`
+> + `br_clock_tick_hz()`)、`core/c_core/src/time.c`(实现 getter)、
 > `platform/qemu-aarch64/src/board_irq.c`(周期 = `BR_CFG_TICK_PERIOD_US`)、
 > `platform/qemu-aarch64/src/plat_qemu_virt.c`(arm 日志报 Hz/周期)、
 > `runtime/posix/include/time.h`(`clock_getres` 如实报 `1/HZ`)。

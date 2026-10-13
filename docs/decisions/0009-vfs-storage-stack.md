@@ -5,7 +5,7 @@
 > `brickie test fs-test` 与既有六道门禁全绿)。
 > 影响面(**新插件 6 件**): `framework/vfs-core/**`、`framework/dev-core/**`、
 > `framework/cdev-core/**`、`fs/tmpfs/**`、`fs/devfs/**`、`io/uart-pl011/**`;
-> `core/include/br/core/br_error.h`(**只加不破**: 补 5 个存储域错误码);
+> `core/c_core/include/br/core/br_error.h`(**只加不破**: 补 5 个存储域错误码);
 > `app/hello/src/main.c`(APP 的 start 接线存储域总套件);
 > `product.toml`(`[select]` 追加 3 件 + `[lint].allow_edges` 追加 1 条);
 > `tests/gates.toml`(新增 `fs-test` 门禁); `WORKAROUNDS.md`(新增两条 + 扩写 `br-wa-test-001`)。

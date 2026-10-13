@@ -107,6 +107,6 @@ br_bool br_spinlock_is_locked(const br_spinlock_t *s);
 /* Count of spins of at least one full round (always 0 on a single core). */
 br_u32 br_spinlock_contention(void);
 
-/* The sync selftest suite is declared in core/selftest/, not here (test surface). */
+/* The sync selftest suite is declared in core/c_core/selftest/, not here (test surface). */
 
 #endif /* BR_CORE_BR_SYNC_H */

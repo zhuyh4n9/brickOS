@@ -1,10 +1,10 @@
 # 0007 — 同步原语(mutex / semaphore / cond / spinlock)在 core 落地
 
 > 状态: **已落地**(宿主侧判据全绿; QEMU 侧端到端用例已接线, 依赖 F2 的调度框架)
-> 影响面: `core/src/sync/sync.c`(整体替换占位体)、`core/include/br/core/br_sync.h`(冻结面, 本刀未破)、
-> `core/src/time.c`(`br_deadline_from_now`)、`core/include/br/core/br_time.h`(`br_delay_*` 注释)、
+> 影响面: `core/c_core/src/sync/sync.c`(整体替换占位体)、`core/c_core/include/br/core/br_sync.h`(冻结面, 本刀未破)、
+> `core/c_core/src/time.c`(`br_deadline_from_now`)、`core/c_core/include/br/core/br_time.h`(`br_delay_*` 注释)、
 > `tests/host/sync_test.c`(新)、`tests/gates.toml`(`[[hosttest]]` + `[[gate]]` 各一条)、
-> `core/src/sched/sched_internal.h`(**只读引用**: TCB 布局 + 等待链四原语)
+> `core/c_core/src/sched/sched_internal.h`(**只读引用**: TCB 布局 + 等待链四原语)
 > 设计依据: `3-01` §7(同步原语, 117–139 行)/§14 CA-1(微秒)/CA-3(ISR 白名单)/CA-4(超时三态)/CA-5(面预算),
 > `3-02` §6.4(`br_irq_lock/unlock` 嵌套计数)/§11.3(v1 COOP 的 ISR→调度语义),
 > `3-03`(阻塞语义)、`6-01` §3.2(TC-SYNC-001..009)/§3.3(TC-TIME-001..003)/INV-1/INV-2
@@ -154,11 +154,11 @@ cond 的唤醒记账、spinlock 这四个字在设计里根本没有出现过**�
 
 **它是测试装置, 不是第二份目标实现**:
 
-* 目标侧的上下文切换是 `core/src/sched/switch.S` 的 aarch64 汇编; 宿主是 x86-64, 手写一遍
+* 目标侧的上下文切换是 `core/c_core/src/sched/switch.S` 的 aarch64 汇编; 宿主是 x86-64, 手写一遍
   目标切换汇编既无意义也不可执行。宿主只需要"能阻塞/能被唤醒"这一件事, `ucontext` 正好是
   这条最小能力, 且是 libc 标准设施(不引第三方)。
 * 等待链四原语与 TCB 布局在宿主侧按 `sched_internal.h` 的**冻结契约原样重实现**(30 行单链表,
-  不是算法); `core/src/sched/sched_core.c` **不参与**宿主编译(它含 `wfi` 内联汇编)。
+  不是算法); `core/c_core/src/sched/sched_core.c` **不参与**宿主编译(它含 `wfi` 内联汇编)。
 * 因此宿主侧证明的是**同步原语自己的正确性**(挂/摘链、所有权交接、超时三态), 不证明调度器;
   调度器由 F2 自己的用例与 QEMU 门禁负责。
 
@@ -213,7 +213,7 @@ cond 的唤醒记账、spinlock 这四个字在设计里根本没有出现过**�
 | 同一份 sync.c 的一致性用例(宿主) | 同上日志 | `[SYNCCONF] SUMMARY pass=12 fail=0 total=12`(TC-SYNC-001..009 + TC-TIME-001..003) |
 | 无线程挂起/无幽灵节点 | 同上日志 | 每个用例后 `br_waitq_len(head)==0`; 压测 3x50k 次后 mutex/sem 等待链均为 0 |
 | 随机化压测 | 同上日志 | `joined=3 incs=74991 expect=74991 overlap=0 errs=0 sem_count=3` |
-| 目标侧编译 + 链接 | `brickie test sync-test` | `ok cc core/src/sync/sync.c` / `ok cc core/src/time.c` / `ok ld build/brick.elf`(`br_waitq_*` 由 F2 的 `sched_core.c` 提供) |
+| 目标侧编译 + 链接 | `brickie test sync-test` | `ok cc core/c_core/src/sync/sync.c` / `ok cc core/c_core/src/time.c` / `ok ld build/brick.elf`(`br_waitq_*` 由 F2 的 `sched_core.c` 提供) |
 | **QEMU 端到端(sync-test 门禁)** | `brickie test sync-test` | `ok qemu sync-test`; `[SYNCCONF] SUMMARY pass=12 fail=0 total=12`(12 个 tag 全 PASS) |
 | 全门禁回归 | `brickie test -j16` | **全部全绿**: 宿主 `sync-test`/`string-test`/`mem-test`/`sched-test` + QEMU `smoke`/`irq-test`/`dbg-test`/`sync-test`/`plugin-test`/`sched-test` + 4 条脚本门禁 |
 | 目标实测 sleep 分辨率 | `build/logs/sync.log` | `sleep(1000us) -> measured=99473 us`; `lock_to(20000us) -> measured=96676 us`(均 ~1 个 100 ms tick) |
@@ -249,14 +249,14 @@ cond 的唤醒记账、spinlock 这四个字在设计里根本没有出现过**�
 
 | 文件 | 改动 |
 |---|---|
-| `core/src/sync/sync.c` | **整体替换占位体**: 四类对象 + `br_sync_conformance()`(1070 行) |
-| `core/src/time.c` | 新增 `br_deadline_from_now()`(文件后半, `br_clock_now()` 之后; 饱和不回绕 + INF 原样) |
-| `core/include/br/core/br_time.h` | 只改注释: 头注与 `br_delay_*` 的降级说明; 冻结面(类型/常量/声明)未动 |
+| `core/c_core/src/sync/sync.c` | **整体替换占位体**: 四类对象 + `br_sync_conformance()`(1070 行) |
+| `core/c_core/src/time.c` | 新增 `br_deadline_from_now()`(文件后半, `br_clock_now()` 之后; 饱和不回绕 + INF 原样) |
+| `core/c_core/include/br/core/br_time.h` | 只改注释: 头注与 `br_delay_*` 的降级说明; 冻结面(类型/常量/声明)未动 |
 | `tests/host/sync_test.c` | **新增**: ucontext 假调度器 + 宿主用例(36 条) |
 | `tests/gates.toml` | 追加 `[[hosttest]] name = "sync-test"` 与 `[[gate]] name = "sync-test"`(判据/正则见 §6) |
 | `docs/decisions/0007-sync-primitives.md` | 本文件 |
-| `core/include/br/core/br_sync.h` | **未改动**(冻结面: 布局/常量/签名/错误码口径照实现) |
-| `core/src/sched/**` | **未改动**(只读引用 `sched_internal.h`) |
+| `core/c_core/include/br/core/br_sync.h` | **未改动**(冻结面: 布局/常量/签名/错误码口径照实现) |
+| `core/c_core/src/sched/**` | **未改动**(只读引用 `sched_internal.h`) |
 | `app/hello/src/main.c` | **未改动**(F1 的领地)。F1 已自行把主循环的忙等 `br_delay_ms(BR_MAINLOOP_PERIOD_MS)` 换成 `br_task_sleep(BR_MAINLOOP_PERIOD_MS * BR_US_PER_MS)`(真阻塞切换) —— 与本 ADR §2.8 的建议一致, 本刀无需再动 |
 
 ## 8. 结论

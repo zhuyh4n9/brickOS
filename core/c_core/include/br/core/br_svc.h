@@ -27,6 +27,6 @@ const char *br_service_name_at(br_u32 index);   /* index out of range => BR_NULL
 /* Lookup count for this service. */
 br_u32 br_service_lookup_hits(const char *name);
 
-/* The selftest suite is declared in core/selftest/ (test surface, not plugin API). */
+/* The selftest suite is declared in core/c_core/selftest/ (test surface, not plugin API). */
 
 #endif /* BR_CORE_BR_SVC_H */

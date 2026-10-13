@@ -50,7 +50,7 @@ _Static_assert((BR_CFG_TICK_HZ) >= 1u && (BR_CFG_TICK_HZ) <= 100000u,
 /* One tick's length (us). A non-dividing HZ rounds down (per-tick error < 1 us). */
 #define BR_CFG_TICK_PERIOD_US (1000000u / (BR_CFG_TICK_HZ))
 
-/* Configured tick frequency (Hz), defined in core/src/time.c. */
+/* Configured tick frequency (Hz), defined in core/c_core/src/time.c. */
 br_u32 br_clock_tick_hz(void);
 
 /*

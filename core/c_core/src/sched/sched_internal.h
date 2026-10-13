@@ -1,5 +1,5 @@
 /*
- * Scheduler framework internal contract (core-private, only for core/src/sched/): pins the TCB
+ * Scheduler framework internal contract (core-private, only for core/c_core/src/sched/): pins the TCB
  * common-head layout (tcb_size = head + plugin tail) and the wait-chain nodes/ops embedded in the
  * TCB, so the sync path never allocates. switch.S reads fixed ctx offsets.
  */

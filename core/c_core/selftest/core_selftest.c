@@ -1,5 +1,5 @@
 /*
- * Single entry of the core selftest suite (core/selftest/): interface tests, kept out of the
+ * Single entry of the core selftest suite (core/c_core/selftest/): interface tests, kept out of the
  * production .c files so "selftest off" means the test code is not in the image. Aggregates only,
  * does not judge: returns the sum of failing items, each suite logs its own lines, and no failure
  * halts the run.

@@ -3,15 +3,15 @@
 > 状态: **已落地**(宿主 `sched-test` / `rr-test` / `work-test` 三条 + QEMU `smoke` /
 > `irq-test` / `sched-test` 等七条门禁全绿 —— 证据见 §5)。
 > 影响面(逐条见 §7):
-> `core/src/sched/sched_core.c`(**抢占接缝 + bh 禁令 + 新线程首次进入的 L2 形态**)、
-> `core/include/br/core/br_sched.h`(`br_sched_request_resched` / `br_sched_resched_pending`)、
-> `core/src/work/work_core.c` + `core/include/br/core/br_work.h`(**新**: 有界队列与 bh 执行)、
-> `core/src/irq/irq_core.c`(BH 分发 + §11.4.1 抑制 + IRQ 出口 drain + `br_irq_in_atomic`)、
-> `core/src/irq/irq_domain.c`(**打开 SLOW 域**: 父线 ISR = 单飞 + mask + 提交 bh)、
-> `core/src/irq/irq_pic.c`(绑定表的 `BR_IRQ_DISPATCH_BH` 折进描述符 flags)、
-> `core/include/br/core/br_irq.h`(`br_irq_stat_t` 的 bh 三项 + 上下文查询面 + 文档口径)、
-> `core/include/br/core/br_trace.h`(4 个新事件)、`core/src/trace.c`(名字表)、
-> `core/selftest/{sched_selftest.c,work_selftest.c,core_selftest.c}`、
+> `core/c_core/src/sched/sched_core.c`(**抢占接缝 + bh 禁令 + 新线程首次进入的 L2 形态**)、
+> `core/c_core/include/br/core/br_sched.h`(`br_sched_request_resched` / `br_sched_resched_pending`)、
+> `core/c_core/src/work/work_core.c` + `core/c_core/include/br/core/br_work.h`(**新**: 有界队列与 bh 执行)、
+> `core/c_core/src/irq/irq_core.c`(BH 分发 + §11.4.1 抑制 + IRQ 出口 drain + `br_irq_in_atomic`)、
+> `core/c_core/src/irq/irq_domain.c`(**打开 SLOW 域**: 父线 ISR = 单飞 + mask + 提交 bh)、
+> `core/c_core/src/irq/irq_pic.c`(绑定表的 `BR_IRQ_DISPATCH_BH` 折进描述符 flags)、
+> `core/c_core/include/br/core/br_irq.h`(`br_irq_stat_t` 的 bh 三项 + 上下文查询面 + 文档口径)、
+> `core/c_core/include/br/core/br_trace.h`(4 个新事件)、`core/c_core/src/trace.c`(名字表)、
+> `core/c_core/selftest/{sched_selftest.c,work_selftest.c,core_selftest.c}`、
 > `sched/rr/**`(**新插件**)、`sched/coop/{README.md,tests/smoke.toml}`(退役说明)、
 > `platform/qemu-aarch64/{include/br/board_irq.h,src/board_irq.c,src/irq_conf.c}`
 > (BH 直连线 + SLOW 父线 + 三条新用例)、
@@ -32,7 +32,7 @@
 | # | 要求 | 落点 | 一句话 |
 |---|---|---|---|
 | ① | RR 调度(插件) | `sched/rr/**` + core 的抢占接缝 | 时间片用尽 ⇒ **IRQ 出口换栈**(设计 §11.2 的接缝第一次真的切栈) |
-| ② | 中断下半部(core) | `core/src/work/work_core.c` + `irq_core.c`/`irq_domain.c` | ISR 可把工作**推迟**到 `eoi` 之后、`ERET` 之前执行 |
+| ② | 中断下半部(core) | `core/c_core/src/work/work_core.c` + `irq_core.c`/`irq_domain.c` | ISR 可把工作**推迟**到 `eoi` 之后、`ERET` 之前执行 |
 | ③ | workqueue 机制 | `br_work_submit` / `br_work_drain` / `BR_IRQ_F_DISPATCH_BH` / SLOW 域 | 有界静态队列 + 三种消费者(按线的 BH、SLOW 域 demux、任意 ISR 的裸提交) |
 
 **归属裁定(用户在本刀开头直接给出)**: workqueue **整体在 core**(队列 + `submit` +
@@ -45,7 +45,7 @@ bh 执行时机), 不再是"机制在插件"; 见 §3.1 的取舍与代价。
 | 上下文切换 asm / TCB 公共头 / 状态机 / 超时 / idle | **core**(不变, ADR-0006) | `sched_core.c` + `switch.S` |
 | **IRQ 出口的换栈**(谁、何时、怎么换) | **core**(本刀新) | `br_sched_irq_epilogue` → `resched_from_irq` |
 | **"什么时候该换"**(时间片) | **调度器插件** | `sched/rr/src/rr.c` 的 `on_tick` → `br_sched_request_resched()` |
-| 工作队列本体 / `br_work_submit` / drain 时机 | **core**(本刀新) | `core/src/work/work_core.c` + `irq_core.c` 的出口 |
+| 工作队列本体 / `br_work_submit` / drain 时机 | **core**(本刀新) | `core/c_core/src/work/work_core.c` + `irq_core.c` 的出口 |
 | 工作项(做什么) | **调用者**(驱动/ISR) | `br_work_submit(fn, arg)` |
 | 按线的分发形态(INLINE / BH) | **platform 数据 + 插件 attr** | 绑定表 `dispatch` / `BR_IRQ_F_DISPATCH_BH` |
 
@@ -320,20 +320,20 @@ QEMU 7 条(smoke/irq/dbg/sync/plugin/sched/fs)+ 脚本 4 条 —— 全绿。
 
 | 文件 | 改动 |
 |---|---|
-| `core/include/br/core/br_sched.h` | **加**: `br_sched_request_resched()` / `br_sched_resched_pending()`; `br_sched_irq_epilogue` 与 `br_sched_block_current` 的注释更新(抢占接缝 / bh 禁令)。**未破任何签名** |
-| `core/include/br/core/br_work.h` | **新**(`br_work_submit` / `br_work_drain` / `br_work_in_bh` / `br_work_stats_get` + 契约头注) |
-| `core/include/br/core/br_irq.h` | `BR_IRQ_F_DISPATCH_BH` 语义从"忽略"改为"生效"; `br_irq_stat_t` **追加** bh 三项; 新增 `br_irq_in_isr` / `br_irq_in_atomic` / `br_irq_lock_depth`; 域与分期口径的注释更新 |
-| `core/include/br/core/br_trace.h` | 追加 4 个事件 id(`BH_DEFER`/`BH_DROP`/`DISPATCH_SUPPRESSED`/`BH_CTX_VIOLATION`)+ `SCHED_PREEMPT` |
-| `core/src/sched/sched_core.c` | `s_need_resched` + `resched_from_irq()` + `br_sched_request_resched/resched_pending`; `br_sched_irq_epilogue` 消费它; bh 禁令三处; `br_sched_thread_entry` 的 P-1 |
-| `core/src/work/work_core.c` | **新**(有界静态环 / ISR-safe submit / 非重入 drain / bh 标志 / 统计) |
-| `core/src/irq/irq_core.c` | BH 分发(`br_irq_dispatch_defer` + `br_irq_bh_run`)+ §11.4.1 抑制 + 出口 `br_work_drain` + `br_irq_in_atomic` / `br_irq_lock_depth` / bh 计数; `br_irq_register` 的 flags **并**而不是覆盖(绑定表可能已给 BH) |
-| `core/src/irq/irq_domain.c` | SLOW 域**打开**; `br_irq_demux_fast` → `br_irq_demux`(一份循环两种上下文); 父线 ISR 的 SLOW 分支(单飞/mask/提交/回滚); `br_irq_domain_drop_of` 访问器; 子中断的 DISPATCH 位语义更新 |
-| `core/src/irq/irq_pic.c` | 绑定表的 `BR_IRQ_DISPATCH_BH` 折进描述符 flags |
-| `core/src/irq/irq_internal.h` | CPU-local 计数 + 域 drop 访问器 + bh 计数接口 |
-| `core/src/trace.c` | 名字表补 5 个 id |
-| `core/selftest/sched_selftest.c` | 按 `ops.kind` 分叉; 新 `TC-TASK-102/103/104`; 用例文本与注释 |
-| `core/selftest/work_selftest.c` | **新**(TC-WQ-001..007) |
-| `core/selftest/core_selftest.c` | 聚合 `br_work_selftest()` |
+| `core/c_core/include/br/core/br_sched.h` | **加**: `br_sched_request_resched()` / `br_sched_resched_pending()`; `br_sched_irq_epilogue` 与 `br_sched_block_current` 的注释更新(抢占接缝 / bh 禁令)。**未破任何签名** |
+| `core/c_core/include/br/core/br_work.h` | **新**(`br_work_submit` / `br_work_drain` / `br_work_in_bh` / `br_work_stats_get` + 契约头注) |
+| `core/c_core/include/br/core/br_irq.h` | `BR_IRQ_F_DISPATCH_BH` 语义从"忽略"改为"生效"; `br_irq_stat_t` **追加** bh 三项; 新增 `br_irq_in_isr` / `br_irq_in_atomic` / `br_irq_lock_depth`; 域与分期口径的注释更新 |
+| `core/c_core/include/br/core/br_trace.h` | 追加 4 个事件 id(`BH_DEFER`/`BH_DROP`/`DISPATCH_SUPPRESSED`/`BH_CTX_VIOLATION`)+ `SCHED_PREEMPT` |
+| `core/c_core/src/sched/sched_core.c` | `s_need_resched` + `resched_from_irq()` + `br_sched_request_resched/resched_pending`; `br_sched_irq_epilogue` 消费它; bh 禁令三处; `br_sched_thread_entry` 的 P-1 |
+| `core/c_core/src/work/work_core.c` | **新**(有界静态环 / ISR-safe submit / 非重入 drain / bh 标志 / 统计) |
+| `core/c_core/src/irq/irq_core.c` | BH 分发(`br_irq_dispatch_defer` + `br_irq_bh_run`)+ §11.4.1 抑制 + 出口 `br_work_drain` + `br_irq_in_atomic` / `br_irq_lock_depth` / bh 计数; `br_irq_register` 的 flags **并**而不是覆盖(绑定表可能已给 BH) |
+| `core/c_core/src/irq/irq_domain.c` | SLOW 域**打开**; `br_irq_demux_fast` → `br_irq_demux`(一份循环两种上下文); 父线 ISR 的 SLOW 分支(单飞/mask/提交/回滚); `br_irq_domain_drop_of` 访问器; 子中断的 DISPATCH 位语义更新 |
+| `core/c_core/src/irq/irq_pic.c` | 绑定表的 `BR_IRQ_DISPATCH_BH` 折进描述符 flags |
+| `core/c_core/src/irq/irq_internal.h` | CPU-local 计数 + 域 drop 访问器 + bh 计数接口 |
+| `core/c_core/src/trace.c` | 名字表补 5 个 id |
+| `core/c_core/selftest/sched_selftest.c` | 按 `ops.kind` 分叉; 新 `TC-TASK-102/103/104`; 用例文本与注释 |
+| `core/c_core/selftest/work_selftest.c` | **新**(TC-WQ-001..007) |
+| `core/c_core/selftest/core_selftest.c` | 聚合 `br_work_selftest()` |
 | `sched/rr/**` | **新插件**(manifest / 头 / 实现 / README / tests) |
 | `sched/coop/{README.md,tests/smoke.toml}` | 退役说明与 `platform = ["host"]` |
 | `platform/qemu-aarch64/include/br/board_irq.h` | 新增 `BR_IRQ_DOMAIN_SLOW` / `BR_IRQ_BH_LINE`(表长 5 → 7) |

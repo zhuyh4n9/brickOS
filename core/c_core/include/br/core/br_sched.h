@@ -13,7 +13,7 @@
 
 /* ---- threads ---- */
 
-/* TCB is opaque: the common header lives in `core/src/sched/sched_internal.h` and the plugin
+/* TCB is opaque: the common header lives in `core/c_core/src/sched/sched_internal.h` and the plugin
  * private tail follows it (`tcb_size` comes from the plugin). */
 typedef struct br_thread br_thread_t;
 
@@ -140,6 +140,6 @@ void *br_thread_priv(br_thread_t *t);
 br_u32 br_sched_task_count(void);
 br_u32 br_sched_ready_count(void);
 
-/* The scheduling selftest entry is declared in core/selftest/, not here (test surface). */
+/* The scheduling selftest entry is declared in core/c_core/selftest/, not here (test surface). */
 
 #endif /* BR_CORE_BR_SCHED_H */

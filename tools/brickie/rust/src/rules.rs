@@ -3,10 +3,10 @@
 
 use crate::diag::{Diag, Severity};
 
-pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "platform"];
+pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "platform", "core"];
 pub const API_TYPES: &[&str] = &["native", "runtime_adapter", "third_party"];
 pub const SUBKINDS: &[&str] = &["scheduler", "framework", "io", "fs", "service"];
-pub const NAMESPACES: &[&str] = &["app", "iface", "platform", "sched", "framework", "io", "fs", "service", "runtime"];
+pub const NAMESPACES: &[&str] = &["app", "iface", "platform", "core", "sched", "framework", "io", "fs", "service", "runtime"];
 pub const PHASES: &[&str] = &["early", "core", "late", "app"];
 pub const SCHED_CLASSES: &[&str] = &["SAFE_PREEMPT", "COOP_ONLY", "TT_SAFE"];
 pub const SCHED_KINDS: &[&str] = &["coop", "preempt", "tt"];
@@ -94,6 +94,9 @@ pub fn namespace_plugin_type(ns: &str) -> Option<&'static str> {
         "app" => Some("app"),
         "iface" => Some("interface"),
         "platform" => Some("platform"),
+        // `core` is a namespace of implementations (`core/c_core`, future `core/r_core`), not a
+        // language marker: the type is the same and exactly one of them is in an image.
+        "core" => Some("core"),
         "sched" | "framework" | "io" | "fs" | "service" => Some("ability"),
         // `runtime` is an ability plugin; it differs from `service` in size and role, not taxonomy.
         "runtime" => Some("ability"),
@@ -166,6 +169,13 @@ pub fn phase_reason(plugin_type: &str, subkind: Option<&str>, phase: &str) -> Op
     if phase == "early" {
         return None;
     }
+    // `core` has no lifecycle hooks at all (it drives the phase machine instead of taking part in
+    // it), so no init completion point other than "early" (= no `init` hook) can be asserted.
+    if plugin_type == "core" {
+        return Some(format!(
+            "`plugin_type = \"core\"` defines no lifecycle: its `early_init`/`init`/`start` hooks are never emitted, so it has no init completion point and `phase = {phase}` cannot be asserted (only `early` = \"no init hook\" applies) (§7.2)"
+        ));
+    }
     let allowed: &[&str] = if is_service_like(plugin_type, subkind) {
         &["late"]
     } else if plugin_type == "app" {
@@ -200,6 +210,8 @@ pub fn max_privilege_level(plugin_type: &str, subkind: Option<&str>) -> &'static
     match plugin_type {
         "app" | "interface" => "P0",
         "platform" => "P4",
+        // core owns the boot chain: page tables + MMU activation are machine-level (§3.4 P4).
+        "core" => "P4",
         "ability" => {
             if subkind == Some("scheduler") {
                 "P3"
@@ -415,10 +427,21 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
 
 /// `plugin_type` direction table: whether consumer → provider is permitted. The platform → platform
 /// entry is not permitted (`platform` is exactly one per image, so self-dependency is impossible).
+/// `core` is the base every other plugin is written against, so depending on it is always permitted.
+/// `core` → `core` stays forbidden (exactly one core, same reason as platform). Core reaches the
+/// platform through the platform *contract* (`br/platform/**`) and registered ops, so a
+/// `core → platform` edge is legal but neither side may turn it into an `init` edge: the two call
+/// each other (platform's entry `bl br_core_main`, core's `br_plat_ticks_*`), and that cycle is
+/// broken by the hard two-step boot chain, not by the topological sort.
 pub fn dep_direction_ok(consumer_pt: &str, provider_pt: &str, provider_is_third_party: bool) -> bool {
+    if provider_pt == "core" && consumer_pt != "core" {
+        return true;
+    }
     match consumer_pt {
         // platform: nothing allowed (lowest SoC level, depends on no plugin)
         "platform" => false,
+        // core: no plugin-level dependency except the platform contract / ability mechanisms
+        "core" => !provider_is_third_party && matches!(provider_pt, "platform" | "ability"),
         // ability: platform, ability (one-way) and third_party allowed / interface forbidden
         "ability" => {
             provider_is_third_party
@@ -442,8 +465,9 @@ pub fn api_type_edge_reason(
     provider_api: &str,
     kind: &str,
 ) -> Option<String> {
-    // Pure consumers (app/interface) are exempt from api_type prohibitions.
-    if !matches!(consumer_pt, "ability" | "platform") {
+    // Pure consumers (app/interface) are exempt from api_type prohibitions. `core` is a provider
+    // with a surface, so a `native` core must not reach into `runtime_adapter`/`third_party`.
+    if !matches!(consumer_pt, "ability" | "platform" | "core") {
         return None;
     }
     if consumer_api == "native" && provider_api == "runtime_adapter" {

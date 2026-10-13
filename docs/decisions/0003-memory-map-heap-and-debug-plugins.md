@@ -190,7 +190,7 @@ tag 一个不缺** —— 与 `irq-test` 同一纪律: 被裁掉的用例也算�
   ① `br_heap_stats_t` 没有 contig 侧错误计数(`bad_free` / `size_mismatch` 只有 core 内部
   计数 + 日志)—— 观测不到; ② `br_mem_layout_t` 没有"DMA 池是否就绪"的显式标志
   (靠 `dma.size > 0` 隐含, 因为 `size == 0` 已被 `-EINVAL` 挡住, 语义可判但不直白);
-  ③ TLSF 的单实例接口是 **core 私有**(`core/src/mem/tlsf_internal.h`), 不对外
+  ③ TLSF 的单实例接口是 **core 私有**(`core/c_core/src/mem/tlsf_internal.h`), 不对外
   —— 宿主用例直接 include 它, 别的插件不许用; ④ `br_heap_walk` 的回调内**不得**
   alloc/free(实现用"原地反转存活链"换 O(n) 升序, 零额外内存)。
 - **已知的覆盖缺口(用例没走到, 不是实现没有)**: ① contig 的"前导空洞切块"分支
@@ -218,7 +218,7 @@ tag 一个不缺** —— 与 `irq-test` 同一纪律: 被裁掉的用例也算�
 ⇒ 链接直接红:`undefined reference to memcpy` / `relocation truncated to fit: R_AARCH64_CALL26`。
 `-ffreestanding -fno-builtin` 关掉的是**内建识别**, 不是**中端 lowering** —— 这条区别只有
 链接器会告诉你。
-**修**: 新增 `core/src/string.c`(memcpy/memmove/memset/memcmp 四件 + 私有头
+**修**: 新增 `core/c_core/src/string.c`(memcpy/memmove/memset/memcmp 四件 + 私有头
 `string_internal.h`), 定位是"编译器支持例程"而非 libc(不是 native API, 不进 48 函数面;
 将来 `svc-posix` 交付 POSIX 符号面时应删掉本文件以归一符号)。
 
@@ -255,7 +255,7 @@ libcall**:
 "panic 打印 → 再 fault → 又走 panic → 再 fault"会**无界递归**, 每次压 0x140 B 异常帧 ⇒
 第三次吃穿 64 KiB 启动栈(这次落进的是页表), 结果是**原始 fault 现场彻底丢失** ——
 这正好解释了 5.2 里"为什么第一层现场看起来完全不像 memcpy 的问题"。
-**修**: `core/src/panic_internal.h`(core 私有)提供 `br_panic_in_progress()` /
+**修**: `core/c_core/src/panic_internal.h`(core 私有)提供 `br_panic_in_progress()` /
 `br_panic_halt()`; `panic.c` 在打印**之前**置重入标志; `irq_fault.c` 在 `in_fault++`
 之后、任何留痕/打印/handler **之前**判定 —— panic 输出期间再 fault ⇒ **静默停机**
 (不打印、不取锁、不碰任何可能已损坏的设施)。行为退化为

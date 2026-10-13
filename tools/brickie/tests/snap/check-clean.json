@@ -36,7 +36,7 @@
     ],
     "summary": {
       "closure": {
-        "plugins": 5,
+        "plugins": 6,
         "ram_kib": 48,
         "stack_kib": 4
       },

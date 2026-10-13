@@ -185,8 +185,8 @@ Exit code 0 all green / 1 any failure; failure details go to stdout.
   "outputs": {"obj_dir": "build/obj", "elf": "build/brick.elf",
               "bin": "build/brick.bin", "map": "build/brick.map"},
   "state_path": "build/gen/build-state.json", "gen_dir": "build/gen",
-  "units": [{"name":"core","dir":"","plugin":null,"sources":3,"includes":["core/include"],
-             "defines":[],"sources_list":["core/src/…"]}],
+  "units": [{"name":"core/c_core","dir":"core/c_core","plugin":"core/c_core","sources":3,
+             "includes":["core/c_core/include"],"defines":[],"sources_list":["core/c_core/src/…"]}],
   "unit_count": 8, "source_count": 30,
   "tools": [ … see below … ],
   "steps": [ … see below … ], "steps_total": 32, "steps_todo": 32, "up_to_date": 0,
@@ -270,7 +270,7 @@ Field shapes are described by `schema/*.schema.json` (BRV-D2: only expresses **s
 schema = 1
 [plugin]
 name        = "service/crypto"    # ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$  globally unique
-plugin_type = "ability"           # app | interface | ability | platform
+plugin_type = "ability"           # app | interface | ability | platform | core
 api_type    = "native"            # native | runtime_adapter | third_party
 subkind     = "service"           # scheduler | framework | io | fs | service (ability only)
 lang        = "c"                 # c | cxx | rust
@@ -391,8 +391,7 @@ hz = 200                           # tick frequency (Hz; cf. Linux CONFIG_HZ); d
                                    # ⇒ 5 ms per tick. brickie build turns it into -DBR_CFG_TICK_HZ and passes it to all compilation units (ADR-0017)
 
 [build]                            # ★ product-level build policy: flag tables + artifact locations + core-proper source set (S1 of ADR-0003)
-core_sources  = ["core/src/*.c", "core/src/*/*.c"]   # source set of the core proper (**not a plugin**), relative to the repository root
-core_includes = ["core/include"]   # include directories of the core proper, relative to the repository root
+selftest_sources = ["core/c_core/selftest/*.c"]   # appended to the core plugin's unit (product-level switch, ADR-0010/0031)
 gen_sources   = ["build/gen/**/*.c"]  # generated-artifact source set (produced by brickie gen); v0.1 may be []
 cflags        = ["-std=c11", "-O2"]   # required (empty ⇒ BRV-BLD-0010: the tool carries no default policy)
 asflags       = ["-g3"]
@@ -430,8 +429,8 @@ bin_dir = "build/hosttest"         # optional; default build/hosttest
 
 [[hosttest]]                       # host executable case: compile → run → exit code is the criterion
 name     = "string-test"
-sources  = ["core/src/string.c", "tests/host/string_test.c"]
-includes = ["core/include", "tests/host"]
+sources  = ["core/c_core/src/string.c", "tests/host/string_test.c"]
+includes = ["core/c_core/include", "tests/host"]
 defines  = ["BR_HOSTTEST=1"]       # optional
 depends  = ["other-hosttest"]      # optional: run it before this case (topological expansion)
 timeout_s = 30                     # optional
@@ -447,7 +446,7 @@ expect       = "timeout"           # optional; default timeout (the image being 
 
 [[script]]                         # script gate: run a script → exit code + optional stdout regex
 name    = "check-string"
-argv    = ["bash", "tools/check-string.sh", "build/obj/core/src/string.o"]
+argv    = ["bash", "tools/check-string.sh", "build/obj/core/c_core/src/string.o"]
 require = ["ok   compiler supports routines without self-recursion"]
 forbid  = []
 
@@ -460,8 +459,8 @@ post = ["check-string", "check-headers"]   # short list run automatically after 
 ```
 
 > **Why `check-headers` deserves a gate**: a stray `*/` in a comment **closes the comment early**,
-> and the most common source of that mistake is path globs — `core/src/sched/*.c`, `platform/*/src/link.ld`,
-> `core/src/sync/**` all contain `*/` (this repo has stepped on it three times). Such an error "compiles" as an illusion:
+> and the most common source of that mistake is path globs — `core/c_core/src/sched/*.c`, `platform/*/src/link.ld`,
+> `core/c_core/src/sync/**` all contain `*/` (this repo has stepped on it three times). Such an error "compiles" as an illusion:
 > a header included by no `.c` file is never compiled at all, and the error only explodes when the first consumer appears ⇒ we must proactively run
 > `-fsyntax-only` on every header (alone / all together / double-include).
 
@@ -503,9 +502,9 @@ silently not matching. "forbid for three kinds of FAIL" must be written as three
 | R-14 | Tool candidate order (`gcc` → `gcc-16` → …) and "which compiler to use" — who decides | **Both the candidate order and resolution are in core** (`data.tools[i].candidates/resolved`); L5 only does the final executability check and does not re-select | The make / ninja backend files are **generated artifacts** and must **bake in** the resolution result — if L5 or the generated artifact each resolved once, "who is compiling" would have two answers |
 | R-15 | Incremental criteria: "content stamp of the input set" or "argv fingerprint + input mtime" | **argv fingerprint + input (size, mtime)**, two criteria (same family as make / ninja); an upstream needing rebuild ⇒ explicitly passes the rebuild downstream | `.d` dependency files are a **product of the build** (they exist only after the first compile) ⇒ stamping the "input set" would make header dependencies recompile one extra round forever (measured); the timestamp criterion has no such self-reference |
 | R-16 | Who owns the red/green criteria of gate logs (require / forbid / PASS tag) | **The criteria are in core** (the `judge` command judges by the regexes in `tests/gates.toml`), L5 only collects the log body and executes | "Red/green" can have only one source of truth; otherwise text output, `--json` and the CI exit code would each judge once |
-| R-17 | `brick.toml [build]` / `product.toml [build]` have only `sources`/`includes` in `§7.1`, which cannot express the full compilation facts | Add `[build].defines` (plugin level) and, for `product.toml [build]`, `core_sources`/`core_includes`/`gen_sources`/`cflags`/`asflags`/`ldflags`/`obj_dir`/`[build.release].{cflags,asflags,ldflags}_extra`, plus the whole platform `[build.target]`/`[build.target.qemu]` | "How to compile" must be writable in **one** declaration surface (otherwise we are back to Makefile literals); the shapes are added to `schema/*.schema.json` and §7.1/§7.2, pending back-feed into design §7.1/§7.2 |
+| R-17 | `brick.toml [build]` / `product.toml [build]` have only `sources`/`includes` in `§7.1`, which cannot express the full compilation facts | Add `[build].defines` (plugin level) and, for `product.toml [build]`, `gen_sources`/`selftest_sources`/`cflags`/`asflags`/`ldflags`/`obj_dir`/`[build.release].{cflags,asflags,ldflags}_extra` (`core_sources`/`core_includes` were retired by ADR-0031: the core is a plugin and declares its own sources), plus the whole platform `[build.target]`/`[build.target.qemu]` | "How to compile" must be writable in **one** declaration surface (otherwise we are back to Makefile literals); the shapes are added to `schema/*.schema.json` and §7.1/§7.2, pending back-feed into design §7.1/§7.2 |
 | R-18 | How product-level **semantic configuration** (first item = tick HZ) enters compilation | `product.toml [kernel].hz` (integer, default 200) is turned by `brickie build` into `-DBR_CFG_TICK_HZ=<hz>` and passed to **all** compilation units (core/plugins/generated); this define is separate from generic `cflags` and uses the `config_defines` channel | Do not write bare `-D` into `cflags`: a semantic key can be validated by `schema/product.schema.json` (`integer` + `minimum: 1`), and "how many timer interrupts per second" has only one source of truth (core's jiffies and the platform's reload period read the same macro; ADR-0017) |
-| R-19 | How declared dependencies become **compile-time facts** (previously `-I` was a global union, and undeclared cross-plugin `#include` silently compiled) | The include surface of each `build` unit = `core_includes` + its own + the includes of every plugin in the **transitive closure of declared dependencies** (core additionally gets platform headers; `build/gen` gets the headers of all selected plugins); plus a **declaration ↔ use** cross-check (scan source `#include`s, map to the provider, report if outside the declaration closure); the deps domain of `check` uses the same convention as `build` | Narrowing `-I` alone is not enough: the target toolchain's glibc headers would cover common names like `unistd.h` (not "header not found" but silently switching to the host libc declarations) ⇒ a criterion independent of the compiler search path is required; both places share `model::cross_plugin_includes()` to avoid divergence (ADR-0018) |
+| R-19 | How declared dependencies become **compile-time facts** (previously `-I` was a global union, and undeclared cross-plugin `#include` silently compiled) | The include surface of each `build` unit = the selected core plugin's `[build].includes` + its own + the includes of every plugin in the **transitive closure of declared dependencies** (the core unit additionally gets platform headers; `build/gen` gets the headers of all selected plugins); plus a **declaration ↔ use** cross-check (scan source `#include`s, map to the provider, report if outside the declaration closure); the deps domain of `check` uses the same convention as `build` | Narrowing `-I` alone is not enough: the target toolchain's glibc headers would cover common names like `unistd.h` (not "header not found" but silently switching to the host libc declarations) ⇒ a criterion independent of the compiler search path is required; both places share `model::cross_plugin_includes()` to avoid divergence (ADR-0018) |
 
 > **Supplementary rulings on the Rust side**: implementing the solving/validation/interface engine forced a batch of finer conventions
 > (S-1…S-19: first publish = create the record without advancing segments, `closure` does not scan `requires_iface` while `check` does,

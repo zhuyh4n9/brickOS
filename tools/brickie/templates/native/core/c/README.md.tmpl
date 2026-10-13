@@ -1,0 +1,40 @@
+# {{name}}
+
+> Plugin skeleton, generated once by `brickie new`. Afterwards **maintained by hand**.
+
+> One image contains **exactly one** `plugin_type = "core"` plugin, and it is mandatory: the core
+> is what drives the other plugins (boot chain + plugin manager). It defines **no lifecycle** —
+> no `early_init` / `init` / `start` hooks — so it never takes part in the phase machine it runs.
+
+## Declaration surface (single source of truth)
+
+| Item | Value |
+|---|---|
+| Plugin category `plugin_type` | `core` |
+| `api_type` | `{{api_type}}` |
+| Language `lang` | `{{lang}}` (v0.1 ships c only) |
+| `phase` | `{{phase}}` — always `early` for `core` (no `init` hook ⇒ no completion point) |
+| Initial version | `{{version}}` = `COMPAT_GEN.MAJOR.MINOR.REVISE` |
+
+The namespace `core/` holds **implementations** of the core (`core/c_core` today, `core/r_core`
+planned); exactly one is selected per image, and `[plugin].version` here is what every other
+plugin's `[compat].core` range resolves against.
+
+Field semantics: `docs/4-plugin/4-03-plugin-manifest.md`; v0.1 schema:
+`docs/2-toolchain/brickie/brickie-v0.1.md` §8.1.
+
+## Next steps (v0.1 loop)
+
+```sh
+brickie check                       # declaration-surface completeness check (composition-time validation)
+brickie gen                         # rebuild build/gen/** from brick.toml; --check only compares
+```
+
+`build/gen/{{name}}/plugin_desc.c` is a **generated file**, do not edit by hand — change
+`brick.toml`, then rebuild. Its three lifecycle fields are `BR_PLUGIN_NO_HOOK` by construction.
+
+## Scope limits
+
+v0.1 `check` is a **declaration-surface completeness checker** — it guarantees "this composition is
+logically consistent", **not** that "it compiles / runs correctly" (no compiler, no symbol table,
+no QEMU).

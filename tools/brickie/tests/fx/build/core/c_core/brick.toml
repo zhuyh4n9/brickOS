@@ -1,0 +1,13 @@
+schema = 1
+
+[plugin]
+name        = "core/c_core"
+plugin_type = "core"
+api_type    = "native"
+lang        = "c"
+phase       = "early"
+version     = "1.0.0.0"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

@@ -300,7 +300,7 @@ EROFS 的 `zmap.c`(压缩映射迭代)与 `decompress.c` 是移植里最重的�
   (contract §6.5)。本刀没有新增/变更任何接口单元(`TC-*` 用例不是接口面, 两件 FS 也不导出
   API)⇒ `brickie iface publish iface/posix --check` 报的正是"面未变 ⇒ 空操作"。
   于是版本这一轴的真值只有两处: `product.toml [product].version` 与
-  `core/include/br/core/br_version.h`(本刀都改到 0.2.0)。
+  `core/c_core/include/br/core/br_version.h`(本刀都改到 0.2.0)。
 * 两件 FS 的**卷级并发**没有锁: vfs-core / fs/tmpfs / 两件移植件都按 v1 的"FS 调用串行化"
   约定, 与"设备 ops 由驱动自锁"是两件事(后者是 `8-01` §4 对**设备**的要求)。本刀的
   症状由 §7 发现 6 的相位处置消掉, 但"两个 APP 线程同时读同一卷"这条路径**没有**保护 ——

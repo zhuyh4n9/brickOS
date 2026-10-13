@@ -15,6 +15,11 @@
         "file": "app/hsm/brick.toml",
         "phase": "app"
       },
+      "core/c_core": {
+        "deps": [],
+        "file": "core/c_core/brick.toml",
+        "phase": "early"
+      },
       "iface/hsm-api": {
         "deps": [
           {
@@ -58,7 +63,8 @@
       }
     },
     "roots": [
-      "app/hsm"
+      "app/hsm",
+      "core/c_core"
     ]
   },
   "diagnostics": [],

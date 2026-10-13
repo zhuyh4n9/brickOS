@@ -27,10 +27,6 @@
 extern const br_plugin_t __br_plugins_start[];
 extern const br_plugin_t __br_plugins_stop[];
 
-/* Weak ref to the core self-test entry (core/selftest/): not compiled when the switch is off,
- * so the symbol may be missing. NULL is the only criterion for "self-test not in this image". */
-extern int br_core_selftest(void) __attribute__((weak));
-
 /* ---- static bounds ---- */
 
 /* BR_PLUGIN_MAX (descriptor bound) is in plugin_mgr_internal.h; self-test sizes a temp array. */
@@ -385,6 +381,22 @@ BR_NORETURN void br_plugin_manager_run(void)
     /* Console is up from boot chain 2, so logs are meaningful from here on. */
     br_log_info("[PLUGIN] manager: .br_plugins section has %u descriptors", s_count);
 
+    /* Core is mandatory and singular (the analogous compose-time count is BRV-TAX-0020). Proven
+     * here too, because the section is what actually got linked: the boot chain above ran *inside*
+     * whichever core plugin is present, so 0 cores is unreachable, but 2 cores would silently let
+     * one of them own the boot chain. */
+    {
+        br_u32 cores = 0u;
+        for (br_u32 i = 0u; i < s_count; i++) {
+            if (s_plugins[i]->plugin_type == BR_PLUGIN_TYPE_CORE) {
+                cores++;
+            }
+        }
+        if (cores != 1u) {
+            br_panic("plugin_manager: an image must contain exactly one plugin_type=core plugin, found %u", cores);
+        }
+    }
+
     /* Duplicate names should have been caught at compose time (globally unique). */
     for (br_u32 i = 0u; i < s_count; i++) {
         for (br_u32 j = i + 1u; j < s_count; j++) {
@@ -562,21 +574,9 @@ void br_plugin_manager_selftest(void)
         ran++;
     }
 
-    /* Core's own suites share the switch with plugin self-tests; when off, core/selftest/ is
-     * not compiled and the weak reference reads BR_NULL. */
-    if (br_core_selftest != BR_NULL) {
-        const int rc = br_core_selftest();
-        if (rc < 0) {
-            errors++;
-            br_log_error("[SELFTEST] ERROR core: rc=%d", rc);
-        } else {
-            fails += (br_u32)rc;
-            br_log_info("[SELFTEST] core rc=%d", rc);
-        }
-        ran++;
-    } else {
-        skipped++;
-    }
+    /* Core's own suites are a plugin self-test like any other: they are reached through the core
+     * plugin's descriptor (its `.selftest` hook = br_core_selftest), so no side channel here. The
+     * suite sources are gated by the product switch and the descriptor emits NO_HOOK when off. */
 
     br_log_info("[SELFTEST] SUMMARY plugins=%u ran=%u skipped=%u fails=%u errors=%u",
                 s_count, ran, skipped, fails, errors);

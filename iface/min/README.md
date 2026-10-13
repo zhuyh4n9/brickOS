@@ -5,14 +5,14 @@ Interface 类别里的**极简别名层**: 把 APP 需要的 core native 面(日
 
 | 转出面 | 来源(单一真值) |
 |---|---|
-| `br_log_set_level` / `br_log_get_level` / `br_log_write` + `br_log_info/warn/error/debug` 宏 | `core/include/br/core/br_log.h` |
-| `br_clock_now` / `br_clock_freq_hz` / `br_clock_ticks_per_ms` / `br_clock_tick_hz` / `br_clock_tick_count`、`BR_US_PER_MS` | `core/include/br/core/br_time.h` |
-| `BR_PROTOTYPE_NAME` / `BR_VERSION_STRING` | `core/include/br/core/br_version.h` |
+| `br_log_set_level` / `br_log_get_level` / `br_log_write` + `br_log_info/warn/error/debug` 宏 | `core/c_core/include/br/core/br_log.h` |
+| `br_clock_now` / `br_clock_freq_hz` / `br_clock_ticks_per_ms` / `br_clock_tick_hz` / `br_clock_tick_count`、`BR_US_PER_MS` | `core/c_core/include/br/core/br_time.h` |
+| `BR_PROTOTYPE_NAME` / `BR_VERSION_STRING` | `core/c_core/include/br/core/br_version.h` |
 
 **皮肤里没有一行 core 实现** —— 头文件把 core 头原样 `#include` 进来(声明只有一份真值), `src/iface_min.c` 只有三个空钩子。
 
 ## 为什么不是 `form = "skin"`
-`form = "skin"` + `reexport_of = ["provider#unit"]` 用于再导出**另一个插件**的接口单元(如 `iface/posix` 再导出 `runtime/posix#posix`)。core **不是插件**、没有 `provider#unit`, 所以直通 core 只能是 `form = "api"`。
+`form = "skin"` + `reexport_of = ["provider#unit"]` 用于再导出**另一个插件**的接口单元(如 `iface/posix` 再导出 `runtime/posix#posix`)。★ ADR-0031 之后 core **是插件**(`core/c_core`), 形状上已经可以写 `reexport_of`; 本皮肤仍取 `form = "api"` 的理由是**语义性的** —— 它转出的是 core 的 native 面, 而 `form = "skin"` 要求 `reexport_of` 指向一个**存在的接口单元**, core 今天没有 `[[export]]`。
 
 ## 与 `iface/posix` 的分工
 

@@ -180,7 +180,7 @@ $ brickie iface status service/svc-posix#svc-posix   # 一致(hash sha256:dd31f4
 6. **`pread/pwrite` 非原子**(§2.7); **`F_SETLKW` 阻塞式记录锁不做**;
    **`rewinddir` 是"关掉再开"**(vfs 的迭代器没有重置槽位)。
 7. **`printf` 家族缺席**(libc 选型未拍); core 里有**三份私有的格式化子集**
-   (`core/src/log.c`、`panic.c`、`service/hexdump`)—— 规范做法是先提炼一个 `vsnprintf`。
+   (`core/c_core/src/log.c`、`panic.c`、`service/hexdump`)—— 规范做法是先提炼一个 `vsnprintf`。
 8. **设计侧回灌**(属设计仓库, 本 ADR 只登记):
    - `11-02` §2.2 把 `link/symlink/readlink` 判为 TR-D; 已实现 ⇒ **改档为 TR-A**
      (原型侧已改; `7-01` 的两个槽位与 `br_stat_t.nlink` 那几笔回灌登记在 **ADR-0013 §4.6**);

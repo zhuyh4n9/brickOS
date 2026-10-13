@@ -7,7 +7,7 @@
 > 工具侧: `2-toolchain/brickie/brickie-v0.1.md` §8.1(manifest)/§8.4(生成物布局)。
 > 本 ADR 覆盖 map 里的 `br-wa-entry-001` 第 ③ 条与 `br-wa-boot-001` 的**启动链部分**。
 >
-> ⚠ 命名: `core/include/br/core/br_plugin.h` 的文件头把本 ADR 写成
+> ⚠ 命名: `core/c_core/include/br/core/br_plugin.h` 的文件头把本 ADR 写成
 > `0005-plugin-manager-and-scheduler.md`。本文件的实际名是 `0005-plugin-manager.md`
 > (调度器归 F2 的 ADR-0006)。**头文件那一行需要主控改**(冻结件由主控维护)。
 
@@ -103,7 +103,7 @@ v0.1 的启动链是**替身链**: `start.S` 直调 `br_irq_cpu_init` → `br_pl
   forbid 判据), 启动横幅里的 `(EARLY/CORE/LATE -> …)` 曾**误触**裸词 `EARLY` 的
   forbid —— 主控把判据精确到 `us: EARLY)` 并补了正向 require `us: ok)`。即便如此,
   管理器的相名仍取小写: **判据不该被"恰好也用到这个词"的无关输出影响**。
-* **入口归属**: `br_core_main` 与 `core/include/br/core/br_main.h` **删除**
+* **入口归属**: `br_core_main` 与 `core/c_core/include/br/core/br_main.h` **删除**
   (裁定: 设计说它的归宿是"被拆掉")。它的三块内容分别落到:
   ① 时钟/日志起点 → `plugin_manager` 头部(那是 `core.init` 的落点, 见 2.6);
   ② 三套一致性用例 → platform 的 `start`(IRQ/MEM)与 service/dump 的 LATE `init`(DBG);
@@ -291,7 +291,7 @@ dump 会排到四个服务**之前**(而它要转调它们的 selftest)⇒ "编�
   也删掉了 —— `allow_edges` 现在是**空表**。
 * `platform/qemu-aarch64/src/irq_conf.c` / `mm_conf.c`: 把"由 `br_core_main` 调用"
   改成"由 platform 的 start() 调用"。
-* `core/include/br/core/br_plugin.h`: 把 ADR 文件名改成 `0005-plugin-manager.md`。
+* `core/c_core/include/br/core/br_plugin.h`: 把 ADR 文件名改成 `0005-plugin-manager.md`。
 * `app/hello/README.md` / `platform/qemu-aarch64/README.md`: 描述里的"`br_core_main`
   的归宿"应改成"已拆掉"。
 * `app/hello/src/main.c`: 已按主控裁决**移交 F2**(调度器接线: APP 线程化 + 交给

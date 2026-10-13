@@ -115,7 +115,7 @@ static inline u32 uboot_fat_get_unaligned_le32(const void *p)
 #define memalign(a, n)        ((void)(a), br_malloc(n))
 #define malloc_cache_aligned(n) br_malloc(n)
 
-/* Provided by core (core/src/string.c); use these four directly, do not rewrite. Core-private
+/* Provided by core (core/c_core/src/string.c); use these four directly, do not rewrite. Core-private
  * string_internal.h leaves the prototypes to here (the other side of -Wmissing-prototypes). */
 void *memcpy (void *dst, const void *src, size_t n);
 void *memmove(void *dst, const void *src, size_t n);

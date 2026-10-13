@@ -2,11 +2,11 @@
 
 > 状态: **已落地**(v0.2.0, QEMU virt aarch64)。
 > 影响面:
-> `core/include/br/core/br_plugin.h`(`br_plugin_t.selftest` 钩子 + `br_plugin_manager_selftest` 入口)、
-> `core/src/plugin/plugin_mgr.c`(START 之后新增 SELFTEST pass)、
-> `core/selftest/**`(**新**: `core_selftest.c` + 四套件的搬迁)、
-> `core/src/{plugin,svc,sched,sync}/**`(生产文件里的套件**搬走**)、
-> `core/include/br/core/{br_plugin,br_svc,br_sched,br_sync}.h`(测试入口**移出**对外头)、
+> `core/c_core/include/br/core/br_plugin.h`(`br_plugin_t.selftest` 钩子 + `br_plugin_manager_selftest` 入口)、
+> `core/c_core/src/plugin/plugin_mgr.c`(START 之后新增 SELFTEST pass)、
+> `core/c_core/selftest/**`(**新**: `core_selftest.c` + 四套件的搬迁)、
+> `core/c_core/src/{plugin,svc,sched,sync}/**`(生产文件里的套件**搬走**)、
+> `core/c_core/include/br/core/{br_plugin,br_svc,br_sched,br_sync}.h`(测试入口**移出**对外头)、
 > 各插件 `<plugin>/src/*_selftest.c`(**新**: 测试与生产分离)与 `brick.toml`(`[selftest]` 表、
 > 测试入口**移出** `[[export]]`)、
 > `product.toml`(`[selftest]` 开关 + `[build].selftest_sources`; 并删掉一条 `allow_edges`)、
@@ -27,10 +27,10 @@
 
 | 套件 | 实现在哪 | 谁驱动它 |
 |---|---|---|
-| `[PLGCONF]` | `core/src/plugin/plugin_mgr.c` | APP 的 `start` |
-| `[SVCCONF]` | `core/src/svc/svc.c` | APP 的 `start` |
-| `[TASKCONF]` | `core/src/sched/sched_core.c` | APP 的 `start` |
-| `[SYNCCONF]` | `core/src/sync/sync.c` | APP 的 `start` |
+| `[PLGCONF]` | `core/c_core/src/plugin/plugin_mgr.c` | APP 的 `start` |
+| `[SVCCONF]` | `core/c_core/src/svc/svc.c` | APP 的 `start` |
+| `[TASKCONF]` | `core/c_core/src/sched/sched_core.c` | APP 的 `start` |
+| `[SYNCCONF]` | `core/c_core/src/sync/sync.c` | APP 的 `start` |
 | `[VFSCONF]` | `framework/vfs-core/src/br_vfs.c` | APP 的 `start`(靠 `allow_edges` 豁免) |
 | `[IRQCONF]`/`[MEMCONF]` | `platform/…/src/{irq_conf,mm_conf}.c` | platform 自己的 `start` |
 | `[DEVCONF]`/`[CDEVCONF]`/`[IOCONF]` | `framework/{dev,cdev}-core`、`io/uart-pl011` | 各自的 `start` |
@@ -66,8 +66,12 @@
 ### 2.2 core 统一驱动: START 之后、`br_sched_run()` 之前(不是第五相)
 
 `br_plugin_manager_selftest()` 在 START 相跑完后、交给调度器之前, 按 **init 拓扑序**
-逐个调 `selftest`。core 自己的四套(连同存储域总套件)由 `core/selftest/core_selftest.c`
-聚合, 经**弱引用**被同一个函数调用。
+逐个调 `selftest`。core 自己的套件由 `core/c_core/selftest/core_selftest.c` 聚合。
+> ★ **后续(ADR-0031)**: core 已是第一类插件, 它的套件走**与其它插件完全相同的一条路** ——
+> `core/c_core/brick.toml` 声明 `[selftest]`, 生成物发 `.selftest = br_core_selftest`
+> (`symbol_prefix = "br_core_"`); 本 ADR 原先把这条写成"经**弱引用**被同一个函数调用",
+> 那根弱符号旁路(`plugin_mgr.c` 的 `br_core_selftest` 弱声明)**已随 ADR-0031 删除**。
+> 判决语义不变: 自检不是第五相, 仍在 START 之后、`br_sched_run()` 之前统一发生。
 
 **为什么不是第五相**: 相位是"能力完成点"(`1-01` §9/§6.2 的四相, `rank` 单调)、
 参与相位单调校验、也参与用例的 id 编号; 而自检是**验证**, 对所有插件都在**同一时刻**
@@ -94,15 +98,15 @@ enabled = "inherit"   # true | false | "inherit"（= 跟随 [product].stage: dev
 | 侧 | 关掉时发生什么 | 落地位置 |
 |---|---|---|
 | 插件 | 描述符 `.selftest` 写 `BR_PLUGIN_NO_HOOK` ⇒ `<plugin>/src/*_selftest.c` 无人引用 ⇒ `--gc-sections` 裁掉 | `plan.rs` 的 `facts.emit_selftest` |
-| core | `core/selftest/**` **不参与编译** ⇒ `br_core_selftest` 符号不存在 ⇒ 弱引用为 NULL ⇒ 跳过 | `build.rs` 的 `selftest_on` |
+| core | 描述符 `.selftest` 写 `BR_PLUGIN_NO_HOOK`(与其它插件同路径) ⇒ `core/c_core/selftest/**` **不参与编译** ⇒ 跳过 | `plan.rs` 的 `facts.emit_selftest` + `build.rs` 的 `selftest_on` |
 
-* 这就是 `[build].selftest_sources` 必须与 `core_sources` **分开**的原因:
-  `core_sources` 的通配(`core/src/*.c`)管不到 `core/selftest/`, 而"关掉时也把
-  `core/src/**` 里的套件一起排除"是做不到的(它们已经搬走了)。分开之后,
-  "要不要编"是一个**源集合**问题, 不是编译期 `#if`。
+* ★ ADR-0031 之后 core 的**生产源**在 `core/c_core/brick.toml [build]`(不在产品声明里),
+  而 `[build].selftest_sources` 仍在 `product.toml`: 自检开关是**产品策略**, 这些源只在开关
+  打开时被追加到 core 插件的构建单元。于是"要不要编"仍是一个**源集合**问题, 不是编译期 `#if`,
+  且产品级开关不需要去改插件自述。
 * 判据是**机械的**(两条, 实测过关闭态):
-  1. `nm` 里**没有**任何断言钩子符号 —— 关闭态实测: 11 个插件钩子 + `br_core_selftest`
-     全部消失, 只剩 `br_plugin_manager_selftest`(管理器自己的入口, 它必须一直在);
+  1. `nm` 里**没有**任何断言钩子符号 —— 关闭态实测: 全部插件钩子(含 `br_core_selftest`)
+     消失, 只剩 `br_plugin_manager_selftest`(管理器自己的入口, 它必须一直在);
   2. 日志里 `[SELFTEST] SUMMARY … ran=0`。★ 注意**不是**"没有 `[SELFTEST]` 行":
      管理器照旧打 banner 与 SUMMARY, 只是 `ran=0 skipped=15` —— 这是**诚实**的
      ("我跑了, 但没有任何钩子"), 比"什么都不打"更有诊断价值。
@@ -165,8 +169,8 @@ enabled = "inherit"   # true | false | "inherit"（= 跟随 [product].stage: dev
 9. **宿主侧用例(`tests/host/*.c`)继续直调套件**: 那里没有描述符、没有插件管理器、
    也没有 `product.toml` 开关 —— 宿主门禁的判据是**退出码**, 它就是要在宿主上
    无条件跑全部套件(CI 的"白捡 ASan"形态)。所以它们改为 `#include` 相应的
-   `core/selftest/*.c` 的**声明**并直接调用, 且 `tests/gates.toml` 的
-   `[[hosttest]].sources` 要把 `core/selftest/*.c` 列进去(见 §5)。
+   `core/c_core/selftest/*.c` 的**声明**并直接调用, 且 `tests/gates.toml` 的
+   `[[hosttest]].sources` 要把 `core/c_core/selftest/*.c` 列进去(见 §5)。
 10. **`service/dump` 不再替别人编排**: 它以前在 LATE init 里转调另外四件的 selftest
     (因为当时没有统一驱动者)。现在 core 驱动全部五件, dump 只报**自己**的用例。
     ⇒ `[DBGCONF] SUMMARY` 的含义从"调试域合计(含四件子套件)"收窄为"dump 自己的用例";
@@ -193,7 +197,7 @@ enabled = "inherit"   # true | false | "inherit"（= 跟随 [product].stage: dev
 **本刀交付的**
 * `br_plugin_t.selftest` + `br_plugin_manager_selftest()`: 一个统一的、有汇总行的自检时机。
 * 11 个插件的测试与生产分离(其中 5 个是搬迁, 4 个是"本来就分离, 补钩子", 2 个见下);
-  core 的四套搬进 `core/selftest/`。
+  core 的四套搬进 `core/c_core/selftest/`。
 * `product.toml [selftest]` 的生成期开关, 两条路径(描述符 NO_HOOK + core 源集合)。
 * 11 个测试入口**移出** `[[export]]`, 冻结面因此更干净。
 * APP 的 `start` 变回纯业务, **`allow_edges` 又回到一条**(`app → platform`)——
@@ -219,7 +223,7 @@ enabled = "inherit"   # true | false | "inherit"（= 跟随 [product].stage: dev
 3. **宿主侧 `tests/host/*.c` 仍直调套件**(§3 裁定 9): 那里没有"开关"的概念, 所以
    `product.toml [selftest] = false` 对宿主门禁**无效** —— 宿主永远跑全部用例。
    这是刻意的(CI 要全量), 但值得写明, 免得有人以为关掉开关就能关掉宿主测试。
-4. **`core/selftest/core_selftest.c` 的聚合顺序是手工维护的**(4 行 `fails += ...`)。
+4. **`core/c_core/selftest/core_selftest.c` 的聚合顺序是手工维护的**(4 行 `fails += ...`)。
    新增一套 core 用例要记得加一行 —— 没有"自动发现"(原型口径: 无动态注册表)。
 5. **`service/dump` 的 `[DBGCONF] SUMMARY` 含义收窄**(§3 裁定 10): 已有注释说明, 但
    外部文档(设计 `5-01`/`6-01`)若描述了"dump 汇总四件"的口径, 需要同步(属设计仓库)。
@@ -238,7 +242,7 @@ enabled = "inherit"   # true | false | "inherit"（= 跟随 [product].stage: dev
   4. `1-01` §9 的启动序列图可以在 START 之后补一个注:"自检(非相)" —— 便于读者对上
      日志里的 `[SELFTEST]` 段。
 * `tests/gates.toml`: 7 道门禁各加了一条 SELFTEST 判据, 并给
-  `[[hosttest]] sched-test`/`sync-test` 的 sources 补了 `core/selftest/*.c`(§3 裁定 9)。
+  `[[hosttest]] sched-test`/`sync-test` 的 sources 补了 `core/c_core/selftest/*.c`(§3 裁定 9)。
 * 接口快照: 11 个测试入口移出 `[[export]]` ⇒ 相关 `api/iface/**` 快照与
   `brick.toml` 的 `[[export]].hash` 必须重发(`brickie iface publish`), 否则
   `brickie iface status` 会报不一致。

@@ -32,7 +32,7 @@
 - `priority` 在 coop 下**被忽略**(属性是建议, 语义归调度插件)。
 
 ## 与 core 的接缝(为什么这么分)
-- TCB 的**公共头**在 `core/src/sched/sched_internal.h`(冻结布局): 状态/名字/栈/退出码/`wait_status`/`wait_next`/`ctx[13]`。插件只拿不透明指针 + `br_thread_priv()` 的私有尾。
+- TCB 的**公共头**在 `core/c_core/src/sched/sched_internal.h`(冻结布局): 状态/名字/栈/退出码/`wait_status`/`wait_next`/`ctx[13]`。插件只拿不透明指针 + `br_thread_priv()` 的私有尾。
 - **ICB 握手**: `wait_status` 是唯一的唤醒/超时赢家位。本插件不碰它 —— 只负责"BLOCKED 的人被唤醒后回到队列", 握手由 core 的 `br_sched_wake` / 超时扫描做。
 - `br_sched_irq_epilogue()` 在 coop 下**只扫超时表、不切栈**(Stage 1 的空接缝)。
 

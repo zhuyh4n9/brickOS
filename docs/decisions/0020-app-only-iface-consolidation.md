@@ -36,6 +36,11 @@
 * `plugin_type = "interface"`, `api_type = "native"`, `form = "api"`(与设计对 `iface-min`
   的分类一致); **无 `[[dep]]`**(直通 core; core 不是插件、没有 `provider#unit`,
   所以不能写 `reexport_of` —— 那正是它用 `form = "api"` 而不是 `form = "skin"` 的原因);
+  > ★ **后续(ADR-0031)**: core 之后成为第一类插件(`core/c_core`), 上面那条**形状上的**
+  > 理由(没有 `provider#unit`)因此失效 —— `reexport_of = "core/c_core#<unit>"` 语法上已经合法。
+  > `form = "api"` 的选择仍然成立, 但理由换成**语义性的**: 皮肤转出的是 core 的 native 面,
+  > 而 `form = "skin"` 要求 `reexport_of` 指向一个**存在的接口单元**, 而 core 今天没有
+  > `[[export]]`(`br_*` 家族尚未发布成单元, 见 ADR-0031 §4 遗留项 1)。core 发布单元那天, 这里可以重选。
 * 转出面只有 APP 需要的那一撮: `br_log_set_level/get_level/write` + 四个等级宏、
   `br_clock_now/freq_hz/ticks_per_ms/tick_hz/tick_count`、`BR_US_PER_MS`、
   `BR_PROTOTYPE_NAME` / `BR_VERSION_STRING`;

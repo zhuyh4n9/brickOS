@@ -133,7 +133,7 @@ static inline void uboot_erofs_put_unaligned_le32(u32 v, void *p)
 }
 
 /* ---- memory movement: memcpy/memset/memcmp/memmove are provided by core
- * (core/src/string.c) and may be used directly, but they have no public header, so the
+ * (core/c_core/src/string.c) and may be used directly, but they have no public header, so the
  * prototypes are written out here (also what -Wmissing-prototypes wants). Call sites keep the
  * plain names so ported EROFS/LZ4 code reads as a port; LZ4_copy8 uses the builtin instead. */
 void *memcpy (void *dst, const void *src, size_t n);

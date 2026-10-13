@@ -2,14 +2,14 @@
 
 > 状态: **已落地**(v0.2.0, QEMU virt aarch64; `smoke`/`plugin-test`/`irq-test`/`dbg-test`/
 > `sched-test`/`sync-test` 六道门禁全绿, `check-workarounds`/`check-headers`/`check-build` 一致)。
-> 影响面: `core/src/main.c`(**新**)、`core/include/br/core/br_main.h`(**新**)、
-> `core/include/br/core/br_plugin.h`(**只加不破**: 管理器拆成三个入口)、
-> `core/src/plugin/plugin_mgr.c`(拆 `br_plugin_manager_init` / `_platform_init` / `run`);
+> 影响面: `core/c_core/src/main.c`(**新**)、`core/c_core/include/br/core/br_main.h`(**新**)、
+> `core/c_core/include/br/core/br_plugin.h`(**只加不破**: 管理器拆成三个入口)、
+> `core/c_core/src/plugin/plugin_mgr.c`(拆 `br_plugin_manager_init` / `_platform_init` / `run`);
 > `platform/qemu-aarch64/src/start.S`(只 `bl br_core_main`)、
 > `platform/qemu-aarch64/src/plat_qemu_virt.c`(early_init 只留平台侧两件)、
 > `platform/qemu-aarch64/src/memmap.c`(只声明 region)、
 > `platform/qemu-aarch64/src/mmu.c`(`br_plat_mmu_init` → `br_plat_mmu_ops_register`; 硬件摘要留痕搬进 `activate`);
-> `core/include/br/core/br_irq.h` / `br_mem.h` / `br_mm.h` 与 platform 的 `br_plat.h` / `br_mmu.h`(注释同步)
+> `core/c_core/include/br/core/br_irq.h` / `br_mem.h` / `br_mm.h` 与 platform 的 `br_plat.h` / `br_mmu.h`(注释同步)
 > 设计依据: `1-01` §9(启动序列)/§6.2(生命周期四相)/§8(平台能力三层模式)、`3-04`(region 表 → 三池 → 恒等映射)、
 > `3-02` §14.3(中断初始化单向链; P-IRQ-5 的描述符池初始化)、`3-05` §2(plugin_manager)
 > 相关: ADR-0005(插件管理器; 本 ADR 还清它 §5 第 4 项"core.init 仍是权宜"这笔债)、
@@ -43,7 +43,7 @@ start.S(reset/BSS) → br_irq_cpu_init → br_plugin_manager_run()
 ### 2.1 `br_core_main()` = 四阶段启动链(唯一编排点)
 
 `platform/…/src/start.S` 只做 reset(选核 / 屏蔽异常 / EL2→EL1 / 栈 / 向量表 / BSS 清零),
-然后 `bl br_core_main()`; **汇编不再调任何子系统**。`br_core_main()`(`core/src/main.c`)按:
+然后 `bl br_core_main()`; **汇编不再调任何子系统**。`br_core_main()`(`core/c_core/src/main.c`)按:
 
 | 阶段 | 内容 | 对应设计 |
 |---|---|---|
@@ -71,7 +71,7 @@ start.S(reset/BSS) → br_irq_cpu_init → br_plugin_manager_run()
 
 | 原来在 `run()` 里 | 现在 |
 |---|---|
-| `br_clock_init` / `br_log_init` / 设日志等级 | `core/src/main.c` 阶段 ① |
+| `br_clock_init` / `br_log_init` / 设日志等级 | `core/c_core/src/main.c` 阶段 ① |
 | `scan()`(扫段 + 建表) + 找 platform | `br_plugin_manager_init()`(阶段 ①, **静默**) |
 | 跑 platform 的 `early_init` | `br_plugin_manager_platform_init()`(阶段 ②) |
 | 重名自证 / 建边 / 拓扑排序 / 相位驱动 | `br_plugin_manager_run()`(阶段 ④) |
@@ -89,7 +89,7 @@ start.S(reset/BSS) → br_irq_cpu_init → br_plugin_manager_run()
 
 * `br_plat_memmap_init()` **只声明** region 表(镜像/栈/五块池/MMIO)。
 * `br_plat_mmu_init()` 更名 **`br_plat_mmu_ops_register()`**, **只** `br_mm_register(&s_mm_ops)`。
-* `core/src/main.c` 阶段 ③ 调 `br_mem_init()` 与 `br_mm_activate()`; 失败 ⇒ `br_panic`
+* `core/c_core/src/main.c` 阶段 ③ 调 `br_mem_init()` 与 `br_mm_activate()`; 失败 ⇒ `br_panic`
   (此时 console 已起, 报得出)。
 * MMU 的**硬件摘要留痕**(SCTLR/pages/TTBR0/TCR/MAIR)搬进 platform 的 `mmu_activate()`
   —— 那是"平台对自己硬件事实"的留痕; core 的 `br_mem_init()` 另有"堆/池"摘要。两边各说
@@ -121,8 +121,8 @@ start.S(reset/BSS) → br_irq_cpu_init → br_plugin_manager_run()
 4. **入口名与命名空间**: `br_core_main`(`br_` 前缀 = core 独占命名空间, 设计 §7.2)。
    汇编里 `bl br_core_main` 与旧形态同形, 但与 `br_plugin_manager_run` 的语义边界清楚:
    "core 的入口" vs "插件管理器的入口"。
-5. **`core/src/main.c` 会不会被 `[build].core_sources` 自动纳入?** 会:
-   `product.toml` 写的是 `core/src/*.c`, 新增顶层 `.c` 无需改声明面(实测 `core` 单元由
+5. **`core/c_core/src/main.c` 会不会被 `[build].core_sources` 自动纳入?** 会(★ ADR-0031 之后该字段退役, 由 `core/c_core/brick.toml [build].sources` 的 `src/*.c` 覆盖):
+   `product.toml` 写的是 `core/c_core/src/*.c`, 新增顶层 `.c` 无需改声明面(实测 `core` 单元由
    18 → 19 个源)。**不改** `product.toml` 的构建段。
 6. **`br_plat_mmu_init` 改名的代价**: 它不在任何 `[[export]]` 里(是 platform 的内部启动
    入口), 所以改声明面/接口 hash 都不受影响(核对过 `brick.toml`/`plat.toml`)。
@@ -156,7 +156,7 @@ start.S(reset/BSS) → br_irq_cpu_init → br_plugin_manager_run()
 2. `br-wa-isa-001`: `mmu.c` 的页表构造仍暂居 platform 插件目录; 本刀只把"注册/激活"的
    边界划清, 没有把文件迁去 ISA 共享库。
 3. `br-wa-mem-001`: 池比例仍写死在 `memmap.c`, 没有 manifest 预算 → region 的生成链路。
-4. `core/include/br/core/br_plugin.h` 文件头引用的 ADR 文件名
+4. `core/c_core/include/br/core/br_plugin.h` 文件头引用的 ADR 文件名
    (`0005-plugin-manager-and-scheduler.md`)与实际不一致 —— 旧账, 冻结件由主控改。
 
 ## 6. 需要主控执行/注意的动作

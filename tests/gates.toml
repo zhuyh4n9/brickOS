@@ -35,36 +35,36 @@ cflags = [
 name     = "sync-test"
 # Main criterion for sync primitives: under test = sync.c (+ time.c's br_deadline_from_now + string.c),
 # stubs = ucontext fake scheduler in sync_test.c (really runs block/wake/timeout) + host_stubs.c.
-# The selftest suite (`core/selftest/sync_selftest.c`, ADR-0010) must be listed: the host exit code is
+# The selftest suite (`core/c_core/selftest/sync_selftest.c`, ADR-0010) must be listed: the host exit code is
 # sched/sync's **main criterion**; omitting the suite (moved out of the production .c) both breaks the
 # link and drops the whole case set. On host, selftest is **always on** — host tests run only in dev/CI,
 sources  = [
-  "core/src/sync/sync.c", "core/src/time.c", "core/src/string.c",
-  "core/selftest/sync_selftest.c",
+  "core/c_core/src/sync/sync.c", "core/c_core/src/time.c", "core/c_core/src/string.c",
+  "core/c_core/selftest/sync_selftest.c",
   "tests/host/sync_test.c", "tests/host/host_stubs.c",
 ]
 includes = [
-  "core/include", "core/src", "core/src/sched", "tests/host",
+  "core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "tests/host",
   "platform/qemu-aarch64/include",
 ]
 
 [[hosttest]]
 name     = "string-test"
-sources  = ["core/src/string.c", "tests/host/string_test.c"]
-includes = ["core/include", "core/src", "tests/host"]
+sources  = ["core/c_core/src/string.c", "tests/host/string_test.c"]
+includes = ["core/c_core/include", "core/c_core/src", "tests/host"]
 
 [[hosttest]]
 name     = "mem-test"
 # Same as the old Makefile's `mem-test: string-test`: run the support-routine case before the mem gate.
 depends  = ["string-test"]
 sources  = [
-  "core/src/mem/tlsf.c", "core/src/mem/mem.c", "core/src/mem/page.c",
-  "core/src/mm/mm.c", "tests/host/mem_test.c", "tests/host/host_stubs.c",
+  "core/c_core/src/mem/tlsf.c", "core/c_core/src/mem/mem.c", "core/c_core/src/mem/page.c",
+  "core/c_core/src/mm/mm.c", "tests/host/mem_test.c", "tests/host/host_stubs.c",
 ]
-includes = ["core/include", "core/src", "core/src/mem", "core/src/mm", "tests/host"]
+includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/mem", "core/c_core/src/mm", "tests/host"]
 
 # sched-test (host): semantic gate for the scheduler framework + **coop**.
-# The switch layer `core/src/sched/switch.S` builds **only on aarch64** (host is x86-64) => the case brings
+# The switch layer `core/c_core/src/sched/switch.S` builds **only on aarch64** (host is x86-64) => the case brings
 # its own ucontext `br_sched_switch_to()` plus clock/L2/log/panic stubs; shared rig in
 # `tests/host/host_sched.c` (interface/rationale in host_sched.h); this case holds coop-specific criteria.
 # Two criterion families: host-only FIFO/block-wake/timeout/sleep_until/idle,
@@ -75,19 +75,19 @@ includes = ["core/include", "core/src", "core/src/mem", "core/src/mm", "tests/ho
 name     = "sched-test"
 # Same support-routine prerequisite as the mem gate (the compiler may lower a block clear to memset).
 depends  = ["string-test"]
-# The `core/selftest/sched_selftest.c` suite is listed for the same reason as sync-test above (host is the
+# The `core/c_core/selftest/sched_selftest.c` suite is listed for the same reason as sync-test above (host is the
 # main criterion; the suite moved out of sched_core.c; selftest is always on host).
-# `core/src/work/work_core.c` must be compiled too: sched_core.c's bh ban and host_sched.c's
+# `core/c_core/src/work/work_core.c` must be compiled too: sched_core.c's bh ban and host_sched.c's
 # `br_irq_in_atomic()` both reference `br_work_in_bh()`.
-# Same for `core/src/trace.c`: after ADR-0011 sched_core.c's preempt/bh bans leave traces.
+# Same for `core/c_core/src/trace.c`: after ADR-0011 sched_core.c's preempt/bh bans leave traces.
 sources  = [
-  "core/src/sched/sched_core.c", "core/src/work/work_core.c",
-  "core/src/trace.c", "core/src/string.c",
-  "core/selftest/sched_selftest.c",
+  "core/c_core/src/sched/sched_core.c", "core/c_core/src/work/work_core.c",
+  "core/c_core/src/trace.c", "core/c_core/src/string.c",
+  "core/c_core/selftest/sched_selftest.c",
   "sched/coop/src/coop.c",
   "tests/host/host_sched.c", "tests/host/sched_test.c",
 ]
-includes = ["core/include", "core/src", "core/src/sched", "sched/coop/include", "tests/host"]
+includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "sched/coop/include", "tests/host"]
 
 # rr-test (host): semantic gate for **sched/rr** (round-robin preemption) (ADR-0011).
 # Shares the rig with sched-test; criteria are the "tick-driven preemption" family: AABB alternation / no
@@ -97,28 +97,28 @@ includes = ["core/include", "core/src", "core/src/sched", "sched/coop/include", 
 name     = "rr-test"
 depends  = ["string-test"]
 sources  = [
-  "core/src/sched/sched_core.c", "core/src/work/work_core.c",
-  "core/src/trace.c", "core/src/string.c",
-  "core/selftest/sched_selftest.c",
+  "core/c_core/src/sched/sched_core.c", "core/c_core/src/work/work_core.c",
+  "core/c_core/src/trace.c", "core/c_core/src/string.c",
+  "core/c_core/selftest/sched_selftest.c",
   "sched/rr/src/rr.c",
   "tests/host/host_sched.c", "tests/host/rr_test.c",
 ]
-includes = ["core/include", "core/src", "core/src/sched", "sched/rr/include", "tests/host"]
+includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "sched/rr/include", "tests/host"]
 
 # work-test (host): semantic gate for bottom halves / work queues (ADR-0011).
-# Under test = `core/src/work/work_core.c` (+ trace ring, to observe bh-ban traces);
+# Under test = `core/c_core/src/work/work_core.c` (+ trace ring, to observe bh-ban traces);
 # queue bounded/FIFO/budget/non-reentrant/bh context and bans — on target a full queue needs an IRQ storm.
 # Include sched_core.c + trace.c: the former gives the real ban path for blocking/yielding in bh, the latter
 [[hosttest]]
 name     = "work-test"
 depends  = ["string-test"]
 sources  = [
-  "core/src/work/work_core.c", "core/src/sched/sched_core.c", "core/src/trace.c",
-  "core/src/string.c",
+  "core/c_core/src/work/work_core.c", "core/c_core/src/sched/sched_core.c", "core/c_core/src/trace.c",
+  "core/c_core/src/string.c",
   "sched/rr/src/rr.c",
   "tests/host/host_sched.c", "tests/host/work_test.c",
 ]
-includes = ["core/include", "core/src", "core/src/sched", "sched/rr/include", "tests/host"]
+includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "sched/rr/include", "tests/host"]
 
 # ft-test (host): gate for the **file table (framework/file-table) + errno value range** (ADR-0012).
 # Why a host case is worthwhile: the table is a **pure algorithm** (contract header says "never dereferences
@@ -136,7 +136,7 @@ sources  = [
   "framework/file-table/src/ft_selftest.c",
   "tests/host/ft_test.c",
 ]
-includes = ["core/include", "framework/file-table/include", "tests/host"]
+includes = ["core/c_core/include", "framework/file-table/include", "tests/host"]
 
 # ! **Duplicate names are deliberate**: `sync-test` / `sched-test` appear in both `[[hosttest]]` and `[[gate]]`.
 #   One name means "two ways to run one case set" — host side (seconds, real blocking via ucontext) and
@@ -305,7 +305,7 @@ require_tags = [
 # build wiring); the logic *is* a script — that brickie orchestrates it (not the Makefile) is the point.
 [[script]]
 name    = "check-string"
-argv    = ["bash", "tools/check-string.sh", "build/obj/core/src/string.o"]
+argv    = ["bash", "tools/check-string.sh", "build/obj/core/c_core/src/string.o"]
 require = ["ok   compiler support routines have no self-recursion"]
 
 [[script]]

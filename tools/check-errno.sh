@@ -11,7 +11,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
-ERR_H="core/include/br/core/br_error.h"
+ERR_H="core/c_core/include/br/core/br_error.h"
 [ -f "$ERR_H" ] || { echo "FAIL: cannot find $ERR_H" >&2; exit 2; }
 
 status=0

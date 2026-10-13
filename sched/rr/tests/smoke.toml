@@ -1,6 +1,6 @@
 # sched/rr — conformance 用例(人写)
 #
-# 与 `br_sched_selftest()`(core/selftest/sched_selftest.c)打印的
+# 与 `br_sched_selftest()`(core/c_core/selftest/sched_selftest.c)打印的
 # `[TASKCONF] PASS/FAIL <id>` **一一对应**。★ 本件是 **preempt** 形态 ⇒ 套件会
 # **按 kind 分叉**: 跑共享用例 + `TC-TASK-102`(时间片抢占)与 `TC-TASK-103`
 # (L2 临界区内不发生抢占), 而 coop 的定义判据 `TC-TASK-101` 由 `sched/coop` 的

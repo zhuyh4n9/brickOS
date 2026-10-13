@@ -109,18 +109,6 @@
    "type": "object",
    "additionalProperties": true,
    "properties": {
-    "core_sources": {
-     "type": "array",
-     "items": {
-      "type": "string"
-     }
-    },
-    "core_includes": {
-     "type": "array",
-     "items": {
-      "type": "string"
-     }
-    },
     "gen_sources": {
      "type": "array",
      "items": {
@@ -177,7 +165,7 @@
      "items": {
       "type": "string"
      },
-     "description": "Source set of the core selftest suite (ADR-0010; not compiled when selftest is off). Separate from core_sources because core_sources globbing would cover core/selftest/**."
+     "description": "Selftest sources of the core plugin (ADR-0010), appended to the core plugin's unit; not compiled at all when selftest is off. Product-level because the selftest switch is product policy."
     }
    }
   },

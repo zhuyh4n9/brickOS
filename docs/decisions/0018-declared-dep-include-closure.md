@@ -49,9 +49,15 @@
 
 | 单元 | include 面 |
 |---|---|
-| 插件 `P` | `product.toml [build].core_includes` + `P` 自己的 `[build].includes` + **P 的声明依赖传递闭包内各插件的 includes** |
-| `core`(非插件) | `core_includes` + platform 插件的 includes(core.init 阶段③依赖 platform 数据; `br_plat.h`/`br_mmu.h` 是设计内的 core→platform 方向) |
-| `build/gen` | `core_includes` + 全部被选插件的 includes(生成物要包含各插件的锚头) |
+| 插件 `P` | **所选 core 插件的 `[build].includes`**(环境基座, 前置给每个单元) + `P` 自己的 `[build].includes` + **P 的声明依赖传递闭包内各插件的 includes** |
+| `core` 插件 | 同上 + platform 插件的 includes(core.init 阶段③读 platform 的定时器; `br_plat.h`/`br_mmu.h` 是设计内的 core→platform 方向) |
+| `build/gen` | core 的 includes + 全部被选插件的 includes(生成物要包含各插件的锚头) |
+
+> ★ **后续(ADR-0031)**: core 已是第一类插件(`core/c_core`), 所以"环境基座"由**所选 core 插件的
+> `[build].includes`** 承担, 不再是产品字段 `core_includes`(该字段已退役)。两处随之细化:
+> ① core 单元额外拿到 platform 的包含目录(它的时钟调 `br_plat_ticks_*`);
+> ② core 包含 `<br/platform/**>` 属"平台**契约**"而非"某个 platform 插件", 因此这一族 `#include`
+> **不做**声明闭包执法(`build.rs`/`check.rs` 各一处显式豁免)。其它包含照旧执法。
 
 闭包按 `[[dep]]` 的**声明边**算(所有 kind), 所以"声明依赖"第一次成为**编译期**事实:
 唯一命名的头(如 `<br/platform/br_plat.h>`)没声明就是 `fatal error: No such file`。

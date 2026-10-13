@@ -39,8 +39,8 @@ eqjc "--version --deps --json three direct deps" "$JQ_RESP" "data.deps" "3"
 eq "core --selftest runs directly" "0" "$("$CORE" --selftest >/dev/null 2>&1; echo $?)"
 
 # ---- V-1 skeleton generation
-section "V-1 new for all four kinds × c, immediate check has 0 errors"
-for pair in "app:app/hsm:" "interface:iface/posix:" "ability:service/crypto:--subkind service" "platform:platform/qemu-aarch64:";
+section "V-1 new for all five kinds × c, immediate check has 0 errors"
+for pair in "app:app/hsm:" "interface:iface/posix:" "ability:service/crypto:--subkind service" "platform:platform/qemu-aarch64:" "core:core/c_core:";
 do
     ptype="${pair%%:*}"; rest="${pair#*:}"; name="${rest%%:*}"; extra="${rest#*:}"
     W="$(new_work)"
@@ -66,9 +66,10 @@ run_brickie "$W" new app app/hsm
 run_brickie "$W" new interface iface/posix
 run_brickie "$W" new ability service/crypto --subkind service
 run_brickie "$W" new platform platform/qemu-aarch64
+run_brickie "$W" new core core/c_core
 run_json "$W" check
-eq "V-1 four kinds one tree check exit code 0" "0" "$RC"
-eqj "V-1 four kinds one tree closure has 4 plugins" "$JQ_RESP" "data.summary.closure.plugins" "4"
+eq "V-1 five kinds one tree check exit code 0" "0" "$RC"
+eqj "V-1 five kinds one tree closure has 5 plugins" "$JQ_RESP" "data.summary.closure.plugins" "5"
 
 # ---- V-2 generated artifacts idempotent
 section "V-2 gen idempotence / --check byte-identical"
@@ -258,7 +259,7 @@ W="$(cp_fx showcase)"
 run_json "$W" dep closure
 eq "V-7 closure exit code 0" "0" "$RC"
 eqj "V-7 closure plugin list" "$JQ_RESP" "data.selected" \
-    '["app/hsm", "iface/hsm-api", "platform/qemu-aarch64", "sched/coop", "service/crypto"]'
+    '["app/hsm", "core/c_core", "iface/hsm-api", "platform/qemu-aarch64", "sched/coop", "service/crypto"]'
 # Only the "provider first" invariant is required; nodes without init edges may sit anywhere.
 init_order_ok() {
     python3 - "$1" <<'PYX'
@@ -635,8 +636,8 @@ sweep() {
     S why-hit         0 'dependency path'                data.found          true       dep why app/hsm service/crypto
     S why-miss        0 'dependency path not found'          data.found          false      dep why service/crypto app/hsm
     S dep-index       0 'reverse dependency index'            data.dependents     present    dep index
-    S gen             0 'generated-file rebuild plan'              data.count          5          gen
-    S gen-check       0 'byte-identical to recomputation'              data.count          5          gen --check
+    S gen             0 'generated-file rebuild plan'              data.count          6          gen
+    S gen-check       0 'byte-identical to recomputation'              data.count          6          gen --check
     S ver-show        0 'interface unit service/crypto#crypto' data.id     service/crypto#crypto ver show service/crypto
     S iface-list      0 'interface unit'                data.count          5          iface list
     S iface-show      0 'declaration hash'             data.not_abi        true       iface show service/crypto#crypto

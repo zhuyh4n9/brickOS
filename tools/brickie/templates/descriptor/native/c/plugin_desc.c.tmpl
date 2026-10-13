@@ -50,9 +50,9 @@ static const br_plugin_t BR_PLUGIN_SECTION {{descriptor_symbol}} = {
     .abi_id      = "{{abi_id}}",
     .api_syms    = BR_NULL,
     .res         = { {{res_ram_kib}}u, {{res_stack_kib}}u },
-    .early_init  = {{symbol_prefix}}early_init,
+    .early_init  = {{early_hook}},
     .init        = {{init_hook}},
-    .start       = {{symbol_prefix}}start,
+    .start       = {{start_hook}},
     /* Self-test hook (ADR-0010). Decided at generation time per `product.toml [selftest]`:
      *   emit ⇒ reference `{{symbol_prefix}}selftest` (defined in the plugin's *_selftest.c)
      *   off  ⇒ BR_PLUGIN_NO_HOOK, test code is then trimmed by --gc-sections */

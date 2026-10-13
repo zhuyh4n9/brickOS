@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# brickOS prototype — self-recursion gate for compiler support routines (core/src/string.c).
+# brickOS prototype — self-recursion gate for compiler support routines (core/c_core/src/string.c).
 # A `bl` to itself means a libcall lowered to the routine itself: unbounded recursion, a blown
 # boot stack and lost fault context. Host builds hide it (libc), so check the disassembly: no
 # memcpy/memmove/memset/memcmp self-call (legitimate calls like memmove->memcpy are allowed).
 # Usage: bash tools/check-string.sh [<obj>] [<objdump>]; <obj> defaults to
-#   build/obj/core/src/string.o (product.toml [build].obj_dir + source path + .o; absent => red);
+#   build/obj/core/c_core/src/string.o (product.toml [build].obj_dir + source path + .o; absent => red);
 #   <objdump> defaults to cross objdump -> versioned variants -> objdump.
 #   Exit 0 consistent, 1 self-recursion present, 2 usage/environment error.
 
@@ -12,7 +12,7 @@ set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
-OBJ="${1:-build/obj/core/src/string.o}"
+OBJ="${1:-build/obj/core/c_core/src/string.o}"
 
 if [ ! -f "$OBJ" ]; then
     echo "FAIL: cannot find $OBJ (run `brickie build` first; see product.toml [build].obj_dir for the object location)" >&2

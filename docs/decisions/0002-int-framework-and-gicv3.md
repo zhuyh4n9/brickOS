@@ -18,7 +18,7 @@ v0.1.0 原来全程关中断(DAIF 全屏蔽)、没有中断控制器; `README` �
 
 | 层 | 拥有者 | 本原型落点 |
 |---|---|---|
-| 语义与机制 | **core** | `core/src/irq/**`(号空间/生命周期/三层屏蔽/优先级语义/域框架/fault) |
+| 语义与机制 | **core** | `core/c_core/src/irq/**`(号空间/生命周期/三层屏蔽/优先级语义/域框架/fault) |
 | 控制器方言 | **ISA 共享库**(可复用库, **非插件**) | `platform/qemu-aarch64/src/gicv3.c`(GICv3 寄存器序列)+ `src/vectors.S`(异常向量桩) |
 | 数据与特化 | **Platform 插件** | `src/board_irq.c`(绑定表/PIC 实例与基址/静态 prio&trigger)+ `src/timer_arch.c` |
 
@@ -102,7 +102,7 @@ v0.1.0 原来全程关中断(DAIF 全屏蔽)、没有中断控制器; `README` �
 
 | 方案 | 否决理由 |
 |---|---|
-| 把 GICv3 驱动做成一个插件(`isa/gicv3` 或 `ability/gicv3`) | 设计 `3-02 §1.3` 明确 ISA 共享库是"**非插件**"; 做成插件会污染插件分类学(四类 plugin_type)与依赖求解, 也会让"每 SoC 一个 platform 插件"的模型失真 |
+| 把 GICv3 驱动做成一个插件(`isa/gicv3` 或 `ability/gicv3`) | 设计 `3-02 §1.3` 明确 ISA 共享库是"**非插件**"; 做成插件会污染插件分类学(当时的四类 plugin_type; ★ ADR-0031 之后是五类, 多了 `core`)与依赖求解, 也会让"每 SoC 一个 platform 插件"的模型失真 |
 | 现在就抽出 `isa/` 独立构建单元 | 需要动 Makefile 的源集合/包含路径/依赖声明(platform → isa 没有声明载体: ISA 库不是插件, 无 `[[dep]]` 可表达), 而收益是**分层整洁**而非本任务的功能。⇒ 登记为欠债 `br-wa-isa-001`, 不半途而废地做一半 |
 | 用 `uint16_t virq_of[nr_irq]` 直接索引 hwirq→virq | GICv3 的 1024 INTID 要 2 KB, 与描述符池同量级(设计 §14.2 的诚实修正)。选"有序表 + 二分"(4 B/绑定) |
 | 在 host 平台插件上跑中断用例(O-5) | Stage 1 的中断路径(向量桩 → ack → ISR → eoi → ERET)在 host 进程里不存在; `6-01 §3.7` 也已定"中断组 = target-only"。⇒ 用例编进镜像, 由 `make irq-test` 在 QEMU 上判红绿 |

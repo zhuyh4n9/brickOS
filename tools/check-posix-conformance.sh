@@ -19,7 +19,7 @@ import re, subprocess, pathlib, sys, tempfile
 
 ROOT = pathlib.Path.cwd()
 INC = ROOT/"runtime/posix/include"
-CORE_INC = ROOT/"core/include"
+CORE_INC = ROOT/"core/c_core/include"
 PLAT_INC = ROOT/"platform/qemu-aarch64/include"
 
 # ---- whitelist of intentional deviations: name -> reason ("why it may differ") ----

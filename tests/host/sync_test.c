@@ -19,7 +19,7 @@
 #include "sched_internal.h"
 
 /* Self-test suite entry (not in br_sync.h; the implementation lives in
- * core/selftest/sync_selftest.c, compiled in by the gates.toml sync-test sources). */
+ * core/c_core/selftest/sync_selftest.c, compiled in by the gates.toml sync-test sources). */
 int br_sync_selftest(void);
 
 #include <stdarg.h>

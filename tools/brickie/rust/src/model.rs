@@ -167,16 +167,14 @@ pub struct BuildTarget {
     pub qemu_extra: Vec<String>,
 }
 
-/// `product.toml [build]`: **product-level build policy** (flag tables + output location + core sources).
+/// `product.toml [build]`: **product-level build policy** (flag tables + output location). Source
+/// sets belong to the plugins themselves (`brick.toml [build]`), including the core plugin's.
 #[derive(Clone, Debug, Default)]
 pub struct ProductBuild {
-    /// Source set of the core proper (**not a plugin**), relative to the repo root.
-    pub core_sources: Vec<String>,
-    /// Include directories of the core proper, relative to the repo root.
-    pub core_includes: Vec<String>,
     /// Generated-source set (`build/gen/**`, produced by `brickie gen`), relative to the repo root.
     pub gen_sources: Vec<String>,
-    /// Core selftest sources (repo-root relative); outside `core_sources` (off = not compiled).
+    /// Selftest sources appended to the **core plugin's** unit (repo-root relative). Product-level
+    /// because the selftest master switch is product policy: off ⇒ this suite is not compiled.
     pub selftest_sources: Vec<String>,
     pub cflags: Vec<String>,
     pub asflags: Vec<String>,
@@ -465,8 +463,6 @@ impl Product {
                 "plugins": self.selftest_plugins,
             },
             "build": self.build.as_ref().map(|b| json!({
-                "core_sources": b.core_sources,
-                "core_includes": b.core_includes,
                 "gen_sources": b.gen_sources,
                 "selftest_sources": b.selftest_sources,
                 "cflags": b.cflags,
@@ -1723,8 +1719,6 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     if let Some(b) = opt_table(top, "build") {
         let rel = opt_table(b, "release");
         prod.build = Some(ProductBuild {
-            core_sources: str_array(b, "core_sources", &file, &file, "build", d),
-            core_includes: str_array(b, "core_includes", &file, &file, "build", d),
             gen_sources: str_array(b, "gen_sources", &file, &file, "build", d),
             selftest_sources: str_array(b, "selftest_sources", &file, &file, "build", d),
             cflags: str_array(b, "cflags", &file, &file, "build", d),

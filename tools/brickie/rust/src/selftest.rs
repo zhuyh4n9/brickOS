@@ -1174,6 +1174,89 @@ fn platform_toml(name: &str, phase: &str, extra: &str) -> String {
     )
 }
 
+fn core_toml(name: &str, extra: &str) -> String {
+    format!(
+        "schema = 1\n[plugin]\nname = \"{name}\"\nplugin_type = \"core\"\napi_type = \"native\"\n\
+         lang = \"c\"\nphase = \"early\"\nversion = \"0.1.0.0\"\n{extra}"
+    )
+}
+
+fn product_with_core(app: &str, plugins: &str) -> String {
+    format!(
+        "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"{app}\"\n\
+         core = \">=1.0.0\"\nstage = \"dev\"\n[select]\nplugins = [{plugins}]\n"
+    )
+}
+
+/// `plugin_type = "core"` (ADR-0031): mandatory + singular, no lifecycle, no `[compat]` self-pin.
+fn core_type_cases(h: &mut Harness) {
+    // Positive: exactly one core in the product closure ⇒ no BRV-TAX-0020.
+    let ok = tmpdir("core-ok");
+    write(&ok, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&ok, "app/m/brick.toml", &ability_toml("app/m", "service", "late", ""));
+    write(&ok, "product.toml", &product_with_core("app/m", "\"core/c_core\""));
+    let resp = check::run(&mk_req("check", &ok, json!({"profile": "dev"})));
+    h.check(!has_code(&resp, "BRV-TAX-0020"), "core: one selected core is not reported");
+
+    // Negative ①: a product whose closure contains no core ⇒ red, message says "found 0".
+    let miss = tmpdir("core-missing");
+    write(&miss, "app/m/brick.toml", &ability_toml("app/m", "service", "late", ""));
+    write(&miss, "product.toml", &product_with_core("app/m", ""));
+    let resp = check::run(&mk_req("check", &miss, json!({"profile": "dev"})));
+    h.eq(resp.exit_code, 1, "core: a product without a core ⇒ exit code 1");
+    h.check(has_code(&resp, "BRV-TAX-0020"), "core: missing core ⇒ BRV-TAX-0020");
+    h.check(
+        msg_of(&resp, "BRV-TAX-0020").contains("found 0"),
+        "core: the message counts what it found",
+    );
+
+    // Negative ②: two selected cores ⇒ red, message says "found 2".
+    let two = tmpdir("core-two");
+    write(&two, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&two, "core/r_core/brick.toml", &core_toml("core/r_core", ""));
+    write(&two, "app/m/brick.toml", &ability_toml("app/m", "service", "late", ""));
+    write(
+        &two,
+        "product.toml",
+        &product_with_core("app/m", "\"core/c_core\", \"core/r_core\""),
+    );
+    let resp = check::run(&mk_req("check", &two, json!({"profile": "dev"})));
+    h.eq(resp.exit_code, 1, "core: two cores ⇒ exit code 1");
+    h.check(
+        msg_of(&resp, "BRV-TAX-0020").contains("found 2"),
+        "core: two cores are reported as found 2",
+    );
+
+    // R-1: no product.toml ⇒ product-level counts do not apply.
+    let bare = tmpdir("core-bare");
+    write(&bare, "app/m/brick.toml", &ability_toml("app/m", "service", "late", ""));
+    let resp = check::run(&mk_req("check", &bare, json!({"profile": "dev"})));
+    h.check(!has_code(&resp, "BRV-TAX-0020"), "core: R-1 — a bare plugin tree has no product-level count");
+
+    // Lifecycle: `core` has no phase other than `early`.
+    h.check(
+        rules::phase_reason("core", None, "core").is_some(),
+        "core: phase=core is rejected (no lifecycle, hence no init completion point)",
+    );
+    h.check(
+        rules::phase_reason("core", None, "early").is_none(),
+        "core: phase=early is legal (means no init hook)",
+    );
+    // Direction: everyone may depend on core; core may not depend on core.
+    h.check(dep_direction_ok_public("app", "core"), "core: app → core is legal");
+    h.check(dep_direction_ok_public("interface", "core"), "core: interface → core is legal");
+    h.check(dep_direction_ok_public("ability", "core"), "core: ability → core is legal");
+    h.check(dep_direction_ok_public("platform", "core"), "core: platform → core is legal (start.S enters br_core_main)");
+    h.check(!dep_direction_ok_public("core", "core"), "core: core → core is illegal (exactly one core)");
+    h.check(dep_direction_ok_public("core", "platform"), "core: core → platform is legal (contract-level call)");
+    h.check(!dep_direction_ok_public("core", "app"), "core: core → app is illegal");
+}
+
+/// Thin wrapper so the case reads as a rule assertion (the table itself is `rules::dep_direction_ok`).
+fn dep_direction_ok_public(consumer_pt: &str, provider_pt: &str) -> bool {
+    rules::dep_direction_ok(consumer_pt, provider_pt, false)
+}
+
 fn cycle_cases(h: &mut Harness) {
     let root = tmpdir("cycle");
     write(&root, "p-one/brick.toml", &ability_toml("p-one", "service", "late", "[[dep]]\nname = \"p-two\"\nrange = \">=0.1.0\"\nkind = \"init\"\n"));
@@ -1965,6 +2048,7 @@ pub fn run() -> i32 {
     plan_cases(&mut h);
     emit_cases(&mut h);
     cycle_cases(&mut h);
+    core_type_cases(&mut h);
     phase_check_cases(&mut h);
     version_solver_cases(&mut h);
     iface_crossfile_cases(&mut h);
@@ -2009,7 +2093,7 @@ fn mk_req_ctx(command: &str, root: &Path, args: Value, context: Value) -> Reques
 /// source files so globs match; the plan is computed from the declaration surface, not mocked. Tool
 /// resolution is off via `context.path = ""`, so any machine replays it.
 fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
-    write(root, "core/src/core.c", "int core_fn(void){return 0;}\n");
+    write(root, "core/c_core/src/core.c", "int core_fn(void){return 0;}\n");
     write(root, "platform/fake/src/plat.c", "int plat_fn(void){return 0;}\n");
     write(root, "platform/fake/src/start.S", "nop\n");
     write(root, "platform/fake/src/link.ld", "SECTIONS { }\n");
@@ -2020,10 +2104,17 @@ fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
         &format!(
             "schema = 1\n\
              [product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\ncore = \">=0.1.0\"\nstage = \"dev\"\n\
-             [select]\nplugins = [\"platform/fake\"]\n\
-             [build]\ncore_sources = [\"core/src/*.c\"]\ncore_includes = [\"core/include\"]\n\
+             [select]\nplugins = [\"core/c_core\", \"platform/fake\"]\n\
+             [build]\n\
              cflags = [\"-std=c11\", \"-O2\"]\nasflags = [\"-g3\"]\nldflags = [\"-nostdlib\"]\n{extra_build}"
         ),
+    );
+    write(
+        root,
+        "core/c_core/brick.toml",
+        "schema = 1\n[plugin]\nname = \"core/c_core\"\nplugin_type = \"core\"\napi_type = \"native\"\n\
+         lang = \"c\"\nphase = \"early\"\nversion = \"1.0.0.0\"\n\
+         [build]\nsources = [\"src/*.c\"]\nincludes = [\"include\"]\n",
     );
     write(
         root,
@@ -2136,7 +2227,7 @@ fn build_cases(h: &mut Harness) {
         "build: linker script comes from platform and resolves against the plugin root",
     );
     h.check(
-        all.iter().any(|s| s.contains("-MF build/obj/core/src/core.o.d")),
+        all.iter().any(|s| s.contains("-MF build/obj/core/c_core/src/core.o.d")),
         "build: compile carries -MMD/-MF (the only source of header deps)",
     );
     h.check(
@@ -2398,7 +2489,7 @@ fn build_cases(h: &mut Harness) {
         "backend/ninja: one rule each for C and .S (using the C template for assembly is wrong)",
     );
     h.check(
-        mk.contains("build/obj/core/src/core.o") && nj.contains("build/obj/app/m/src/main.o"),
+        mk.contains("build/obj/core/c_core/src/core.o") && nj.contains("build/obj/app/m/src/main.o"),
         "backend: both backends list the objects",
     );
     h.check(

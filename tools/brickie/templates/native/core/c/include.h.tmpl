@@ -1,0 +1,13 @@
+/* {{name}} — public declaration surface (hand-written)
+ *
+ * The core plugin **defines no lifecycle**: it drives the phase machine (boot chain + plugin
+ * manager) instead of taking part in it, so there are no early_init/init/start hooks to declare
+ * here. What belongs here is the core's own native API surface (`br_*`), which every other plugin
+ * is written against and which needs no `[[dep]]` edge to use.
+ */
+#ifndef {{header_guard}}
+#define {{header_guard}}
+
+/* TODO: declare this core implementation's native API surface here. */
+
+#endif /* {{header_guard}} */

@@ -1,5 +1,5 @@
 /*
- * Host tests for the compiler support routines in core/src/string.c: semantics compared byte by
+ * Host tests for the compiler support routines in core/c_core/src/string.c: semantics compared byte by
  * byte against a reference, out-of-bounds writes caught by sentinel bytes, self-recursion blows
  * the host stack immediately. The check-string gate covers the disassembly side instead.
  */
@@ -245,7 +245,7 @@ static void case_memcmp(void)
 
 int main(void)
 {
-    printf("[STRINGTEST] compiler support routines (core/src/string.c) on host\n");
+    printf("[STRINGTEST] compiler support routines (core/c_core/src/string.c) on host\n");
 
     case_memcpy();
     case_memmove();

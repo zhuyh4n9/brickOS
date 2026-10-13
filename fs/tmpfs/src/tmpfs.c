@@ -216,7 +216,7 @@ static void tmpfs_str_copy(char *dst, const char *src, br_u32 cap)
     dst[cap - 1u] = '\0';
 }
 
-/* Block copy/zero via compiler builtins, no <string.h>: core/src/string.c provides
+/* Block copy/zero via compiler builtins, no <string.h>: core/c_core/src/string.c provides
  * memcpy/memset, and writing our own would hit the "lowered into memcpy" recursion trap. */
 static void tmpfs_copy(void *dst, const void *src, br_size_t n)
 {

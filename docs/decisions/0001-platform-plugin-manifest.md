@@ -34,6 +34,13 @@ prototype 的 `platform/` 一直是"被 Makefile 直接编进镜像的一组文�
 4. **core 不是插件**: `core/` 是内核本体(被 `[compat].core` 引用), 不进插件树。
    `br_core_main` 的实现随 APP 迁到 `app/hello`(它是 M0 的 app 入口), 声明仍由
    core 头文件 `br/core/br_main.h` 提供。
+   > ★ **后续(ADR-0031 取代本条)**: core **已经成为第一类插件** —— 新增
+   > `plugin_type = "core"`, 必须有且仅有一个, **不定义生命周期**(它是驱动者, 不参与相位机)。
+   > 实现 `core/c_core`(`core/` 是实现的命名空间), manifest 在 `core/c_core/brick.toml`,
+   > `product.toml [build].core_sources`/`core_includes` 退役。本条的历史语境是 v0.1:
+   > 那时 `br_core_main` 的实现还在 APP 里, 插件管理器也还没落地 —— "不进插件树"是当时
+   > 唯一自洽的选择(没有类型、没有相位可归)。ADR-0008 之后 core 有了独立入口与编排权,
+   > 它缺的就只剩"身份"。
 5. **组合校验接进构建**: `make` 在编译镜像前先跑 `brickie check`(声明面完备性);
    release 镜像用 `brickie check --profile release`。生成物由 `brickie gen` 重建,
    **不参与编译**(编译编排是 v0.3 的能力)。
@@ -53,4 +60,4 @@ prototype 的 `platform/` 一直是"被 Makefile 直接编进镜像的一组文�
 |---|---|
 | 保留 `platform/src/aarch64/` 不变, 只加一个旁路 manifest | 违反 §8.3 ④"目录名 = 插件名"; 声明面与源码分居两处, 迟早漂移 |
 | 为 M0 造一个 `iface/plat` 皮肤, 让 app 经 interface 依赖平台 | M0 尚无 Interface 插件(设计明说"此时 Interface 插件尚未交付"), 造一个只为规避规则的空皮肤 = 用假声明换绿灯 |
-| 把 `core/` 也做成插件 | core 是所有插件的基座与 `[compat].core` 的对象, 不是可选组合件; 插件化会与"每镜像恰一个 platform、恰一个 app"的数量约束混淆 |
+| 把 `core/` 也做成插件 | ~~core 是所有插件的基座与 `[compat].core` 的对象, 不是可选组合件; 插件化会与"每镜像恰一个 platform、恰一个 app"的数量约束混淆~~ ★ **ADR-0031 推翻此判断**: "不是可选组合件"恰恰可以用**基数约束**表达("必须有且仅有一个"), 而不必用"不在插件树"表达; 混淆数量约束的担忧也不成立 —— 新类型的基数判据与 platform/app 是**同一条产品级计数**(`BRV-TAX-0020`), 不是例外。真正的障碍当时是 core 没有生命周期可归, 那条已由"core 不定义生命周期"解决 |

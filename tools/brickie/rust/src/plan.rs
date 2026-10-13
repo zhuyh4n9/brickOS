@@ -99,6 +99,7 @@ fn plugin_type_const(t: &str) -> &'static str {
         "platform" => "BR_PLUGIN_TYPE_PLATFORM",
         "app" => "BR_PLUGIN_TYPE_APP",
         "interface" => "BR_PLUGIN_TYPE_INTERFACE",
+        "core" => "BR_PLUGIN_TYPE_CORE",
         _ => "BR_PLUGIN_TYPE_ABILITY",
     }
 }
@@ -361,24 +362,58 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v.insert("res_stack_kib".into(), f.res_stack_kib.max(0).to_string());
     v.insert("gen_total".into(), f.gen_total.to_string());
     // early_init/start for all plugins; init only when phase != "early", else BR_PLUGIN_NO_HOOK.
+    // `core` is the exception: it drives the phase machine instead of taking part in it, so it
+    // defines no lifecycle at all and all three hooks are NO_HOOK (its `[selftest]` hook stays --
+    // self-test is verification, not a phase).
+    let has_lifecycle = f.plugin_type != "core";
+    v.insert(
+        "early_hook".into(),
+        if has_lifecycle {
+            format!("{sym}early_init")
+        } else {
+            "BR_PLUGIN_NO_HOOK".into()
+        },
+    );
     v.insert(
         "init_hook".into(),
-        if f.has_init {
+        if has_lifecycle && f.has_init {
             format!("{sym}init")
         } else {
             "BR_PLUGIN_NO_HOOK".into()
         },
     );
-    v.insert("early_proto".into(), format!("int {sym}early_init(void);"));
+    v.insert(
+        "start_hook".into(),
+        if has_lifecycle {
+            format!("{sym}start")
+        } else {
+            "BR_PLUGIN_NO_HOOK".into()
+        },
+    );
+    v.insert(
+        "early_proto".into(),
+        if has_lifecycle {
+            format!("int {sym}early_init(void);")
+        } else {
+            String::new()
+        },
+    );
     v.insert(
         "init_proto".into(),
-        if f.has_init {
+        if has_lifecycle && f.has_init {
             format!("int {sym}init(void);")
         } else {
             String::new()
         },
     );
-    v.insert("start_proto".into(), format!("int {sym}start(void);"));
+    v.insert(
+        "start_proto".into(),
+        if has_lifecycle {
+            format!("int {sym}start(void);")
+        } else {
+            String::new()
+        },
+    );
     // selftest prototype only when the hook is emitted (else -Wmissing-prototypes/link errors).
     v.insert(
         "selftest_proto".into(),
@@ -668,13 +703,15 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         );
     }
 
-    // The new skeleton includes an init stub (early_init/init/start) ⇒ has_init = true.
+    // The new skeleton includes an init stub (early_init/init/start) ⇒ has_init = true, except for
+    // `core`: it defines no lifecycle at all (it drives the phase machine), so it stays at `early`.
     let sub_for_phase = if plugin_type == "ability" {
         Some(subkind.as_str())
     } else {
         None
     };
-    let phase = rules::derive_phase(&plugin_type, sub_for_phase, true);
+    let has_init = plugin_type != "core";
+    let phase = rules::derive_phase(&plugin_type, sub_for_phase, has_init);
     let facts = PluginFacts {
         name: &name,
         plugin_type: &plugin_type,
@@ -697,7 +734,7 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
             "{short}/{short}.h",
             short = rules::name_short(&name)
         ),
-        has_init: true,
+        has_init,
         emit_selftest: false,
         mounts: Vec::new(),
     };

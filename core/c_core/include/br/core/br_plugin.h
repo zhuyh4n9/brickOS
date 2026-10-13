@@ -50,6 +50,10 @@ typedef struct br_dep {
 #define BR_PLUGIN_TYPE_INTERFACE 1u
 #define BR_PLUGIN_TYPE_ABILITY   2u
 #define BR_PLUGIN_TYPE_PLATFORM  3u
+/* The core: mandatory and singular (exactly one per image). It defines no lifecycle -- it is the
+ * plugin that drives the others (boot chain + plugin manager), so early_init/init/start are all
+ * BR_PLUGIN_NO_HOOK in its descriptor and it never enters the phase machine it runs. */
+#define BR_PLUGIN_TYPE_CORE      4u
 
 #define BR_SUBKIND_NONE      0u
 #define BR_SUBKIND_SCHEDULER 1u
@@ -191,7 +195,7 @@ br_u32 br_plugin_phase_reached(void);
 /* init failure count (prototype convention: first failure halts, so 0 or 1). */
 br_u32 br_plugin_init_failures(void);
 
-/* The plugin manager selftest suite is declared in core/selftest/, not here (test surface). */
+/* The plugin manager selftest suite is declared in core/c_core/selftest/, not here (test surface). */
 
 /*
  * ---- mount plan ----

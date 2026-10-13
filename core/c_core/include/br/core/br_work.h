@@ -55,6 +55,6 @@ typedef struct br_work_stat {
 
 void br_work_stats_get(br_work_stat_t *out);
 
-/* The selftest entry is declared in core/selftest/, not here (test surface, not plugin API). */
+/* The selftest entry is declared in core/c_core/selftest/, not here (test surface, not plugin API). */
 
 #endif /* BR_CORE_BR_WORK_H */

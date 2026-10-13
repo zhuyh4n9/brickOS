@@ -569,6 +569,45 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
     closure.capacity_stack = cap_stack;
     closure.has_platform = tree.plugins.iter().any(|p| p.plugin_type == "platform");
 
+    // Exactly one `core` per image, and a product must select one: core owns the boot chain and
+    // drives every other plugin, so an image without it cannot start and an image with two cannot
+    // decide which one does. Product-level count (like app/platform), so per ruling R-1 it is only
+    // enforced when a `product.toml` exists — a bare plugin tree is validated on its own.
+    if let Some(prod) = &tree.product {
+        let cores: Vec<String> = closure
+            .selected
+            .iter()
+            .filter(|n| {
+                by_name
+                    .get(n.as_str())
+                    .map(|p| p.plugin_type == "core")
+                    .unwrap_or(false)
+            })
+            .cloned()
+            .collect();
+        if cores.len() != 1 {
+            diags.push((
+                SCOPE_DEPS,
+                err(
+                    "BRV-TAX-0020",
+                    "product",
+                    &prod.file,
+                    "select.plugins",
+                    format!(
+                        "an image must contain exactly one `plugin_type = \"core\"` plugin, found {}: {}",
+                        cores.len(),
+                        if cores.is_empty() {
+                            "none selected".to_string()
+                        } else {
+                            cores.join(", ")
+                        }
+                    ),
+                    "§8.3 ④ / §7.3: `core` is mandatory and singular (it is the plugin that drives the other plugins); add it to `[select].plugins` (e.g. `core/c_core`) or drop the extra one",
+                ),
+            ));
+        }
+    }
+
     let platform_file = tree
         .plugins
         .iter()

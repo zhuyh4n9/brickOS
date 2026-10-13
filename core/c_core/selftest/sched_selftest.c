@@ -1,6 +1,6 @@
 /*
  * Scheduler framework + coop/preempt self-test suite. Cases are not a plugin capability, so they
- * stay out of the golden headers; with selftest off core/selftest/ is not compiled. The suite runs
+ * stay out of the golden headers; with selftest off core/c_core/selftest/ is not compiled. The suite runs
  * in a real thread and really creates/yields/joins/sleeps. Scheduler identity comes from the
  * production registry via br_sched_ops_get(), never from a copy. Log contract, matched literally
  * by tests/gates.toml: [TASKCONF] PASS/FAIL <id> <desc> ...

@@ -1,0 +1,19 @@
+schema = {{schema}}
+
+[plugin]
+name        = "{{name}}"
+plugin_type = "core"
+api_type    = "{{api_type}}"
+lang        = "{{lang}}"
+phase       = "{{phase}}"        # core has no lifecycle: `early` is the only legal value
+version     = "{{version}}"
+summary     = "{{summary}}"
+license     = "{{license}}"
+
+# No `[compat]` table: `compat.core` is how every *other* plugin pins the core it is written
+# against, and the core cannot be compatible with itself. `[plugin].version` above is what those
+# ranges resolve against.
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

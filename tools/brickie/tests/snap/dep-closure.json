@@ -27,6 +27,17 @@
       },
       {
         "api_type": "native",
+        "compat_gen": 1,
+        "name": "core/c_core",
+        "phase": "early",
+        "plugin_type": "core",
+        "ram_kib": 0,
+        "selected": true,
+        "stack_kib": 0,
+        "version": "1.0.0.0"
+      },
+      {
+        "api_type": "native",
         "compat_gen": 0,
         "name": "iface/hsm-api",
         "phase": "late",
@@ -82,10 +93,12 @@
       }
     ],
     "seeds": [
-      "app/hsm"
+      "app/hsm",
+      "core/c_core"
     ],
     "selected": [
       "app/hsm",
+      "core/c_core",
       "iface/hsm-api",
       "platform/qemu-aarch64",
       "sched/coop",
@@ -93,6 +106,7 @@
     ],
     "topo_order": [
       "app/hsm",
+      "core/c_core",
       "iface/hsm-api",
       "platform/qemu-aarch64",
       "sched/coop",

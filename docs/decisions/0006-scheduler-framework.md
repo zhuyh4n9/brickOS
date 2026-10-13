@@ -1,12 +1,12 @@
 # 0006 — 调度框架(core)+ 协作式调度器 `sched/coop` 落地
 
 > 状态: **已落地**(宿主侧判据全绿; QEMU 侧端到端用例全绿 —— `brickie test sched-test`)。
-> 影响面: `core/src/sched/sched_core.c`(**整体替换占位体**)、`core/src/sched/switch.S`(新)、
-> `core/src/sched/sched_ctx.h`(新)、`core/src/sched/sched_internal.h`(**只加不改**: ICB 注 + 切换层原型)、
-> `core/include/br/core/br_sched.h`(**只加不破**: `BR_STACK_MIN` / `br_sched_tcb_size` / `br_thread_priv` / ICB 注)、
-> `sched/coop/**`(新插件)、`core/src/irq/irq_core.c`(把 `br_sched_irq_epilogue` 的实现搬走, 调用点不动)、
+> 影响面: `core/c_core/src/sched/sched_core.c`(**整体替换占位体**)、`core/c_core/src/sched/switch.S`(新)、
+> `core/c_core/src/sched/sched_ctx.h`(新)、`core/c_core/src/sched/sched_internal.h`(**只加不改**: ICB 注 + 切换层原型)、
+> `core/c_core/include/br/core/br_sched.h`(**只加不破**: `BR_STACK_MIN` / `br_sched_tcb_size` / `br_thread_priv` / ICB 注)、
+> `sched/coop/**`(新插件)、`core/c_core/src/irq/irq_core.c`(把 `br_sched_irq_epilogue` 的实现搬走, 调用点不动)、
 > `platform/qemu-aarch64/src/board_irq.c`(timer ISR 加一行 tick 驱动)、
-> `product.toml`(`[select].plugins` 追加 + `[build].core_sources` 纳入 `.S`)、
+> `product.toml`(`[select].plugins` 追加 + `[build].core_sources` 纳入 `.S`)★ ADR-0031 后 core 的源归 `core/c_core/brick.toml [build]`、
 > `tests/host/sched_test.c`(新)、`tests/gates.toml`(`[[hosttest]]` + `[[gate]]` 各一条)、
 > `app/hello/src/main.c`(**接线**: APP 线程化 + `br_task_sleep`; 主控在 2026-10-09 把本文件划归本刀)
 > 设计依据: `3-03-sched.md`(总纲; §2 的 7 项待成文清单)、`3-01` §2(任务/线程)/§5.1(`br_sched_ops` 注册点)/
@@ -27,10 +27,10 @@
 
 | 面 | 归属 | 落点 |
 |---|---|---|
-| 上下文切换 asm / TCB 公共头 / 栈与 trampoline / 超时唤醒 / idle / 状态机 / 首次调度 | **core** | `core/src/sched/{sched_core.c,switch.S,sched_internal.h}` |
+| 上下文切换 asm / TCB 公共头 / 栈与 trampoline / 超时唤醒 / idle / 状态机 / 首次调度 | **core** | `core/c_core/src/sched/{sched_core.c,switch.S,sched_internal.h}` |
 | 就绪队列 / `pick_next` / tick 策略 / 抢占决策 | **调度器插件** | `sched/coop/src/coop.c` |
 | 阻塞与唤醒的**机制**(block/wake/等待链) | **core** | `sched_core.c` + `sched_internal.h` |
-| 锁与信号量的对象与语义 | **core** | `core/src/sync/sync.c`(F3; ADR-0007) |
+| 锁与信号量的对象与语义 | **core** | `core/c_core/src/sync/sync.c`(F3; ADR-0007) |
 
 **关键不变量**(实现与用例都建在它们上; 与 `br_sched.h`/`sched_internal.h` 的头注同源):
 
@@ -314,13 +314,13 @@ tick(100 ms)", 1 ms 阈值把两者分得很开。
 
 | 文件 | 改动 |
 |---|---|
-| `core/include/br/core/br_sched.h` | **加**: `BR_STACK_MIN`; `br_sched_tcb_size()` / `br_thread_priv()` 声明; `br_sched_block_current` 的 ICB 前置义务注; `br_task_attr.stack` 的"栈顶(高地址)"澄清。**未破任何签名/语义** |
-| `core/src/sched/sched_internal.h` | **加**: `wait_status` 的 ICB 注; 切换层三原型(`br_sched_switch_to` / `br_sched_thread_trampoline` / `br_sched_thread_entry`); 私有尾注释指向 `br_sched.h`。**布局未动** |
-| `core/src/sched/sched_core.c` | **整体替换占位体**(含搬进来的 `br_sched_irq_epilogue` 与等待链四原语) |
-| `core/src/sched/{switch.S,sched_ctx.h}` | 新 |
-| `core/src/irq/irq_core.c` | 把 epilogue 的**实现**搬走; 加 `#include <br/core/br_sched.h>`; **IRQ 退出路径的调用点一字未动** |
+| `core/c_core/include/br/core/br_sched.h` | **加**: `BR_STACK_MIN`; `br_sched_tcb_size()` / `br_thread_priv()` 声明; `br_sched_block_current` 的 ICB 前置义务注; `br_task_attr.stack` 的"栈顶(高地址)"澄清。**未破任何签名/语义** |
+| `core/c_core/src/sched/sched_internal.h` | **加**: `wait_status` 的 ICB 注; 切换层三原型(`br_sched_switch_to` / `br_sched_thread_trampoline` / `br_sched_thread_entry`); 私有尾注释指向 `br_sched.h`。**布局未动** |
+| `core/c_core/src/sched/sched_core.c` | **整体替换占位体**(含搬进来的 `br_sched_irq_epilogue` 与等待链四原语) |
+| `core/c_core/src/sched/{switch.S,sched_ctx.h}` | 新 |
+| `core/c_core/src/irq/irq_core.c` | 把 epilogue 的**实现**搬走; 加 `#include <br/core/br_sched.h>`; **IRQ 退出路径的调用点一字未动** |
 | `platform/qemu-aarch64/src/board_irq.c` | timer ISR 加 `br_sched_on_tick(br_clock_now());` + 两个 include。**其余未动** |
-| `product.toml` | `[select].plugins` 追加 `"sched/coop"`; `[build].core_sources` 追加 `"core/src/*/*.S"`(否则 `switch.S` 不进镜像) |
+| `product.toml` | `[select].plugins` 追加 `"sched/coop"`; `[build].core_sources` 追加 `"core/c_core/src/*/*.S"`(否则 `switch.S` 不进镜像; ★ ADR-0031 后这两个字段已退役, 该 glob 在 `core/c_core/brick.toml [build].sources`) |
 | `app/hello/src/main.c` | **接线**(主控划归本刀): `hello_start` 创建 APP 线程 + return 0; MainLoop 移入线程体 `hello_mainloop`; `br_delay_ms` → `br_task_sleep`; 钩子名/自检调用序列/管理器契约不变 |
 | `sched/coop/**` | 新插件(`brick.toml` / `src/coop.c` / `include/br/sched/coop.h` / `README.md` / `tests/smoke.toml`) |
 | `tests/host/sched_test.c` | 新(宿主切换层 + 桩 + 五条宿主判据) |

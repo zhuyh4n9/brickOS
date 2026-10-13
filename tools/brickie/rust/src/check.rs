@@ -221,6 +221,16 @@ fn deps_usage_checks(
 ) -> Vec<(&'static str, Diag)> {
     let mut out: Vec<(&'static str, Diag)> = Vec::new();
     for u in model::cross_plugin_includes(root, tree, &closure.selected) {
+        // The core plugin is platform-agnostic: it uses the platform *contract* (`br/platform/**`)
+        // without naming a platform plugin, so that include family is exempt (same rule as `build`).
+        if u.header.starts_with("br/platform/")
+            && tree
+                .plugins
+                .iter()
+                .any(|p| p.name == u.consumer && p.plugin_type == "core")
+        {
+            continue;
+        }
         // A-2: only an APP consumer of core headers is a violation (others already include them).
         if u.provider == "core" {
             let is_app = tree

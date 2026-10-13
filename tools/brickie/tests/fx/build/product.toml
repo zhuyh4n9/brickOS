@@ -13,7 +13,7 @@ core    = ">=1.0.0"
 stage   = "dev"
 
 [select]
-plugins = ["app/hello"]
+plugins = ["core/c_core", "app/hello"]
 
 [budget]
 ram_kib   = 512
@@ -26,8 +26,6 @@ allow_edges = []
 # 产品级构建策略(contract §7.2): 本夹具的 cflags 故意很短 —— 用例只断言"标志进了 argv",
 # 不复制真产品的交叉编译纪律(那是 product.toml 的事)。
 [build]
-core_sources  = ["core/src/*.c"]
-core_includes = ["core/include"]
 gen_sources   = []
 obj_dir       = "build/obj"
 cflags  = ["-std=c11", "-O0", "-DFX_BUILD=1"]

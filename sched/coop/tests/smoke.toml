@@ -1,6 +1,6 @@
 # sched/coop — conformance 用例(人写)
 #
-# 与 `br_sched_selftest()`(core/selftest/sched_selftest.c; 由 core 的
+# 与 `br_sched_selftest()`(core/c_core/selftest/sched_selftest.c; 由 core 的
 # `br_plugin_manager_selftest()` 在全部 start() 之后驱动, ADR-0010)打印的
 # `[TASKCONF] PASS/FAIL <id>` **一一对应**:
 # v0.1 的红绿由 in-image 自检打 tag(宿主的 sched-test 是同一批用例的第二条腿);

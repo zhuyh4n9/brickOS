@@ -1,6 +1,6 @@
 /*
  * PL011 early console (polled), implementing core's early console protocol
- * (core/include/br/core/br_console.h). v0.1 registers no device and enables no interrupts.
+ * (core/c_core/include/br/core/br_console.h). v0.1 registers no device and enables no interrupts.
  */
 #include <br/core/br_console.h>
 #include <br/platform/br_plat.h>

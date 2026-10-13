@@ -25,7 +25,7 @@
 
 ### D-1 名字就是 POSIX 原名, 且与数值同处一地
 
-`core/include/br/core/br_error.h`:
+`core/c_core/include/br/core/br_error.h`:
 
 ```c
 #define EPERM        1   /* Operation not permitted */
@@ -38,7 +38,7 @@
 - **单一真值**: 名字与数值在同一个文件、同一行 —— 不再有"名字表 + 数值表"两张表。
 - `BR_ERR(e)`(`-(int)(e)`)保留: 它是"取负"的宏, **不是 errno 名**。
 - `BR_OK` 保留(不是 errno)。
-- `core/include/br/core/br_errno.h` 退化为**转发头**(只 `#include <br/core/br_error.h>`),
+- `core/c_core/include/br/core/br_errno.h` 退化为**转发头**(只 `#include <br/core/br_error.h>`),
   既有包含点不用改; 它自己不再定义任何名字。
 
 ### D-2 只改 errno 名, 不碰同前缀的别的标识符

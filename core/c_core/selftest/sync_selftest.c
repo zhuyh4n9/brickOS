@@ -1,6 +1,6 @@
 /*
  * Self-test suite for sync primitives + time (TC-SYNC-001..009, TC-TIME-001..003). Cases are not a
- * plugin capability and stay out of the golden headers; with selftest off core/selftest/ is not
+ * plugin capability and stay out of the golden headers; with selftest off core/c_core/selftest/ is not
  * compiled. The static fixtures (s_m/s_sem/s_cv/s_sp/stacks) are used only by this suite.
  * Cross-boundary: struct br_thread + br_waitq_len() from sched_internal.h (forge a non-owner,
  * check for ghost waiters). Log contract, matched verbatim by tests/gates.toml:

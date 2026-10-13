@@ -1,6 +1,6 @@
 /*
  * aarch64 exception vector table + entry save/restore stubs (P-IRQ-ASM-1, P-IRQ-ASM-2).
- * Frame layout lives in core/include/br/core/br_exc.h (offset macros are assembler-safe).
+ * Frame layout lives in core/c_core/include/br/core/br_exc.h (offset macros are assembler-safe).
  * Each 0x80 B slot holds only a trampoline to its own stub body (a full 31-GPR + system-register
  * save/restore does not fit in a slot); fault and IRQ share the body, the fault path adding
  * msr daifset, #0xf. Only caller-saved x0..x30 are saved: v1 ISRs return to the interrupted site.

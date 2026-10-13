@@ -2,8 +2,8 @@
 
 > 状态: **已落地**(`brickie check` 0 错误/0 警告/0 提示; `brickie build` 通过;
 > `smoke` / `irq-test` / `plugin-test` / `check-workarounds` / `check-headers` 全绿 —— 验证记录见 §3)。
-> 影响面: `core/include/br/core/br_time.h`(**新增** `br_clock_tick_notify()` /
-> `br_clock_tick_count()`)、`core/src/time.c`(计数实现)、
+> 影响面: `core/c_core/include/br/core/br_time.h`(**新增** `br_clock_tick_notify()` /
+> `br_clock_tick_count()`)、`core/c_core/src/time.c`(计数实现)、
 > `platform/qemu-aarch64/src/board_irq.c`(ISR 改为通知 core; `br_plat_timer_ticks` 变转发)、
 > `platform/qemu-aarch64/include/br/platform/br_plat.h`(注释: 消费者请读 core)、
 > `platform/qemu-aarch64/src/plat_qemu_virt.c`(平台身份日志移到自己的 start)、
@@ -45,7 +45,7 @@ br_log_info("tick=... irq_ticks=%lu", ..., (br_u64)br_plat_timer_ticks());
 * `void br_clock_tick_notify(void)` —— **写入口**, 只给 platform 的 timer ISR;
 * `br_u32 br_clock_tick_count(void)` —— **读接口**, 任意上下文可调, 消费者只认识它。
 
-实现落在 `core/src/time.c`(`static volatile br_u32 s_tick_count`)。三个刻意:
+实现落在 `core/c_core/src/time.c`(`static volatile br_u32 s_tick_count`)。三个刻意:
 
 1. **放时间组**(`br_time.h`)而不是中断组: 它是"时间基在走"的观测点, 不是中断控制器语义;
    与 `br_clock_now()` 同一份世界观(设计 `3-01` §4)。

@@ -43,9 +43,9 @@ src/main.c           人写   ← 三个钩子(early_init/init/start) + APP 线�
 tests/smoke.toml     人写   ← 用例声明面(与镜像里 [PLGCONF]/[SVCCONF] 的 id 一一对应)
 ```
 
-M0 那个"在 APP 里直调各子系统"的旧 `br_core_main` 已经不存在了 —— 与 `core/include/br/core/br_main.h` 一起被拆掉(`WORKAROUND(br-wa-boot-001)` 的口径就是"它的归宿不是长大, 而是被拆掉")。
+M0 那个"在 APP 里直调各子系统"的旧 `br_core_main` 已经不存在了 —— 与 `core/c_core/include/br/core/br_main.h` 一起被拆掉(`WORKAROUND(br-wa-boot-001)` 的口径就是"它的归宿不是长大, 而是被拆掉")。
 
-**core 现在的 `br_core_main` 是"四阶段启动链的编排"**, 不是 M0 那个 APP 替身 (见 [br_main.h](../../core/include/br/core/br_main.h)):
+**core 现在的 `br_core_main` 是"四阶段启动链的编排"**, 不是 M0 那个 APP 替身 (见 [br_main.h](../../core/c_core/include/br/core/br_main.h)):
 
 | 原来在 M0 的 `br_core_main` 里的事 | 现在归谁 |
 |---|---|

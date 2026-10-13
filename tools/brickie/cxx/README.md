@@ -51,7 +51,7 @@ echo '{"protocol":1,"command":"render","args":{
 |---|---|---|
 | `name` | full plugin name (`service/crypto`) | all |
 | `schema` | `brick.toml`'s `schema` value (`1`) | brick.toml |
-| `plugin_type` | `app`/`interface`/`ability`/`platform` (template directories are already split; current templates hardcode it literally per directory) | (reserved) |
+| `plugin_type` | `app`/`interface`/`ability`/`platform`/`core` (template directories are already split; current templates hardcode it literally per directory) | (reserved) |
 | `api_type` | `native`/`runtime_adapter`/`third_party` | brick.toml / README |
 | `subkind` | ability subdivision (`""` for non-ability) | ability brick.toml |
 | `lang` | `c` | brick.toml / README |

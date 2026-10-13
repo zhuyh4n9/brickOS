@@ -35,6 +35,13 @@ stage   = "dev"                 # dev | release; CLI overrides (§7.5)
 #   and "mount plan containing / or /dev pulls it in" (§1 note) has no generation path here
 #   (WORKAROUND br-wa-fs-001), so the choice stays explicit on the product side.
 plugins = [
+  # * The core is a plugin like the others now: `plugin_type = "core"`, mandatory and singular
+  #   (solver: BRV-TAX-0020; the manager re-proves it at runtime). It defines **no lifecycle** --
+  #   it is what drives the others (`br_core_main` boot chain + plugin manager) -- so it never
+  #   enters the phase machine it runs, and it is depended on by everything (its headers are the
+  #   ambient include base). `core/` is a namespace of implementations: `c_core` (this one) and a
+  #   future `r_core`; exactly one of them is selected per image.
+  "core/c_core",
   "platform/qemu-aarch64",
   # * ADR-0011: image scheduler switched from `sched/coop` to `sched/rr` (round-robin preemption).
   #   Why: this cut's new mechanisms = **IRQ-exit stack switch** (core) and **bottom halves** (core),
@@ -86,8 +93,9 @@ plugins = [
 # br_plugin_manager_selftest in plugin_mgr.c).
 #
 # * This switch is **generation-time**: off => generated descriptors write `.selftest` as
-#   BR_PLUGIN_NO_HOOK and `core/selftest/**` is not compiled => test code is **entirely
-#   removed by --gc-sections** (not "compiled but not run"). Criterion = `[SELFTEST]` vanishes.
+#   BR_PLUGIN_NO_HOOK and `[build].selftest_sources` (the core plugin's suite) is not compiled
+#   => test code is **entirely removed by --gc-sections** (not "compiled but not run").
+#   Criterion = `[SELFTEST]` vanishes.
 #
 # Semantics: true/false explicit; "inherit" (or table absent) = follow [product].stage
 #       — on for dev / off for release (dev images carry selftests, release images do not).
@@ -136,29 +144,27 @@ allow_edges = [
 # ============================================================ build policy (brickie build)
 #
 # * This table is the **single truth for image builds** (ADR-0004 / design ADR-0003 S1-S3):
-#   the top-level Makefile lists no literal `core/src/**` / `platform/**` paths — those come from
-#   the `[select]` closure + each plugin's `[build]` + platform's `[build.target]`.
+#   the top-level Makefile lists no literal source paths — those come from the `[select]` closure
+#   + each plugin's `[build]` (including the core plugin's) + platform's `[build.target]`.
 #
 # Division of work:
 #   target facts (arch/cross prefix/arch flags/linker script/QEMU model) -> platform `[build.target]`
-#   product policy (this table) -> compile/asm/link flags + outputs + core (non-plugin) sources
+#   product policy (this table) -> compile/asm/link flags + outputs
 #   each plugin's own sources -> its brick.toml `[build]`
 #   tool candidate order/resolution -> `brickie-core` (contract §9 R-14: result gets baked in)
 #
 # WORKAROUND(br-wa-toolchain-001): the external cross toolchain **choice** (prefix/variant/linker
 #   script) lives in platform's `[build.target]`; this table holds product policy only — once
 #   toolchain is ready, only the declaration surface changes; build rules stay put.
-core_sources  = ["core/src/*.c", "core/src/*/*.c", "core/src/*/*.S"]
-core_includes = ["core/include"]
 # Generated source set (descriptors produced by `brickie gen`): the plugin manager enumerates them
 # via the `.br_plugins` section (design 3-05 §2.2). `**` is independent of namespace depth (it is
 # not tied to two-segment names); **closure filtering is the tool's job** — generated output
 # outside the `[select]` closure is skipped (BRV-BLD-0013 info), so no "descriptor in, .c out =>
 gen_sources   = ["build/gen/**/plugin_desc.c"]
-# Core selftest suite sources (ADR-0010). **Must be separate from core_sources**: its glob
-# `core/src/*/*.c` does not reach `core/selftest/` (different top-level dir), and with it off this
-# family is not compiled at all — so "selftest off" also means "code out of the image" for core.
-selftest_sources = ["core/selftest/*.c"]
+# Core selftest suite sources (ADR-0010), appended to the core plugin's build unit. Product-level
+# because the selftest switch above is product policy: off ⇒ these files are **not compiled**, so
+# "selftest off" also means "code out of the image" for the core's own suites.
+selftest_sources = ["core/c_core/selftest/*.c"]
 obj_dir       = "build/obj"
 
 # Cross-compilation discipline (every flag has a reason, not a casual optimization switch):

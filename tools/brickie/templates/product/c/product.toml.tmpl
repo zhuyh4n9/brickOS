@@ -35,15 +35,13 @@ allow_edges = []
 #   computed from the **declaration surface** (ADR-0004 / S1–S3 of design ADR-0003), no longer literals in a hand-written Makefile:
 #     · per-plugin sources/includes   → each plugin's brick.toml `[build]`
 #     · target facts (arch/cross prefix/linker script) → the platform plugin's `[build.target]`
-#     · this table                    → product-level policy (flags + output locations + core source set)
+#     · this table                    → product-level policy (flags + output locations)
 #   The default below is the minimal usable set for "AArch64 bare-metal ELF, no libc" — every entry has a reason:
 #     -ffreestanding / -fno-builtin   no host runtime assumptions; loops are not silently turned into memcpy
 #     -fno-stack-protector            no libc __stack_chk_fail
 #     -fno-omit-frame-pointer         **compile-time prerequisite** for stack traces (service/backtrace): -O2 drops fp
 #     -fno-pic / -fno-pie             bare metal, no relocations
 #     -ffunction-sections/-fdata-sections + -Wl,--gc-sections   unused code stays out of the image
-core_sources  = ["core/src/*.c", "core/src/*/*.c"]   # core body (**not a plugin**)
-core_includes = ["core/include"]
 gen_sources   = []                                    # whether `brickie gen` outputs (descriptors etc.) go into the image
 obj_dir       = "build/obj"
 

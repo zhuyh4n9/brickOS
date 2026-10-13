@@ -36,7 +36,7 @@ steps    = [
   "检查 EARLY 相第一步是否为 platform 插件的 early_init",
   "检查 APP 的 start 是否在所有非 APP 的 start 之后",
 ]
-expect   = "相位单调成立; early 相第一步是 platform; APP 最后(非 APP 的 start 全先跑完); 且自检跑在**全部 start 之后**(ADR-0010 换过判据, 见 core/selftest/plugin_selftest.c)"
+expect   = "相位单调成立; early 相第一步是 platform; APP 最后(非 APP 的 start 全先跑完); 且自检跑在**全部 start 之后**(ADR-0010 换过判据, 见 core/c_core/selftest/plugin_selftest.c)"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]
 

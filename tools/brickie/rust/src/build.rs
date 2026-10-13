@@ -516,32 +516,9 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         .map(|p| p.selftest_on())
         .unwrap_or(false);
 
-    // (a) Core body (not a plugin; referenced by `[compat].core`). Selftest sources compile only
-    // when the switch allows: off ⇒ `br_core_selftest()` is absent and the weak ref reads NULL.
-    let mut core_sources =
-        expand_many(&root, "", &pb.core_sources, "core", "product.toml", "build.core_sources", &mut diags);
-    if selftest_on {
-        core_sources.extend(expand_many(
-            &root,
-            "",
-            &pb.selftest_sources,
-            "core/selftest",
-            "product.toml",
-            "build.selftest_sources",
-            &mut diags,
-        ));
-    }
-    units.push(Unit {
-        name: "core".to_string(),
-        dir: String::new(),
-        sources: core_sources,
-        includes: pb.core_includes.clone(),
-        defines: Vec::new(),
-        cflags: Vec::new(),
-        plugin: None,
-    });
-
-    // (b) Plugins in the closure, in topological order (makes link order reproducible too).
+    // Plugins in the closure, in topological order (makes link order reproducible too). The core
+    // plugin is one of them: it is composed and compiled like any other plugin, from its own
+    // `brick.toml [build]`, and only its selftest sources are gated by the product switch below.
     let mut ordered: Vec<String> = closure.topo_order.clone();
     for name in &closure.selected {
         if !ordered.contains(name) {
@@ -564,7 +541,20 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             );
             continue;
         }
-        let sources = expand_many(&root, &dir, &b.sources, &p.name, &format!("{dir}/brick.toml"), "build.sources", &mut diags);
+        let mut sources = expand_many(&root, &dir, &b.sources, &p.name, &format!("{dir}/brick.toml"), "build.sources", &mut diags);
+        // Selftest master switch: off ⇒ the core's suite is not compiled at all. The descriptor
+        // writes NO_HOOK for the same switch, so nothing references these symbols either way.
+        if selftest_on && p.plugin_type == "core" {
+            sources.extend(expand_many(
+                &root,
+                "",
+                &pb.selftest_sources,
+                &p.name,
+                "product.toml",
+                "build.selftest_sources",
+                &mut diags,
+            ));
+        }
         units.push(Unit {
             name: p.name.clone(),
             dir: dir.clone(),
@@ -631,18 +621,32 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     }
 
     // Per-unit include surface = core + self + declared dep closure; no global union, so an
-    // undeclared dep is a hard compile error. Core also gets platform headers; build/gen gets every
-    // selected plugin's includes.
+    // undeclared dep is a hard compile error. The core plugin's headers are the **ambient base** of
+    // every unit (nothing has to declare a dep on core to include `<br/core/**>`); the core unit
+    // additionally gets the platform headers, because its clock reads the platform timer.
     let platform_incs: Vec<String> = tree
         .plugins
         .iter()
         .filter(|p| p.plugin_type == "platform" && closure.selected.contains(&p.name))
         .flat_map(plugin_incs)
         .collect();
+    let core_incs: Vec<String> = tree
+        .plugins
+        .iter()
+        .filter(|p| p.plugin_type == "core" && closure.selected.contains(&p.name))
+        .flat_map(plugin_incs)
+        .collect();
+    let is_core_unit = |u: &Unit| {
+        u.plugin
+            .as_deref()
+            .and_then(|n| tree.by_name(n))
+            .map(|p| p.plugin_type == "core")
+            .unwrap_or(false)
+    };
     let mut unit_includes: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for u in &units {
-        let mut incs: Vec<String> = pb.core_includes.clone();
-        if u.name == "core" {
+        let mut incs: Vec<String> = core_incs.clone();
+        if is_core_unit(u) {
             incs.extend(platform_incs.clone());
         } else if u.name == "build/gen" {
             incs.extend(u.includes.clone());
@@ -662,6 +666,17 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     // An undeclared cross-plugin `#include` is a build error. Narrowing `-I` alone is not enough:
     // glibc headers mask common names such as `unistd.h`. `check` calls the same function.
     for u in model::cross_plugin_includes(&root, &tree, &closure.selected) {
+        // The core plugin is the base and is platform-agnostic: it includes the platform *contract*
+        // (`br/platform/**`, provided by whichever platform plugin is selected) without naming a
+        // platform plugin, so that one include family is not dep-closure-checked.
+        if u.header.starts_with("br/platform/")
+            && tree
+                .plugins
+                .iter()
+                .any(|p| p.name == u.consumer && p.plugin_type == "core")
+        {
+            continue;
+        }
         // A-2: an APP directly including a core header is a build error; others are unrestricted.
         if u.provider == "core" {
             let is_app = tree

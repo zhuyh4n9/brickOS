@@ -8,7 +8,7 @@
 > 宿主 7 + QEMU 7 + 脚本 4)。
 > 影响面(**新插件 1 件**): `framework/file-table/**`(brick.toml / include/br/ft/br_ft.h /
 > src/file_table.c / src/ft_selftest.c / README.md / tests/smoke.toml);
-> `core/include/br/core/br_error.h`(**只加不破**: errno-base 整表 + generic 补码);
+> `core/c_core/include/br/core/br_error.h`(**只加不破**: errno-base 整表 + generic 补码);
 > `tests/host/ft_test.c`(新宿主用例); `product.toml`(`[select]` 追加 1 件);
 > `tests/gates.toml`(新增 `[[hosttest]] ft-test` + `plugin-test` 扩三条判据);
 > `WORKAROUNDS.md`(扩写 `br-wa-test-001`)。

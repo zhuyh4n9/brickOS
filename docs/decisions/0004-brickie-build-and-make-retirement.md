@@ -13,7 +13,7 @@
 `br-wa-entry-001` 记了半年的一句话是: **"镜像的源码集合、编译标志与链接脚本由手写 `Makefile`
 决定"**。它的根因不是"make 不好用", 而是 `2-02` §1 把"插件发现 / manifest 解析 / 闭包求解 /
 拓扑与环检测 / 生成物 / **构建编排**"整块划给了 `brickie`, 而那块能力当时不存在 —— 于是
-`Makefile` 里出现了 `CORE_SRCS := $(wildcard core/src/*.c) …`、`PLAT_SRCS := …`、`INCLUDES := -I…`
+`Makefile` 里出现了 `CORE_SRCS := $(wildcard core/c_core/src/*.c) …`、`PLAT_SRCS := …`、`INCLUDES := -I…`
 这样一批**本该从声明面算出来**的字面量。
 
 `Makefile` 表达不了的东西是具体的: 依赖闭包、`compat_gen` 精确匹配、分类学禁则、相位单调、
@@ -52,12 +52,14 @@ make 或 ninja, 出**逐字节一致**的镜像)→ S3(入口换成 `brickie bui
 | 选哪些插件 | `product.toml [select].plugins` + 各插件 `[[dep]]` 闭包 | 已是既有唯一真值 |
 | 每个插件怎么编(源/包含/宏) | 各插件 `brick.toml [build]` | 插件自述(`§9.1` 规则 1) |
 | **目标事实**(arch / 交叉前缀 / arch 标志 / 链接脚本 / QEMU 型号) | **platform 插件**的 `[build.target]` | 每镜像恰一个 platform(§8.3 ④); "平台是什么"本来就包含这些 |
-| **产品策略**(编译/汇编/链接标志、产物落点、核心本体源集合、profile 追加标志) | `product.toml [build]` / `[build.release]` | 产品级选择与预算的既有归属 |
+| **产品策略**(编译/汇编/链接标志、产物落点、profile 追加标志) | `product.toml [build]` / `[build.release]` | 产品级选择与预算的既有归属 |
 | **门禁的判据**(宿主用例 / 日志正则 / 脚本) | `tests/gates.toml` | 判据以前散在 `Makefile` recipe 里, 那是第二处真值 |
 | 生成物(`build/gen/**`) | 由 `brickie gen` 产出, `[build].gen_sources` 决定是否进镜像 | 生成物不手改(C6) |
 
-`core/`(非插件)的源集合只能由产品声明 —— `[build].core_sources`。这一点如实反映了设计现状:
-core 不是插件, 没有自己的 manifest(`[compat].core` 只钉版本区间)。
+`core/` 的源集合过去只能由产品声明(`[build].core_sources`), 因为 core 不是插件。
+★ **ADR-0031 之后不再如此**: core 是第一类插件(`plugin_type = "core"`, 必须有且仅有一个),
+源集合回到它自己的 `core/c_core/brick.toml [build]`, `core_sources`/`core_includes` 两字段退役;
+只有 `selftest_sources` 留在产品级(自检开关是产品策略, ADR-0010)。
 
 ### 2.3 core 出计划与判据, L5 只执行(裁定 S-B1/R-14/R-16)
 
@@ -189,7 +191,7 @@ debug=panic / release=trace)尚未落地, 是留待项(§4)。
 ### 5.1 产物父目录没人建(新源码目录必炸)
 
 `direct` 后端第一次跑"新增了一个源码目录"的构建时, 编译器报
-`fatal error: opening dependency file build/obj/core/src/sched/sched_core.o.d: No such file or directory`。
+`fatal error: opening dependency file build/obj/core/c_core/src/sched/sched_core.o.d: No such file or directory`。
 旧 `Makefile` 有 `@mkdir -p $(dir $@)`, 而我的执行器假设"目录都在" —— 只有 `build/obj` 里恰好已有
 全部旧目录时才看不出来。修法: 执行器按 `steps[i].outputs` 逐级 `mkdir -p`(这是**编排**, 不是判定 ——
 core 只声明"这一步写出哪些文件")。教训与 ADR-0003 §5 的同款: **只有从零构建才暴露的问题**,
@@ -208,7 +210,7 @@ core 只声明"这一步写出哪些文件")。教训与 ADR-0003 §5 的同款:
 
 ### 5.4 注释里的 `*/`(同一个坑第二次踩)
 
-`sched_internal.h` 的文件头注释里写了 `core/src/sched/*.c` —— `*/` 提前闭合注释, 编译器报
+`sched_internal.h` 的文件头注释里写了 `core/c_core/src/sched/*.c` —— `*/` 提前闭合注释, 编译器报
 `error: '/*' within comment`。这与 ADR-0003 记的 `TC-MEM-*/TC-MM-*` 是同一个坑: **注释里不要出现
 `*/` 序列**。仓内的自查手段目前只有编译器; 这类坑不值得单开门禁(编译器 100% 抓得住), 但值得写进文档。
 
@@ -246,7 +248,7 @@ core 只声明"这一步写出哪些文件")。教训与 ADR-0003 §5 的同款:
 `templates/product/c/product.toml.tmpl` 里**没有 `[build]`** ⇒ 新建的产品跑 `brickie build`
 直接 `BRV-BLD-0001`, 而且没有任何提示("你还差什么"完全靠猜)。本刀补齐:
 * 产品骨架给一份**能编**的 AArch64 裸机缺省(`[build]` 的 22 条 cflags 逐条写了理由,
-  外加 `core_sources`/`core_includes`/`gen_sources`/`obj_dir` 与 `[build.release]` 的位置);
+  外加 `gen_sources`/`selftest_sources`/`obj_dir` 与 `[build.release]` 的位置 —— `core_sources`/`core_includes` 已由 ADR-0031 退役);
 * 四个插件骨架里过期的 `[build] # v0.1 只记录; v0.3 起被消费` 改成事实;
 * platform 骨架补 `[build.target]` 的**注释形状**, 并写明"不填就报 `BRV-BLD-0003`" ——
   模板**不能替人知道** SoC 的事实, 但必须告诉人还差什么。
@@ -278,7 +280,7 @@ core 只声明"这一步写出哪些文件")。教训与 ADR-0003 §5 的同款:
 | 组合期声明面(dev + release) | `brickie check` / `brickie check --profile release` | 0 错误 / 0 警告 / 0 提示(四域全零); 闭包 8 个插件 |
 | 生成物可复现 | `brickie gen --check` | 8 个文件逐字节一致 |
 | 全量构建(干净树) | `brickie clean --all && brickie build -j16` | **46 步**(44 源 + 链接 + objcopy), 0 失败 |
-| 增量收敛 | `brickie build -j16` 连跑 | `steps_todo = 0`; `touch core/include/br/core/br_log.h` 后 14 步, 再跑即 0 |
+| 增量收敛 | `brickie build -j16` 连跑 | `steps_todo = 0`; `touch core/c_core/include/br/core/br_log.h` 后 14 步, 再跑即 0 |
 | **S2 后端一致** | 干净树上 `brickie build` / `--backend make --tag mk` / `--backend ninja --tag ninja` | 三个 ELF 与 BIN **逐字节一致**(实测) |
 | S2 的**口径**修正 | 同上, 但在"增量树"上先跑一个后端、再跑另一个 | 中途若有任何输入变化, 各后端的对象各自重编 ⇒ **跨后端比对只在"同一份输入"下有意义**。所以门禁要把 S2 放在**干净树**上(或先 `clean`); 否则量到的是"两次构建之间有没有改过东西", 不是后端等价性 |
 | 门禁(全部经 brickie) | `brickie test -j16` | **18 条全绿**: 宿主 `string-test`/`mem-test`/`sync-test`/`sched-test` + QEMU `smoke`/`irq-test`/`dbg-test`/`sync-test`/`plugin-test`/`sched-test` + 脚本 `check-string`/`check-headers`/`check-workarounds`/`check-build` |
