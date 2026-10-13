@@ -142,6 +142,7 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 | 2026-10-12 | 0.1.0 | `x86-64/linux` | 换工具链重发: 编 `brickie-core` 的 rustc 由 1.93.1 变成**工作区自带的 1.99.0**(apt 的 cargo 1.75 读不了 `Cargo.lock` v4); `make core` 起**自动发现** `.toolchain`, 太旧的 cargo 当场 FAIL 并给出修法 |
 | 2026-10-12 | 0.1.0 | `x86-64/linux` | 入口 ELF 与 core 重发: `brickie-core` 增 **vendor 代码的单元级 cflags**(`[build].cflags` 以前被解析但被丢掉)与 **APP 挂载计划**的生成(`br_mount_plan_t` 表 + `mount_plan_apply()`); 工具链改动 ⇒ 三件一起重发。★ 本行与 §5.1 的表**必须同一次改**(重发种子的人负责刷新指纹) |
 | 2026-10-12 | 0.1.0 | `x86-64/linux` | 入口 ELF 增补**运行前设备模型预检**: 步骤 argv 里出现 `-device emmc` 而解析到的 QEMU < **10.2** 时, 不再把 QEMU 那句 `'emmc' is not a valid device model name` 原样漏给用户, 而是当场给出原因(eMMC 卡模型 9.1 就有, 10.2 才成为**可插拔**设备)与修法(`tools/fetch-qemu.sh`); 顺带把 `runner.StepError` 在 CLI 里接住。只动了 `brickie` 的 Python 载荷 ⇒ `brickie-core`/`brickie-gen` 两件**逐字节未变** |
+| 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以**追平源码**: 库里那份种子的 `brickie-core` 比当前源码编出来的小 ~125 KiB(`2 951 624` vs `3 077 392` B), 即 `9849fe0`(brick.toml 改名 + 注释英文化)**发布了与自身源码不符的种子** ⇒ `make tools-prebuilt-check` 红。本次 `make tools-prebuilt` 重发三件, 并同一次刷新 §5.1(该检查现已 3/3 ok)。 |
 
 ### 5.1 当前种子指纹(实测)
 
@@ -151,9 +152,9 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 文件(`prebuilts/seed/brickie/x86-64/linux/bin/`) | 体积 | sha256 |
 |---|---|---|
-| `brickie` | 3 522 696 B(~3.36 MiB) | `c580c7fcde9a714bb5951dfcbd916da08f23a7db2087a7322a849baff06650d4` |
-| `brickie-core` | 3 068 960 B(~2.93 MiB) | `61e432d31212d6478d697c0408bbbc771493e56ee9ff1666cd67fde66b4753f6` |
-| `brickie-gen` | 167 384 B(~163 KiB) | `cd77d34d1f8c44c71c70685fb643e9e8f8eaa564bf7d15253199350a18a3b92b` |
+| `brickie` | 3 539 080 B(~3.38 MiB) | `d6dd3291d4ec74ba771fd402b1a0dd3a7f741936b01e18563e5c76c2ccf68069` |
+| `brickie-core` | 3 077 392 B(~2.93 MiB) | `751ad1eb01f27517de8f53eca207c684f4a7d5352ff46f74799137f7bcdabce6` |
+| `brickie-gen` | 167 384 B(~163 KiB) | `a7a433b4b88ccc0d5f2152bbeed090e818c4f0e6adfd98ef0d28e49e9469e673` |
 
 > 这一份由 **rustc 1.99.0**(工作区自带的 `.toolchain`; `make core` 自动采用)编出 ——
 > `brickie --version --json` 的 `data.languages[0].version` 就是它。种子字节与 rustc 版本

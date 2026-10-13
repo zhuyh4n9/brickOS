@@ -91,7 +91,7 @@ plugins = [
 #
 # Semantics: true/false explicit; "inherit" (or table absent) = follow [product].stage
 #       — on for dev / off for release (dev images carry selftests, release images do not).
-enabled = false
+enabled = "inherit"
 # plugins: run only the listed plugins (**optional**; empty/absent = all with [selftest]).
 # Use: when keeping only one or two selftest suites in an image, trim the rest too.
 # plugins = []
