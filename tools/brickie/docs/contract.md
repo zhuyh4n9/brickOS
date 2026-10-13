@@ -376,11 +376,18 @@ extra   = ["-nographic"]
 ```toml
 schema = 1
 [product]
-name = "hsm"; version = "0.1.0.0"; app = "app/hsm"; core = ">=1.0.0"
-platform = "platform/qemu-aarch64"     # closure root: the single platform plugin
-ability  = ["core/c_core", "service/crypto", "sched/coop"]   # closure roots: directly selected abilities
-stage = "dev"                      # dev | release (profile default, overridden by CLI)
-# [select].plugins = [...]         # optional/legacy extra roots (the two keys above are the preferred surface)
+name = "hsm"; version = "0.1.0.0"; stage = "dev"    # dev | release (profile default, overridden by CLI)
+# Every root is a record (ADR-0035): `brick` = plugin name, `requires` = that brick's own version
+# requirement (`{}` = none). app/platform/core are singletons; `[[product.ability]]` is the list
+# (one `<alias> = { ... }` per plugin, the alias being a label only).
+app      = { brick = "app/hsm", requires = {} }
+platform = { brick = "platform/qemu-aarch64", requires = {} }
+core     = { brick = "core/c_core", requires = { version = ">=1.0.0" } }
+[[product.ability]]
+crypto = { brick = "service/crypto", requires = {} }
+coop   = { brick = "sched/coop", requires = {} }
+# Removed by ADR-0035 (shape error, exit code 2): `[select].plugins` and the bare-string form
+# (`app = "app/hsm"`, `core = ">=1.0.0"`).
 [budget]
 ram_kib = 512
 stack_kib = 16

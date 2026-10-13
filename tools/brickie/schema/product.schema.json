@@ -1,7 +1,7 @@
 {
  "$schema": "http://json-schema.org/draft-07/schema#",
  "title": "product.toml - brickie v0.1 product selection surface (BRV-D2: single-record shape)",
- "description": "Expresses single-record shape only (contract §7.2). Cross-field/cross-file invariants ('exactly one app', 'select.plugins globally unique', budget vs closure) are reported as codes by brickie-core.",
+ "description": "Expresses single-record shape only (contract §7.2). Cross-field/cross-file invariants ('exactly one app', root type vs plugin type, budget vs closure) are reported as codes by brickie-core. ADR-0035: every root is a record { brick, requires } in [product]; app/platform/core are singletons and [[product.ability]] is the list.",
  "type": "object",
  "required": [
   "schema",
@@ -30,30 +30,22 @@
      "type": "string"
     },
     "app": {
-     "type": "string"
+     "$ref": "#/definitions/selection"
     },
     "core": {
-     "type": "string"
+     "$ref": "#/definitions/selection"
     },
     "platform": {
-     "description": "Closure root: the platform plugin name (a single string), e.g. platform/qemu-aarch64. Everything the platform needs enters via its own [[dep]].",
-     "oneOf": [
-      {
-       "type": "string"
-      },
-      {
-       "type": "array",
-       "items": {
-        "type": "string"
-       }
-      }
-     ]
+     "$ref": "#/definitions/selection"
     },
     "ability": {
-     "description": "Closure roots: directly selected ability plugin names. Every plugin they [[dep]] on (frameworks, interfaces, runtimes) enters the image by dependency closure and is not listed here.",
+     "description": "`[[product.ability]]`: one array element per block, each `<alias> = { brick = ..., requires = ... }`. The alias is a label only -- the plugin identity is always `brick`.",
      "type": "array",
      "items": {
-      "type": "string"
+      "type": "object",
+      "additionalProperties": {
+       "$ref": "#/definitions/selection"
+      }
      }
     },
     "stage": {
@@ -62,19 +54,6 @@
       "dev",
       "release"
      ]
-    }
-   }
-  },
-  "select": {
-   "type": "object",
-   "description": "Legacy/extra closure roots: same effect as [product].platform + [product].ability. The preferred surface is the two [product] keys.",
-   "additionalProperties": true,
-   "properties": {
-    "plugins": {
-     "type": "array",
-     "items": {
-      "type": "string"
-     }
     }
    }
   },
@@ -216,6 +195,31 @@
       "type": "string"
      },
      "description": "Run only the listed plugins; an empty array = every plugin that declares [selftest]."
+    }
+   }
+  }
+ },
+ "definitions": {
+  "selection": {
+   "description": "One selection record (ADR-0035): `brick` names the plugin, `requires` carries that same brick's version requirement only.",
+   "type": "object",
+   "required": [
+    "brick"
+   ],
+   "additionalProperties": false,
+   "properties": {
+    "brick": {
+     "type": "string"
+    },
+    "requires": {
+     "type": "object",
+     "additionalProperties": false,
+     "properties": {
+      "version": {
+       "type": "string",
+       "description": "Version range (3 segments, compared against the brick's MAJOR.MINOR.REVISE)."
+      }
+     }
     }
    }
   }

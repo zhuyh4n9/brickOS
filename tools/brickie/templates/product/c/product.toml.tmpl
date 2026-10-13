@@ -7,11 +7,18 @@ schema = {{schema}}
 [product]
 name     = "{{name}}"
 version  = "{{version}}"       # COMPAT_GEN.MAJOR.MINOR.REVISE
-app      = "{{app}}"           # directory of the single APP plugin (usually app/<name>)
-core     = ">=1.0.0"           # core range is always 3 segments (§7.4)
-platform = ""                  # platform plugin name, e.g. "platform/qemu-aarch64"
-ability  = []                  # directly selected abilities; their [[dep]] closure joins the image
+# Every root is a record: `brick` names the plugin, `requires` carries that brick's own version
+# requirement (`{}` = none). The rest of the image joins by each plugin's `[[dep]]` closure.
+app      = { brick = "{{app}}", requires = {} }                       # exactly one APP
+platform = { brick = "", requires = {} }                              # fill in: platform/<board>
+core     = { brick = "", requires = { version = "{{CORE_RANGE}}" } }  # fill in: core/c_core
 stage    = "dev"               # dev | release (profile default, CLI can override)
+
+# Directly selected abilities: one `[[product.ability]]` block, one `<alias> = { ... }` per plugin.
+# The alias is a label only -- the plugin identity always comes from `brick`.
+[[product.ability]]
+# console = { brick = "driver/uart-pl011", requires = {} }
+# rootfs  = { brick = "fs/tmpfs", requires = {} }
 
 [budget]
 ram_kib   = 512

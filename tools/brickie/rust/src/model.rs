@@ -385,20 +385,59 @@ impl Plugin {
     }
 }
 
+/// One selection record: `{ brick = "<plugin name>", requires = { version = "<range>" } }`.
+/// The record's own `kind` decides which plugin type the `brick` must have (solver:
+/// `BRV-TAX-0024`); `requires` carries only the version requirement of that same brick.
+#[derive(Clone, Debug, Default)]
+pub struct Sel {
+    /// `""` for the typed singletons (`app` / `platform` / `core`); the TOML key for an
+    /// `[[ability]]` entry. A label only -- the plugin identity is always `brick`.
+    pub alias: String,
+    /// `"app"` | `"platform"` | `"core"` | `"ability"`.
+    pub kind: String,
+    /// Plugin name this record selects (`""` = the optional root is declared but unset).
+    pub brick: String,
+    /// `requires.version`; `None` = no requirement.
+    pub req: Option<Range>,
+    pub req_raw: Option<String>,
+    /// Declaration span, e.g. `product.app`, `product.ability[0].fs`.
+    pub span: String,
+}
+
+impl Sel {
+    pub fn to_json(&self) -> serde_json::Value {
+        use serde_json::json;
+        let mut req = serde_json::Map::new();
+        if let Some(r) = &self.req {
+            req.insert("version".into(), json!(r.canonical()));
+        }
+        json!({
+            "alias": self.alias,
+            "kind": self.kind,
+            "brick": self.brick,
+            "requires": req,
+        })
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Product {
     pub file: String,
     pub schema: i64,
     pub name: String,
     pub version: Version,
+    /// Brick of the single APP record (`[product].app`).
     pub app: String,
-    pub core: Option<Range>,
-    /// `[product].platform`: the platform plugin (the board/BSP half of the target facts).
+    /// Brick of the optional `[product].core` record.
+    pub core_brick: Option<String>,
+    /// Bricks of the optional `[product].platform` record (0 or 1).
     pub platform: Vec<String>,
-    /// `[product].ability`: directly selected ability plugins (closure roots).
+    /// Bricks of the `[[ability]]` records (closure roots).
     pub ability: Vec<String>,
+    /// Every selection record in declaration order (app, platform, core, abilities) -- the
+    /// surface as written, for presentation and for the per-record judgements.
+    pub roots: Vec<Sel>,
     pub stage: String,
-    pub select: Vec<String>,
     pub budget_ram_kib: Option<i64>,
     pub budget_stack_kib: Option<i64>,
     /// `[kernel].hz`: tick frequency in Hz. `None` = undeclared ⇒ default 200 (5 ms/tick);
@@ -449,17 +488,29 @@ impl Product {
             .iter()
             .map(|(a, b)| json!([a, b]))
             .collect();
+        let sel = |kind: &str| {
+            self.roots
+                .iter()
+                .find(|s| s.kind == kind)
+                .map(Sel::to_json)
+        };
+        let abilities: Vec<_> = self
+            .roots
+            .iter()
+            .filter(|s| s.kind == "ability")
+            .map(Sel::to_json)
+            .collect();
         json!({
             "file": self.file,
             "schema": self.schema,
             "name": self.name,
             "version": self.version.to_string(),
-            "app": self.app,
-            "core": self.core.as_ref().map(|r| r.canonical()),
-            "platform": self.platform,
-            "ability": self.ability,
+            "app": sel("app"),
+            "core": sel("core"),
+            "platform": sel("platform"),
+            "ability": abilities,
+            "selection": self.roots.iter().map(Sel::to_json).collect::<Vec<_>>(),
             "stage": self.stage,
-            "select": self.select,
             "budget": {"ram_kib": self.budget_ram_kib, "stack_kib": self.budget_stack_kib},
             "kernel": {"hz": self.kernel_hz},
             "lint": {"frozen_deps": self.lint_frozen_deps, "allow_edges": edges},
@@ -932,6 +983,144 @@ fn rel_path(root: &Path, p: &Path) -> String {
         .to_string_lossy()
         .replace('\\', "/")
 }
+
+/// Parse one selection record (ADR-0035): `{ brick = "<plugin name>", requires = { version = "..." } }`.
+/// `require_brick` marks the records that must name a plugin (`app` and every ability entry);
+/// `platform` / `core` may carry an empty `brick` = "the key is declared but selects nothing".
+fn parse_sel(
+    kind: &str,
+    alias: &str,
+    span: &str,
+    value: &toml::Value,
+    require_brick: bool,
+    file: &str,
+    d: &mut Diags,
+) -> Option<Sel> {
+    let Some(tbl) = value.as_table() else {
+        sel_shape_error(span, value.type_str(), file, d);
+        return None;
+    };
+    let mut sel = Sel {
+        alias: alias.to_string(),
+        kind: kind.to_string(),
+        span: span.to_string(),
+        ..Default::default()
+    };
+    for key in tbl.keys() {
+        if key != "brick" && key != "requires" {
+            d.shape(
+                "BRV-MF-0001",
+                file,
+                file,
+                format!("{span}.{key}"),
+                format!("unknown key `{key}` in a selection record (accepted keys: `brick`, `requires`)"),
+                "ADR-0035: one record answers exactly two questions -- which brick, and which version of it",
+            );
+        }
+    }
+    match tbl.get("brick") {
+        None => d.shape(
+            "BRV-MF-0001",
+            file,
+            file,
+            span,
+            "selection record has no `brick`",
+            "ADR-0035: `brick` names the selected plugin, e.g. `brick = \"fs/devfs\"`",
+        ),
+        Some(toml::Value::String(name)) => {
+            let name = name.trim();
+            if name.is_empty() {
+                if require_brick {
+                    d.shape(
+                        "BRV-MF-0001",
+                        file,
+                        file,
+                        format!("{span}.brick"),
+                        format!("`{span}` must name a plugin"),
+                        "ADR-0035: only the optional `platform` / `core` records may carry an empty `brick`",
+                    );
+                }
+            } else if rules::valid_plugin_name(name) {
+                sel.brick = name.to_string();
+            } else {
+                d.shape(
+                    "BRV-MF-0001",
+                    file,
+                    file,
+                    format!("{span}.brick"),
+                    format!("`brick` name `{name}` violates the name contract"),
+                    "§8.3",
+                );
+            }
+        }
+        Some(other) => d.shape(
+            "BRV-MF-0001",
+            file,
+            file,
+            format!("{span}.brick"),
+            format!("`brick` must be the plugin name as a string, got {}", other.type_str()),
+            "ADR-0035",
+        ),
+    }
+    match tbl.get("requires") {
+        None => {}
+        Some(toml::Value::Table(req)) => {
+            for key in req.keys() {
+                if key != "version" {
+                    d.shape(
+                        "BRV-MF-0001",
+                        file,
+                        file,
+                        format!("{span}.requires.{key}"),
+                        format!("unknown key `{key}` in `requires` (accepted: `version`)"),
+                        "ADR-0035: `requires` carries this brick's own version requirement only",
+                    );
+                }
+            }
+            match req.get("version") {
+                None => {}
+                Some(toml::Value::String(raw)) => {
+                    if let Some(r) = parse_range_field(raw, &sel.brick, file, &format!("{span}.requires.version"), d) {
+                        sel.req = Some(r);
+                        sel.req_raw = Some(raw.clone());
+                    }
+                }
+                Some(other) => d.shape(
+                    "BRV-MF-0001",
+                    file,
+                    file,
+                    format!("{span}.requires.version"),
+                    format!("`version` must be a range string, e.g. \">=0.1.0\"; got {}", other.type_str()),
+                    "§7.4: range is exactly 3 segments",
+                ),
+            }
+        }
+        Some(other) => d.shape(
+            "BRV-MF-0001",
+            file,
+            file,
+            format!("{span}.requires"),
+            format!("`requires` must be a table (`{{}}` or `{{ version = \"...\" }}`), got {}", other.type_str()),
+            "ADR-0035",
+        ),
+    }
+    Some(sel)
+}
+
+/// A selection record that is not even a table: the pre-ADR-0035 bare-string / list forms land here.
+fn sel_shape_error(span: &str, got: &str, file: &str, d: &mut Diags) {
+    d.shape(
+        "BRV-MF-0001",
+        file,
+        file,
+        span,
+        format!(
+            "selection record must be `{{ brick = \"<plugin name>\", requires = {{}} }}`, got {got}"
+        ),
+        "ADR-0035 (hard switch): the bare-string form was removed -- `app = \"app/hello\"`, `core = \">=0.1.0\"` (a range) and `[select].plugins = [\"plugin/name\"]` are no longer accepted",
+    );
+}
+
 
 /// Parse one `brick.toml`. Returns `None` only when even the TOML cannot be read.
 pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin> {
@@ -1714,44 +1903,95 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
             prod.version = v;
         }
     }
-    prod.app = req_str(product, "app", &file, &file, "product", d).unwrap_or_default();
-    if !prod.app.is_empty() && !rules::valid_plugin_name(&prod.app) {
-        d.shape(
+    // Selection surface (ADR-0035): every root is a record `{ brick, requires }` inside
+    // `[product]`; `app` / `platform` / `core` are singletons and `[[product.ability]]` is the
+    // list. The bare-string form and the `[select]` table were removed (hard switch).
+    let mut roots: Vec<Sel> = Vec::new();
+    match product.get("app") {
+        None => d.shape(
             "BRV-MF-0001",
             &file,
             &file,
             "product.app",
-            format!("`app` name `{}` violates the name contract", prod.app),
-            "§8.3",
+            "missing required field `app`",
+            "contract §7.2: `app = { brick = \"app/<name>\", requires = {} }`",
+        ),
+        Some(v) => {
+            if let Some(s) = parse_sel("app", "", "product.app", v, false, &file, d) {
+                // An empty `brick` declares the key without selecting a root (same as platform/core)
+                if !s.brick.is_empty() {
+                    prod.app = s.brick.clone();
+                    roots.push(s);
+                }
+            }
+        }
+    }
+    for kind in ["platform", "core"] {
+        let Some(v) = product.get(kind) else { continue };
+        let span = format!("product.{kind}");
+        let Some(s) = parse_sel(kind, "", &span, v, false, &file, d) else {
+            continue;
+        };
+        // An empty `brick` (the `plan-init` skeleton) declares the key without selecting a root.
+        if s.brick.is_empty() {
+            continue;
+        }
+        if kind == "platform" {
+            prod.platform.push(s.brick.clone());
+        } else {
+            prod.core_brick = Some(s.brick.clone());
+        }
+        roots.push(s);
+    }
+    match product.get("ability") {
+        None => {}
+        Some(toml::Value::Array(items)) => {
+            for (i, item) in items.iter().enumerate() {
+                let Some(tbl) = item.as_table() else {
+                    sel_shape_error(&format!("product.ability[{i}]"), item.type_str(), &file, d);
+                    continue;
+                };
+                for (alias, rec) in tbl {
+                    let span = format!("product.ability[{i}].{alias}");
+                    if let Some(s) = parse_sel("ability", alias, &span, rec, true, &file, d) {
+                        prod.ability.push(s.brick.clone());
+                        roots.push(s);
+                    }
+                }
+            }
+        }
+        Some(other) => d.shape(
+            "BRV-MF-0001",
+            &file,
+            &file,
+            "product.ability",
+            format!(
+                "`ability` must be an array of tables (`[[product.ability]]` + `<alias> = {{ ... }}`), got {}",
+                other.type_str()
+            ),
+            "ADR-0035: the flat `[\"plugin/name\"]` list was removed",
+        ),
+    }
+    prod.ability.sort();
+    prod.ability.dedup();
+    prod.roots = roots;
+
+    // `[select].plugins` was the flat root list; its removal is deliberate (ADR-0035).
+    if top.contains_key("select") {
+        d.shape(
+            "BRV-MF-0001",
+            &file,
+            &file,
+            "select",
+            "the `[select]` table was removed: roots are now `[product].app` / `[product].platform` / `[product].core` / `[[product.ability]]`",
+            "ADR-0035 (hard switch): the flat `[select].plugins` list no longer selects anything",
         );
     }
-    if let Some(core) = opt_str(product, "core", &file, &file, "product", d) {
-        prod.core = parse_range_field(&core, &file, &file, "product.core", d);
-    }
-    // `platform` accepts one name or a list; `ability` accepts a list.
-    match product.get("platform") {
-        None => {}
-        Some(toml::Value::String(v)) => prod.platform.push(v.clone()),
-        Some(_) => prod.platform = str_array(product, "platform", &file, &file, "product", d),
-    }
-    prod.ability = str_array(product, "ability", &file, &file, "product", d);
     prod.stage = opt_str(product, "stage", &file, &file, "product", d)
         .unwrap_or_else(|| "dev".to_string());
     if !rules::in_list(&["dev", "release"], &prod.stage) {
         shape_enum(d, &file, &file, "product", "stage", &prod.stage, &["dev", "release"]);
     }
-
-    if let Some(sel) = opt_table(top, "select") {
-        prod.select = str_array(sel, "plugins", &file, &file, "select", d);
-    }
-    // An unset/empty root (e.g. the `plan-init` skeleton's `platform = ""`) is "no root", not a
-    // missing plugin.
-    for list in [&mut prod.platform, &mut prod.select] {
-        list.retain(|n| !n.is_empty());
-    }
-    prod.ability.retain(|n| !n.is_empty());
-    prod.ability.sort();
-    prod.ability.dedup();
     if let Some(st) = opt_table(top, "selftest") {
         prod.has_selftest_table = true;
         match st.get("enabled") {

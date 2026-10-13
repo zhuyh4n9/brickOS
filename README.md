@@ -122,9 +122,9 @@ v0.1.0 交付**声明期**(插件发现/校验/描述符生成 + `brickie` 组�
 brickOS/
 ├── Makefile                     只编工具 + 镜像侧的过渡别名(真身 = brickie build)
 ├── README.md                    本文件 · WORKAROUNDS.md WORKAROUND 登记表(欠债清单)
-├── product.toml                 产品声明: app 选择 / 插件选择 / 预算 / 时钟节拍(HZ) / M0 引导例外豁免
+├── product.toml                 产品声明: 根记录(app/platform/core/[[product.ability]]) / 预算 / 时钟节拍(HZ) / 构建策略
 ├── mk/host.mk                   宿主三元组 + 宿主产物目录(build/host/… 与 prebuilts/…)
-├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`: 适配层按能力归位 + `api_type` 纯化为表面分类(BRV-TAX-0022)+ 来源守卫(BRV-TAX-0023)**
+├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`** / **0034 选择面收敛为闭包根(`[product].platform`/`ability`)** / **0035 根记录形态 `{ brick, requires }` + `[[product.ability]]`(硬切换, BRV-TAX-0024)**
 ├── prebuilts/toolchain/         外部工具链**下载缓存**(派生, 不进库; fetch-prebuilt.py)
 ├── prebuilts/                   宿主工具**自举种子**(进库; 见下, 详见其 README): seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}
 ├── tools/                       host-detect.sh 宿主 arch/os 探测(布局映射的唯一真值) · check-workarounds.sh 源码标记 ↔ 登记表 一致性检查 · check-build.sh 构建接线门禁(宿主产物出树 / 自举种子进库)
@@ -294,6 +294,23 @@ make check-build        # 构建接线门禁: 缺省目标=工具/无字面源�
 make tools-prebuilt     # 发布三件自举种子到 prebuilts/seed/brickie/<arch>/<os>/bin/
 make clean              # 清掉工具与镜像两侧的派生物(只清工具: make tools-clean)
 ```
+
+**选择面(ADR-0035)**: `product.toml [product]` 只写**根**, 其余插件全部由各插件自己的 `[[dep]]` 闭包带进来。四个根各是一条**记录**(`brick` = 插件名, `requires` = 该 brick 自己的版本区间, `{}` = 不要求):
+
+```toml
+# product.toml
+[product]
+app      = { brick = "app/hello", requires = {} }                        # 恰一个
+platform = { brick = "platform/qemu-aarch64", requires = {} }             # 可选
+core     = { brick = "core/c_core", requires = { version = ">=0.1.0" } }  # 可选
+stage    = "dev"
+
+[[product.ability]]                     # 直接选中的能力件; 键只是可读别名, 身份一律取自 brick
+dump  = { brick = "service/dump", requires = {} }
+devfs = { brick = "fs/devfs", requires = {} }
+```
+
+判据(全部在组合期, 由 `brickie check` 报码): 记录里的 `brick` 不在插件树 ⇒ `BRV-MF-0001`; 记录的种类与 brick 的 `plugin_type` 不符(如 `core` 记录写了能力件) ⇒ **`BRV-TAX-0024`**; `requires.version` 不被该 brick 的版本满足 ⇒ **`BRV-VER-0002`**; 闭包内 core 数量 ≠ 1 ⇒ `BRV-TAX-0020`。旧的 `[select].plugins` 与裸字符串形式(`app = "app/hello"`、`core = ">=1.0.0"`)已**移除**, 属形状错(退出码 2)。
 
 **三条与内存/中断相关的构建/运行纪律**(都不是"可选优化"; 现在都写在**声明面**上):
 

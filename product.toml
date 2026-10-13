@@ -1,16 +1,17 @@
 # product.toml — image composition (brickOS prototype v0.2.0, QEMU virt aarch64)
 #
-# The product states its **roots** only; every other plugin joins the image by dependency
-# closure (`[[dep]]` in each brick.toml). Roots are: the single APP (`[product].app`), the
-# platform (`[product].platform`), and the directly selected abilities (`[product].ability`).
+# Every root is a record: `brick` names the plugin, `requires` carries that brick's own version
+# requirement (`{}` = none). The rest of the image joins by dependency closure (each plugin's
+# `[[dep]]`). Roots are the single APP, the platform, the core, and every `[[product.ability]]`
+# entry.
 schema = 1
 
 [product]
 name     = "brickos-prototype"
 version  = "0.2.0.0"             # COMPAT_GEN.MAJOR.MINOR.REVISE
-app      = "app/hello"           # exactly one (§3.2)
-core     = ">=0.1.0"             # compatibility range; the core plugin itself is selected below
-platform = "platform/qemu-aarch64"
+app      = { brick = "app/hello", requires = {} }
+platform = { brick = "platform/qemu-aarch64", requires = {} }
+core     = { brick = "core/c_core", requires = { version = ">=0.1.0" } }
 stage    = "dev"                 # dev | release; CLI overrides (§7.5)
 
 # Directly selected abilities. A root pulls in everything it `[[dep]]`s on, so the frameworks
@@ -29,19 +30,15 @@ stage    = "dev"                 # dev | release; CLI overrides (§7.5)
 # ([[mount]] in app/hello) declares / and /dev, and a mount plan does not generate a
 # selection edge (WORKAROUND br-wa-fs-001), so dropping a line here removes the volume
 # rather than trimming a dependency.
-ability = [
-  "core/c_core",
-  "sched/rr",
-  "service/dump",
-  "fs/uboot-fat",
-  "fs/uboot-erofs",
-  "fs/tmpfs",
-  "fs/devfs",
-  "driver/uart-pl011",
-  "driver/uboot-mmc",
-]
-# A `[select].plugins` list is still honoured as extra roots (legacy surface); this product
-# expresses its roots through the two keys above.
+[[product.ability]]
+rr    = { brick = "sched/rr", requires = {} }
+dump  = { brick = "service/dump", requires = {} }
+fat   = { brick = "fs/uboot-fat", requires = {} }
+erofs = { brick = "fs/uboot-erofs", requires = {} }
+tmpfs = { brick = "fs/tmpfs", requires = {} }
+devfs = { brick = "fs/devfs", requires = {} }
+uart  = { brick = "driver/uart-pl011", requires = {} }
+mmc   = { brick = "driver/uboot-mmc", requires = {} }
 
 [selftest]
 # Each plugin's interface tests (`*_selftest()` in <plugin>/src/*_selftest.c), run by core's

@@ -1314,13 +1314,28 @@ fn scoped_msg(sol: &solver::SolveResult, code: &str) -> String {
         .join(" | ")
 }
 
-/// Minimal valid ability plugin text.
-fn ability_toml(name: &str, subkind: &str, phase: &str, extra: &str) -> String {
+/// Minimal valid plugin text of an explicit type (`subkind` empty = the plugin declares none).
+fn typed_toml(name: &str, plugin_type: &str, subkind: &str, phase: &str, extra: &str) -> String {
+    let sk = if subkind.is_empty() {
+        String::new()
+    } else {
+        format!("subkind = \"{subkind}\"\n")
+    };
     format!(
-        "schema = 1\n[plugin]\nname = \"{name}\"\nplugin_type = \"ability\"\napi_type = \"native\"\n\
-         subkind = \"{subkind}\"\nlang = \"c\"\nphase = \"{phase}\"\nversion = \"0.1.0.0\"\n\
+        "schema = 1\n[plugin]\nname = \"{name}\"\nplugin_type = \"{plugin_type}\"\napi_type = \"native\"\n\
+         {sk}lang = \"c\"\nphase = \"{phase}\"\nversion = \"0.1.0.0\"\n\
          [compat]\ncore = \">=1.0.0\"\n{extra}"
     )
+}
+
+/// Minimal valid ability plugin text.
+fn ability_toml(name: &str, subkind: &str, phase: &str, extra: &str) -> String {
+    typed_toml(name, "ability", subkind, phase, extra)
+}
+
+/// Minimal valid app plugin text.
+fn app_toml(name: &str, extra: &str) -> String {
+    typed_toml(name, "app", "", "app", extra)
 }
 
 fn platform_toml(name: &str, phase: &str, extra: &str) -> String {
@@ -1337,26 +1352,36 @@ fn core_toml(name: &str, extra: &str) -> String {
     )
 }
 
-fn product_with_core(app: &str, plugins: &str) -> String {
-    format!(
-        "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"{app}\"\n\
-         core = \">=1.0.0\"\nstage = \"dev\"\n[select]\nplugins = [{plugins}]\n"
-    )
+/// `product.toml` in the ADR-0035 record shape: an app record, an optional core record and
+/// optional ability roots (`a0`, `a1`, ... as alias keys).
+fn product_records(app: &str, core: Option<&str>, abilities: &[&str]) -> String {
+    let mut s = format!(
+        "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\n\
+         app = {{ brick = \"{app}\", requires = {{}} }}\n"
+    );
+    if let Some(c) = core {
+        s.push_str(&format!("core = {{ brick = \"{c}\", requires = {{ version = \">=1.0.0\" }} }}\n"));
+    }
+    s.push_str("stage = \"dev\"\n");
+    if !abilities.is_empty() {
+        s.push_str("[[product.ability]]\n");
+        for (i, a) in abilities.iter().enumerate() {
+            s.push_str(&format!("a{i} = {{ brick = \"{a}\", requires = {{}} }}\n"));
+        }
+    }
+    s
 }
 
-/// `[product].platform` / `[product].ability` (selection surface) must derive the same closure as
-/// the `[select].plugins` roots they replace, and an unknown name must still be reported.
+/// The record-shaped selection surface (`[product].app/platform/core` + `[[product.ability]]`):
+/// roots drive the closure, the record's kind fixes the brick's type, `requires.version` is
+/// checked against that brick, and the pre-ADR-0035 forms are hard-rejected.
 fn product_selection_cases(h: &mut Harness) {
-    let legacy = tmpdir("prodsel-legacy");
-    write(&legacy, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
-    write(&legacy, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
+    let t = tmpdir("prodsel");
+    write(&t, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&t, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
+    write(&t, "app/m/brick.toml", &app_toml("app/m", ""));
     write(
-        &legacy,
-        "app/m/brick.toml",
-        &ability_toml("app/m", "service", "app", ""),
-    );
-    write(
-        &legacy,
+        &t,
         "service/mem/brick.toml",
         &ability_toml(
             "service/mem",
@@ -1366,90 +1391,231 @@ fn product_selection_cases(h: &mut Harness) {
         ),
     );
     write(
-        &legacy,
+        &t,
         "framework/f/brick.toml",
         &ability_toml("framework/f", "framework", "core", ""),
     );
     write(
-        &legacy,
+        &t,
         "product.toml",
         &format!(
-            "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\n\
-             core = \">=1.0.0\"\n[select]\nplugins = [\"core/c_core\", \"platform/fake\", \"service/mem\"]\n"
+            "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\n\
+             app = {{ brick = \"app/m\", requires = {{}} }}\n\
+             platform = {{ brick = \"platform/fake\", requires = {{}} }}\n\
+             core = {{ brick = \"core/c_core\", requires = {{ version = \">=1.0.0\" }} }}\n\
+             stage = \"dev\"\n\
+             [[product.ability]]\n\
+             mem = {{ brick = \"service/mem\", requires = {{}} }}\n"
         ),
     );
-    let want = solver::solve(&model::load_tree(&legacy), "dev", false)
-        .closure
-        .selected;
-
-    let fresh = tmpdir("prodsel-fresh");
-    write(&fresh, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
-    write(&fresh, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
-    write(
-        &fresh,
-        "app/m/brick.toml",
-        &ability_toml("app/m", "service", "app", ""),
+    let resp = check::run(&mk_req("check", &t, json!({"profile": "dev"})));
+    h.check(!has_code(&resp, "BRV-MF-0001"), "records: a well-formed selection surface is accepted");
+    h.check(!has_code(&resp, "BRV-TAX-0020"), "records: one core record ⇒ exactly one core");
+    h.check(
+        !has_code(&resp, "BRV-TAX-0024"),
+        "records: every brick matches its record's kind",
     );
-    write(
-        &fresh,
-        "service/mem/brick.toml",
-        &ability_toml(
-            "service/mem",
-            "service",
-            "late",
-            "\n[[dep]]\nname = \"framework/f\"\nkind = \"init\"\n",
-        ),
+    h.check(
+        !has_code(&resp, "BRV-VER-0002"),
+        "records: a satisfied `requires.version` is not reported",
     );
-    write(
-        &fresh,
-        "framework/f/brick.toml",
-        &ability_toml("framework/f", "framework", "core", ""),
-    );
-    write(
-        &fresh,
-        "product.toml",
-        "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\n\
-         core = \">=1.0.0\"\nplatform = \"platform/fake\"\n\
-         ability = [\"core/c_core\", \"service/mem\"]\n",
-    );
-    let tree = model::load_tree(&fresh);
+    let tree = model::load_tree(&t);
     let got = solver::solve(&tree, "dev", false).closure.selected;
-    h.eq(got.clone(), want, "platform+ability: same closure as the [select].plugins roots");
+    h.eq(
+        got.clone(),
+        ["app/m", "core/c_core", "framework/f", "platform/fake", "service/mem"]
+            .iter()
+            .map(|s| s.to_string())
+            .collect(),
+        "records: app + platform + core + ability roots derive the closure",
+    );
     h.check(
         got.contains("framework/f"),
-        "platform+ability: a dep of a selected ability is pulled in (closure, not a flat list)",
+        "records: a dep of a selected ability joins by closure (the list is not flat)",
+    );
+    h.check(
+        tree.product.as_ref().unwrap().roots.len() == 4,
+        "records: every record is kept in declaration order for diagnostics",
     );
 
-    // Name-shape and reference integrity still apply to the new keys.
-    let bad = tmpdir("prodsel-bad");
-    write(&bad, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
-    write(&bad, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
-    write(&bad, "app/m/brick.toml", &ability_toml("app/m", "service", "app", ""));
+    // The alias is a label only; the plugin identity always comes from `brick`.
+    let alias = tmpdir("prodsel-alias");
+    write(&alias, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&alias, "app/m/brick.toml", &app_toml("app/m", ""));
     write(
-        &bad,
-        "product.toml",
-        "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\n\
-         core = \">=1.0.0\"\nplatform = [\"platform/fake\"]\nability = [\"service/ghost\"]\n",
+        &alias,
+        "service/mem/brick.toml",
+        &ability_toml("service/mem", "service", "late", ""),
     );
-    let resp = check::run(&mk_req("check", &bad, json!({"profile": "dev"})));
+    write(
+        &alias,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n\
+         core = { brick = \"core/c_core\", requires = {} }\n\
+         [[product.ability]]\nanything-at-all = { brick = \"service/mem\", requires = {} }\n",
+    );
+    let resp = check::run(&mk_req("check", &alias, json!({"profile": "dev"})));
+    h.check(!has_code(&resp, "BRV-MF-0001"), "records: the ability alias is not a plugin name");
+
+    // Wrong kind for the record ⇒ BRV-TAX-0024 (each of the four kinds).
+    for (tag, prod, want) in [
+        (
+            "app",
+            "app = { brick = \"service/mem\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n",
+            "app record naming an ability",
+        ),
+        (
+            "platform",
+            "app = { brick = \"app/m\", requires = {} }\nplatform = { brick = \"core/c_core\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n",
+            "platform record naming a core",
+        ),
+        (
+            "core",
+            "app = { brick = \"app/m\", requires = {} }\ncore = { brick = \"service/mem\", requires = {} }\n",
+            "core record naming an ability",
+        ),
+        (
+            "ability",
+            "app = { brick = \"app/m\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n[[product.ability]]\nx = { brick = \"platform/fake\", requires = {} }\n",
+            "ability record naming a platform",
+        ),
+    ] {
+        let w = tmpdir(&format!("prodsel-kind-{tag}"));
+        write(&w, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+        write(&w, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
+        write(&w, "app/m/brick.toml", &app_toml("app/m", ""));
+        write(&w, "service/mem/brick.toml", &ability_toml("service/mem", "service", "late", ""));
+        write(&w, "product.toml", &format!("schema = 1\n[product]\nname = \"p\"\n{prod}"));
+        let resp = check::run(&mk_req("check", &w, json!({"profile": "dev"})));
+        h.check(has_code(&resp, "BRV-TAX-0024"), format!("records: {want} ⇒ BRV-TAX-0024"));
+    }
+
+    // An interface skin may still be selected explicitly: `[[product.ability]]` is the list of
+    // everything that is not one of the three singletons.
+    let skin = tmpdir("prodsel-skin");
+    write(&skin, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&skin, "app/m/brick.toml", &app_toml("app/m", ""));
+    write(
+        &skin,
+        "iface/k/brick.toml",
+        &typed_toml("iface/k", "interface", "", "late", ""),
+    );
+    write(
+        &skin,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n\
+         core = { brick = \"core/c_core\", requires = {} }\n\
+         [[product.ability]]\nskin = { brick = \"iface/k\", requires = {} }\n",
+    );
+    let resp = check::run(&mk_req("check", &skin, json!({"profile": "dev"})));
     h.check(
-        has_code(&resp, "BRV-MF-0001"),
-        "platform+ability: an ability name not in the tree is reported",
+        !has_code(&resp, "BRV-TAX-0024"),
+        "records: an interface skin selected as an ability is legal (only app/platform/core are rejected)",
     );
 
-    let shape = tmpdir("prodsel-shape");
-    write(&shape, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
-    write(&shape, "app/m/brick.toml", &ability_toml("app/m", "service", "app", ""));
+    // `requires.version` is checked against the brick it names.
+    let ver = tmpdir("prodsel-ver");
+    write(&ver, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&ver, "app/m/brick.toml", &app_toml("app/m", ""));
     write(
-        &shape,
+        &ver,
         "product.toml",
-        "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\n\
-         core = \">=1.0.0\"\nability = \"service/mem\"\n",
+        "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n\
+         core = { brick = \"core/c_core\", requires = { version = \">=9.0.0\" } }\n",
     );
-    let resp = check::run(&mk_req("check", &shape, json!({"profile": "dev"})));
+    let resp = check::run(&mk_req("check", &ver, json!({"profile": "dev"})));
+    h.check(
+        has_code(&resp, "BRV-VER-0002"),
+        "records: an unsatisfiable `requires.version` ⇒ BRV-VER-0002",
+    );
+
+    // Hard switch: the pre-ADR-0035 forms are shape errors (exit 2), not silently ignored.
+    for (tag, prod, want) in [
+        (
+            "app-string",
+            "app = \"app/m\"\ncore = { brick = \"core/c_core\", requires = {} }\n",
+            "`app = \"app/m\"`",
+        ),
+        (
+            "core-range",
+            "app = { brick = \"app/m\", requires = {} }\ncore = \">=1.0.0\"\n",
+            "`core = \">=1.0.0\"` (the old range form)",
+        ),
+        (
+            "ability-list",
+            "app = { brick = \"app/m\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\nability = [\"service/mem\"]\n",
+            "the flat `ability = [\"plugin/name\"]` list",
+        ),
+        (
+            "no-brick",
+            "app = { requires = {} }\n",
+            "a record without `brick`",
+        ),
+        (
+            "unknown-key",
+            "app = { brick = \"app/m\", range = \">=1.0.0\" }\n",
+            "an unknown key inside a record",
+        ),
+    ] {
+        let w = tmpdir(&format!("prodsel-old-{tag}"));
+        write(&w, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+        write(&w, "app/m/brick.toml", &app_toml("app/m", ""));
+        write(&w, "service/mem/brick.toml", &ability_toml("service/mem", "service", "late", ""));
+        write(&w, "product.toml", &format!("schema = 1\n[product]\nname = \"p\"\n{prod}"));
+        let resp = check::run(&mk_req("check", &w, json!({"profile": "dev"})));
+        h.eq(resp.exit_code, 2, &format!("records: {want} ⇒ exit code 2"));
+        h.check(has_code(&resp, "BRV-MF-0001"), format!("records: {want} ⇒ BRV-MF-0001"));
+    }
+
+    // A `[select]` table is a shape error even when it is empty.
+    let select = tmpdir("prodsel-select");
+    write(&select, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&select, "app/m/brick.toml", &app_toml("app/m", ""));
+    write(
+        &select,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n\
+         core = { brick = \"core/c_core\", requires = {} }\n[select]\nplugins = []\n",
+    );
+    let resp = check::run(&mk_req("check", &select, json!({"profile": "dev"})));
+    h.eq(resp.exit_code, 2, "records: `[select]` was removed ⇒ exit code 2");
+
+    // An unknown brick name is still reported, now pointing at the record that wrote it.
+    let ghost = tmpdir("prodsel-ghost");
+    write(&ghost, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&ghost, "app/m/brick.toml", &app_toml("app/m", ""));
+    write(
+        &ghost,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n\
+         core = { brick = \"core/c_core\", requires = {} }\n\
+         [[product.ability]]\nghost = { brick = \"service/ghost\", requires = {} }\n",
+    );
+    let resp = check::run(&mk_req("check", &ghost, json!({"profile": "dev"})));
     h.check(
         has_code(&resp, "BRV-MF-0001"),
-        "platform+ability: `ability` must be a list of strings",
+        "records: an ability brick not in the tree is reported",
+    );
+
+    // Empty `brick` on the optional singletons = declared but not selected.
+    let unset = tmpdir("prodsel-unset");
+    write(&unset, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&unset, "app/m/brick.toml", &app_toml("app/m", ""));
+    write(
+        &unset,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n\
+         platform = { brick = \"\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n",
+    );
+    let tree = model::load_tree(&unset);
+    h.check(
+        tree.product.as_ref().unwrap().platform.is_empty(),
+        "records: an empty `platform.brick` selects nothing (plan-init skeleton)",
+    );
+    h.eq(
+        tree.diags.items().iter().filter(|d| d.code.as_deref() == Some("BRV-MF-0001")).count(),
+        0,
+        "records: an empty `platform.brick` is not a reference error",
     );
 }
 
@@ -1458,15 +1624,15 @@ fn core_type_cases(h: &mut Harness) {
     // Positive: exactly one core in the product closure ⇒ no BRV-TAX-0020.
     let ok = tmpdir("core-ok");
     write(&ok, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
-    write(&ok, "app/m/brick.toml", &ability_toml("app/m", "service", "late", ""));
-    write(&ok, "product.toml", &product_with_core("app/m", "\"core/c_core\""));
+    write(&ok, "app/m/brick.toml", &app_toml("app/m", ""));
+    write(&ok, "product.toml", &product_records("app/m", Some("core/c_core"), &[]));
     let resp = check::run(&mk_req("check", &ok, json!({"profile": "dev"})));
     h.check(!has_code(&resp, "BRV-TAX-0020"), "core: one selected core is not reported");
 
     // Negative ①: a product whose closure contains no core ⇒ red, message says "found 0".
     let miss = tmpdir("core-missing");
-    write(&miss, "app/m/brick.toml", &ability_toml("app/m", "service", "late", ""));
-    write(&miss, "product.toml", &product_with_core("app/m", ""));
+    write(&miss, "app/m/brick.toml", &app_toml("app/m", ""));
+    write(&miss, "product.toml", &product_records("app/m", None, &[]));
     let resp = check::run(&mk_req("check", &miss, json!({"profile": "dev"})));
     h.eq(resp.exit_code, 1, "core: a product without a core ⇒ exit code 1");
     h.check(has_code(&resp, "BRV-TAX-0020"), "core: missing core ⇒ BRV-TAX-0020");
@@ -1475,15 +1641,26 @@ fn core_type_cases(h: &mut Harness) {
         "core: the message counts what it found",
     );
 
-    // Negative ②: two selected cores ⇒ red, message says "found 2".
+    // Negative ②: a second core reaches the closure through a dep ⇒ "found 2" (the `core` record
+    // is singular, so a second core can only arrive as someone's provider).
     let two = tmpdir("core-two");
     write(&two, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
     write(&two, "core/r_core/brick.toml", &core_toml("core/r_core", ""));
-    write(&two, "app/m/brick.toml", &ability_toml("app/m", "service", "late", ""));
+    write(&two, "app/m/brick.toml", &app_toml("app/m", ""));
+    write(
+        &two,
+        "service/mem/brick.toml",
+        &ability_toml(
+            "service/mem",
+            "service",
+            "late",
+            "\n[[dep]]\nname = \"core/r_core\"\nkind = \"init\"\n",
+        ),
+    );
     write(
         &two,
         "product.toml",
-        &product_with_core("app/m", "\"core/c_core\", \"core/r_core\""),
+        &product_records("app/m", Some("core/c_core"), &["service/mem"]),
     );
     let resp = check::run(&mk_req("check", &two, json!({"profile": "dev"})));
     h.eq(resp.exit_code, 1, "core: two cores ⇒ exit code 1");
@@ -1646,7 +1823,7 @@ fn version_solver_cases(h: &mut Harness) {
     let bud = tmpdir("budget2");
     write(&bud, "platform/soc/brick.toml", &platform_toml("platform/soc", "core", "[[res]]\nkind = \"ram\"\nused_kib = 64\n"));
     write(&bud, "service/mem/brick.toml", &ability_toml("service/mem", "service", "late", "[[res]]\nkind = \"ram\"\nused_kib = 200\n"));
-    write(&bud, "product.toml", "schema = 1\n[product]\nname = \"p\"\nversion = \"0.1.0.0\"\napp = \"\"\ncore = \">=1.0.0\"\nstage = \"dev\"\n[select]\nplugins = [\"platform/soc\", \"service/mem\"]\n[budget]\nram_kib = 100\nstack_kib = 8\n");
+    write(&bud, "product.toml", "schema = 1\n[product]\nname = \"p\"\nversion = \"0.1.0.0\"\napp = { brick = \"\", requires = {} }\nplatform = { brick = \"platform/soc\", requires = {} }\nstage = \"dev\"\n[[product.ability]]\nmem = { brick = \"service/mem\", requires = {} }\n[budget]\nram_kib = 100\nstack_kib = 8\n");
     let resp = check::run(&mk_req("check", &bud, json!({"profile": "dev"})));
     h.eq(resp.exit_code, 1, "V-19③: budget overrun ⇒ exit code 1");
     h.check(
@@ -2371,8 +2548,11 @@ fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
         "product.toml",
         &format!(
             "schema = 1\n\
-             [product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\ncore = \">=0.1.0\"\nstage = \"dev\"\n\
-             [select]\nplugins = [\"core/c_core\", \"platform/fake\"]\n\
+             [product]\nname = \"p\"\nversion = \"1.0.0.0\"\n\
+             app = {{ brick = \"app/m\", requires = {{}} }}\n\
+             platform = {{ brick = \"platform/fake\", requires = {{}} }}\n\
+             core = {{ brick = \"core/c_core\", requires = {{ version = \">=0.0.0\" }} }}\n\
+             stage = \"dev\"\n\
              [build]\n\
              cflags = [\"-std=c11\", \"-O2\"]\nasflags = [\"-g3\"]\nldflags = [\"-nostdlib\"]\n{extra_build}"
         ),
@@ -2538,7 +2718,7 @@ fn build_cases(h: &mut Harness) {
     write(
         &root2,
         "product.toml",
-        "schema = 1\n[product]\nname = \"p\"\napp = \"app/m\"\n",
+        "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n",
     );
     let (d2, _) = build::selftest_plan(&root2, &mk_req_ctx("build", &root2, json!({}), json!({"path": ""})));
     h.check(diags_code(&d2, build::CODE_NO_BUILD), "build: missing [build] ⇒ BRV-BLD-0001");

@@ -8,12 +8,9 @@ schema = 1
 [product]
 name    = "fx-build"
 version = "0.1.0.0"
-app     = "app/hello"
-core    = ">=1.0.0"
+app     = { brick = "app/hello", requires = {} }
+core    = { brick = "core/c_core", requires = {} }
 stage   = "dev"
-
-[select]
-plugins = ["core/c_core", "app/hello"]
 
 [budget]
 ram_kib   = 512

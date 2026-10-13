@@ -1,5 +1,12 @@
 # 0034 — 产品的**选择面**: `[product]` 增 `platform` / `ability` 两个闭包根, `[select].plugins` 退役为可选兼容面
 
+> ★ **部分被 [ADR-0035](0035-selection-records.md) 取代**: 本 ADR 的 **D-1/D-2 仍然成立**
+> (根 = `app` + `platform` + `ability`; 闭包种子由它们并集推导), 但 **D-3 里"`[select].plugins`
+> 保留为可选兼容面"与"不设互斥/硬切换"那半条不再成立** —— ADR-0035 把四个根改成**记录形态**
+> (`{ brick, requires }`, `ability` 用 `[[product.ability]]`), 并把旧的裸字符串形式与
+> `[select]` 表一并**移除**(形状错, 退出码 2)。本 ADR 的顶层键名(`platform`/`ability`)
+> 与"直接选中的根"这一语义被 ADR-0035 继承。
+
 > 状态: **已落地**(工具侧 `model.rs`(解析 + JSON)、`solver.rs`(种子)、`selftest.rs`(新增
 > `product_selection_cases`)、`schema/product.schema.json`、`templates/product/c/product.toml.tmpl`;
 > 声明面 `product.toml` 的 `[select].plugins` 15 项 → 根 12 项)。

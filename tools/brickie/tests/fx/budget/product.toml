@@ -1,14 +1,16 @@
 schema = 1
 
 [product]
-name    = "hsm"
-version = "0.1.0.0"
-app     = "app/hsm"
-core    = ">=1.0.0"
-stage   = "dev"
+name     = "hsm"
+version  = "0.1.0.0"
+app      = { brick = "app/hsm", requires = {} }
+platform = { brick = "platform/qemu-aarch64", requires = {} }
+core     = { brick = "core/c_core", requires = {} }
+stage    = "dev"
 
-[select]
-plugins = ["core/c_core", "app/hsm", "platform/qemu-aarch64", "service/big-a", "service/big-b"]
+[[product.ability]]
+big-a = { brick = "service/big-a", requires = {} }
+big-b = { brick = "service/big-b", requires = {} }
 
 [budget]
 ram_kib   = 512

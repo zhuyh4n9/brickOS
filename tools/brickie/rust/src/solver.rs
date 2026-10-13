@@ -131,6 +131,16 @@ fn sev_for_profile(profile: &str) -> Severity {
     }
 }
 
+/// Whether a selection record of `kind` may name a plugin of `plugin_type` (ADR-0035). The three
+/// singletons are exact; `[[product.ability]]` is the list of everything else, so it also accepts
+/// interface skins (a product may select a skin explicitly) but never app / platform / core.
+fn sel_kind_matches(kind: &str, plugin_type: &str) -> bool {
+    match kind {
+        "app" | "platform" | "core" => kind == plugin_type,
+        _ => plugin_type == "ability" || plugin_type == "interface",
+    }
+}
+
 const REACH_TYPE_ONLY: u8 = 1;
 const REACH_FULL: u8 = 2;
 
@@ -142,19 +152,16 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
 
     let mut seeds: Vec<String> = Vec::new();
     if let Some(prod) = &tree.product {
-        // Closure roots: the single APP, the platform, every directly selected ability, plus
-        // `[select].plugins` (compat surface). Everything else enters via `[[dep]]`.
-        if !prod.app.is_empty() {
-            seeds.push(prod.app.clone());
-        }
-        for s in prod
-            .platform
-            .iter()
-            .chain(prod.ability.iter())
-            .chain(prod.select.iter())
-        {
-            if !seeds.contains(s) {
-                seeds.push(s.clone());
+        // Closure roots (ADR-0035): the selection records of `[product]` -- app, platform, core
+        // and every `[[product.ability]]` entry. Everything else enters via `[[dep]]`.
+        let roots: Vec<&str> = std::iter::once(prod.app.as_str())
+            .chain(prod.platform.iter().map(String::as_str))
+            .chain(prod.core_brick.iter().map(String::as_str))
+            .chain(prod.ability.iter().map(String::as_str))
+            .collect();
+        for r in roots {
+            if !r.is_empty() && !seeds.iter().any(|s| s == r) {
+                seeds.push(r.to_string());
             }
         }
         if seeds.is_empty() {
@@ -173,22 +180,73 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
 
     for s in &seeds {
         if !by_name.contains_key(s.as_str()) {
-            let file = tree
-                .product
-                .as_ref()
-                .map(|p| p.file.clone())
-                .unwrap_or_else(|| "product.toml".to_string());
+            let (file, span) = match &tree.product {
+                Some(p) => (
+                    p.file.clone(),
+                    p.roots
+                        .iter()
+                        .find(|r| &r.brick == s)
+                        .map(|r| r.span.clone())
+                        .unwrap_or_else(|| "product".to_string()),
+                ),
+                None => ("product.toml".to_string(), "product".to_string()),
+            };
             diags.push((
                 SCOPE_DEPS,
                 err(
                     "BRV-MF-0001",
                     s,
                     &file,
-                    "product",
+                    &span,
                     format!("plugin `{s}` in the selection set is not in the plugin tree (missing `{s}/brick.toml`)"),
                     "gap substitute (R-9): selection/dependency reference integrity has no dedicated code; add the plugin or drop it from the selection set",
                 ),
             ));
+        }
+    }
+
+    // Per-record judgements (ADR-0035): the record's own kind fixes the plugin type its `brick`
+    // must have (`BRV-TAX-0024`), and `requires.version` must be satisfied by that same brick
+    // (`BRV-VER-0002`). Both compare only the record against its brick -- no closure involved.
+    if let Some(prod) = &tree.product {
+        for sel in &prod.roots {
+            let Some(p) = by_name.get(sel.brick.as_str()) else {
+                continue;
+            };
+            if !sel_kind_matches(&sel.kind, &p.plugin_type) {
+                diags.push((
+                    SCOPE_TAX,
+                    err(
+                        "BRV-TAX-0024",
+                        &sel.brick,
+                        &prod.file,
+                        &sel.span,
+                        format!(
+                            "selection record `{}` (`brick = \"{}\"`) expects a `{}` plugin, but `{}` is `{}`",
+                            sel.span, sel.brick, sel.kind, p.name, p.plugin_type
+                        ),
+                        "§8.3 ④: the four kinds of root each name their own kind of plugin; move the plugin to the matching record",
+                    ),
+                ));
+            }
+            if let Some(r) = &sel.req {
+                if !r.matches(p.version.triple()) {
+                    diags.push((
+                        SCOPE_DEPS,
+                        err(
+                            "BRV-VER-0002",
+                            &sel.brick,
+                            &prod.file,
+                            &sel.span,
+                            format!(
+                                "range out of bounds within the same generation: `{}` requires `{}` to satisfy `{}`, but its current version is {}",
+                                sel.span, sel.brick, r.canonical(), p.version
+                            ),
+                            "§7.4: range compares only MAJOR.MINOR.REVISE (missing segments right-padded with 0); fix `requires.version` or advance the brick",
+                        ),
+                    ));
+                }
+            }
         }
     }
 
@@ -631,7 +689,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                             cores.join(", ")
                         }
                     ),
-                    "§8.3 ④ / §7.3: `core` is mandatory and singular (it is the plugin that drives the other plugins); select it as an ability (e.g. `core/c_core`) or drop the extra one",
+                    "§8.3 ④ / §7.3: `core` is mandatory and singular (it is the plugin that drives the other plugins); name it in the `core` record (e.g. `core = { brick = \"core/c_core\", requires = {} }`) or drop the extra one",
                 ),
             ));
         }
