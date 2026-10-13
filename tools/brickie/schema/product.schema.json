@@ -35,6 +35,27 @@
     "core": {
      "type": "string"
     },
+    "platform": {
+     "description": "Closure root: the platform plugin name (a single string), e.g. platform/qemu-aarch64. Everything the platform needs enters via its own [[dep]].",
+     "oneOf": [
+      {
+       "type": "string"
+      },
+      {
+       "type": "array",
+       "items": {
+        "type": "string"
+       }
+      }
+     ]
+    },
+    "ability": {
+     "description": "Closure roots: directly selected ability plugin names. Every plugin they [[dep]] on (frameworks, interfaces, runtimes) enters the image by dependency closure and is not listed here.",
+     "type": "array",
+     "items": {
+      "type": "string"
+     }
+    },
     "stage": {
      "type": "string",
      "enum": [
@@ -46,6 +67,7 @@
   },
   "select": {
    "type": "object",
+   "description": "Legacy/extra closure roots: same effect as [product].platform + [product].ability. The preferred surface is the two [product] keys.",
    "additionalProperties": true,
    "properties": {
     "plugins": {

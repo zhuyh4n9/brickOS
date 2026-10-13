@@ -1,5 +1,5 @@
 //! `brickie build` — declaration-driven build orchestration (core side: plan + verdict).
-//! Sources come from the `product.toml [select]` closure + each plugin's `[build].sources`; compile
+//! Sources come from the `product.toml` selection closure + each plugin's `[build].sources`; compile
 //! flags from `product.toml [build]` + platform `[build.target]`; gates from `tests/gates.toml`.
 //! L5 only executes `data.steps[i].argv` and writes files; log criteria (`judge`) are decided here,
 //! so red/green has one source of truth. Core owns tool resolution and the incremental decision
@@ -585,7 +585,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                 .code(CODE_GEN_NOT_SELECTED)
                 .file("product.toml")
                 .span("build.gen_sources")
-                .hint("add the plugin to [select].plugins, or exclude it from the artifact glob"),
+                .hint("add the plugin to [product].ability, or exclude it from the artifact glob"),
             );
         }
         for path in &orphans {

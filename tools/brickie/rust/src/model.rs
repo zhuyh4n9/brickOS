@@ -393,6 +393,10 @@ pub struct Product {
     pub version: Version,
     pub app: String,
     pub core: Option<Range>,
+    /// `[product].platform`: the platform plugin (the board/BSP half of the target facts).
+    pub platform: Vec<String>,
+    /// `[product].ability`: directly selected ability plugins (closure roots).
+    pub ability: Vec<String>,
     pub stage: String,
     pub select: Vec<String>,
     pub budget_ram_kib: Option<i64>,
@@ -452,6 +456,8 @@ impl Product {
             "version": self.version.to_string(),
             "app": self.app,
             "core": self.core.as_ref().map(|r| r.canonical()),
+            "platform": self.platform,
+            "ability": self.ability,
             "stage": self.stage,
             "select": self.select,
             "budget": {"ram_kib": self.budget_ram_kib, "stack_kib": self.budget_stack_kib},
@@ -1722,6 +1728,13 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     if let Some(core) = opt_str(product, "core", &file, &file, "product", d) {
         prod.core = parse_range_field(&core, &file, &file, "product.core", d);
     }
+    // `platform` accepts one name or a list; `ability` accepts a list.
+    match product.get("platform") {
+        None => {}
+        Some(toml::Value::String(v)) => prod.platform.push(v.clone()),
+        Some(_) => prod.platform = str_array(product, "platform", &file, &file, "product", d),
+    }
+    prod.ability = str_array(product, "ability", &file, &file, "product", d);
     prod.stage = opt_str(product, "stage", &file, &file, "product", d)
         .unwrap_or_else(|| "dev".to_string());
     if !rules::in_list(&["dev", "release"], &prod.stage) {
@@ -1731,6 +1744,14 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     if let Some(sel) = opt_table(top, "select") {
         prod.select = str_array(sel, "plugins", &file, &file, "select", d);
     }
+    // An unset/empty root (e.g. the `plan-init` skeleton's `platform = ""`) is "no root", not a
+    // missing plugin.
+    for list in [&mut prod.platform, &mut prod.select] {
+        list.retain(|n| !n.is_empty());
+    }
+    prod.ability.retain(|n| !n.is_empty());
+    prod.ability.sort();
+    prod.ability.dedup();
     if let Some(st) = opt_table(top, "selftest") {
         prod.has_selftest_table = true;
         match st.get("enabled") {

@@ -146,6 +146,7 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 | 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0031(`core` 成为第一类插件)**: `brickie-core` 的规则表/schema 加 `plugin_type = "core"`(基数判据 `BRV-TAX-0020`)、模板加 `templates/native/core/c/`、`plan.rs` 增 `early_hook`/`start_hook` 变量、`product.toml [build]` 去掉 `core_sources`/`core_includes`; `brickie` 的负载(模板 + schema)随之变化 ⇒ 三件一起重发并同一次刷新 §5.1。 |
 | 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0032(命名空间 `io/` → `driver/` + `driver/` ⇒ `api_type = native` 的 `BRV-TAX-0021`)**: `brickie-core` 的 `NAMESPACES`/两个命名空间映射/`is_driver_namespace`/`validate_driver_namespace` 与 `driver/⇒io`、`driver/⇒native` 正负例; `product.toml [build]` 无变化, 但插件身份与接口单元改名(`io/uart-pl011` → `driver/uart-pl011`)也改变了入口 ELF 的负载可见面 ⇒ 三件一起重发并同一次刷新 §5.1。 |
 | 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0033(解散 `adapter/`)**: `brickie-core` 增 `BRV-TAX-0022`(`api_type` 是表面分类 ⇒ `third_party`/`runtime_adapter` 必须伴随 `[[export]]`)与 `BRV-TAX-0023`(来源守卫: 不携带 `third_party/` 代码者不得依赖携带者), 并**修掉 `build.rs` 的 include 顺序缺陷**(去掉末尾 `sort()`, 改为"环境基座 → 自己的 → 依赖闭包"保序去重 —— 原来"自己的 compat 壳优先"只是目录名字典序的巧合); 插件身份 `adapter/uboot-{mmc,fat,erofs}` → `driver/uboot-mmc` / `fs/uboot-{fat,erofs}` ⇒ 三件一起重发并同一次刷新 §5.1。 |
+| 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地**选择面的根分类**: `[product]` 增 `platform` / `ability` 两个一等键(闭包根), solver 以 `app + platform + ability + [select].plugins` 为种子做 `[[dep]]` 闭包; `product.schema.json`、`templates/product/c/product.toml.tmpl` 与 `product.toml` 的 `[select].plugins` 退役为可选兼容面 ⇒ 入口 ELF 负载与 `brickie-core` 都变, 两件重发(`brickie-gen` 逐字节未变)并同一次刷新 §5.1。 |
 
 ### 5.1 当前种子指纹(实测)
 
@@ -155,8 +156,8 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 文件(`prebuilts/seed/brickie/x86-64/linux/bin/`) | 体积 | sha256 |
 |---|---|---|
-| `brickie` | 3 575 944 B(~3.41 MiB) | `c3cfc274ac5c49926171b44cead05d2aac1dd114df668005c1685845c277c212` |
-| `brickie-core` | 3 121 368 B(~2.98 MiB) | `89d97016ce523384b2d62cec1a86e06fc962bcc0eb6ef7cfedea6268b893fc56` |
+| `brickie` | 3 588 232 B(~3.42 MiB) | `e6096b20dabc1692857df1f59315248403ba41767a09d0f0cff4fb6023b583e5` |
+| `brickie-core` | 3 135 104 B(~2.99 MiB) | `eb5c3226c870caaf5b714774a6c98435e8dde8326d35089408e74790ba2a864a` |
 | `brickie-gen` | 167 384 B(~163 KiB) | `a7a433b4b88ccc0d5f2152bbeed090e818c4f0e6adfd98ef0d28e49e9469e673` |
 
 > 这一份由 **rustc 1.99.0**(工作区自带的 `.toolchain`; `make core` 自动采用)编出 ——

@@ -5,14 +5,13 @@
 schema = {{schema}}
 
 [product]
-name    = "{{name}}"
-version = "{{version}}"       # COMPAT_GEN.MAJOR.MINOR.REVISE
-app     = "{{app}}"           # directory of the single APP plugin (usually app/<name>)
-core    = ">=1.0.0"           # core range is always 3 segments (§7.4)
-stage   = "dev"               # dev | release (profile default, CLI can override)
-
-[select]
-plugins = []                  # plugins selected by the product (closure roots); add/remove by hand per §8.2
+name     = "{{name}}"
+version  = "{{version}}"       # COMPAT_GEN.MAJOR.MINOR.REVISE
+app      = "{{app}}"           # directory of the single APP plugin (usually app/<name>)
+core     = ">=1.0.0"           # core range is always 3 segments (§7.4)
+platform = ""                  # platform plugin name, e.g. "platform/qemu-aarch64"
+ability  = []                  # directly selected abilities; their [[dep]] closure joins the image
+stage    = "dev"               # dev | release (profile default, CLI can override)
 
 [budget]
 ram_kib   = 512

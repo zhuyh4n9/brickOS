@@ -1344,6 +1344,115 @@ fn product_with_core(app: &str, plugins: &str) -> String {
     )
 }
 
+/// `[product].platform` / `[product].ability` (selection surface) must derive the same closure as
+/// the `[select].plugins` roots they replace, and an unknown name must still be reported.
+fn product_selection_cases(h: &mut Harness) {
+    let legacy = tmpdir("prodsel-legacy");
+    write(&legacy, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&legacy, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
+    write(
+        &legacy,
+        "app/m/brick.toml",
+        &ability_toml("app/m", "service", "app", ""),
+    );
+    write(
+        &legacy,
+        "service/mem/brick.toml",
+        &ability_toml(
+            "service/mem",
+            "service",
+            "late",
+            "\n[[dep]]\nname = \"framework/f\"\nkind = \"init\"\n",
+        ),
+    );
+    write(
+        &legacy,
+        "framework/f/brick.toml",
+        &ability_toml("framework/f", "framework", "core", ""),
+    );
+    write(
+        &legacy,
+        "product.toml",
+        &format!(
+            "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\n\
+             core = \">=1.0.0\"\n[select]\nplugins = [\"core/c_core\", \"platform/fake\", \"service/mem\"]\n"
+        ),
+    );
+    let want = solver::solve(&model::load_tree(&legacy), "dev", false)
+        .closure
+        .selected;
+
+    let fresh = tmpdir("prodsel-fresh");
+    write(&fresh, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&fresh, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
+    write(
+        &fresh,
+        "app/m/brick.toml",
+        &ability_toml("app/m", "service", "app", ""),
+    );
+    write(
+        &fresh,
+        "service/mem/brick.toml",
+        &ability_toml(
+            "service/mem",
+            "service",
+            "late",
+            "\n[[dep]]\nname = \"framework/f\"\nkind = \"init\"\n",
+        ),
+    );
+    write(
+        &fresh,
+        "framework/f/brick.toml",
+        &ability_toml("framework/f", "framework", "core", ""),
+    );
+    write(
+        &fresh,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\n\
+         core = \">=1.0.0\"\nplatform = \"platform/fake\"\n\
+         ability = [\"core/c_core\", \"service/mem\"]\n",
+    );
+    let tree = model::load_tree(&fresh);
+    let got = solver::solve(&tree, "dev", false).closure.selected;
+    h.eq(got.clone(), want, "platform+ability: same closure as the [select].plugins roots");
+    h.check(
+        got.contains("framework/f"),
+        "platform+ability: a dep of a selected ability is pulled in (closure, not a flat list)",
+    );
+
+    // Name-shape and reference integrity still apply to the new keys.
+    let bad = tmpdir("prodsel-bad");
+    write(&bad, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&bad, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
+    write(&bad, "app/m/brick.toml", &ability_toml("app/m", "service", "app", ""));
+    write(
+        &bad,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\n\
+         core = \">=1.0.0\"\nplatform = [\"platform/fake\"]\nability = [\"service/ghost\"]\n",
+    );
+    let resp = check::run(&mk_req("check", &bad, json!({"profile": "dev"})));
+    h.check(
+        has_code(&resp, "BRV-MF-0001"),
+        "platform+ability: an ability name not in the tree is reported",
+    );
+
+    let shape = tmpdir("prodsel-shape");
+    write(&shape, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&shape, "app/m/brick.toml", &ability_toml("app/m", "service", "app", ""));
+    write(
+        &shape,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\napp = \"app/m\"\n\
+         core = \">=1.0.0\"\nability = \"service/mem\"\n",
+    );
+    let resp = check::run(&mk_req("check", &shape, json!({"profile": "dev"})));
+    h.check(
+        has_code(&resp, "BRV-MF-0001"),
+        "platform+ability: `ability` must be a list of strings",
+    );
+}
+
 /// `plugin_type = "core"` (ADR-0031): mandatory + singular, no lifecycle, no `[compat]` self-pin.
 fn core_type_cases(h: &mut Harness) {
     // Positive: exactly one core in the product closure ⇒ no BRV-TAX-0020.
@@ -2207,6 +2316,7 @@ pub fn run() -> i32 {
     emit_cases(&mut h);
     cycle_cases(&mut h);
     core_type_cases(&mut h);
+    product_selection_cases(&mut h);
     phase_check_cases(&mut h);
     version_solver_cases(&mut h);
     iface_crossfile_cases(&mut h);

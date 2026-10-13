@@ -377,9 +377,10 @@ extra   = ["-nographic"]
 schema = 1
 [product]
 name = "hsm"; version = "0.1.0.0"; app = "app/hsm"; core = ">=1.0.0"
+platform = "platform/qemu-aarch64"     # closure root: the single platform plugin
+ability  = ["core/c_core", "service/crypto", "sched/coop"]   # closure roots: directly selected abilities
 stage = "dev"                      # dev | release (profile default, overridden by CLI)
-[select]
-plugins = ["platform/qemu-aarch64", "service/crypto"]
+# [select].plugins = [...]         # optional/legacy extra roots (the two keys above are the preferred surface)
 [budget]
 ram_kib = 512
 stack_kib = 16

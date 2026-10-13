@@ -1,185 +1,92 @@
 # product.toml — image composition (brickOS prototype v0.2.0, QEMU virt aarch64)
 #
-# Product level: **only "selection and budget"**; plugin self-description lives in its brick.toml (BRV-D4).
+# The product states its **roots** only; every other plugin joins the image by dependency
+# closure (`[[dep]]` in each brick.toml). Roots are: the single APP (`[product].app`), the
+# platform (`[product].platform`), and the directly selected abilities (`[product].ability`).
 schema = 1
 
 [product]
-name    = "brickos-prototype"
-# ★ v0.2.0: v0.1.0 delivered the **declaration-phase** half (discovery/validation/descriptor gen);
-#   this release delivers the **runtime** half — plugin manager + four-phase start chain,
-#   build driven by the declaration surface (`brickie build` replaces the composition Makefile),
-#   POSIX runtime + fd table, VFS storage stack, device/storage frameworks (bdev/pci),
-#   and third-party FAT/EROFS on real eMMC.
-#   Itemized record: ADR-0008..0022 in `docs/decisions/` and `WORKAROUNDS.md`.
-version = "0.2.0.0"             # COMPAT_GEN.MAJOR.MINOR.REVISE
-app     = "app/hello"           # exactly one (§3.2)
-core    = ">=0.1.0"
-stage   = "dev"                 # dev | release; CLI overrides (§7.5)
+name     = "brickos-prototype"
+version  = "0.2.0.0"             # COMPAT_GEN.MAJOR.MINOR.REVISE
+app      = "app/hello"           # exactly one (§3.2)
+core     = ">=0.1.0"             # compatibility range; the core plugin itself is selected below
+platform = "platform/qemu-aarch64"
+stage    = "dev"                 # dev | release; CLI overrides (§7.5)
 
-[select]
-# Lists only **directly selected** plugins; the rest come in via dependency closure
-# `[[dep]]`; the product only selects — BRV-D4). Closure chain of this product:
-#   app/hello    -> iface/posix (thin Interface skin, ADR-0018) -> runtime/posix
-#                -> iface/min  (core native pass-through skin, ADR-0020; log/clock/tick/version)
-#                  * Both iface skins are deliberately **not** listed below: APP's `[[dep]]`
-#                    (same "closure readability" trade-off as framework/file-table).
+# Directly selected abilities. A root pulls in everything it `[[dep]]`s on, so the frameworks
+# (dev-core, cdev-core, bdev-core, vfs-core, file-table, pci-core) and the two interface skins
+# (iface/posix, iface/min) are deliberately **absent**: they enter the closure through their
+# consumers. What is left below is only what no other selected plugin depends on.
+#
+#   app/hello -> iface/posix -> runtime/posix -> framework/{file-table,vfs-core}
+#             -> iface/min (core native pass-through skin: log/clock/tick/version)
 #   service/dump -> service/{trace,backtrace,hexdump,memleak}
-#   fs/devfs     -> framework/{dev-core,cdev-core,vfs-core} + fs/tmpfs (parent FS of mount points)
-#   driver/uart-pl011-> framework/{cdev-core,dev-core,vfs-core}
-#   fs/tmpfs     -> framework/vfs-core
-#                          ↓
-#   framework/{vfs-core,dev-core,cdev-core}   (storage/device domain framework parts, ADR-0009)
-# * Why list fs/devfs and driver/uart-pl011 directly instead of only tmpfs: in design `1-03` §1's v1.0
-#   plugin list all three (tmpfs rootfs / devfs /dev / uart-pl011 tty) are **selection items** —
-#   dropping devfs yields form B of `8-01` §1.2 (device frameworks only, no /dev namespace);
-#   and "mount plan containing / or /dev pulls it in" (§1 note) has no generation path here
-#   (WORKAROUND br-wa-fs-001), so the choice stays explicit on the product side.
-plugins = [
-  # * The core is a plugin like the others now: `plugin_type = "core"`, mandatory and singular
-  #   (solver: BRV-TAX-0020; the manager re-proves it at runtime). It defines **no lifecycle** --
-  #   it is what drives the others (`br_core_main` boot chain + plugin manager) -- so it never
-  #   enters the phase machine it runs, and it is depended on by everything (its headers are the
-  #   ambient include base). `core/` is a namespace of implementations: `c_core` (this one) and a
-  #   future `r_core`; exactly one of them is selected per image.
+#   fs/devfs  -> framework/{dev-core,cdev-core} + fs/tmpfs (parent FS of the mount points)
+#   driver/uart-pl011 -> framework/{cdev-core,dev-core}
+#   fs/uboot-{fat,erofs} -> driver/uboot-mmc -> framework/{bdev-core,dev-core,pci-core}
+#
+# `fs/devfs`, `driver/uart-pl011` and the eMMC stack stay explicit: the APP mount plan
+# ([[mount]] in app/hello) declares / and /dev, and a mount plan does not generate a
+# selection edge (WORKAROUND br-wa-fs-001), so dropping a line here removes the volume
+# rather than trimming a dependency.
+ability = [
   "core/c_core",
-  "platform/qemu-aarch64",
-  # * ADR-0011: image scheduler switched from `sched/coop` to `sched/rr` (round-robin preemption).
-  #   Why: this cut's new mechanisms = **IRQ-exit stack switch** (core) and **bottom halves** (core),
-  #   whose only consumer is "a scheduler with a time-slice policy" — without it on target
-  #   would be covered only by host cases, i.e. never validated on the real exception exit.
-  #   `sched/coop` **stays in the tree**: `brickie check` still validates its declaration
-  #   sched_class composition, and host `sched-test` covers all its boundaries (incl. TC-TASK-101).
-  #   Switching back needs only this line (`br_sched_register` exactly once => one at a time).
   "sched/rr",
   "service/dump",
-  # * ADR-0014/0015: POSIX runtime (runtime/posix). Its closure chain:
-  #   runtime/posix -> framework/{file-table, vfs-core} + platform/qemu-aarch64
-  #   => listing it alone pulls the other two framework parts via [[dep]] (so the next line is
-  #      optional; kept to make "file table has evidence outside POSIX runtime" readable).
-  "runtime/posix",
-  # * File table (fd table, ADR-0012): after runtime/posix landed this line is **redundant** (enters
-  #   the closure via `runtime/posix --init--> framework/file-table`). Kept deliberately:
-  #   it makes "file table has evidence outside POSIX runtime" readable in `[select]`, and products
-  #   with POSIX runtime trimmed (minimal native) can still carry it; `check` stays 0 errors without it.
-  "framework/file-table",
-  # * ADR-0021: block-device subclass framework (bdev-core). Second device chain of the
-  #   this cut lands the framework part first (no driver consumer yet); the eMMC driver joins later.
-  "framework/bdev-core",
-  # * ADR-0021 D-2: generic PCI(e) mechanism (enumeration/BAR allocation). Depends on platform
-  #   landed and validated alone here (enumerates sdhci-pci); the driver later consumes it via init.
-  "framework/pci-core",
-  # * ADR-0033: the eMMC/SDHCI driver ported from u-boot (GPL-2.0+). The `adapter/` namespace was
-  #   dissolved -- an adapter now sits **in the namespace of the capability it provides** (this one
-  #   is a device driver ⇒ `driver/`), while the vendor sources stay byte-exact under
-  #   `third_party/uboot-imx/**`. `api_type = "native"` because it exports no interface at all
-  #   (BRV-TAX-0022): the *surface* is native/empty, the *provenance* is GPL and lives on the
-  #   `license` + `third_party/` axes. `driver/` ⇒ native is enforced by BRV-TAX-0021.
-  "driver/uboot-mmc",
-  # * ADR-0022 + ADR-0033: this cut's two filesystem ports (same origin/license: nxp-imx u-boot
-  #   `fs/fat` and `fs/erofs`, GPL-2.0+), now under `fs/` because that is the capability they
-  #   provide. Both need `uboot-mmc`'s start phase (after global IRQ enable) before mounting --
-  #   that order is expressed via `[[dep]] driver/uboot-mmc`. The vendor tree stays self-contained
-  #   and removable: the provenance guard (BRV-TAX-0023) forbids a plugin that carries **no**
-  #   `third_party/` code from depending on one that does, so the GPL subgraph stays closed:
-  #     driver/uboot-mmc (block dev) -> fs/uboot-fat (3 writable volumes) / fs/uboot-erofs (1 read-only image)
-  #   The 4 volumes' roles and device names: platform's `[build.target.qemu].extra` and ADR-0022.
   "fs/uboot-fat",
   "fs/uboot-erofs",
   "fs/tmpfs",
   "fs/devfs",
   "driver/uart-pl011",
+  "driver/uboot-mmc",
 ]
+# A `[select].plugins` list is still honoured as extra roots (legacy surface); this product
+# expresses its roots through the two keys above.
 
 [selftest]
-# ============================================================ selftest switch (ADR-0010)
+# Each plugin's interface tests (`*_selftest()` in <plugin>/src/*_selftest.c), run by core's
+# plugin manager after every start and before the scheduler takes over.
 #
-# Selftest = each plugin's **interface tests** (`*_selftest()` in <plugin>/src/*_selftest.c),
-# separate from core code; driven by core "after all starts, before the scheduler takes over"
-# br_plugin_manager_selftest in plugin_mgr.c).
-#
-# * This switch is **generation-time**: off => generated descriptors write `.selftest` as
-#   BR_PLUGIN_NO_HOOK and `[build].selftest_sources` (the core plugin's suite) is not compiled
-#   => test code is **entirely removed by --gc-sections** (not "compiled but not run").
-#   Criterion = `[SELFTEST]` vanishes.
-#
-# Semantics: true/false explicit; "inherit" (or table absent) = follow [product].stage
-#       — on for dev / off for release (dev images carry selftests, release images do not).
+# Generation-time switch: off ⇒ descriptors write .selftest = BR_PLUGIN_NO_HOOK and the core
+# plugin's suite below is not compiled, so the test code is removed by --gc-sections
+# (criterion: `[SELFTEST]` vanishes), not merely not run.
+# true | false | "inherit" (follow [product].stage: dev on, release off)
 enabled = "inherit"
-# plugins: run only the listed plugins (**optional**; empty/absent = all with [selftest]).
-# Use: when keeping only one or two selftest suites in an image, trim the rest too.
-# plugins = []
+# plugins = []                   # optional: run only these plugins' suites (empty/absent = all)
 
 [budget]
-# Division of the two limits (brickie-v0.1 §8.1): platform's [[res]] = **physical capacity** (raised
-# to 8 MiB: page tables + core's three pools); this item = **plugin budget** (sum of [[res]] <= value).
-# * ADR-0022 raised it to 256 KiB (was 64): this cut adds two **media-class FS** ports — FAT
-#   needs static sector/cluster buffers + 3-volume bookkeeping (u-boot's `fsdata` is
-#   large-buffered); EROFS needs a 4 KiB block + LZ4 decompress buffer (neither fits
-#   the stack; see each brick.toml [[res]]); eMMC driver: 1 -> 4 static instances (+12 KiB).
+# Plugin budget: Σ [[res]] of the closure <= these values. The platform's own [[res]] is the
+# physical capacity (8 MiB) and is a separate axis.
 ram_kib   = 256
 stack_kib = 16
 
 [kernel]
-# ============================================================ clock tick (cf. Linux CONFIG_HZ)
-# Clock interrupts per second (Hz). Every 1/HZ second platform's timer ISR runs:
-#   br_clock_tick_notify() (core tick count = jiffies += 1)
-#   -> br_sched_on_tick() (scan expired timeouts / scheduler on_tick decrements the slice)
-#   -> reload the next deadline.
-# Default 200 (absent = 200) => 5 ms per tick. brickie build turns it into -DBR_CFG_TICK_HZ
-# for all compile units — so "interrupts per second" has a single truth: platform's reload period
-# and core's jiffies read the same macro (ADR-0017).
-# Common values 100/200/250/1000; valid range 1..100000 (backstopped by br_time.h _Static_assert).
+# Clock interrupts per second (cf. Linux CONFIG_HZ); absent = 200. brickie build turns it into
+# -DBR_CFG_TICK_HZ for every compile unit, so platform's reload period and core's jiffies read
+# one macro. Valid range 1..100000 (br_time.h _Static_assert).
 hz = 200
 
 [lint]
-frozen_deps = "inherit"         # inherit (follows [product].stage) | allow | deny
-# Explicit exemptions: **empty**. Design §7.3: app may depend only on interface; it now holds:
-#   - `app/hello -> iface/posix` (thin Interface skin, ADR-0018) and `app/hello -> iface/min`
-#     (core native pass-through skin, ADR-0020) are **legal edges**; no exemption needed;
-#   - APP sources no longer reach below the iface layer (flagged by the ADR-0020 scan);
-#   - the former M0 bootstrap exception (`app -> platform`: identity/heartbeat) was removed with
-#     ADR-0016 (heartbeat counting moved to core; platform logs its own identity).
-# => This table stays empty. The criterion is not "a whitelist silences it" but **no illegal
-#   edge exists**: after emptying it `brickie check` is still 0 errors. "Declaration <-> use" is
-#   cross-checked too (ADR-0018): using another plugin's header without declaring the dep is flagged.
-allow_edges = [
-]
+frozen_deps = "inherit"          # inherit (follows [product].stage) | allow | deny
+# Empty on purpose: `app/hello -> iface/*` are legal edges, and no illegal edge exists to exempt.
+allow_edges = []
 
 [build]
-# ============================================================ build policy (brickie build)
-#
-# * This table is the **single truth for image builds** (ADR-0004 / design ADR-0003 S1-S3):
-#   the top-level Makefile lists no literal source paths — those come from the `[select]` closure
-#   + each plugin's `[build]` (including the core plugin's) + platform's `[build.target]`.
-#
-# Division of work:
-#   target facts (arch/cross prefix/arch flags/linker script/QEMU model) -> platform `[build.target]`
-#   product policy (this table) -> compile/asm/link flags + outputs
-#   each plugin's own sources -> its brick.toml `[build]`
-#   tool candidate order/resolution -> `brickie-core` (contract §9 R-14: result gets baked in)
-#
-# WORKAROUND(br-wa-toolchain-001): the external cross toolchain **choice** (prefix/variant/linker
-#   script) lives in platform's `[build.target]`; this table holds product policy only — once
-#   toolchain is ready, only the declaration surface changes; build rules stay put.
-# Generated source set (descriptors produced by `brickie gen`): the plugin manager enumerates them
-# via the `.br_plugins` section (design 3-05 §2.2). `**` is independent of namespace depth (it is
-# not tied to two-segment names); **closure filtering is the tool's job** — generated output
-# outside the `[select]` closure is skipped (BRV-BLD-0013 info), so no "descriptor in, .c out =>
-gen_sources   = ["build/gen/**/plugin_desc.c"]
-# Core selftest suite sources (ADR-0010), appended to the core plugin's build unit. Product-level
-# because the selftest switch above is product policy: off ⇒ these files are **not compiled**, so
-# "selftest off" also means "code out of the image" for the core's own suites.
-selftest_sources = ["core/c_core/selftest/*.c"]
-obj_dir       = "build/obj"
+# Image build policy (brickie build). Target facts live in platform [build.target], per-plugin
+# sources in each brick.toml [build]; this table adds only product-level flags and outputs.
+selftest_sources = ["core/c_core/selftest/*.c"]   # compiled only while the switch above is on
+gen_sources      = ["build/gen/**/plugin_desc.c"] # `**` is namespace-depth independent; the tool
+                                                  # skips generated output outside the closure
+obj_dir          = "build/obj"
 
 # Cross-compilation discipline (every flag has a reason, not a casual optimization switch):
 #   -ffreestanding / -fno-builtin  no host runtime assumptions; no silent loop->memcpy
 #   -fno-stack-protector           no libc __stack_chk_fail
-#   -fno-omit-frame-pointer        * compile-time precondition of service/backtrace: unwinding walks
-#                                  the x29(fp) chain (5-01 §3), while -O2 by default treats fp as an
-#                                  ordinary register => the chain breaks at frame one (one stp/ldp each).
+#   -fno-omit-frame-pointer        compile-time precondition of service/backtrace: unwinding walks
+#                                  the x29(fp) chain, while -O2 treats fp as an ordinary register
+#                                  => the chain breaks at frame one (one stp/ldp each).
 #   -ffunction-sections/-fdata-sections + -Wl,--gc-sections  bare-metal image: unused code stays out
-#   -fno-pic/-fno-pie/-no-pie      no relocations on bare metal (identity mapping, 3-04)
+#   -fno-pic/-fno-pie/-no-pie      no relocations on bare metal (identity mapping)
 #   -fno-asynchronous-unwind-tables/-fno-unwind-tables  nothing reads .eh_frame
 cflags = [
   "-std=c11", "-O2", "-g3",
@@ -191,19 +98,18 @@ cflags = [
   "-fno-asynchronous-unwind-tables", "-fno-unwind-tables",
   "-fno-omit-frame-pointer",
 ]
-# Assembly is cpp-preprocessed (`__ASSEMBLER__` defined by GCC), so .S can also
-# `#include <br/core/br_exc.h>` — exception frame offsets have a single truth.
+# Assembly is cpp-preprocessed (`__ASSEMBLER__` is defined by GCC), so .S can also include
+# <br/core/br_exc.h>: exception frame offsets have a single truth.
 asflags = ["-g3"]
 
 ldflags = [
   "-nostdlib", "-nostartfiles", "-static", "-no-pie",
   "-Wl,--build-id=none", "-Wl,--gc-sections", "-Wl,-z,max-page-size=4096",
 ]
-# The linker script and -Wl,-Map are injected by the tool (from platform `[build.target]` and the
-# locations respectively); not repeated here — one fact, one writable place.
+# Linker script and -Wl,-Map are injected by the tool (from platform [build.target] and the
+# artifact locations); not repeated here.
 
 [build.release]
-# Flags **appended** by `--profile release`. Currently empty: dev and release differ only in
-# **composition-time check strictness** (release forces `brickie check --profile release`).
-# The in-image assertion axis (1-01 §13: debug=panic / release=trace) is not landed — ADR-0004 §4.
+# Flags appended by `--profile release`. Empty: dev and release currently differ only in
+# composition-time strictness (release forces `brickie check --profile release`).
 cflags_extra = []

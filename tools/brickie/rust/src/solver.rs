@@ -142,10 +142,17 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
 
     let mut seeds: Vec<String> = Vec::new();
     if let Some(prod) = &tree.product {
+        // Closure roots: the single APP, the platform, every directly selected ability, plus
+        // `[select].plugins` (compat surface). Everything else enters via `[[dep]]`.
         if !prod.app.is_empty() {
             seeds.push(prod.app.clone());
         }
-        for s in &prod.select {
+        for s in prod
+            .platform
+            .iter()
+            .chain(prod.ability.iter())
+            .chain(prod.select.iter())
+        {
             if !seeds.contains(s) {
                 seeds.push(s.clone());
             }
@@ -177,7 +184,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     "BRV-MF-0001",
                     s,
                     &file,
-                    "select.plugins",
+                    "product",
                     format!("plugin `{s}` in the selection set is not in the plugin tree (missing `{s}/brick.toml`)"),
                     "gap substitute (R-9): selection/dependency reference integrity has no dedicated code; add the plugin or drop it from the selection set",
                 ),
@@ -614,7 +621,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     "BRV-TAX-0020",
                     "product",
                     &prod.file,
-                    "select.plugins",
+                    "product",
                     format!(
                         "an image must contain exactly one `plugin_type = \"core\"` plugin, found {}: {}",
                         cores.len(),
@@ -624,7 +631,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                             cores.join(", ")
                         }
                     ),
-                    "§8.3 ④ / §7.3: `core` is mandatory and singular (it is the plugin that drives the other plugins); add it to `[select].plugins` (e.g. `core/c_core`) or drop the extra one",
+                    "§8.3 ④ / §7.3: `core` is mandatory and singular (it is the plugin that drives the other plugins); select it as an ability (e.g. `core/c_core`) or drop the extra one",
                 ),
             ));
         }
