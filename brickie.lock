@@ -12,17 +12,17 @@ version = "0.2.0.0"
 stage = "dev"
 
 [[lock.plugins]]
-name = "adapter/uboot-erofs"
+name = "fs/uboot-erofs"
 version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.plugins]]
-name = "adapter/uboot-fat"
+name = "fs/uboot-fat"
 version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.plugins]]
-name = "adapter/uboot-mmc"
+name = "driver/uboot-mmc"
 version = "0.1.0.0"
 compat_gen = 0
 

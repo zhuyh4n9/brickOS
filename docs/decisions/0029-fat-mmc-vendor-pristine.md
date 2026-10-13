@@ -1,5 +1,9 @@
 # 0029 — 三方件迁移(2/3): FAT 与 MMC 的**上游原样编译** + "不许夹带副本"的机械判据
 
+> ★ **布局已被 [ADR-0033](0033-dissolve-adapter-namespace.md) 取代**: `adapter/uboot-{fat,mmc}` →
+> `fs/uboot-fat` / `driver/uboot-mmc`; "不许夹带副本"的判据同时从 `adapter/**` 扩到**全树**
+> (`tools/check-vendor-copies.py`)。下文已就地更新为新路径。
+
 > 状态: **已落地**。
 > 推进: [ADR-0026](0026-third-party-vendor-and-adapter.md) §5 的两条欠债
 > (「`uboot-fat` 迁到新架构 = 待做」「`uboot-mmc` 迁到新架构 = 难/待专门决策」)——
@@ -12,7 +16,7 @@
 ## 1. 背景: 迁移只做了 1/3
 
 ADR-0026 定了新架构并落地了 erofs(1/3): `brick.toml` 的 `sources` **直接编译**
-`third_party/uboot-imx/fs/erofs/**` 的上游原件, 适配收进 `adapter/uboot-erofs/{compat,glue}`。
+`third_party/uboot-imx/fs/erofs/**` 的上游原件, 适配收进 `fs/uboot-erofs/{compat,glue}`。
 fat 与 mmc 当时仍是旧形态 —— 插件目录里躺着 `src/fat_core.c`(与上游 `fs/fat/fat.c`
 行级相似度 **0.58**)、`src/fat_write.c`(0.60)、`src/mmc_core.c` / `src/sdhci_host.c`
 (改写副本)。ADR-0026 §5 把 mmc 记为**难**:
@@ -29,17 +33,17 @@ ADR-0026 的判据只覆盖了两侧: vendor 侧(`check-third-party-pristine.sh`
 "适配 = 给环境"(D-3 的文字)。但**"把上游抄一份改名再改缩进"在文件系统上与"适配"长得一样**
 —— 旧 `src/fat_core.c` 就是这么来的。于是本刀补一条机械判据:
 
-`tools/check-adapter-copies.py` —— 去空行/去纯注释行/去 `#` 预处理行后, 对
+`tools/check-vendor-copies.py` —— 去空行/去纯注释行/去 `#` 预处理行后, 对
 `adapter/**` 的每个 `.c/.h` 与 `third_party/**` 的每个 `.c/.h` 算
 `difflib.SequenceMatcher` 行级相似度; **相似度 ≥ 阈值(0.30)且双方归一化行数都 ≥ 30 ⇒ 红**,
 除非在脚本里**具名豁免**(每条要写理由)。
 
-- **正例(迁移前实测)**: `adapter/uboot-fat/src/fat_core.c ~= fs/fat/fat.c = 0.58`、
+- **正例(迁移前实测)**: `fs/uboot-fat/src/fat_core.c ~= fs/fat/fat.c = 0.58`、
   `src/fat_write.c ~= fs/fat/fat_write.c = 0.60` ⇒ 报红 —— 判据确实抓得住"副本"。
 - **负例(迁移后)**: 全树最高相似度 = 0.xx(adapter 侧只剩 `compat/` 的壳与 `glue/` 的对接)
   ⇒ 全过。
 
-它在 `tests/gates.toml` 里注册为脚本门禁 `check-adapter-copies`。
+它在 `tests/gates.toml` 里注册为脚本门禁 `check-vendor-copies`。
 
 ## 3. fat 的落地
 
@@ -83,7 +87,7 @@ ADR-0026 的判据只覆盖了两侧: vendor 侧(`check-third-party-pristine.sh`
 | 项 | 结果 |
 |---|---|
 | `tools/check-third-party-pristine.sh` | **PASS** —— vendor 27 个文件逐字节 = 锁; 无多余文件; 无插件; 头只经 adapter 转发壳 |
-| `tools/check-adapter-copies.py` | **PASS** —— 全树最高相似度 **0.16**(阈值 0.30); 迁移**前** `src/fat_core.c`=**0.58** / `src/fat_write.c`=**0.60** ⇒ 判据确实抓得住副本 |
+| `tools/check-vendor-copies.py` | **PASS** —— 全树最高相似度 **0.16**(阈值 0.30); 迁移**前** `src/fat_core.c`=**0.58** / `src/fat_write.c`=**0.60** ⇒ 判据确实抓得住副本 |
 | `-fsyntax-only` 直编 `third_party/uboot-imx/fs/fat/fat_write.c` | rc=0(带 `compat/` 的 `-I`; vendor 一个字没改) |
 | `build/obj/third_party/uboot-imx/fs/fat/fat_write.o` | 在场 ⇒ **编的是 vendor 原件** |
 | 镜像符号 | `file_fat_write_at` / `fat_set_blk_dev` / `fat_readdir` / `uboot_fat_truncate` 都在 |
@@ -176,8 +180,8 @@ QEMU 的 SDHCI 是**电平**中断: 断言条件 = `INT_STATUS & SIGNAL_ENABLE`�
 | 项 | 结果 |
 |---|---|
 | `tools/check-third-party-pristine.sh` | **PASS**(32 个 vendor 文件逐字节 = 锁) |
-| `tools/check-adapter-copies.py` | **PASS**(uboot-mmc 无 findings; 全树最高 ≈0.15) |
-| `brickie build` | 全绿(修复"两件三方插件都定义 `blk_dread/blk_dwrite`"的**重复符号**之后: 定义归**上游真正调用它的那一件** —— `adapter/uboot-fat`; mmc 的上游不调用, 定义在 mmc 是死代码) |
+| `tools/check-vendor-copies.py` | **PASS**(uboot-mmc 无 findings; 全树最高 ≈0.15) |
+| `brickie build` | 全绿(修复"两件三方插件都定义 `blk_dread/blk_dwrite`"的**重复符号**之后: 定义归**上游真正调用它的那一件** —— `fs/uboot-fat`; mmc 的上游不调用, 定义在 mmc 是死代码) |
 | `build/obj/third_party/uboot-imx/drivers/mmc/` | `mmc.o` `mmc_legacy.o` `mmc_write.o` `sdhci-adma.o` `sdhci.o` ⇒ **编的是 vendor 原件** |
 | 端到端门禁 | `emmc-test` / `fat-test` / `erofs-test` **三件都 PASS**(`brickie test` 全量跑) |
 | ★ 一处**真实回归**(如实记账, 见 §6) | 迁移把"启动→自检结束"的墙钟推后了 ~0.6 s(基线 5.04 s / 迁移后 5.61~5.89 s), 而若干门禁的 `timeout_s = 6` 且判据是日志里要有 `[SELFTEST] SUMMARY` ⇒ **踩在边界上**: `irq-test` 单跑从"基线 2/5 红"变成"5/5 红"; `--jobs 4` 全量跑时基线红 2 关(`irq-test`/`emmc-test`)、迁移后红 3 关(多一个 `plugin-test`)。逐条数字与根因见 §6 的同名欠债行 |
@@ -206,14 +210,14 @@ QEMU 的 SDHCI 是**电平**中断: 断言条件 = `INT_STATUS & SIGNAL_ENABLE`�
 | `part_init()` / `blk_dselect_hwpart()` | 显式空实现/直通(本件不做软件分区, v1 暴露裸设备; 分区映射是 SD-9/v1.x) |
 | 冗余 INTx 投递 | ISR 不能清 `INT_STATUS`(上游要读)、等待前又要重开 `SIGNAL_ENABLE` ⇒ 同一条命令内"读到未清"期间会**重复断言-投递**。这些是**真中断**, 只是冗余; 根因是这组硬约束的必然结果, 已登记 |
 | 5 个 errno 名字寄在插件里 | `ECOMM(70)`/`EBADMSG(74)`/`ENOMEDIUM(123)`/`EMEDIUMTYPE(124)`/`ENOTSUPP(524)` 现定义在 `compat/mmc_env.h`(数值逐字取自 u-boot `include/linux/errno.h`)。按 ADR-0023 D-4 的口径它们**应当**上收 `core/br_error.h`(本仓库的 errno 单一真值); 未做, 登记为欠债 |
-| FAT 的 `strdup`/`sprintf`/`rand`/`assert` | `assert` 给成**空语句**(与上游 `_DEBUG=0` 的展开一致 —— 上一版"打印 + 返回 -EIO"才是改上游); `strdup`/有界 `sprintf`/确定性 `rand` 是环境实现(u-boot 的 `rand` 在 vendor 树里没有原件)。前三条登记在 `adapter/uboot-fat/README.md` §9 |
+| FAT 的 `strdup`/`sprintf`/`rand`/`assert` | `assert` 给成**空语句**(与上游 `_DEBUG=0` 的展开一致 —— 上一版"打印 + 返回 -EIO"才是改上游); `strdup`/有界 `sprintf`/确定性 `rand` 是环境实现(u-boot 的 `rand` 在 vendor 树里没有原件)。前三条登记在 `fs/uboot-fat/README.md` §9 |
 | **`irq-test` 的时序回归(本刀唯一一处"变差")** | 见 §4.7 的表末行: 迁移后"启动→自检结束"晚 ~0.6 s(`irq-test` 的 6 s 上限), 从基线 2/5 红变成 5/5 红。**根因**: 上游原样编译时 ISR 不能清 `INT_STATUS`(上游等待循环要读它)⇒ 只能用 `SIGNAL_ENABLE` 去断言电平线, 而"等待前重开"会让线上仍有未清位时**立刻再投递一次** ⇒ 冗余 INTx(实测 5–10 次/命令)。**已做的两次优化**: ① `udelay()` 恢复忙等语义(上游取值只有 10/100/1000/2000 µs, 而调度器的睡眠粒度是一拍 5 ms ⇒ 短自旋曾被放大 50×): 4 卡 bring-up **0.376 s → 0.204 s**; ② `udelay()` 不再顺带打开 `SIGNAL_ENABLE`(它本来就不需要被唤醒, 开了不掩会在窗口之后继续断言电平线 ⇒ 直接炸 `br_task_exit in bh`)。**未做的正解**: 降低重开频率(只在"上一次等待真的睡下去且没等到"时重开 `SIGNAL_ENABLE`), 或让等待原语把"当前要等的位"传下来、只 arm 那一组。判据 = `irq-test` 恢复到基线频率(≤2/5 红, 因为它**本来就是**间歇红) |
 | `errno.h`/`time.h` 走 cflags 而非 `includes` | 两个**标准头名**的壳放在 `compat/std-names/`, 因为 brickie 的包含面判据是**名字级**的(ADR-0018), 而 `runtime/posix/include/` 下有同名文件 ⇒ 放进声明面会被判成"别人 include 了我们的头"。这是**判据的粗粒度**导致的绕行, 回归条件 = 判据能按 per-unit `-I` 解析(或排除标准 C 头名) |
 
 ## 7. 判据
 
 - `bash tools/check-third-party-pristine.sh` —— vendor 逐字节 = 上游;
-- `python3 tools/check-adapter-copies.py` —— adapter 里没有三方件源码副本(迁移前两个
+- `python3 tools/check-vendor-copies.py` —— adapter 里没有三方件源码副本(迁移前两个
   `src/fat_*.c` = 0.58/0.60 报红, 迁移后全树最高 ≈0.15);
 - `brickie build` 全绿; `brickie test` 全绿(含 `fat-test` / `emmc-test` / `erofs-test` 与
   两个新脚本门禁);

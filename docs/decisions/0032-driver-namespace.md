@@ -1,5 +1,12 @@
 # 0032 — 驱动命名空间: `io/` → `driver/`, 且 `driver/` 只放**本仓自研驱动**(`api_type = "native"`)
 
+> ★ **部分被 [ADR-0033](0033-dissolve-adapter-namespace.md) 取代**: 本 ADR 把 `driver/` 定义为"**我们写的**"
+> 驱动、并把"移植件归 `adapter/`"写成规则的那部分**不再成立** —— `adapter/` 已解散, 移植来的
+> 设备驱动(`driver/uboot-mmc`)现在与自研驱动同住 `driver/`; 区分改由 `api_type`(表面, ADR-0033 §2.2)
+> 与来源守卫(`BRV-TAX-0023`)承担。本 ADR 的**其余部分仍然有效**: 命名空间 `io/` → `driver/`、
+> 对外头 `br/io/` → `br/driver/`、`subkind = "io"` 不变、以及 `driver/` ⇒ `api_type = native`
+> (`BRV-TAX-0021`, 现在对三件都成立)。下文已就地更新为 `driver/uboot-mmc`。
+
 > 状态: **已落地**(工具侧 `rules.rs`/`model.rs`/`selftest.rs`; 插件 `io/uart-pl011` → `driver/uart-pl011`;
 > 对外头 `include/br/io/` → `include/br/driver/`; 接口单元 `io/uart-pl011#uart-pl011` →
 > `driver/uart-pl011#uart-pl011`; 声明面/门禁/文档指称)。
@@ -19,7 +26,7 @@
 两条要求: ① 目录/命名空间改名 `io/` → `driver/`; ② 该目录是**本仓自研(native)驱动**的家。
 
 原型当时的形态:`io/uart-pl011` 是**唯一**一个 `io/` 插件, `subkind = "io"`;
-而两个设备驱动里更"重"的那个(`adapter/uboot-mmc`, eMMC/SDHCI, 4 张卡)在 `adapter/` 下,
+而两个设备驱动里更"重"的那个(`driver/uboot-mmc`, eMMC/SDHCI, 4 张卡)在 `adapter/` 下,
 `api_type = "third_party"` —— 也就是说**"驱动"这个能力被两个命名空间按来源分着放**, 但这条
 区分**只存在于人的习惯里**: 工具既不认识 `driver/`, 也不检查"谁该放哪"。
 
@@ -48,7 +55,7 @@ namespace_subkind("driver")     => Some("io")      // ★ 能力不变, 只换�
 ⇒ `namespace_subkind("driver") = "io"`, 于是 `driver/<short>` 的默认 subkind 推导仍是 `io`。
 **三个连带好处**: ① 相位推导不变(`ability + io` ⇒ CORE, 与从前逐字相同); ② 目标侧
 `br_plugin.h` 的 `BR_SUBKIND_IO` 与 `plan.rs` 的 `subkind_const` **一个字都不用动**;
-③ `adapter/uboot-mmc` 的 `subkind = "io"` 保持正确 —— 它**也是** I/O 驱动, 只是不姓"driver"。
+③ `driver/uboot-mmc` 的 `subkind = "io"` 保持正确 —— 它**也是** I/O 驱动, 只是不姓"driver"。
 
 把 subkind 一起改名(如 `driver`)会为"目录换名"去动一个**能力枚举**与冻结面, 而获得的行为差异为零。
 
@@ -79,7 +86,7 @@ pub fn is_driver_namespace(name: &str) -> bool { name_namespace(name) == "driver
 - `adapter/` 不是本仓的推荐命名空间(`NAMESPACES` 里没有它, 所以 `brickie new adapter/x`
   会给出 `BRV-TAX-0013` **警告**)—— 这是**有意**的: 移植件的落点由 ADR-0024/0029 的
   "原件原样编译 + 适配层"流程决定, 不是 `brickie new` 的日常产物。本刀不改这条。
-- `BRV-TAX-0021` **只**认 `driver/`: `adapter/uboot-mmc` 的 `third_party` 不受影响
+- `BRV-TAX-0021` **只**认 `driver/`: `driver/uboot-mmc` 的 `third_party` 不受影响
   (`selftest` 里有一条正面判据专门钉住这一点, 免得规则被误推广成"任何 io 驱动都得 native")。
 
 ## 3. 落地清单(与 ADR-0015 同型的三步: 声明面 → 生成物 → 源码)
@@ -114,7 +121,7 @@ $ brickie test                     # 7 host + 11 QEMU + 10 script 全绿
 | 保留 `io/` 作兼容别名(`NAMESPACES` 同时收 `io` 与 `driver`) | 两个命名空间表达同一件事 ⇒ 立刻出现"新插件该放哪"的第二答案; 现在就一件住户, 是改名最便宜的时刻 |
 | 新造一个 `[plugin].origin = "own"` 字段来表达"自研" | `api_type` 已经是这条轴(native/third_party/runtime_adapter); 新字段会与它重叠并产生第三个真值 |
 | 反向也执法(凡 `subkind = "io"` 的 `native` 插件必须在 `driver/` 下) | `adapter/` 里的 `api_type = "native"` 适配器(如将来某个自研 host 控制器)会被误报; 且"能力"不该反推"住址" |
-| 连 `adapter/` 一起改名/收进 `driver/` 的 `third_party/` 子目录 | 会改动 ADR-0024/0029 的整条隔离流程与门禁(`check-adapter-copies`/`check-third-party-pristine`), 与"只改命名空间"的目标不成比例 |
+| 连 `adapter/` 一起改名/收进 `driver/` 的 `third_party/` 子目录 | 会改动 ADR-0024/0029 的整条隔离流程与门禁(`check-vendor-copies`/`check-third-party-pristine`), 与"只改命名空间"的目标不成比例 |
 | 只立约定不执法(写进 README 就算) | 本仓口径是"每条约定都有判据"; 而"三方代码进自研目录"是**一步复制就能静默发生**的事(§2.3) |
 
 ## 5. 后果与遗留项(诚实清单)

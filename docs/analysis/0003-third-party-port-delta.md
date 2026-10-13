@@ -1,6 +1,10 @@
 # 三方移植件逐文件对照(相对 u-boot 钉死 commit)
 
 > ⚠ **本文记的是"改写副本"时代的事实(ADR-0024 的取证底稿), 不是当前结构**。
+> ★ **布局再次变更([ADR-0033](../decisions/0033-dissolve-adapter-namespace.md))**: `adapter/` 已解散,
+> 适配层按能力归入 `driver/uboot-mmc` / `fs/uboot-fat` / `fs/uboot-erofs`。为免指向不存在的路径,
+> 下文已就地替换为**新位置**; 但请注意本文叙述的对象是**当年**的 `src/` 副本(该层已不存在),
+> 所以文中出现的 `<插件>/src/*.c` 一律是**历史路径**, 不要把新目录名读成"新目录下有 src/"。
 > 自 ADR-0026 起 `adapter/<插件>/src/`(上游改写副本)这一层被取消: 上游原件只在
 > `third_party/uboot-imx/`(只读 + sha256 锁), 由各 `brick.toml` 的 `sources` **直接编译**;
 > 适配收进 `adapter/<插件>/{compat,glue}`。所以下表的"行级相似度 / 变更行"现在读作
@@ -9,7 +13,7 @@
 > - fat 与 mmc 的迁移见 [ADR-0029](../decisions/0029-fat-mmc-vendor-pristine.md)(2/3), 那里有
 >   迁移**后**的对照(参与编译的 vendor 文件清单 + adapter 侧的相似度上界);
 > - "adapter/ 里不许夹带副本"这条判据现在是机械的:
->   `python3 tools/check-adapter-copies.py`(注册于 `tests/gates.toml`)。
+>   `python3 tools/check-vendor-copies.py`(注册于 `tests/gates.toml`)。
 >
 > 本文仍是**历史取证的唯一底稿**: 基准与复现命令、每个文件的差异性质、审计修掉的缺陷
 > (R-1..R-5)、已删除的"上游没有的代码"、以及两条"判定不可行"的自我更正(§8/§9)。
@@ -40,8 +44,8 @@ sha256sum uboot.tar.gz     # 期望 9d060f32…4a52
 tar xzf uboot.tar.gz "$(basename "$REF")"
 
 # 逐文件看差异(示例)
-diff -u "$REF/drivers/mmc/sdhci.c"  <repo>/adapter/uboot-mmc/src/sdhci_host.c | head
-diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/adapter/uboot-erofs/src/erofs_fs.h
+diff -u "$REF/drivers/mmc/sdhci.c"  <repo>/driver/uboot-mmc/src/sdhci_host.c | head
+diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/fs/uboot-erofs/src/erofs_fs.h
 ```
 
 ### 1.1 两个口径, 别混用
@@ -64,7 +68,7 @@ diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/adapter/uboot-erofs/src/erofs_fs.h
 > 同理 `erofs_internal.h` 与上游 `decompress.h` 也有交叉(单独比只有 4.0%, 但
 > `z_erofs_decompress_req` 确实搬进来了)。**判断"改了什么"请看各表的差异性质, 而不是只看百分比。**
 
-### 2.1 `adapter/uboot-mmc`
+### 2.1 `driver/uboot-mmc`
 
 | `src/` 文件 | 行 | 上游对应物 | 上游行 | 相似度 | 变更行 | 判定 |
 |---|---|---|---|---|---|---|
@@ -82,7 +86,7 @@ diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/adapter/uboot-erofs/src/erofs_fs.h
   唯一的**值错**已修(见 §3)。
 - 上游来源 **`mmc_write.c`** 是审计补上的: 早先 `NOTICE` 把写路径也记在 `mmc.c` 名下, 不准。
 
-### 2.2 `adapter/uboot-fat`
+### 2.2 `fs/uboot-fat`
 
 | `src/` 文件 | 行 | 上游对应物 | 上游行 | 相似度 | 变更行 | 判定 |
 |---|---|---|---|---|---|---|
@@ -97,7 +101,7 @@ diff -u "$REF/fs/erofs/erofs_fs.h"  <repo>/adapter/uboot-erofs/src/erofs_fs.h
   理由是实测结论(ADR-0024 §5): 需把 4 个 static 提升为全局, 且它要写可变全局
   `total_sector`(不变量 = "每个入口从卷刷新")⇒ 跨 TU 共享会把该不变量扩散出去。
 
-### 2.3 `adapter/uboot-erofs`
+### 2.3 `fs/uboot-erofs`
 
 | `src/` 文件 | 行 | 上游对应物 | 上游行 | 相似度 | 变更行 | 判定 |
 |---|---|---|---|---|---|---|
@@ -171,7 +175,7 @@ R-1 是"抄错一个常量值"。这类错误**最隐蔽也最危险**(值错 = 
 ## 4. 唯一做到逐字的文件: `erofs_fs.h`
 
 ```
-$ diff -u <upstream>/fs/erofs/erofs_fs.h <repo>/adapter/uboot-erofs/src/erofs_fs.h
+$ diff -u <upstream>/fs/erofs/erofs_fs.h <repo>/fs/uboot-erofs/src/erofs_fs.h
 -（只有这 5 行被删）
 -#include <asm/unaligned.h>
 -#include <fs.h>

@@ -19,6 +19,16 @@ name  = "service/sqlite"
 range = "*"
 kind  = "type"
 
+[[export]]
+name         = "adapter"
+api_iface    = "runtime_adapter"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = ""
+status       = "experimental"
+
 [build]
 sources  = ["src/*.c"]
 includes = ["include"]

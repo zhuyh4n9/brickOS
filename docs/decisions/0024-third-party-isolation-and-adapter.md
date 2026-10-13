@@ -1,5 +1,10 @@
 # 0024 — 三方件隔离**硬化**: `src/` ↔ `adapter/` 硬边界 + 审计发现的三处缺陷
 
+> ★ **布局已被 [ADR-0033](0033-dissolve-adapter-namespace.md) 取代**: `adapter/` 这个按**来源**分的
+> 命名空间已解散, 适配层按**能力**归位(`driver/uboot-mmc`、`fs/uboot-fat`、`fs/uboot-erofs`),
+> 插件的 `api_type` 也不再承担来源标记(纯化为表面分类)。下文已就地更新为新路径; **判据与
+> 机制一字未改**(vendor 只读锁 + 上游原样编译 + 不许夹带副本 + 来源守卫 `BRV-TAX-0023`)。
+
 > 状态: **已落地**。三个三方插件的源码目录一分为二 —— `src/`(上游派生)与
 > `adapter/`(本项目适配层), 依赖方向单向; 新增适配层入口头 `mmc_compat.h`(fat/erofs
 > 的入口头已有); 新增门禁 `check-third-party-isolation`(四条机械判据)进 `gates.toml`;
@@ -51,7 +56,7 @@ curl -sL -o uboot.tar.gz \
 # ↑ sha256 = 9d060f32c84b15c1ae2e9903c300d51b3088898b3ad80b95bca74c67ef6a4a52 (47 019 609 B)
 tar xzf uboot.tar.gz "$(basename $REF)/{drivers/mmc,include,fs/fat,fs/erofs,lib/lz4.c}"
 # 逐文件对照:
-diff -u "$REF/drivers/mmc/sdhci.c" adapter/uboot-mmc/src/sdhci_host.c | head
+diff -u "$REF/drivers/mmc/sdhci.c" driver/uboot-mmc/src/sdhci_host.c | head
 ```
 
 | 插件 | 文件 | 上游对应物 | 重合度 | 判定 |

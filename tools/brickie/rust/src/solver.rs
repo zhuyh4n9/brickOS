@@ -550,6 +550,28 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
+    // Provenance prohibition (ADR-0033): only another vendor-carrying plugin may depend on a
+    // vendor-carrying one, so `third_party/` include dirs never enter a native compile closure.
+    for e in &all_edges {
+        let a = by_name[e.from.as_str()];
+        let b = by_name[e.to.as_str()];
+        let a_vendor = model::carries_vendor_code(&a.dir, a.build.as_ref());
+        let b_vendor = model::carries_vendor_code(&b.dir, b.build.as_ref());
+        if let Some(msg) = rules::vendor_edge_reason(a_vendor, b_vendor) {
+            diags.push((
+                SCOPE_TAX,
+                err(
+                    "BRV-TAX-0023",
+                    &a.name,
+                    &a.file,
+                    format!("dep[{}]", e.index),
+                    format!("consumer `{}` → provider `{}`: {msg}", a.name, b.name),
+                    "§3.1/ADR-0033: keep the vendor (copyleft) subgraph closed; if this edge is genuinely wanted, the consumer must compile vendor code itself",
+                ),
+            ));
+        }
+    }
+
     // Budget totals: platform `[[res]]` is capacity, not counted into the consumer-side Σ.
     let mut used_ram = 0i64;
     let mut used_stack = 0i64;

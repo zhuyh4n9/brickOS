@@ -1,0 +1,100 @@
+driver/uboot-mmc — 第三方来源与许可说明(ADR-0026 形态)
+=========================================================
+
+本插件把 u-boot(NXP 下游分支)的 **MMC 协议核心 + 通用 SDHCI 主机**接进 brickOS。
+
+★ ADR-0026 起, **上游原件原样参与编译**(没有改写副本): 下面第一张表列出的文件在
+  `third_party/uboot-imx/`(只读 vendor 树, 逐文件 sha256 锁在
+  `third_party/upstream.lock`, 判据 = `tools/check-third-party-pristine.sh`)。
+  第二张表列出的文件是**本项目代码**(`compat/` = 环境, `glue/` = 对接), 它们不在 vendor 树里。
+
+来源
+----
+  仓库    : https://github.com/nxp-imx/uboot-imx
+  分支    : lf_v2026.04
+  commit  : bb41975aeb4cbd153b49c9fd62da1d64cd65968d
+  许可    : 下列上游文件均标 `SPDX-License-Identifier: GPL-2.0+`(GPL-2.0 或更新版本)
+
+一、参与编译的**上游原件**(逐字节 = 上游; 在 `third_party/uboot-imx/`, 本目录**没有副本**)
+--------------------------------------------------------------------------------------------
+  drivers/mmc/mmc.c          (3352 行, GPL-2.0+; Copyright 2008 Freescale / 2020 NXP / Andy Fleming)
+  drivers/mmc/mmc_write.c    (254 行, GPL-2.0+; 块写与擦除)
+  drivers/mmc/mmc_legacy.c   (260 行, GPL-2.0+; Copyright 2016 Google, Inc / 2020 NXP / Simon Glass)
+                             ★ 本刀**新引入**的 vendor 件(`!DM_MMC` 形态的设备链, 见 §四)
+  drivers/mmc/sdhci.c        (1050 行, GPL-2.0+; Copyright 2011 Marvell Semiconductor Inc.)
+  drivers/mmc/sdhci-adma.c   (87 行, GPL-2.0+; ADMA2 描述符表构造)
+
+  **被 include 但不单独编译**(同样逐字节 = 上游):
+  include/mmc.h              (1093 行, GPL-2.0+)  ← `compat/mmc.h` 转发
+  include/sdhci.h            (546 行,  GPL-2.0+)  ← `compat/sdhci.h` 转发
+  include/memalign.h         (GPL-2.0+)           ← `compat/memalign.h` 转发(★ 本刀新引入)
+  include/linux/kconfig.h    (GPL-2.0)            ← `compat/linux/kconfig.h` 转发(★ 本刀新引入)
+  include/linux/list.h       (GPL-2.0)            ← `compat/linux/list.h` 转发(★ 本刀新引入)
+  include/linux/poison.h     (GPL-2.0)            ← `compat/linux/poison.h` 转发(★ 本刀新引入)
+  include/dm/uclass-id.h     (GPL-2.0)            ← `compat/dm/uclass-id.h` 转发(★ 本刀新引入)
+  include/linux/bitops.h / include/linux/compiler.h / include/linux/build_bug.h
+                             (GPL-2.0; 经上面几份的 include 闭合集被间接读到)
+  Licenses/gpl-2.0.txt                            本目录 `LICENSE.GPL-2.0` 的来源
+
+  ★ 为什么**不** vendor `include/blk.h` / `include/part.h` / `include/cyclic.h`:
+    前者拖进 `<bouncebuf.h>` + `<efi.h>` 整族, 中者拖进 `<u-boot/uuid.h>` + 整族分区表
+    解析器声明, 后者拖进 `<u-boot/schedule.h>` → `<uthread.h>`。本件只用得到其中
+    **一个结构、一个宏、两个原型** ⇒ 按 ADR-0026 D-3 由 `compat/` 给**忠实但最小**的
+    接口类型壳(逐条理由写在那三个文件的文件头)。这是"给环境", 不是"抄上游"。
+
+二、本刀为"原样编译"新 vendor 的上游件(6 件, **已补进 sha256 锁**)
+------------------------------------------------------------------
+  drivers/mmc/mmc_legacy.c     legacy(!DM_MMC)形态的必需件(设备链/devnum/块设备挂钩)
+  include/linux/kconfig.h      CONFIG_IS_ENABLED 那套"未定义当 0"机制的权威实现
+  include/linux/list.h         `mmc_legacy.c` **真的遍历**设备链 ⇒ 需要真实现(不是只为布局)
+  include/linux/poison.h       上面那份的 include 闭合集
+  include/memalign.h           `mmc.c:970` 的 ALLOC_CACHE_ALIGN_BUFFER(栈上 DMA 安全缓冲)
+  include/dm/uclass-id.h       `struct blk_desc::uclass_id` + UCLASS_MMC(零依赖的纯枚举)
+
+三、本项目代码(**无**上游对应物; 在 `compat/` 与 `glue/`, 都以 GPL-2.0-or-later 分发)
+--------------------------------------------------------------------------------------------
+  compat/mmc_env.h            ★ **环境实现**: u-boot 运行环境 → brickOS 的唯一落点
+                              (类型/宏/位运算/64 位除法/格式化打印/log/pr/debug/malloc/
+                               MMIO/cache/DMA/GPIO/errno/★ udelay·get_timer 的中断唤醒)
+  compat/generated/autoconf.h ★ **配置矩阵**(u-boot 真实构建里那个文件的角色; 逐条理由在内)
+  compat/*.h                  u-boot 头名薄壳(28 个)+ 7 个 vendor 转发壳 + 3 个接口类型壳
+                              (blk.h/part.h/cyclic.h)+ std-names/{errno.h,time.h}
+  glue/emmc_internal.h        本项目的内部契约(器件数/擦写区/ioctl 布局/观测面)
+  glue/emmc_bdev.c            PCIe 绑定 + 静态实例表 + IRQ(ISR/bh)+ bdev ops + ioctl
+                              + 三个环境钩子的实现 + 四阶段生命周期钩子
+  glue/emmc_selftest.c        TC-EMMC-001..008(经 bdev 公开面的端到端)
+
+四、与上游的**有意偏离**(完整逐条见 ADAPTER-NOTES.md §6)
+--------------------------------------------------------
+  1. **中断驱动而非轮询**: 上游 `sdhci.c` 用 `udelay()`/`get_timer()` 轮询 `INT_STATUS`;
+     本件把这两个函数实现在环境层为"让出 CPU 到'下一 ms **或**设备中断'", 于是上游的
+     轮询循环自动变成 ISR→bh→信号量的中断驱动等待, **上游一行都不用改**。
+  2. **数据通路可切换**: ADMA2 与 PIO 都可用, 运行期经 ioctl 切**上游 `host->flags` 的
+     `USE_ADMA` 位**; 当前通路在 `br_bdev_geom_t.flags`(`BR_BDEV_F_DMA`/`_PIO`)里报出。
+  3. **`U_BOOT_LEGACY_BLK()` 降级为普通全局对象**: 本件没有 u-boot 的链接段枚举块驱动
+     (glue 直接持有实例)⇒ 宏展开成普通对象, `mmc_legacy.c` 原文仍逐字成立但没人遍历;
+     接口面(`blk_dselect_hwpart`/`blk_select_hwpart_devnum`/`part_init`)由 glue 直接兑现。
+  4. **不做软件分区**: `part_init()` 是显式空实现(v1 暴露裸设备; 分区映射属 SD-9/v1.x)。
+  5. **不调 `mmc_initialize()`**(只调 `mmc_list_init()`): 设备来自 PCIe 枚举而不是 u-boot
+     的静态板级列表; `board_mmc_init()`/`cpu_mmc_init()` 仍以 `__weak` 给出(缺省返回 -1)。
+  6. **未移植**: DM/uclass/设备树/regulator/gpio/clk、SD/UHS/HS200/HS400/tuning、RPMB、
+     BKOPS、SDMA、64 位 ADMA、eMMC 硬件分区(boot/GP)、`CACHE_FLUSH`。
+     (前两组由配置矩阵关闭 ⇒ 上游对应分支不参与编译; 后几条见 ADAPTER-NOTES §6 与
+      `WORKAROUNDS.md` 的 `br-wa-emmc-001`。)
+  7. **出口是 `bdev`**(`br_bdev_ops`)而不是 u-boot 的 `blk-uclass`。
+  8. 为了"上游原样编译"而补的 **5 个 errno 名字**(`ECOMM`/`EBADMSG`/`ENOMEDIUM`/
+     `EMEDIUMTYPE`/`ENOTSUPP`)暂放在 `compat/mmc_env.h`, 数值**逐字取自 u-boot
+     `include/linux/errno.h`**(见 ADAPTER-NOTES §6 偏离 11; 这是欠债)。
+  9. 为不改上游而按**它的**告警口径编译(`[build].cflags` 的 `-Wno-*`; ADR-0026 D-4)。
+
+五、许可
+--------
+  上游文件均标 `SPDX-License-Identifier: GPL-2.0+`, 本插件(上游原件 + 我们的 `compat/`、`glue/`)
+  整体以 **GPL-2.0-or-later** 分发, 全文见同目录 `LICENSE.GPL-2.0`。
+  上游每个文件都带 SPDX 标识; vendor 树**一字不改**(所以标识也逐字节保留)。
+  本插件是本仓库内 **GPL 代码区**的三件之一(与 `fs/uboot-fat`、`fs/uboot-erofs` 一起);
+  `framework/**`、`platform/**`、`core/**` 等保持 WTFPL。**残余风险**(静态链接进同一镜像后,
+  整镜像在分发时仍构成 GPL 组合作品 —— "目录隔离"解决的是代码归属清晰, 不是许可传染)登记在
+  `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。
+
+WORKAROUND(br-wa-tp-001): residual GPL combined-work risk of statically linking this port into the image (registered in WORKAROUNDS.md).

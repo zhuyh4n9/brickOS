@@ -332,10 +332,11 @@ argv = ["bash", "tools/check-workarounds.sh"]
 #   (3) every lock entry is on disk (missing => red); (4) no files outside the lock in the vendor tree (red);
 #   (5) no brick.toml under third_party/; (6) nobody includes third-party headers by **absolute path**
 #   (since ADR-0026 vendor `.c` files **really are compiled** — each brick.toml's `sources` points at
-#   them; vendor headers come in via relative-path **forwarding shells** in adapter/*/compat/).
+#   them; vendor headers come in via relative-path **forwarding shells** in <plugin>/compat/).
 #   * Why it must exist: the previous round repeatedly "edited one line of third-party code to make it
 #     build" (comments/SPDX, include edits, trimming). Prose discipline does not stop it; a hash lock does.
-#   * Its **other half** (ADR-0029): `check-adapter-copies` guards "no vendor source copies under adapter/".
+#   * Its **other half** (ADR-0029/0033): `check-vendor-copies` guards "no vendor source copies
+#     anywhere outside third_party/" (the scan is repository-wide, not keyed to a directory name).
 # check-posix-conformance: gate that iface/posix **matches POSIX** (ADR-0028).
 # * It guards "the POSIX surface APP sees must match real POSIX" — mismatch does not fail the build, it
 #   gives **silent wrong values** (different type widths => different layout), **different flag-bit meanings**
@@ -346,7 +347,7 @@ argv = ["bash", "tools/check-workarounds.sh"]
 # check-mount-ownership: **mount ownership** gate (ADR-0030).
 # * It guards the new split "mounting is decided by APP": FS plugins only register **drivers** (fstype name
 #   -> ops); APP mounts by name via POSIX mount() with the plan in APP's own [[mount]].
-#   Two mechanical criteria: (1) nobody in fs/ or adapter/ calls br_mount_register (no self-mounting);
+#   Two mechanical criteria: (1) nobody in fs/ or driver/ calls br_mount_register (no self-mounting);
 #   (2) [[mount]] appears only in app/ declarations (the plan belongs to the consumer) — plus a positive
 #   criterion: APP's [[mount]] must really be generated into an executable entry (mount_plan_apply).
 #   * Why mechanical: if someone writes br_mount_register in an FS again, functional tests **still mount**,
@@ -366,18 +367,20 @@ name = "check-third-party-pristine"
 argv = ["bash", "tools/check-third-party-pristine.sh"]
 require = ["PASS: third_party is a read-only vendor tree"]
 
-# check-adapter-copies: gate that **adapter/ carries no third-party source copies** (ADR-0026 D-3 / ADR-0029).
+# check-vendor-copies: gate that **no third-party source copies exist outside third_party/**
+#   (ADR-0026 D-3 / ADR-0029 / ADR-0033).
 # * It guards the **other half** of third-party discipline: `check-third-party-pristine` watches the vendor
-#   side ("not one byte of the original changed"), while "**copy upstream into adapter/ and rename**" looks
-#   identical on disk to "writing an adaptation layer" — the previous round's `adapter/uboot-fat/src/
+#   side ("not one byte of the original changed"), while "**copy upstream into a plugin and rename**" looks
+#   identical on disk to "writing an adaptation layer" — an earlier round's `fs/uboot-fat/src/
 #   fat_core.c` had 0.58 line-level similarity to upstream `fs/fat/fat.c`. Criterion (after normalizing
-#   away blank/comment-only/preprocessor lines, using `difflib` line similarity): any adapter .c/.h vs. any
+#   away blank/comment-only/preprocessor lines, using `difflib` line similarity): any .c/.h outside
+#   third_party/ vs. any
 #   vendor .c/.h with **>= 0.30 and both >= 30 lines** => red, unless **named and justified** in the
 #   script (an exemption is bookkeeping, not silencing). Measured: the two pre-migration `src/fat_*.c`
 [[script]]
-name = "check-adapter-copies"
-argv = ["python3", "tools/check-adapter-copies.py"]
-require = ["PASS: adapter has no third-party source copies"]
+name = "check-vendor-copies"
+argv = ["python3", "tools/check-vendor-copies.py"]
+require = ["PASS: no third-party source copies outside third_party/"]
 
 [[script]]
 name = "check-build"
@@ -516,7 +519,7 @@ require   = [
   "\\[DEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[CDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   # * ADR-0021: block-device subclass framework (bdev-core). Second device chain of the storage domain,
-  #   beside CDEVCONF; once the driver joins (adapter/uboot-mmc) its e2e suite gets its own gate.
+  #   beside CDEVCONF; once the driver joins (driver/uboot-mmc) its e2e suite gets its own gate.
   "\\[BDEVCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "\\[IOCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
@@ -584,7 +587,7 @@ require_tags = [
   "TC-EMMC-005", "TC-EMMC-006", "TC-EMMC-007", "TC-EMMC-008",
 ]
 
-# fat-test: end-to-end gate for the **third-party FAT port** (adapter/uboot-fat) (ADR-0022).
+# fat-test: end-to-end gate for the **third-party FAT port** (fs/uboot-fat) (ADR-0022/0033).
 # Criteria = all three volumes mounted + `[FATCONF]` summary all green + 8 cases named individually.
 # It proves "real FAT volumes on real media": volumes built on the host by mkfs.fat + mcopy (external
 # authority tools), with bytes read by the driver matching host-written content byte for byte — a homegrown
@@ -615,7 +618,7 @@ require_tags = [
   "TC-FAT-005", "TC-FAT-006", "TC-FAT-007", "TC-FAT-008",
 ]
 
-# erofs-test: end-to-end gate for the **third-party EROFS port** (adapter/uboot-erofs) (ADR-0022).
+# erofs-test: end-to-end gate for the **third-party EROFS port** (fs/uboot-erofs) (ADR-0022/0033).
 # Criteria = /assets mounted + `[EROFCONF]` summary all green + 8 cases named individually.
 # It proves both read paths really read an image **made by an external tool**:
 #   uncompressed (FLAT_INLINE / FLAT_PLAIN: hello.txt, dir/a.bin, dir/sub/deep.txt)

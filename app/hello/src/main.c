@@ -671,7 +671,7 @@ int hello_init(void)
  * START phase (**the last** start): name and create the APP thread, return 0; the manager then
  * calls `br_sched_run()` and the APP thread takes over MainLoop. Selftests are core's job, not the
  * APP's. Mounting happens here because media-class FS `mount()` needs the block device that
- * adapter/uboot-mmc registers in its own start phase; mount points are sorted by `order` ("/"
+ * driver/uboot-mmc registers in its own start phase; mount points are sorted by `order` ("/"
  * first), else a child has no parent FS.
  */
 int hello_start(void)

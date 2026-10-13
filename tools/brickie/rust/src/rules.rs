@@ -110,7 +110,8 @@ pub fn namespace_subkind(ns: &str) -> Option<&'static str> {
         "framework" => Some("framework"),
         // `driver/` = where this repo's **own** (native) device drivers live; the capability they
         // provide is still `subkind = "io"` -- namespace says where it lives, subkind what it is.
-        // Ported third-party drivers stay in `adapter/` with `api_type = "third_party"`.
+        // A ported driver keeps `subkind = "io"` too: it *is* an I/O driver; only its provenance
+        // and its `api_type` (surface, ADR-0033) differ from a self-written one.
         "driver" => Some("io"),
         "fs" => Some("fs"),
         "service" => Some("service"),
@@ -521,6 +522,24 @@ pub fn dep_edge_violation(
         ));
     }
     api_type_edge_reason(consumer_pt, consumer_api, provider_api, kind)
+}
+
+/// Provenance prohibition (ADR-0033): `third_party/` is a copyleft-isolated vendor tree, so a plugin
+/// that does **not** carry vendor code must not depend on one that does -- the vendor include
+/// directories (reached through the plugin's `../../third_party/**` forwarding entries) would enter
+/// a native plugin's compile closure. Replaces the former `native → third_party` prohibition, which
+/// keyed provenance on the *surface* axis (`api_type`); this one keys on the declared build surface,
+/// so it holds regardless of which namespace the adapter lives in.
+pub fn vendor_edge_reason(
+    consumer_carries_vendor: bool,
+    provider_carries_vendor: bool,
+) -> Option<String> {
+    if provider_carries_vendor && !consumer_carries_vendor {
+        return Some(
+            "provenance prohibition: this plugin declares no vendor code (`third_party/`) in its `[build]`, so it must not depend on a plugin that does -- the vendor include directories would enter its compile closure (ADR-0033)".to_string(),
+        );
+    }
+    None
 }
 
 /// Read-only view of one `[[export]]` (for [`check_export_invariants`]).

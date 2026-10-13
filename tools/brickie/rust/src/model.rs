@@ -1252,6 +1252,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     }
 
     check_export_invariants(&p, d);
+    validate_api_type_surface(&p, d);
 
     if let Some(priv_t) = opt_table(top, "privileged") {
         let level = opt_str(priv_t, "level", &p.name, &file, "privileged", d);
@@ -1381,7 +1382,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
 
 /// `driver/` is where this repo's **own** device drivers live (`BRV-TAX-0021`). Provenance is
 /// already an axis of its own (`api_type`), so the namespace pins it: a ported driver is
-/// `api_type = "third_party"` and belongs in `adapter/`, and a plugin that only *adapts* an
+/// `api_type = "third_party"` (ADR-0033: only when it actually exports a surface of that class --
+/// a fully adapted port exports nothing and is `native`), and a plugin that only *adapts* an
 /// existing runtime is `runtime_adapter`. Error ⇒ exit code 1.
 fn validate_driver_namespace(p: &Plugin, d: &mut Diags) {
     if p.api_type.is_empty() || !rules::is_driver_namespace(&p.name) {
@@ -1398,9 +1400,66 @@ fn validate_driver_namespace(p: &Plugin, d: &mut Diags) {
                 "`driver/` is the namespace of this repo's own device drivers, so `api_type` must be `native`, got `{}`",
                 p.api_type
             ),
-            "§8.3/§3.1: `driver/` = own (native) driver; a ported driver is `api_type = \"third_party\"` and belongs in `adapter/`, an adapter of an existing runtime is `runtime_adapter`",
+            "§8.3/§3.1: `driver/` = the namespace of device drivers; `api_type` classifies the **surface** only -- a port that exports nothing is `native` (its GPL provenance is carried by `license` + `third_party/`, and guarded by BRV-TAX-0023)",
         );
     }
+}
+
+/// `api_type` classifies the plugin's **outward interface surface** (invariant 1 pins
+/// `export.api_iface == [plugin].api_type`), so a surface class needs a surface: declaring
+/// `third_party`/`runtime_adapter` while exporting nothing classifies nothing (`BRV-TAX-0022`,
+/// ADR-0033). A module fully adapted to the native surface declares `native`; provenance is carried
+/// by the `third_party/` tree and the license, not by this field.
+fn validate_api_type_surface(p: &Plugin, d: &mut Diags) {
+    if p.api_type != "third_party" && p.api_type != "runtime_adapter" {
+        return;
+    }
+    if !p.exports.is_empty() {
+        return;
+    }
+    d.coded(
+        "BRV-TAX-0022",
+        Severity::Error,
+        &p.name,
+        &p.file,
+        "plugin.api_type",
+        format!(
+            "`api_type = \"{}\"` classifies the plugin's outward interface surface, but this plugin exports nothing (`[[export]]` is empty), so it classifies nothing",
+            p.api_type
+        ),
+        "§3.1/§8.3: `native` = this repo's own surface (possibly empty); use `third_party`/`runtime_adapter` only when a unit of that class is actually exported",
+    );
+}
+
+/// Whether this plugin's declared build surface reaches into the vendor tree (`third_party/`).
+/// Such a plugin compiles vendor (copyleft) code into the image, which is what makes it
+/// "vendor-carrying" for the provenance guard (`BRV-TAX-0023`, ADR-0033). Declaration-surface only
+/// -- no disk access, and it survives the plugin sitting in any namespace (`driver/`, `fs/`, ...).
+pub fn carries_vendor_code(dir: &str, build: Option<&BuildDecl>) -> bool {
+    let Some(b) = build else { return false };
+    b.sources
+        .iter()
+        .chain(b.includes.iter())
+        .any(|rel| resolves_under_third_party(dir, rel))
+}
+
+/// Resolve `dir` + `rel` (a `[build]` entry relative to the plugin root) and test whether the
+/// result lies under `third_party/`. Glob segments are inert here -- only the prefix matters.
+fn resolves_under_third_party(dir: &str, rel: &str) -> bool {
+    let mut segs: Vec<&str> = Vec::new();
+    if !dir.is_empty() {
+        segs.extend(dir.split('/'));
+    }
+    for seg in rel.split('/') {
+        match seg {
+            "" | "." => {}
+            ".." => {
+                segs.pop();
+            }
+            s => segs.push(s),
+        }
+    }
+    segs.first() == Some(&"third_party")
 }
 
 /// `subkind` derivation and conflicts (§8.4 / `BRV-TAX-0015`; error ⇒ exit code 1).

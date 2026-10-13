@@ -68,18 +68,23 @@ plugins = [
   # * ADR-0021 D-2: generic PCI(e) mechanism (enumeration/BAR allocation). Depends on platform
   #   landed and validated alone here (enumerates sdhci-pci); the driver later consumes it via init.
   "framework/pci-core",
-  # * ADR-0021 D-3: third-party module isolation — eMMC/SDHCI driver ported from u-boot (GPL-2.0+).
-  #   The **only** third_party plugin in the closure; framework and platform stay WTFPL.
-  "adapter/uboot-mmc",
-  # * ADR-0022: this cut's two filesystem ports (same origin/license: nxp-imx u-boot `fs/fat` and
-  #   `fs/erofs`, GPL-2.0+). They **must** be third_party: the toolchain forbids `native`
-  #   `third_party` (rules.rs::api_type_edge_reason), and both need `uboot-mmc`'s start phase (after
-  #   global IRQ enable) before mounting — that order can only be expressed via `[[dep]]
-  #   adapter/uboot-mmc. So eMMC and its filesystems form a **self-contained third-party subgraph**:
-  #     uboot-mmc (block dev) -> uboot-fat (3 writable volumes) / uboot-erofs (1 read-only image)
+  # * ADR-0033: the eMMC/SDHCI driver ported from u-boot (GPL-2.0+). The `adapter/` namespace was
+  #   dissolved -- an adapter now sits **in the namespace of the capability it provides** (this one
+  #   is a device driver ⇒ `driver/`), while the vendor sources stay byte-exact under
+  #   `third_party/uboot-imx/**`. `api_type = "native"` because it exports no interface at all
+  #   (BRV-TAX-0022): the *surface* is native/empty, the *provenance* is GPL and lives on the
+  #   `license` + `third_party/` axes. `driver/` ⇒ native is enforced by BRV-TAX-0021.
+  "driver/uboot-mmc",
+  # * ADR-0022 + ADR-0033: this cut's two filesystem ports (same origin/license: nxp-imx u-boot
+  #   `fs/fat` and `fs/erofs`, GPL-2.0+), now under `fs/` because that is the capability they
+  #   provide. Both need `uboot-mmc`'s start phase (after global IRQ enable) before mounting --
+  #   that order is expressed via `[[dep]] driver/uboot-mmc`. The vendor tree stays self-contained
+  #   and removable: the provenance guard (BRV-TAX-0023) forbids a plugin that carries **no**
+  #   `third_party/` code from depending on one that does, so the GPL subgraph stays closed:
+  #     driver/uboot-mmc (block dev) -> fs/uboot-fat (3 writable volumes) / fs/uboot-erofs (1 read-only image)
   #   The 4 volumes' roles and device names: platform's `[build.target.qemu].extra` and ADR-0022.
-  "adapter/uboot-fat",
-  "adapter/uboot-erofs",
+  "fs/uboot-fat",
+  "fs/uboot-erofs",
   "fs/tmpfs",
   "fs/devfs",
   "driver/uart-pl011",

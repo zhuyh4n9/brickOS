@@ -645,6 +645,12 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     };
     let mut unit_includes: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for u in &units {
+        // Order is semantic, not cosmetic: `-I` is searched left to right, and two ports can each
+        // ship a forwarding shim for the same u-boot header (`<linux/types.h>`, `<asm/io.h>`, ...).
+        // The unit's **own** shims must therefore win over a dependency's. Sorting this list (which
+        // is what used to happen) made the winner an accident of directory naming: it worked only
+        // while every consumer's dir sorted before its provider's (ADR-0033 moved `uboot-mmc` to
+        // `driver/`, which sorts before `fs/`, and u-boot's `__u64`/`le16_to_cpu` got redefined).
         let mut incs: Vec<String> = core_incs.clone();
         if is_core_unit(u) {
             incs.extend(platform_incs.clone());
@@ -658,8 +664,9 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                 }
             }
         }
-        incs.sort();
-        incs.dedup();
+        // Dedup keeping the **first** occurrence (order-preserving), and drop empties.
+        let mut seen: std::collections::HashSet<String> = std::collections::HashSet::new();
+        incs.retain(|i| !i.is_empty() && seen.insert(i.clone()));
         unit_includes.insert(u.name.clone(), incs);
     }
 

@@ -35,7 +35,7 @@ same artifacts and cannot drift apart.
 | `fx/tax-01-app-ability/` `tax-02-native-adapter/` `tax-03-iface-leaf/` | counterexamples for the three hard prohibitions | V-8 |
 | `fx/tax-ok/` | app→interface→ability | V-8 positive case |
 | `fx/export-tax16|17|18|19/` | four violations of export-surface invariants | V-12 |
-| `fx/thirdparty/` | `third_party` without export | V-12 positive case |
+| `fx/thirdparty/` | `third_party` **without** export ⇒ `BRV-TAX-0022` (ADR-0033: a surface class needs a surface) | V-12 negative case |
 | `fx/skin-one/` `fx/skin-multi/` | skin single/multiple providers, equal classification | V-12 positive case |
 | `fx/sqlite/` | app→third-party + adapter with only `kind=type` | V-12 positive cases ②③ |
 | `fx/req-iface/` `fx/req-iface-plain/` | same combination with/without `requires_iface` | V-10 ①③ + V-14 + V-10② control |

@@ -530,22 +530,135 @@ fn driver_namespace_cases(h: &mut Harness) {
     let tree = model::load_tree(&bad);
     h.check(
         tree.diags.items().iter().any(|x| x.code.as_deref() == Some("BRV-TAX-0021")),
-        "driver/: api_type = third_party ⇒ BRV-TAX-0021 (ported drivers belong in adapter/)",
+        "driver/: api_type = third_party ⇒ BRV-TAX-0021 (the namespace pins the surface)",
     );
 
-    // The rule is about the `driver/` namespace only: `adapter/` keeps third_party.
-    let adapter = tmpdir("drv-adapter-ok");
+    // The rule is about the `driver/` namespace only: a third_party plugin elsewhere is untouched.
+    // It exports a surface, so BRV-TAX-0022 does not apply either (ADR-0033).
+    let elsewhere = tmpdir("drv-elsewhere-ok");
     write(
-        &adapter,
-        "adapter/uboot-mmc/brick.toml",
-        "schema = 1\n[plugin]\nname = \"adapter/uboot-mmc\"\nplugin_type = \"ability\"\n\
-         api_type = \"third_party\"\nsubkind = \"io\"\nlang = \"c\"\nphase = \"core\"\n\
-         version = \"0.1.0.0\"\n",
+        &elsewhere,
+        "fs/port/brick.toml",
+        "schema = 1\n[plugin]\nname = \"fs/port\"\nplugin_type = \"ability\"\n\
+         api_type = \"third_party\"\nsubkind = \"fs\"\nlang = \"c\"\nphase = \"core\"\n\
+         version = \"0.1.0.0\"\n\
+         [[export]]\napi_iface = \"third_party\"\nform = \"api\"\nname = \"port\"\n\
+         version = \"0.1.0.0\"\ncompat_gen = 0\nfrozen_state = \"unfrozen\"\n\
+         freeze_state = \"unfrozen\"\nstatus = \"experimental\"\n",
     );
-    let tree = model::load_tree(&adapter);
+    let tree = model::load_tree(&elsewhere);
     h.check(
         !tree.diags.items().iter().any(|x| x.code.as_deref() == Some("BRV-TAX-0021")),
-        "driver/: adapter/third_party is untouched by the rule",
+        "driver/: a third_party plugin outside driver/ is untouched by BRV-TAX-0021",
+    );
+}
+
+/// `api_type` is the *surface* axis (`BRV-TAX-0022`) and provenance has its own guard
+/// (`BRV-TAX-0023`) -- ADR-0033.
+fn vendor_provenance_cases(h: &mut Harness) {
+    // Rule A: a surface class needs a surface (`[[export]]`).
+    let bare = tmpdir("surface-bare");
+    write(
+        &bare,
+        "fs/port/brick.toml",
+        "schema = 1\n[plugin]\nname = \"fs/port\"\nplugin_type = \"ability\"\n\
+         api_type = \"third_party\"\nsubkind = \"fs\"\nlang = \"c\"\nphase = \"core\"\n\
+         version = \"0.1.0.0\"\n",
+    );
+    let tree = model::load_tree(&bare);
+    h.check(
+        tree.diags.items().iter().any(|x| x.code.as_deref() == Some("BRV-TAX-0022")),
+        "surface: api_type=third_party with no [[export]] => BRV-TAX-0022",
+    );
+
+    let with_export = tmpdir("surface-export");
+    write(
+        &with_export,
+        "fs/port/brick.toml",
+        "schema = 1\n[plugin]\nname = \"fs/port\"\nplugin_type = \"ability\"\n\
+         api_type = \"third_party\"\nsubkind = \"fs\"\nlang = \"c\"\nphase = \"core\"\n\
+         version = \"0.1.0.0\"\n\
+         [[export]]\napi_iface = \"third_party\"\nform = \"api\"\nname = \"port\"\n\
+         version = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nstatus = \"experimental\"\n",
+    );
+    let tree = model::load_tree(&with_export);
+    h.check(
+        !tree.diags.items().iter().any(|x| x.code.as_deref() == Some("BRV-TAX-0022")),
+        "surface: third_party WITH an export is not reported",
+    );
+
+    // `native` is the neutral value and is never reported, exports or not.
+    let native = tmpdir("surface-native");
+    write(&native, "fs/port/brick.toml", &ability_toml("fs/port", "fs", "core", ""));
+    let tree = model::load_tree(&native);
+    h.check(
+        !tree.diags.items().iter().any(|x| x.code.as_deref() == Some("BRV-TAX-0022")),
+        "surface: api_type=native needs no surface",
+    );
+
+    // Rule B decision table.
+    h.check(
+        rules::vendor_edge_reason(true, true).is_none(),
+        "vendor: vendor-carrying -> vendor-carrying is legal",
+    );
+    h.check(
+        rules::vendor_edge_reason(false, false).is_none(),
+        "vendor: no vendor code on either side is legal",
+    );
+    h.check(
+        rules::vendor_edge_reason(false, true).is_some(),
+        "vendor: non-vendor -> vendor is a violation",
+    );
+
+    // Rule B end-to-end through `check`.
+    let tree_bad = tmpdir("vendor-edge-bad");
+    write(
+        &tree_bad,
+        "driver/port/brick.toml",
+        "schema = 1\n[plugin]\nname = \"driver/port\"\nplugin_type = \"ability\"\n\
+         api_type = \"native\"\nsubkind = \"io\"\nlang = \"c\"\nphase = \"core\"\n\
+         version = \"0.1.0.0\"\n\
+         [build]\nsources = [\"../../third_party/vendor/x.c\"]\n",
+    );
+    write(
+        &tree_bad,
+        "framework/fw/brick.toml",
+        &ability_toml(
+            "framework/fw",
+            "framework",
+            "core",
+            "[[dep]]\nname = \"driver/port\"\nrange = \">=0.1.0\"\nkind = \"init\"\n",
+        ),
+    );
+    let resp = check::run(&mk_req("check", &tree_bad, json!({"profile": "dev"})));
+    h.check(
+        has_code(&resp, "BRV-TAX-0023"),
+        "vendor: a plugin without `third_party/` in [build] must not depend on one with it",
+    );
+
+    // ... and the same edge is fine when the consumer carries vendor code too.
+    let tree_ok = tmpdir("vendor-edge-ok");
+    write(
+        &tree_ok,
+        "driver/port/brick.toml",
+        "schema = 1\n[plugin]\nname = \"driver/port\"\nplugin_type = \"ability\"\n\
+         api_type = \"native\"\nsubkind = \"io\"\nlang = \"c\"\nphase = \"core\"\n\
+         version = \"0.1.0.0\"\n\
+         [build]\nsources = [\"../../third_party/vendor/x.c\"]\n",
+    );
+    write(
+        &tree_ok,
+        "fs/port2/brick.toml",
+        "schema = 1\n[plugin]\nname = \"fs/port2\"\nplugin_type = \"ability\"\n\
+         api_type = \"native\"\nsubkind = \"fs\"\nlang = \"c\"\nphase = \"core\"\n\
+         version = \"0.1.0.0\"\n\
+         [build]\nsources = [\"../../third_party/vendor/y.c\"]\n\
+         [[dep]]\nname = \"driver/port\"\nrange = \">=0.1.0\"\nkind = \"init\"\n",
+    );
+    let resp = check::run(&mk_req("check", &tree_ok, json!({"profile": "dev"})));
+    h.check(
+        !has_code(&resp, "BRV-TAX-0023"),
+        "vendor: vendor-carrying -> vendor-carrying is not reported",
     );
 }
 
@@ -2088,6 +2201,7 @@ pub fn run() -> i32 {
     export_invariant_cases(&mut h);
     model_cases(&mut h);
     driver_namespace_cases(&mut h);
+    vendor_provenance_cases(&mut h);
     snapshot_and_lock_cases(&mut h);
     plan_cases(&mut h);
     emit_cases(&mut h);

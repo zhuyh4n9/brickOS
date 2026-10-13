@@ -1,0 +1,66 @@
+schema = 1
+
+[plugin]
+name        = "fs/uboot-erofs"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "fs"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "u-boot EROFS 移植(GPL-2.0+): 只读, 未压缩 + LZ4 压缩块, emmc3 挂 /assets"
+license     = "GPL-2.0-or-later"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 16
+notes    = "超级块/映射/解压的静态缓冲(4 KiB 块缓冲 + LZ4 输出缓冲); 运行期 inode 与目录流走 core 堆"
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/bdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "driver/uboot-mmc"
+range = ">=0.1.0"
+kind  = "init"
+
+[selftest]
+
+cases = 8
+
+[build]
+
+cflags = [
+  "-Wno-shadow",
+  "-Wno-pointer-arith",
+  "-Wno-missing-prototypes",
+  "-Wno-sign-compare",
+  "-Wno-unused-parameter",
+  "-Wno-int-to-pointer-cast",
+  "-Wno-pointer-to-int-cast",
+]
+
+sources  = [
+
+  "../../third_party/uboot-imx/fs/erofs/super.c",
+  "../../third_party/uboot-imx/fs/erofs/namei.c",
+  "../../third_party/uboot-imx/fs/erofs/data.c",
+  "../../third_party/uboot-imx/fs/erofs/zmap.c",
+  "../../third_party/uboot-imx/fs/erofs/decompress.c",
+  "../../third_party/uboot-imx/lib/lz4.c",
+
+  "glue/*.c",
+]
+includes = [
+  "compat", "glue",
+
+  "../../third_party/uboot-imx/fs/erofs",
+]

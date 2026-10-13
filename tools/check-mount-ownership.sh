@@ -4,7 +4,7 @@
 # The FS addon only registers a driver (br_fs_driver_register, fstype -> ops); the APP mounts by
 # name with POSIX mount() and declares the plan in brick.toml [[mount]]. Breaking either fails
 # silently, so:
-#   ① br_mount_register must not appear in .c files under fs/** or adapter/** (exemption: vfs-core's
+#   ① br_mount_register must not appear in .c files under fs/** or driver/** (exemption: vfs-core's
 #      own implementation and its conformance suite, which is what it tests);
 #   ② no brick.toml outside app/** contains [[mount]];
 #   ③ if app/ declares [[mount]], brickie must have generated an execution point (mount_plan_apply).
@@ -17,13 +17,13 @@ status=0
 fail() { echo "FAIL: $*" >&2; status=1; }
 pass() { echo "ok   $*"; }
 
-# ---- ① FS addons (and the adapter layer) may not self-mount ----
-hits="$(grep -rn --include='*.c' -E '\bbr_mount_register[[:space:]]*\(' fs adapter 2>/dev/null || true)"
+# ---- ① FS addons (and the drivers) may not self-mount ----
+hits="$(grep -rn --include='*.c' -E '\bbr_mount_register[[:space:]]*\(' fs driver 2>/dev/null || true)"
 if [ -n "$hits" ]; then
-    fail "FS addons/adapter layer still self-mount (should use br_fs_driver_register and let the APP mount):"
+    fail "FS addons/drivers still self-mount (should use br_fs_driver_register and let the APP mount):"
     printf '%s\n' "$hits" | sed 's/^/      /' >&2
 else
-    pass "nobody under fs/ or adapter/ self-mounts (all register drivers instead)"
+    pass "nobody under fs/ or driver/ self-mounts (all register drivers instead)"
 fi
 
 # ---- ② [[mount]] belongs to the APP only ----

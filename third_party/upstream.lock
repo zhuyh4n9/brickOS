@@ -1,0 +1,160 @@
+# third_party/upstream.lock — third_party/ 上游 vendor 树的**只读锁**
+#
+# 纪律(ADR-0025, 布局见 ADR-0033):
+#   * `third_party/<tree>/`(本仓 = `third_party/uboot-imx/`)是**逐字节上游原件**的 vendor 树 ——
+#     **永不编辑**(连注释/README/LICENSE 都不动)。本文件逐文件记 sha256, 是这条纪律的**机械判据**:
+#       bash tools/check-third-party-pristine.sh     # 任一文件被改 ⇒ 红
+#     (本文件自己**不在**被哈希的子树里: 它记的是 `[upstream].vendor_root` 之下的内容。)
+#   * 我们对三方件的**一切改动(移植/兼容/对接/自检)** 都在**能力命名空间**下 ——
+#     是驱动就进 `driver/`, 是文件系统就进 `fs/`(ADR-0033 解散了按来源分的 `adapter/`)。
+#     那是本项目的代码, 可以自由改; 每个这样的插件的 `NOTICE` 记它派生自哪些上游文件。
+#   * 上游换 commit ⇒ 先改这里(连同 third_party/ 的内容), 再跑一次门禁核对。
+#     不许"就地改三方件"来适配 —— 要适配就写进对应能力命名空间下的插件。
+#
+# 复现(取基准与逐文件核对):
+#   curl -sL -o uboot.tar.gz \
+#     https://codeload.github.com/nxp-imx/uboot-imx/tar.gz/bb41975aeb4cbd153b49c9fd62da1d64cd65968d
+#   diff -r <解包目录>/<所取子目录> prototype/third_party/uboot-imx/   # 期望无输出
+
+version = 1
+
+[upstream]
+repo    = "https://github.com/nxp-imx/uboot-imx"
+branch  = "lf_v2026.04"
+commit  = "bb41975aeb4cbd153b49c9fd62da1d64cd65968d"
+snapshot = "codeload tar.gz; 41546 项; 47019609 B"
+snapshot_sha256 = "9d060f32c84b15c1ae2e9903c300d51b3088898b3ad80b95bca74c67ef6a4a52"
+vendor_root = "third_party/uboot-imx"
+why = "三方代码与 brickOS 代码必须隔离: third_party/ 只放上游原件, 一切适配在能力命名空间下的插件(driver/、fs/)中"
+
+[[file]]
+path   = "Licenses/gpl-2.0.txt"
+sha256 = "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+
+[[file]]
+path   = "drivers/mmc/mmc.c"
+sha256 = "4453f8c8144395b80b82ff9c4c1dcd7b1d3d14d0c30f065a7aa242cfe30e55e4"
+
+[[file]]
+path   = "drivers/mmc/mmc_private.h"
+sha256 = "9c0675d669d0ebb96d42cb08e2541f8996ae878a11e910e2d1bbdea3139c53c6"
+
+[[file]]
+path   = "drivers/mmc/mmc_write.c"
+sha256 = "463d7cc6ac592f21c74aa97696a40a91ef426704854b0189a881d169b25064aa"
+
+[[file]]
+path   = "drivers/mmc/sdhci-adma.c"
+sha256 = "c5973e9aa39eb588b8a273bf436003146c080ba5b1a33638671ee51fa00ae1d4"
+
+[[file]]
+path   = "drivers/mmc/sdhci.c"
+sha256 = "2e983bf50298d5fbab51fca81c560e0796b36f1f1b0643fd1367c78b1be44007"
+
+[[file]]
+path   = "fs/erofs/data.c"
+sha256 = "8303bcd93e4601047107fcc4dacec76ddb3995c95f0f23f1525b6eb7bf1a954e"
+
+[[file]]
+path   = "fs/erofs/decompress.c"
+sha256 = "1bd4398d7ebc3fe636a75782641cd5c90f30dbc2b06b902cea28281e9ca31430"
+
+[[file]]
+path   = "fs/erofs/decompress.h"
+sha256 = "61289bd478cc98ecad683b1a06e68225e479c9fcf6c81fe76712bae36ed67720"
+
+[[file]]
+path   = "fs/erofs/erofs_fs.h"
+sha256 = "b18c0f185f448263b5a3643974acd37ac692a031cc8a66bd6c42c71279c21b72"
+
+[[file]]
+path   = "fs/erofs/fs.c"
+sha256 = "7f041ce7b8780f9988d616feb05302f2e4954ea6f89ad540f10dff6603e65489"
+
+[[file]]
+path   = "fs/erofs/internal.h"
+sha256 = "77ec291442290cf4cc547fd20e63638f021d9565101e4c1536108eee242018cd"
+
+[[file]]
+path   = "fs/erofs/namei.c"
+sha256 = "ccfd711dc8fa4961d7a51a018021405de2e966596d5005ceafcad3deb39716a1"
+
+[[file]]
+path   = "fs/erofs/super.c"
+sha256 = "2da6b926388796fd1a7bf4ecfe95fb719878eb0ea14ceaaf8aa851a12f51a5eb"
+
+[[file]]
+path   = "fs/erofs/zmap.c"
+sha256 = "118376a0eba45905909137edef7c503639dfdbca89591054c30a2acb6df9a109"
+
+[[file]]
+path   = "fs/fat/fat.c"
+sha256 = "630268b0b501fd2c7cf25d2fe641997f2d125962d58057860f174af9ad7bce85"
+
+[[file]]
+path   = "fs/fat/fat_write.c"
+sha256 = "304379f5c4b2ae359753af418383c50fcbfb81f12e1a772cdf92109a3fd64429"
+
+[[file]]
+path   = "include/fat.h"
+sha256 = "9c1138a092fb4924e61dad84bed7353f1f114fad06132ced1162dcaea8febe20"
+
+[[file]]
+path   = "include/fs.h"
+sha256 = "061deac591a5355c74c3af728a2493b151c0f7894c6c619f7d6778770cd894b8"
+
+[[file]]
+path   = "include/linux/bitops.h"
+sha256 = "dc046cce84877d2e9bb1a08b98fede3efcc573ac2d6a8696bf4b50094b8ee130"
+
+[[file]]
+path   = "include/linux/build_bug.h"
+sha256 = "a455bb76bec0b3f60651e6d64dc8391ac60bb490ec04f6e1c01a6494e44f7c8d"
+
+[[file]]
+path   = "include/linux/compiler.h"
+sha256 = "bc9d96dcb8d2a812fcaa6a29ff800710cf5b25d1fa5e7a7867fb92337836e174"
+
+[[file]]
+path   = "include/mmc.h"
+sha256 = "1f2e7e5b83beba2f2402acde90f2b0fb73d3696319c7c330025648e68472d0d0"
+
+[[file]]
+path   = "include/sdhci.h"
+sha256 = "07f440ca35101fb714a16cc18198d6a447b8672bc9ada255858eda1f88cd3448"
+
+[[file]]
+path   = "include/u-boot/lz4.h"
+sha256 = "941f70680171d0c8b2fac8d09b2a7381b26eed57c9eaee9d220289522b554933"
+
+[[file]]
+path   = "lib/lz4.c"
+sha256 = "01670ab77447f119826efca6728f56026eafb075be621d79c4a8b9685a260862"
+
+[[file]]
+path   = "include/rtc_def.h"
+sha256 = "f69b5c0f6210d22d1a7c87a98f5540534c560c2dd8c6cc5a13818e8e105a60ee"
+
+[[file]]
+path   = "drivers/mmc/mmc_legacy.c"
+sha256 = "c36fc94684f28d7321db301d2bfbb3167383fea3c9cb84e742cc5619dd34c326"
+
+[[file]]
+path   = "include/dm/uclass-id.h"
+sha256 = "1a28c6145f952b0e738fc89067d51580147a417abdc6c2b7112615bf1f23591b"
+
+[[file]]
+path   = "include/linux/kconfig.h"
+sha256 = "63be846a3c9c8f4256eff5f0c4e1db870c6b32909d00c80267c08c2ce9b90149"
+
+[[file]]
+path   = "include/linux/list.h"
+sha256 = "a4a05d3104d6c8473e0c1e91caf2c01570365a058c1b7a3c64b8a3d6729237fe"
+
+[[file]]
+path   = "include/linux/poison.h"
+sha256 = "1c2110a1cccc38a086b60da92b416b6881703f2163c0d610d01551a0afa95da5"
+
+[[file]]
+path   = "include/memalign.h"
+sha256 = "28500a461ad4504b4a9394c878f72bdd7e5052ce04872cf90bf5ef352a0f4917"

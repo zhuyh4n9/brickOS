@@ -417,10 +417,14 @@ for pair in "export-tax16:BRV-TAX-0016" "export-tax17:BRV-TAX-0017" \
     eq "V-12 $fx exit code 1" "1" "$RC"
     eq "V-12 $fx reports $code" "1" "$(grep -c "$code" "$ERR" || true)"
 done
+# ADR-0033 (`BRV-TAX-0022`): a surface class needs a surface. `fx/thirdparty` is a plugin that
+# declares `api_type = "third_party"` while exporting nothing ⇒ red. (It used to be the *positive*
+# case "third_party has no export"; the ruling reversed it: a fully adapted port exports nothing and
+# is `native`.) The positive counterpart -- third_party **with** a matching export -- is V-12 ③ below.
 W="$(cp_fx thirdparty)"
 run_json "$W" check
-eq "V-12 positive ①: third_party has no export ⇒ exit code 0" "0" "$RC"
-eqj "V-12 positive ① errors=0" "$JQ_RESP" "data.summary.errors" "0"
+eq "V-12 ① third_party with no export ⇒ exit code 1" "1" "$RC"
+eq "V-12 ① reports BRV-TAX-0022" "1" "$(grep -c 'BRV-TAX-0022' "$ERR" || true)"
 W="$(cp_fx skin-one)"
 run_json "$W" check
 eq "V-12 positive ②: skin single provider ⇒ exit code 0" "0" "$RC"

@@ -1,11 +1,14 @@
 # 0026 — 三方件: `third_party/` 只放逐字节上游原件, 一切适配在 `adapter/`
 
+> ★ **布局已被 [ADR-0033](0033-dissolve-adapter-namespace.md) 取代**: `adapter/` 解散, 三方适配层按
+> **能力**归入 `driver/`/`fs/`; `third_party/` 的地位与全部判据不变。下文已就地更新为新路径。
+
 > 状态: **已全部落地(3/3)**。vendor 树 + 只读锁 + 门禁已就位; `uboot-erofs`(本 ADR 落地)、
 > `uboot-fat` 与 `uboot-mmc`(见 [ADR-0029](0029-fat-mmc-vendor-pristine.md))三件都已是
 > "上游原件**直接参与编译** + 适配在 `adapter/<插件>/{compat,glue}`"的形态,
 > **没有任何改写副本**(`src/` 层在三个插件里都已删除)。
 > ★ 本 ADR 的 D-5 只守了 vendor 侧; ADR-0029 补上了另一半:"adapter/ 里不许夹带副本"由
-> `tools/check-adapter-copies.py` 机械执法。
+> `tools/check-vendor-copies.py` 机械执法。
 > 取代: ADR-0024 的"`src/` ↔ `adapter/` 都放在插件目录里"那套结构。
 > 前置: ADR-0021 D-3(三方隔离)、ADR-0022 D-1(两件 FS 为何是三方件)、
 > ADR-0023(三方件最小改动)、ADR-0024(隔离的机械判据)。
@@ -32,7 +35,7 @@ ADR-0024 把每个三方插件拆成 `src/`(上游派生)与 `adapter/`(本项�
 (`fs/erofs/...`、`drivers/mmc/...`、`lib/lz4.c`、`include/...`)。**永不编辑** ——
 连注释、README、LICENSE 都不动。
 
-`adapter/third-party-upstream.lock` 逐文件记 sha256, 是这条纪律的**机械判据**。
+`third_party/upstream.lock` 逐文件记 sha256, 是这条纪律的**机械判据**。
 
 ### D-2 一切适配在 `adapter/`(prototype 顶级目录)
 
@@ -91,14 +94,14 @@ prototype/
 
 > ★ **补上的另一半(ADR-0029)**: 上面六条盯的是 **vendor 侧**("原件一个字节都没被改")。
 > 但"把上游抄一份到 `adapter/` 再改名/改缩进"在文件系统上与"写适配层"长得一模一样 ——
-> 正是上一轮 `adapter/uboot-fat/src/fat_core.c`(与上游 `fs/fat/fat.c` 行级相似度 0.58)的
-> 来历。于是 ADR-0029 补了 `tools/check-adapter-copies.py`: 归一化(去空行/纯注释/
+> 正是上一轮 `fs/uboot-fat/src/fat_core.c`(与上游 `fs/fat/fat.c` 行级相似度 0.58)的
+> 来历。于是 ADR-0029 补了 `tools/check-vendor-copies.py`: 归一化(去空行/纯注释/
 > 预处理行)后算 adapter × vendor 的 `difflib` 行级相似度, **≥ 0.30 且双方 ≥ 30 行 ⇒ 红**
 > (具名豁免要写理由)。判据 = 全树最高相似度远低于阈值, 而迁移前的两个 `src/fat_*.c` 报红。
 
 ## 3. 落地(erofs): 上游原样编译
 
-`adapter/uboot-erofs/brick.toml` 的 sources 是上游的
+`fs/uboot-erofs/brick.toml` 的 sources 是上游的
 `fs/erofs/{super,namei,data,zmap,decompress}.c` + `lib/lz4.c`(注意源码**没有副本**)。
 
 **证据**(不是"看起来像"):
@@ -141,13 +144,13 @@ ADR 取代: 那时把"改写过的上游"放在插件目录里, 仍然混淆了"
 |---|---|
 | `uboot-fat` 迁到新架构 | ✅ **已做**(ADR-0029 §3)。当时探查的结论被证实: 上游 `fs/fat/fat_write.c` 是**单编译单元**(它 `#include "fat.c"`)⇒ 只编一个文件; 依赖面 ~21 个 u-boot 头名 + `struct blk_desc`/`disk_partition` + `blk_dread/blk_dwrite` + malloc/printf/assert/strdup/rand。`compat/fat_compat.h`(照抄上游 `include/fat.h` 的 631 行)已删除, 改为 `compat/fat.h` 的**相对路径转发壳** |
 | `uboot-mmc` 迁到新架构 | ✅ **已做**(ADR-0029 §4)。当时判"**难**"的两条前提都被证伪: ① u-boot 的 MMC 栈有**非 DM(`!DM_MMC`)形态**可用(`mmc_legacy.c` + `struct mmc_config.ops` + `add_sdhci()`), 不必搬 DM/uclass; ② "中断驱动 vs 上游 `udelay()` 轮询"不是二选一 —— 环境层把 `udelay()/get_timer()` 实现成"让出 CPU 到**下一 ms 或设备中断**", 上游的轮询循环**自动**变成中断驱动的等待(上游零改动)。SD/UHS/HS200/HS400/tuning/RPMB 那一族不启用即不进镜像 |
-| `adapter/uboot-{erofs,fat,mmc}/ADAPTER-NOTES.md` 与 `README.md` | ✅ **已重写**(三件都按新三角描述; 旧 `src/` 结构一律标注"已被 ADR-0026 取代") |
-| `adapter/uboot-erofs/compat/` 里那些"壳"头的路径写法 | **保留**(相对路径), 并推广到 fat/mmc: 因为 brickie 的 `-I` **按字典序**排, 指向 `third_party/include` 的 `-I` 会**盖住** `compat/` 里的同名壳(`<fs.h>`/`<part.h>` 被解析到 u-boot 的真头 → 它还要 `rtc_def.h` 之类)。相对路径没有这个歧义 |
+| `{driver/uboot-mmc,fs/uboot-fat,fs/uboot-erofs}/ADAPTER-NOTES.md` 与 `README.md` | ✅ **已重写**(三件都按新三角描述; 旧 `src/` 结构一律标注"已被 ADR-0026 取代") |
+| `fs/uboot-erofs/compat/` 里那些"壳"头的路径写法 | **保留**(相对路径), 并推广到 fat/mmc: 因为 brickie 的 `-I` **按字典序**排, 指向 `third_party/include` 的 `-I` 会**盖住** `compat/` 里的同名壳(`<fs.h>`/`<part.h>` 被解析到 u-boot 的真头 → 它还要 `rtc_def.h` 之类)。相对路径没有这个歧义 |
 
 ## 6. 判据
 
 - `bash tools/check-third-party-pristine.sh`(注册于 `tests/gates.toml`)—— vendor 逐字节 = 上游;
-- `python3 tools/check-adapter-copies.py`(注册于 `tests/gates.toml`, ADR-0029)——
+- `python3 tools/check-vendor-copies.py`(注册于 `tests/gates.toml`, ADR-0029)——
   adapter 里没有三方件源码副本;
 - `bash tools/check-errno.sh`(errno 单一真值, 见 ADR-0027);
 - `brickie test` 全绿 —— 其中 `erofs-test` / `fat-test` / `emmc-test` 是"上游原样编译且真的

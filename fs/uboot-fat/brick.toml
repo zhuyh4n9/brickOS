@@ -1,0 +1,57 @@
+schema = 1
+
+[plugin]
+name        = "fs/uboot-fat"
+plugin_type = "ability"
+api_type    = "native"
+subkind     = "fs"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "u-boot FAT 原样编译(GPL-2.0+): FAT12/16/32 读写齐, 三卷 emmc0/1/2 挂 /fat12 /fat16 /fat32"
+license     = "GPL-2.0-or-later"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 80
+notes    = "上游块缓冲(每卷 512 B 引导扇区 + 上游按需 3 KiB FAT 缓存)+ 瞬态 inode 与目录流走 core 堆"
+
+[[dep]]
+name  = "framework/vfs-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "framework/bdev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "driver/uboot-mmc"
+range  = ">=0.1.0"
+kind  = "init"
+
+[selftest]
+
+cases = 8
+
+[build]
+
+cflags = [
+  "-Wno-shadow",
+  "-Wno-pointer-arith",
+  "-Wno-missing-prototypes",
+  "-Wno-sign-compare",
+  "-Wno-unused-parameter",
+  "-Wno-int-to-pointer-cast",
+  "-Wno-pointer-to-int-cast",
+]
+
+sources  = [
+
+  "../../third_party/uboot-imx/fs/fat/fat_write.c",
+
+  "glue/*.c",
+]
+includes = ["compat", "glue"]

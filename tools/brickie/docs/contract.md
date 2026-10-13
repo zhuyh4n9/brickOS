@@ -90,7 +90,7 @@ written per §9's "new defects with unassigned codes are registered in §9"; bac
 | `BRV-BLD-0011` | error | An executed step failed (compile / link / script exited non-zero) — detected by L5, code assigned by core along with the step |
 | `BRV-BLD-0012` | error | A regex in `tests/gates.toml` exceeds the **subset** core supports (reported, not silently unmatched) |
 | `BRV-BLD-0013` | info | A generated artifact belongs to a plugin **not in the closure** ⇒ skipped (not a defect, but it must be visible; exit code unchanged) |
-| `BRV-BLD-0014` | info | A generated artifact under `build/gen/` whose **owner cannot be identified** (stale leftovers after a plugin rename/removal) ⇒ skipped. Keeping it becomes a "ghost plugin": a plugin with the same symbol in the tree is registered twice, and `start` executes a second time ⇒ shutdown at boot (measured: `rc=-28` after renaming `third_party/uboot-mmc` → `adapter/uboot-mmc`) |
+| `BRV-BLD-0014` | info | A generated artifact under `build/gen/` whose **owner cannot be identified** (stale leftovers after a plugin rename/removal) ⇒ skipped. Keeping it becomes a "ghost plugin": a plugin with the same symbol in the tree is registered twice, and `start` executes a second time ⇒ shutdown at boot (measured: `rc=-28` after renaming `third_party/uboot-mmc` → `driver/uboot-mmc`) |
 
 ## 4. File Ownership (§9.1.1 write-path discipline)
 

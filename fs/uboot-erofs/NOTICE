@@ -1,0 +1,86 @@
+fs/uboot-erofs — 第三方来源与许可说明
+==============================================
+
+本插件把 u-boot(NXP 下游分支)的 **EROFS 只读文件系统 + LZ4 解码器** 接进 brickOS。
+架构口径是 ADR-0026: 上游 `.c` **原样参与编译, 没有副本**(在 `third_party/uboot-imx/**`
+下, 逐字节未改动); 本目录的 `compat/` 与 `glue/` 是**本项目**写的适配层。
+适配层的设计史与边界判据见 `ADAPTER-NOTES.md`, 结构与用例见 `README.md`。
+
+来源
+----
+  仓库    : https://github.com/nxp-imx/uboot-imx
+  分支    : lf_v2026.04
+  commit  : bb41975aeb4cbd153b49c9fd62da1d64cd65968d
+  只读锁  : `third_party/upstream.lock`(逐文件 sha256)
+  判据    : `bash tools/check-third-party-pristine.sh`(vendor 只读 + 逐字节哈希)
+
+上游文件 → 它在构建里怎么参与
+-----------------------------
+★ 上游源码**没有副本**: `brick.toml` 的 `[build].sources` 直接写 `third_party` 路径
+  (`../../third_party/uboot-imx/...`)。下表左边是 vendor 路径(相对
+  `third_party/uboot-imx/`), 右边是参与方式。
+
+  fs/erofs/super.c        (GPL-2.0+)   → 直接编: 超级块解析 / 特性位校验 / 设备表
+  fs/erofs/namei.c        (GPL-2.0+)   → 直接编: inode 解析(COMPACT/EXTENDED)+ 目录块内查找 + 路径走查
+  fs/erofs/data.c         (GPL-2.0+)   → 直接编: 平面/chunk 映射、读路径 `erofs_pread()`
+  fs/erofs/zmap.c         (GPL-2.0+)   → 直接编: 压缩映射迭代(紧凑/非紧凑索引、big pcluster、lookbehind)
+  fs/erofs/decompress.c   (GPL-2.0+)   → 直接编: 解压分派 + LZ4 分支(INTERLACED/SHIFTED)
+  lib/lz4.c               (**GPL 2.0+ OR BSD-2-Clause**, Copyright 2011-2016 Yann Collet)
+                                       → 直接编: `LZ4_decompress_safe` / `LZ4_decompress_safe_partial`
+  fs/erofs/erofs_fs.h     (**GPL-2.0-only OR Apache-2.0**) → 编: on-disk 格式(上游 .c 直接 include)
+  fs/erofs/internal.h     (GPL-2.0+)   → 编: 上游内部契约(`sbi` / `erofs_blksiz()` / `iloc()` / 各原型)
+  fs/erofs/decompress.h   (GPL-2.0+)   → 编: `struct z_erofs_decompress_req`
+  include/u-boot/lz4.h    (GPL-2.0+)   → 编: 经 `compat/u-boot/lz4.h` 的**相对路径转发壳**引用
+  fs/erofs/fs.c           (GPL-2.0+)   → **不编**: u-boot 的 blk/DM 胶水层(认识 `blk_desc`/`fs_devread`);
+                                         它的职责(块层 + 目录流)由本项目 `glue/` 接管
+
+  上游源码 `#include` 的一批 u-boot 头名(`linux/compat.h`、`linux/stat.h`、`linux/bug.h`、
+  `linux/log2.h`、`asm/unaligned.h`、`inttypes.h` …)由本项目 `compat/` 用**同名薄壳**兑现,
+  不引入上游头文件。
+
+适配件(本项目代码) vs 上游件
+----------------------------
+  compat/   本项目代码 —— u-boot 运行环境。`erofs_env.h` 是唯一实现(类型/宏/日志/字符串/
+            分配器/errno 接地); 其余每个文件是**一个 u-boot 头名的薄壳**, 只 include
+            `erofs_env.h`。特例: `compat/u-boot/lz4.h` 是一条**相对路径转发**到 vendor 原件
+            (`include/u-boot/lz4.h`), 不复制内容。**compat/ 里没有上游源码副本。**
+  glue/     本项目代码 —— `erofs_glue.h`(适配层内部契约) / `erofs_vfs.c`(块层 shim +
+            VFS 四层 ops + 全局 `sbi` 的存储 + on-disk 布局 `_Static_assert`) /
+            `erofs_selftest.c`(`TC-EROFS-*`)。**glue/ 里没有上游源码副本。**
+  brick.toml   项目声明面(取代上游 `fs/erofs/Kconfig` + `Makefile` 的构建与特性声明)
+
+  符号口径: 被编译的上游原件保持**上游的链接形态**(如 `LZ4_decompress_safe*` 是全局符号;
+  旧 `src/` 那版把它们收成 `static` 的改写已随 ADR-0026 取消)。本插件另导出 `uboot_erofs_*`
+  生命周期/自检钩子, 以及上游 `internal.h` 要求实现者的 `erofs_dev_read` / `erofs_blk_read`。
+
+未移植 / 不支持(逐条理由)
+--------------------------
+  fs/erofs/fs.c        : u-boot 的 blk/DM 胶水; 块层与目录流由 `glue/erofs_vfs.c` 接管。
+  xattr 内容面         : 本件的 VFS 面没有 xattr。vendor 的 `fs/erofs/` 里**没有 xattr.c**
+                         (上游 `internal.h` 只声明了 `erofs_getxattr`/`erofs_listxattr`, 在本插件
+                         的编译集里没有实现者/调用者); 但 xattr 的**长度**仍参与 inline 数据定位
+                         —— `namei.c` 调 `erofs_fs.h` 的 `erofs_xattr_ibody_size()`。
+  DEFLATE(zlib)        : `decompress.c` 的该分支在 `#if IS_ENABLED(CONFIG_ZLIB)` 内, 而
+                         `compat/erofs_env.h` 给 `CONFIG_ZLIB 0` ⇒ 不编译; 非 LZ4 算法在
+                         `z_erofs_decompress()` 处 `-EOPNOTSUPP`。
+  多设备(extra devices): 本件一个卷(`emmc3`)。上游 `erofs_init_devices()` 拿盘上的
+                         `extra_devices` 与 `sbi.extra_devices` 比对, 而全局 `sbi` 零初始化
+                         (本件从不设它)⇒ 有 device table 的卷在挂载期得 `-EINVAL`。
+
+许可
+----
+  上游文件除两处外均标 `SPDX-License-Identifier: GPL-2.0+`(GPL-2.0 或更新版本):
+    - `fs/erofs/erofs_fs.h` : **GPL-2.0-only OR Apache-2.0**
+                              (Copyright (C) 2017-2018 HUAWEI, Inc.; 2021 Alibaba Cloud)
+    - `lib/lz4.c`           : **GPL 2.0+ OR BSD-2-Clause**
+                              (Copyright (C) 2011-2016, Yann Collet; BSD 全文随上游源码保留在
+                               `third_party/uboot-imx/lib/lz4.c` 的文件头)
+  本插件整体以 **GPL-2.0-or-later** 分发(全文见同目录 `LICENSE.GPL-2.0`)。
+  ★ `compat/` 与 `glue/` 是**本项目代码**, 不是上游派生件 —— 因此不存在"每个 `src/` 文件都带
+    与上游一致的 SPDX 标识"这回事(本插件没有 `src/`, 也没有上游副本); 但两目录与上游原件
+    同插件分发、静态链进同一镜像 ⇒ 整插件按 GPL-2.0-or-later 走。
+  本插件与 `driver/uboot-mmc` 是整个 brickOS 原型树内的 GPL 代码; `framework/**`、
+  `platform/**` 等保持 WTFPL。残余风险(静态链接后整镜像构成 GPL 组合作品)登记在
+  `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`。
+
+WORKAROUND(br-wa-tp-001): residual GPL combined-work risk of statically linking this port into the image (registered in WORKAROUNDS.md).

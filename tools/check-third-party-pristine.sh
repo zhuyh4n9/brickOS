@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 # brickOS prototype — gate for third_party being a read-only vendor tree.
 #
-# third_party/ holds byte-for-byte upstream originals (pinned to a u-boot commit); every change we
-# make (porting / compat / glue / self-checks) lives under adapter/. Five mechanical criteria:
-#   (1) adapter/third-party-upstream.lock has repo / branch / commit / snapshot_sha256;
+# third_party/<tree>/ holds byte-for-byte upstream originals (pinned to a u-boot commit); every
+# change we make (porting / compat / glue / self-checks) is written by us as an ordinary plugin under
+# the **capability** namespace it serves (ADR-0033: `driver/uboot-mmc`, `fs/uboot-fat`,
+# `fs/uboot-erofs`). Five mechanical criteria:
+#   (1) third_party/upstream.lock has repo / branch / commit / snapshot_sha256;
 #   (2) every file under third_party/uboot-imx/** matches its lock sha256, and (3) every lock entry
 #       exists on disk (an extra file in the vendor tree is red as well);
 #   (4) no brick.toml under third_party/ — third-party code is not a brickOS plugin;
 #   (5) no code outside third_party/ includes third-party headers by absolute path; vendor headers
-#       are reached through relative-path forwarding shims under adapter/*/compat/.
+#       are reached through relative-path forwarding shims under <plugin>/compat/.
 # Usage: bash tools/check-third-party-pristine.sh; exit 0 pass, 1 violations, 2 environment error.
 
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
 
-LOCK="adapter/third-party-upstream.lock"
+LOCK="third_party/upstream.lock"
 VENDOR="third_party/uboot-imx"
 
 [ -f "$LOCK" ] || { echo "FAIL: lock file not found: $LOCK" >&2; exit 2; }
@@ -65,7 +67,7 @@ for row in "${want[@]}"; do
         fail "third-party file was modified: $f"
         echo "       lock $h" >&2
         echo "       got  $got" >&2
-        echo "       => third_party/ is a **read-only** vendor tree; to adapt, change the port files under adapter/" >&2
+        echo "       => third_party/ is a **read-only** vendor tree; to adapt, change the port files in the plugin that carries them (driver/, fs/)" >&2
     fi
 done
 if [ "$status" -eq 0 ]; then
@@ -88,22 +90,22 @@ fi
 
 # ---- (4) no plugins under third_party ----
 if find third_party -name brick.toml -print -quit | grep -q .; then
-    fail "brick.toml found under third_party/ — third-party code is not a brickOS plugin (our plugins live in adapter/)"
+    fail "brick.toml found under third_party/ — third-party code is not a brickOS plugin (our plugins carry it and live in the capability namespaces: driver/, fs/)"
 else
-    pass "no brick.toml under third_party/ (all plugins are in adapter/)"
+    pass "no brick.toml under third_party/ (vendor code is carried by plugins in the capability namespaces)"
 fi
 
 # ---- (5) third-party headers must not be taken by absolute path ----
 hits="$(grep -rn --include='*.c' --include='*.h' -E '^[[:space:]]*#[[:space:]]*include[[:space:]]*[<"]third_party/' \
             --exclude-dir=build --exclude-dir=.git --exclude-dir=tools . 2>/dev/null || true)"
 if [ -n "$hits" ]; then
-    fail "code outside third_party/ includes third-party headers by absolute path (to use a vendor header, add a relative-path forwarding shim under adapter/*/compat/)"
+    fail "code outside third_party/ includes third-party headers by absolute path (to use a vendor header, add a relative-path forwarding shim under <plugin>/compat/ -- see ADR-0033)"
     printf '%s\n' "$hits" | sed 's/^/      /' >&2
 else
-    pass "nobody includes third-party headers by absolute path (vendor headers only via adapter/*/compat/ shims)"
+    pass "nobody includes third-party headers by absolute path (vendor headers only via <plugin>/compat/ shims)"
 fi
 
 if [ "$status" -eq 0 ]; then
-    echo "PASS: third_party is a read-only vendor tree (byte-identical to upstream / no extra files / no plugins / headers only via adapter shims)"
+    echo "PASS: third_party is a read-only vendor tree (byte-identical to upstream / no extra files / no plugins / headers only via plugin compat shims)"
 fi
 exit "$status"

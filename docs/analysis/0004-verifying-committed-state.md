@@ -7,7 +7,7 @@
 ## 1. 为什么主工作树的"绿"会骗人
 
 实例(本轮真实发生): `HEAD` 缺两个文件 —— `third_party/uboot-imx/include/rtc_def.h`
-(fat 的适配壳要 include 它)与 `tools/check-adapter-copies.py`(门禁已注册但脚本没提交)。
+(fat 的适配壳要 include 它)与 `tools/check-vendor-copies.py`(门禁已注册但脚本没提交)。
 主工作树里它们就躺在磁盘上(别人的未提交产物), 所以：
 
 - `brickie build` **绿**;
@@ -37,7 +37,7 @@ make tools && make tools-core          # 先造出 build/host/**(见 §3.3)
 | # | 不一致 | 主树为什么看不出来 |
 |---|---|---|
 | 1 | 缺 `third_party/uboot-imx/include/rtc_def.h` ⇒ **fat 编不过** | 该文件在工作树里存在(未提交) |
-| 2 | `tests/gates.toml` 注册了 `check-adapter-copies`, 而**脚本未提交** ⇒ 门禁必红 | 脚本在工作树里存在(未提交) |
+| 2 | `tests/gates.toml` 注册了 `check-vendor-copies`, 而**脚本未提交** ⇒ 门禁必红 | 脚本在工作树里存在(未提交) |
 | 3 | `prebuilts/README.md` 的指纹表是**旧值**(种子已重发) | 工作树里 README 也被改过, 看起来"有人会修" |
 
 ## 3. 三个坑(都不明显, 记下来省一次踩)

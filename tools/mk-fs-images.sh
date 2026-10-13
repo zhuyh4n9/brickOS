@@ -9,7 +9,7 @@
 #   emmc0   2 MiB  FAT12 -> /fat12      emmc1  16 MiB  FAT16 -> /fat16
 #   emmc2  32 MiB  FAT32 -> /fat32      emmc3  16 MiB  EROFS + 512 KiB scratch at tail -> /assets
 # Cross-piece invariants: each FAT volume's label/contents are the constants in
-# adapter/uboot-fat/src/fat_internal.h; the EROFS image is <= 1 MiB (asserted) and the scratch area
+# fs/uboot-fat/glue/fat_glue.h; the EROFS image is <= 1 MiB (asserted) and the scratch area
 # starts at LBA 4096 / 2 MiB (BR_EMMC_SCRATCH_LBA), so overlap is computed, not conventional; the
 # four card names/order come from the platform plugin's [build.target.qemu].extra.
 # Usage: tools/mk-fs-images.sh [<output dir>]     default = build

@@ -278,7 +278,7 @@ keys are sorted with `BTreeMap`; edges are built only from **declared** `[[dep]]
 
 > R-1…R-16 were registered by the **first cut**; S-1…S-17 by the **second cut** (solver/check/iface); **S-B1…S-B6** by the **third cut** (build family `build.rs`).
 > ⚠ The `BRV-D8` code table has **no BUILD family** ⇒ this cut opens `BRV-BLD-0001..0014` (see `docs/contract.md` §3); the boundary discipline wording is in contract §9 R-13.
-> 0013/0014 are the **two info entries added later**: "attribution clear but not selected" and "no plugin of this name is left in the tree" — stale leftovers get compiled into **ghost plugins** by the `build/gen/**` glob, which in measurement stopped `plugin_manager` at startup (`third_party/uboot-mmc` renamed to `adapter/uboot-mmc`).
+> 0013/0014 are the **two info entries added later**: "attribution clear but not selected" and "no plugin of this name is left in the tree" — stale leftovers get compiled into **ghost plugins** by the `build/gen/**` glob, which in measurement stopped `plugin_manager` at startup (`third_party/uboot-mmc` renamed to `driver/uboot-mmc`).
 
 | # | Gap | This implementation | Suggestion |
 |---|---|---|---|
