@@ -1,15 +1,12 @@
-"""L5 → L0/L1/L2 process boundary: calls ``brickie-core`` / ``brickie-gen``, JSON over stdio.
+"""L5 -> L0/L1/L2 process boundary: calls ``brickie-core`` / ``brickie-gen``, JSON over stdio.
 
-Contract in ``docs/contract.md`` §1/§2/§6: both native tools share **one envelope** — one line of JSON
-read from stdin, one line of JSON written to stdout. The Python side only "turns a request into JSON and JSON
-back into objects"; all decisions and error codes live on the native side (§8 allowed/forbidden boundary).
+Both native tools share one envelope: one JSON line from stdin, one JSON line to stdout. Python only
+turns requests into JSON and JSON back into objects; all decisions and codes live natively.
 
-Two invariants:
-
-* **Process exit code**: a native tool's process exit code is always 0 (protocol handled); the business exit code is in the
-  response's ``exit_code``. Non-zero only means "the tool itself failed" ⇒ always raise :class:`NativeError` (L5 exit code 2).
-* **Protocol version**: the response ``protocol`` must equal this package's ``PROTOCOL``; a mismatch is a failed handshake ⇒
-  ``NativeError`` (code ``BRV-PROTO-0001``), **no automatic migration** (contract §2).
+* A native tool's process exit code is always 0 (protocol handled); the business exit code is in the
+  response's ``exit_code``. Non-zero means the tool itself failed -> ``NativeError`` (L5 code 2).
+* The response ``protocol`` must equal this package's ``PROTOCOL``; a mismatch is a failed handshake
+  -> ``NativeError`` with code ``BRV-PROTO-0001``, no automatic migration.
 """
 
 from __future__ import annotations
@@ -25,10 +22,8 @@ from .hostinfo import host_bin_dir, prebuilts_bin_dir
 
 
 class NativeError(RuntimeError):
-    """Native-side failure (protocol failure / environment error / tool fault) — maps to BRV-D9 exit code 2.
-
-    ``code`` is an optional BRV diagnostic code (e.g. ``BRV-PROTO-0001`` for a protocol mismatch); ``None``
-    when unclassifiable (contract §2: codeless diagnostics use ``code: null``).
+    """Native-side failure (protocol / environment / tool fault); maps to BRV-D9 exit code 2.
+    ``code`` is an optional BRV diagnostic code, ``None`` when unclassifiable (``code: null``).
     """
 
     def __init__(self, message: str, code: str | None = None) -> None:
@@ -36,15 +31,9 @@ class NativeError(RuntimeError):
         self.code = code
 
 
-# ------------------------------------------------------------------ path anchors
-
-
 def tool_root() -> Path:
-    """The tool's own root directory (``tools/brickie/``).
-
-    Source-tree layout: ``tools/brickie/python/brickie/native.py`` → three levels up.
-    In the entry-ELF form it is the unpacked payload root (still has ``python/``, ``templates/``).
-    Overridable via ``BRICKIE_TOOL_ROOT`` (installed layout / test cases).
+    """The tool's own root directory (``tools/brickie/``); in the entry ELF this is the unpacked
+    payload root (still has ``python/``, ``templates/``). Overridable via ``BRICKIE_TOOL_ROOT``.
     """
     override = os.environ.get("BRICKIE_TOOL_ROOT")
     if override:
@@ -53,10 +42,7 @@ def tool_root() -> Path:
 
 
 def repo_root() -> Path:
-    """Repo root (anchor for ``build/host/...`` and ``prebuilts/seed/...``).
-
-    Source-tree layout: the parent of ``tools/brickie/``. Overridable via ``BRICKIE_REPO_ROOT``.
-    """
+    """Repo root, anchor of ``build/host/...`` and ``prebuilts/seed/...``; ``BRICKIE_REPO_ROOT`` wins."""
     override = os.environ.get("BRICKIE_REPO_ROOT")
     if override:
         return Path(override).expanduser().resolve()
@@ -68,8 +54,6 @@ def templates_root() -> Path:
     return tool_root() / "templates"
 
 
-# ------------------------------------------------------------------ binary lookup
-
 _CORE_ENV = "BRICKIE_CORE"
 _GEN_ENV = "BRICKIE_GEN"
 
@@ -79,16 +63,10 @@ def _is_executable(path: Path) -> bool:
 
 
 def _find_tool(name: str, env_var: str) -> Path:
-    """Locate a native tool in a **fixed order**: freshly built, then seed, then environment.
-
-      1. ``$BRICKIE_CORE`` / ``$BRICKIE_GEN`` explicit override (test cases / entry-ELF payload);
-      2. ``build/host/<host-arch>/<host-os>/bin/<name>`` — this build's output;
-      3. ``build/host/*/*/bin/<name>`` — fallback when the host triple disagrees;
-      4. ``prebuilts/seed/brickie/<host-arch>/<host-os>/bin/<name>`` — bootstrap seed;
-      5. ``prebuilts/seed/brickie/*/*/bin/<name>`` — same fallback;
-      6. an executable of the same name on ``PATH``.
-
-    Local builds win over seeds: after editing sources, ``make tools`` must not be shadowed by an old seed.
+    """Locate a native tool in a fixed order: the ``$BRICKIE_CORE``/``$BRICKIE_GEN`` override, this
+    build's ``build/host/<arch>/<os>/bin/<name>``, a ``*/*`` host fallback, the
+    ``prebuilts/seed/brickie`` seed (and its ``*/*`` fallback), then ``PATH``. Local builds win over
+    seeds, so ``make tools`` output is never shadowed by an old seed.
     """
     exe = f"{name}.exe" if os.name == "nt" else name
 
@@ -130,9 +108,6 @@ def gen_binary() -> Path:
     return _find_tool("brickie-gen", _GEN_ENV)
 
 
-# ------------------------------------------------------------------ request/response
-
-
 def make_request(
     command: str,
     root: Path,
@@ -141,10 +116,8 @@ def make_request(
     *,
     templates: Path | None = None,
 ) -> dict:
-    """Assemble the standard request envelope (contract §2).
-
-    ``templates_root`` is a first-cut legacy top-level field: per §6 it now belongs only to ``brickie-gen render``'s
-    ``args``; it is kept at top level for native implementations not yet migrated to the new contract (extras ignored).
+    """Assemble the standard request envelope; ``templates_root`` is a legacy top-level field kept
+    for native implementations not yet migrated (extras are ignored).
     """
     request: dict = {
         "protocol": PROTOCOL,
@@ -236,10 +209,8 @@ def call_gen(request: dict) -> dict:
 
 
 def render(artifacts: list[dict], *, root: Path) -> dict:
-    """Ask ``brickie-gen render`` to render the plan's ``artifacts`` into file contents (contract §6).
-
-    ``artifacts[i] = {path, template, vars}`` (``kind`` is ignored); response ``files``
-    = ``[{path, kind:"rendered", content, mode}]``.
+    """Ask ``brickie-gen render`` for file contents: ``artifacts[i] = {path, template, vars}``;
+    the response ``files`` is ``[{path, kind:"rendered", content, mode}]`` (``kind`` is ignored).
     """
     request = make_request(
         "render",

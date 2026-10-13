@@ -1,58 +1,31 @@
 /*
- * service/backtrace — stack backtrace capture service (implementation)
- *
- * Design source: `docs/5-debug/5-01-debug.md` §3:
- *   "capture set: register set, full TCB set + **per-thread stacks**, trace ring …" and
- *   "host tool: offline analysis (thread timing against trace, fault decode, **stack backtrace**)".
- * Responsibility boundary: **target only captures, host symbolizes**
- *   (addr2line/llvm-symbolizer turns pc into function+offset) — this file neither carries nor
- *   generates a symbol table (that needs two-pass linking, a v1.x "offline decode"
- *   optimization); see README for the ownership boundary.
- *
- * Build-time precondition: the whole image is compiled with `-fno-omit-frame-pointer`
- *   (Makefile CFLAGS) — otherwise -O2 drops x29 as an ordinary register and the
- *   chain breaks at frame 0. This is the plugin's only build-time precondition.
- *
- * aarch64 frame chain convention (AAPCS64):
- *   prologue `stp x29, x30, [sp, #-16]!; mov x29, sp` ⇒ x29 points at the save area,
- *   `[x29]` = caller's x29 (previous frame fp), `[x29 + 8]` = return address (next pc).
- *   Stack grows down ⇒ fp walking up the chain is **strictly increasing**
- *   (also the main loop guard).
- *
- * ISR safety: `br_bt_*` are all **thread-only**; the fault-site capture entry takes
- *   fp/pc from the exception frame (passed by the platform fault dispatch path) and
- *   never raises an exception itself.
+ * Backtrace capture implementation. The target captures the fp chain; the host symbolizes offline.
+ * Build precondition: the whole image is compiled with -fno-omit-frame-pointer, else -O2 drops x29
+ * as an ordinary register and the chain breaks at frame 0.
+ * aarch64 (AAPCS64) frame chain: prologue `stp x29, x30, [sp, #-16]!; mov x29, sp` => [x29] is the
+ * caller's fp and [x29 + 8] the return address; the stack grows down, so fp strictly increases.
+ * br_bt_* are thread-only; the fault-site entry takes fp/pc from the exception frame and never
+ * raises an exception itself.
  */
 #include <br/debug/br_bt.h>
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 
-#include "backtrace_internal.h"    /* internal view for self-test (see that header; unused in production) */
+#include "backtrace_internal.h"
 
-/* Conservative fallback window when bounds are unknown: lower bound = walker's current SP,
- * upper bound = SP + 1 MiB. The real boot stack is only tens of KiB (link.ld); 1 MiB covers
- * every caller frame while blocking the worst case of "fp smashed to a far wild value". */
+/* Bounds-unknown fallback: lower bound = walker's SP, upper bound = SP + 1 MiB. The boot stack is
+ * only tens of KiB, so 1 MiB covers every caller frame yet stops an fp smashed to a wild value. */
 #define BT_FALLBACK_STACK_BYTES  (1024u * 1024u)
 
-/* =====================================================================
- * Internal state
- * ===================================================================== */
-
 static br_uintptr_t s_stack_bottom;
-static br_uintptr_t s_stack_top;     /* s_stack_top == 0 ⇒ bounds unset */
+static br_uintptr_t s_stack_top;     /* s_stack_top == 0 => bounds unset */
 
 static br_bt_frame_t s_last[BR_BT_MAX_FRAMES];   /* last capture snapshot */
 static br_u32        s_last_count;
 
-/* =====================================================================
- * Helpers
- * ===================================================================== */
-
-/* Stack range for this walk: prefer platform-set bounds; else fall back to
- * "current SP .. +1 MiB". The fallback lower bound is the walker's own SP — lower
- * than any walked caller frame (stack grows down), so it never kills a legit frame;
- * the cost is that the upper bound is only this fixed conservative window. */
+/* Stack range for this walk: platform-set bounds if present, else the fallback window. The fallback
+ * lower bound is the walker's own SP, below every caller frame, so it never kills a legit frame. */
 static void bt_bounds(br_uintptr_t *lo, br_uintptr_t *hi)
 {
     if (s_stack_top != 0u) {
@@ -67,17 +40,10 @@ static void bt_bounds(br_uintptr_t *lo, br_uintptr_t *hi)
     *hi = sp + (br_uintptr_t)BT_FALLBACK_STACK_BYTES;
 }
 
-/* =====================================================================
- * Frame chain walk
- * ===================================================================== */
-
 /*
- * Walk the fp chain from (fp, pc). Frame 0 = the passed (pc, fp).
- * Guards (all must pass before dereferencing fp; never read before check):
- *   ① fp != 0; ② fp 16-byte aligned (AAPCS64); ③ within the stack range;
- *   ④ strictly increasing (next_fp > fp; stop on loop/break); ⑤ depth < BR_BT_MAX_DEPTH;
- *   ⑥ frames < max.
- * Returns the number of frames written to out.
+ * Walk the fp chain from (fp, pc); frame 0 is the passed pair. All guards are checked before any
+ * dereference: fp != 0, 16-byte aligned, inside the stack range, strictly increasing,
+ * depth < BR_BT_MAX_DEPTH, frames < max. Returns the number of frames written to out.
  */
 static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
                       br_bt_frame_t *out, br_u32 max)
@@ -93,7 +59,6 @@ static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
     br_u32 depth = 0u;
 
     while ((depth < max) && (depth < BR_BT_MAX_DEPTH)) {
-        /* ---- guards before dereference ---- */
         if (fp == 0u) {
             break;
         }
@@ -109,9 +74,7 @@ static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
 
         out[depth].pc    = pc;
         out[depth].fp    = fp;
-        /* sp: fp + 16 is the "canonical position" in the stack frame (past the save
-         * area), not the real SP — the real SP varies within the function body and
-         * has no portable meaning. */
+        /* fp + 16 is the canonical frame slot (past the save area), not the real SP. */
         out[depth].sp    = fp + 16u;
         out[depth].depth = depth;
         depth++;
@@ -120,13 +83,13 @@ static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
             break;
         }
 
-        /* ---- read previous frame's fp and return address; volatile prevents compiler caching (stack may change) ---- */
+        /* volatile: the stack may change under us */
         const volatile br_uintptr_t *frame = (const volatile br_uintptr_t *)fp;
         const br_uintptr_t next_fp = frame[0];
         const br_uintptr_t ret_pc  = frame[1];
 
         if (next_fp <= fp) {
-            break;   /* chain must increase strictly, else it is a loop or smashed */
+            break;   /* loop or smashed chain */
         }
         fp = next_fp;
         pc = ret_pc;
@@ -135,7 +98,7 @@ static br_u32 bt_walk(br_uintptr_t fp, br_uintptr_t pc,
     return depth;
 }
 
-/* Walk + store the static snapshot (reused by br_bt_last/dump to avoid re-walking) */
+/* Walk and store the static snapshot reused by br_bt_last/br_bt_print (avoids re-walking). */
 static br_u32 bt_snapshot(br_uintptr_t fp, br_uintptr_t pc,
                           br_bt_frame_t *out, br_u32 max)
 {
@@ -151,15 +114,8 @@ static br_u32 bt_snapshot(br_uintptr_t fp, br_uintptr_t pc,
     return n;
 }
 
-/* =====================================================================
- * Public capture surface
- * ===================================================================== */
-
-/* noinline is a **semantic requirement**, not an optimization hint: frame 0's fp must
- * be this function's own frame, else `mov x29` reads the caller's frame and the chain
- * loses a level (probe criterion of TC-DBG-010).
- * The header declaration does not carry the attribute, so it is only on the definition
- * (ABI unchanged). */
+/* noinline is a semantic requirement: frame 0's fp must be this function's own frame, else the
+ * chain loses a level (TC-DBG-010). The header carries no attribute, so the ABI is unchanged. */
 __attribute__((noinline))
 br_u32 br_bt_capture(br_bt_frame_t *out, br_u32 max)
 {
@@ -172,9 +128,7 @@ br_u32 br_bt_capture(br_bt_frame_t *out, br_u32 max)
     __asm__ volatile("mov %0, x29" : "=r"(fp));
     __asm__ volatile("mov %0, x30" : "=r"(lr));
 
-    /* Frame 0's pc is lr = "next instruction after returning to the caller" — the same
-     * convention as the other chain frames (which store return addresses), so no +/- 4
-     * correction is needed. */
+    /* Frame 0's pc is lr, the same return-address convention as the chain frames: no correction. */
     return bt_snapshot(fp, lr, out, max);
 }
 
@@ -198,10 +152,6 @@ int br_bt_set_stack_bounds(br_uintptr_t bottom, br_uintptr_t top)
     return 0;
 }
 
-/* =====================================================================
- * Presentation
- * ===================================================================== */
-
 static void bt_emit(const br_bt_frame_t *fr, br_u32 n)
 {
     for (br_u32 i = 0u; i < n; i++) {
@@ -213,7 +163,7 @@ static void bt_emit(const br_bt_frame_t *fr, br_u32 n)
 
 br_u32 br_bt_print(void)
 {
-    /* Write the static snapshot directly: capture already stores one, saving a 512 B intermediate buffer */
+    /* Capture straight into the snapshot, saving a 512 B intermediate buffer */
     const br_u32 n = br_bt_capture(s_last, BR_BT_MAX_FRAMES);
     bt_emit(s_last, n);
     return n;
@@ -238,9 +188,8 @@ const br_bt_frame_t *br_bt_last(void)
 
 int br_bt_init(void)
 {
-    /* Clear the "last capture" snapshot. ★ Do not touch the stack bounds: the platform
-     * sets them in early_init from linker-script symbols, and init is the LATE phase —
-     * clearing them here would wipe that setup. */
+    /* Clear the last-capture snapshot; the stack bounds are set elsewhere and must survive this
+     * LATE-phase init. */
     for (br_u32 i = 0u; i < BR_BT_MAX_FRAMES; i++) {
         s_last[i].pc    = 0u;
         s_last[i].fp    = 0u;
@@ -249,28 +198,11 @@ int br_bt_init(void)
     }
     s_last_count = 0u;
 
-    /* No cross-plugin trace event name registration: the declaration surface has no
-     * service/backtrace → service/trace [[dep]] edge (already noted in br_bt.h's init
-     * comment); a cross-plugin call would introduce an undeclared dependency.
-     *
-     * ⚠ Stack bounds stay **unchanged**: br_bt.h's init comment says "clear state and
-     *    reset the stack range", but set_stack_bounds' comment in the same header says
-     *    platform calls it in **early_init**, and init is LATE — clearing here would wipe
-     *    that setup. This implementation does not clear bounds (the self-consistent
-     *    reading of the two comments); the wording conflict was reported upstream. */
     return 0;
 }
 
-/* =====================================================================
- * Internal view for self-test
- *
- * See `src/backtrace_internal.h`: these two exist **only** for `backtrace_selftest.c` —
- * a case narrows the stack bounds temporarily and **restores them exactly**, and
- * "restore to unset (0/0)" cannot be expressed via the public
- * `br_bt_set_stack_bounds` (it rejects invalid values). ★ They read/write the
- * **production state itself**, with no copy kept elsewhere, else the case would be
- * changing a copy's bounds.
- * ===================================================================== */
+/* Accessors for backtrace_selftest.c only: they touch the production state itself (no copy), so a
+ * case can restore bounds to "unset" (0/0), which br_bt_set_stack_bounds rejects. */
 
 void br_bt_internal_read_stack_bounds(br_uintptr_t *bottom, br_uintptr_t *top)
 {
@@ -289,31 +221,25 @@ void br_bt_internal_restore_stack_bounds(br_uintptr_t bottom, br_uintptr_t top)
 }
 
 
-/* =====================================================================
- * Plugin lifecycle hooks (name = symbol_prefix(short) + phase; referenced by the
- * generated `build/gen/service/backtrace/plugin_desc.c`; design 1-01 §9 / 3-05 §2)
- * Self-declared prototypes satisfy -Wmissing-prototypes (hook names come from the
- * generator, not the public header or [[export]]).
- * ===================================================================== */
+/* Plugin lifecycle hooks referenced by the generated plugin_desc.c. Self-declared prototypes
+ * satisfy -Wmissing-prototypes (the hook names come from the generator, not the public header). */
 int backtrace_early_init(void);
 int backtrace_init(void);
 int backtrace_start(void);
 
-/* EARLY phase: no action (the platform sets stack bounds in its early_init; this plugin does not touch them). */
+/* EARLY phase: no action; the platform sets the stack bounds in its own early_init. */
 int backtrace_early_init(void)
 {
     return 0;
 }
 
-/* LATE phase (Service category ⇒ ② completion point): delegating to the existing init. */
+/* LATE phase: delegates to br_bt_init(). */
 int backtrace_init(void)
 {
     return br_bt_init();
 }
 
-/* START phase: this service has nothing to do once interrupts/threads are available. */
 int backtrace_start(void)
 {
     return 0;
 }
-

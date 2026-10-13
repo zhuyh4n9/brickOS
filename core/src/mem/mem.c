@@ -1,36 +1,16 @@
 /*
- * brickOS prototype v0.1.0 — memory subsystem implementation (mem.c):
- *   br_mem_init claims three pools + TLSF wrapper (accounting/redzone/poison) + contig pool + DMA + observation
+ * Memory subsystem: br_mem_init() claims the heap/contig/page pools from the platform region
+ * table (core does not own RAM, it only claims by BR_MM_KIND_*) and builds TLSF + page bitmap
+ * + contig/DMA pools; the TLSF wrapper adds accounting, redzone, poison and owner tags.
  *
- * Authoritative design: `docs/3-os-core/3-01-core-api-list.md` §6 (br-mem group, 11 functions),
- *   §14 CA-6 (dma_addr identity) / CA-7 (contig as its own pool) / CA-8 (page pool);
- *   `docs/3-os-core/3-04-memory.md` (the three pools come from the platform region table; §3
- *   boot sequence = core.init, before the EARLY phase);
- *   `docs/5-debug/5-01-debug.md` §4 (redzone / freelist poisoning / double-free interception;
- *   the cheap v1.x form of per-plugin ownership accounting = an owner tag).
- *
- * Pool input is the region table in `br_mm.h`: core does not own RAM, it only claims by
- * BR_MM_KIND_* (§6 text: "the platform region table splits RAM into heap / contig pool / page pool").
- *
- * User block layout (frozen 32 B block header; the br_heap_block_t observation contract
- * fields all live inside it):
- *
+ * User block layout (frozen 32 B header; the br_heap_block_t fields live inside it):
  *   TLSF block: [ TLSF header 16B | ------------------- payload ------------------- ]
- *   payload: [ mem header 32B | user area n | redzone (0xA5) | footer 8B magic2|size copy ]
- *   user pointer = mem header + 32 = TLSF payload + 32
- *
- *   redzone length = (8 - n % 8) % 8 + BR_MEM_REDZONE (minimum 8 B) — after padding to an
- *   8-byte boundary it keeps another 8 B, so the most typical single-byte overflow ("write one
- *   byte past the user area") always lands in the redzone (the TC-LEAK-UNIT check).
- *   TLSF request = 32 + ALIGN8(n) + 8 + 8.
- *
- * Why the header does not store block (actual footprint): 32 B cannot hold full-width
- *   {magic,size,block,owner,caller,seq,state,next}; block follows uniquely from n
- *   (see mem_req) and can be queried any time via `br_tlsf_block_size()`, so storing it twice
- *   would only add a second source of truth.
- *
- * Hot-path rule (§6's "v1 has only a global heap"): br_malloc/br_free do NOT log;
- * logging is only for errors and the init summary (prefix "mem: ").
+ *   payload:    [ mem header 32B | user area n | redzone 0xA5 | footer 8B magic2|size ]
+ *   user pointer = mem header + 32
+ * Redzone length = (8 - n % 8) % 8 + BR_MEM_REDZONE, so a one-byte overflow past the user area
+ * always lands in the redzone. TLSF request = 32 + ALIGN8(n) + 8 + 8. The header does not store
+ * the block footprint: it follows from n and is queryable via br_tlsf_block_size().
+ * br_malloc/br_free do not log (hot path); only errors and the init summary do, prefix "mem: ".
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -40,9 +20,7 @@
 
 #include "tlsf_internal.h"
 
-/* =====================================================================
- * Constants and block layout
- * ===================================================================== */
+/* ---- constants and block layout ---- */
 
 #define BR_MEM_HDR        32u    /* mem-layer block header */
 #define BR_MEM_FOOTER     8u     /* trailing magic2 + size copy */
@@ -58,12 +36,12 @@
 
 #define BR_OWNER_MAX      16u
 
-/* static node bound for the contig / DMA pools (prototype: small pools allocated at run time, no growth). */
+/* static node bound for the contig / DMA pools (small pools, no growth). */
 #define BR_CONTIG_MAX_FREE   64u
 #define BR_CONTIG_MAX_ALLOC  64u
 
 typedef struct br_mem_hdr {
-    br_u32              magic;   /* [0x00] header magic (corruption ⇒ canary) */
+    br_u32              magic;   /* [0x00] header magic (corruption => canary) */
     br_u32              size;    /* [0x04] user-requested bytes (< 4 GiB; pools are far smaller) */
     br_u32              seq;     /* [0x08] allocation sequence (monotonic; walk sort key) */
     br_u16              owner;   /* [0x0C] ownership tag */
@@ -76,14 +54,12 @@ _Static_assert(sizeof(br_mem_hdr_t) == BR_MEM_HDR, "mem block header must be 32 
 
 typedef struct br_mem_footer {
     br_u32 magic;   /* footer magic */
-    br_u32 size;    /* size copy (mismatch with header ⇒ header/footer stomped) */
+    br_u32 size;    /* size copy (mismatch with header => header/footer stomped) */
 } br_mem_footer_t;
 
 _Static_assert(sizeof(br_mem_footer_t) == BR_MEM_FOOTER, "footer sentinel must be 8 B");
 
-/* =====================================================================
- * Global state (single instance in the prototype; no threads in v1 ⇒ no locking)
- * ===================================================================== */
+/* ---- global state (single instance; no threads in v1, so no locking) ---- */
 
 static struct {
     br_bool          attempted;   /* idempotent: first call's result is cached, never rebuilt */
@@ -91,7 +67,7 @@ static struct {
     br_bool          ready;
     br_bool          have_dma;
     br_mem_layout_t  layout;
-    br_mem_hdr_t    *live;        /* live-block singly linked list (push-front ⇒ seq decreasing) */
+    br_mem_hdr_t    *live;        /* live-block singly linked list (push-front => seq decreasing) */
     br_u32           seq;
     br_size_t        high_water;
     br_u32           n_alloc;
@@ -106,16 +82,14 @@ static struct {
     br_u32           contig_size_mismatch;
 } s_mem;
 
-/* Owner tag table (the v1.x form from 5-01 §4: tags only, no budget/enforcement). */
+/* Owner tag table (tags only, no budget/enforcement). */
 static struct {
     const char *name;
 } s_owners[BR_OWNER_MAX];
 static br_u32     s_owner_n;
 static br_owner_t s_owner_cur = BR_OWNER_NONE;
 
-/* =====================================================================
- * Small helpers (no libc)
- * ===================================================================== */
+/* ---- small helpers (no libc) ---- */
 
 static br_bool mem_str_eq(const char *a, const char *b)
 {
@@ -142,7 +116,6 @@ static br_size_t mem_align8(br_size_t v)
     return (v + 7u) & ~(br_size_t)7u;
 }
 
-/* TLSF request = block header 32 + user area padded to 8 B + redzone 8 + footer 8. */
 static br_size_t mem_req(br_size_t n)
 {
     return (br_size_t)BR_MEM_HDR + mem_align8(n) +
@@ -154,7 +127,6 @@ static br_u8 *mem_user(const br_mem_hdr_t *h)
     return (br_u8 *)(void *)h + BR_MEM_HDR;
 }
 
-/* redzone = [user + n, user + ALIGN8(n) + 8); the footer sentinel follows immediately. */
 static br_u8 *mem_rz_begin(const br_mem_hdr_t *h)
 {
     return mem_user(h) + h->size;
@@ -165,7 +137,7 @@ static br_u8 *mem_foot_at(const br_mem_hdr_t *h)
     return mem_user(h) + mem_align8(h->size) + (br_size_t)BR_MEM_REDZONE;
 }
 
-/* user pointer → block header (validity: inside the heap pool, aligned to BR_MALLOC_ALIGN); invalid ⇒ NULL. */
+/* user pointer -> header (inside heap pool, BR_MALLOC_ALIGN-aligned); invalid => NULL. */
 static br_mem_hdr_t *mem_hdr_of_user(void *p)
 {
     if ((p == BR_NULL) || (s_mem.ready == BR_FALSE)) {
@@ -205,16 +177,11 @@ static void mem_unlink_live(br_mem_hdr_t *h)
     }
 }
 
-/* =====================================================================
- * contig pool (CA-7): sorted free list + first fit + aligned hole split back to the list + merge on free
- *
- * Record table vs free list: the allocation record (addr/block/user_size) is the only source
- * of truth at free time. The size argument of `br_mem_free_contig(ptr,size)` is untrustworthy —
- * the caller remembers it, and a wrong value would punch holes in the pool; so the
- * implementation always returns the block size from the record and only counts a mismatch as
- * an error (the "static partitioning" spirit of 3-04 §2: the free boundary is not decided
- * ad hoc by the caller).
- * ===================================================================== */
+/* ---- contig pool: sorted free list + first fit + aligned hole split + merge on free ----
+ * The allocation record is the only source of truth at free time: the size argument of
+ * br_mem_free_contig(ptr,size) is the caller's memory, so the record's block size is always
+ * used and a mismatch is only counted as an error.
+ */
 
 typedef struct {
     br_uintptr_t addr;
@@ -265,7 +232,7 @@ static void contig_pool_init(br_contig_pool_t *cp, br_uintptr_t base, br_size_t 
     }
 }
 
-/* insert a free node in ascending address order (no merging; contig_merge does that in one pass). */
+/* insert a free node in ascending address order (contig_merge merges in one pass). */
 static br_bool contig_free_insert(br_contig_pool_t *cp, br_uintptr_t addr, br_size_t size)
 {
     if (cp->n_free >= (br_u32)BR_CONTIG_MAX_FREE) {
@@ -349,7 +316,6 @@ static int contig_alloc(br_contig_pool_t *cp, br_size_t size, br_size_t align, v
         cp->allocs[cp->n_alloc].size  = size;
         cp->n_alloc++;
 
-        /* unlink that free node, then return the front/back holes as separate nodes. */
         for (br_u32 k = i; (k + 1u) < cp->n_free; k++) {
             cp->free_list[k] = cp->free_list[k + 1u];
         }
@@ -409,9 +375,7 @@ static void contig_free(br_contig_pool_t *cp, void *ptr, br_size_t size)
     contig_merge(cp);
 }
 
-/* =====================================================================
- * Owner tags (③ accounting contract; the v1.x form of 5-01 §4)
- * ===================================================================== */
+/* ---- owner tags ---- */
 
 br_owner_t br_heap_owner_register(const char *name)
 {
@@ -451,9 +415,7 @@ br_owner_t br_heap_owner_get(void)
     return s_owner_cur;
 }
 
-/* =====================================================================
- * Byte heap (TLSF wrapper; §6)
- * ===================================================================== */
+/* ---- byte heap (TLSF wrapper) ---- */
 
 void *br_malloc(br_size_t n)
 {
@@ -469,7 +431,7 @@ void *br_malloc(br_size_t n)
     br_u8 *h = (br_u8 *)br_tlsf_alloc(mem_req(n));
     if (h == BR_NULL) {
         s_mem.n_fail++;
-        return BR_NULL;   /* hot path: no logging (§6; counters suffice to locate it) */
+        return BR_NULL;   /* hot path: no logging; counters suffice to locate it */
     }
 
     br_mem_hdr_t *hdr = (br_mem_hdr_t *)(void *)h;
@@ -505,7 +467,7 @@ void *br_malloc(br_size_t n)
 void br_free(void *p)
 {
     if (p == BR_NULL) {
-        return;   /* §6: free(NULL) is a no-op */
+        return;   /* free(NULL) is a no-op */
     }
     if (s_mem.ready == BR_FALSE) {
         s_mem.bad_free++;
@@ -519,9 +481,8 @@ void br_free(void *p)
         return;
     }
 
-    /* ★ the free list stores the block TAIL (tlsf.c), so the block header is still readable
-     *   after free ⇒ this can tell "already freed" (state=DEAD, header not reused) from a
-     *   wild pointer, and count double_free. */
+    /* The free list stores the block tail (tlsf.c), so a freed header stays readable: this
+     * tells "already freed" (state=DEAD) from a wild pointer. */
     if ((h->magic == BR_MEM_MAGIC) && (h->state == BR_MEM_ST_DEAD)) {
         s_mem.double_free++;
         return;
@@ -569,7 +530,7 @@ void br_free(void *p)
 void *br_calloc(br_size_t n, br_size_t size)
 {
     if ((n != 0u) && (size > (~(br_size_t)0u) / n)) {
-        s_mem.n_fail++;   /* multiplication overflow: the §6 error face (avoid "computed small, then wrote out of bounds") */
+        s_mem.n_fail++;   /* multiplication overflow: avoid "computed small, then wrote out of bounds" */
         return BR_NULL;
     }
     const br_size_t total = n * size;
@@ -621,8 +582,7 @@ int br_heap_usage(br_size_t *used, br_size_t *total)
     if ((used == BR_NULL) || (total == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
-    /* same projection as used/total in br_heap_stats_get: both ask the TLSF counters directly,
-     * with no second cache — otherwise "accounting" and "reality" would drift apart. */
+    /* Ask TLSF directly; no second cache, so accounting cannot drift from reality. */
     *used  = br_tlsf_used();
     *total = s_mem.layout.heap.size;
     return BR_OK;
@@ -663,10 +623,8 @@ int br_heap_walk(br_heap_walk_fn fn, void *ctx)
         return BR_ERR(EINVAL);
     }
 
-    /* the live list is push-front ⇒ seq strictly decreases from head to tail. In-place reversal
-     * gives ascending order; flip back after the callbacks.
-     * ★ constraint: the callback must NOT allocate/free (it would mutate the list); read-only
-     * observation (as memleak uses it). */
+    /* The live list is push-front, so seq decreases head to tail; reverse in place for ascending
+     * order, flip back after. The callback must not allocate/free (it would mutate the list). */
     br_mem_hdr_t *prev = BR_NULL;
     br_mem_hdr_t *cur  = s_mem.live;
     while (cur != BR_NULL) {
@@ -741,9 +699,7 @@ br_u32 br_heap_check(void)
     return v;
 }
 
-/* =====================================================================
- * contig pool / page pool / DMA (§6; CA-6/CA-7/CA-8)
- * ===================================================================== */
+/* ---- contig pool / page pool / DMA ---- */
 
 int br_mem_alloc_contig(br_size_t size, br_size_t align, void **out)
 {
@@ -784,10 +740,8 @@ int br_dma_alloc(br_size_t n, br_u32 attrs, br_dma_buf_t *out)
         return BR_ERR(EINVAL);
     }
 
-    /* v1 is 4 KiB aligned by default (CA-6 identity mapping + device-side consistency);
-     * setting BR_DMA_F_ALIGN4K does not change the path. BR_DMA_F_CACHED is a non-goal in v1
-     * (§6 header comment: uncached by default is the conservative choice for device
-     * consistency), deliberately ignored rather than rejected — append-only attribute bits. */
+    /* 4 KiB aligned by default (identity mapping + device consistency); BR_DMA_F_ALIGN4K does
+     * not change the path, BR_DMA_F_CACHED is ignored (uncached is the conservative default). */
     void *v = BR_NULL;
     const int rc = contig_alloc(&s_dma, n, (br_size_t)BR_PAGE_SIZE, &v);
     if (rc != BR_OK) {
@@ -818,8 +772,8 @@ int br_dma_free(const br_dma_buf_t *b)
         return BR_ERR(EINVAL);
     }
     if (b->dma_addr != (br_uintptr_t)b->vaddr) {
-        /* CA-6 consistency check: the two addresses are two views of one source of truth; if
-         * they disagree, do not return the block (returning the wrong address would damage the pool). */
+        /* The two addresses are two views of one source of truth: on mismatch do not return
+         * the block (the wrong address would damage the pool). */
         br_log_error("mem: dma_free address mismatch vaddr=%p dma=0x%lx",
                      b->vaddr, (unsigned long)b->dma_addr);
         return BR_ERR(EINVAL);
@@ -828,9 +782,7 @@ int br_dma_free(const br_dma_buf_t *b)
     return BR_OK;
 }
 
-/* =====================================================================
- * Init (§6 / 3-04 §3): claim regions, build TLSF + page bitmap + contig/DMA pools
- * ===================================================================== */
+/* ---- init: claim regions, build TLSF + page bitmap + contig/DMA pools ---- */
 
 static int mem_claim_pools(void)
 {
@@ -846,8 +798,7 @@ static int mem_claim_pools(void)
         if (r == BR_NULL) {
             continue;
         }
-        /* region granularity check: a pool must be 4 KiB aligned and a 4 KiB multiple
-         * (the BR_PAGE_SIZE rule of 3-01 §6; br_mm_region_add already blocks once, this is the second line). */
+        /* Pool must be 4 KiB aligned and a 4 KiB multiple (br_mm_region_add blocks once). */
         if (((r->base & (br_uintptr_t)(BR_PAGE_SIZE - 1u)) != 0u) ||
             (r->size == 0u) ||
             ((r->size & (br_size_t)(BR_PAGE_SIZE - 1u)) != 0u)) {
@@ -894,7 +845,7 @@ static int mem_claim_pools(void)
         return BR_ERR(ENODEV);
     }
 
-    /* pools too small: each gets its own lower bound, so we never build a pool that can never allocate. */
+    /* pools too small: each gets its own lower bound, so no unusable pool is built. */
     if (heap.size < ((br_size_t)BR_TLSF_OVERHEAD * 2u)) {
         return BR_ERR(ENOMEM);
     }

@@ -1,21 +1,8 @@
 /*
- * tests/host/sched_test.c — host-side semantic gate for the scheduling framework / **coop** (no QEMU needed)
- *
- * Why run on the host: ready-queue order / block↔wake state machine / timeout-table expiry / pool
- * limit are **policy properties** that the host can re-run in milliseconds; on QEMU the same
- * properties could only be hit by a few cases. The host uses `ucontext.h` for **real stack
- * switching** (not a "fake switch"), so `br_task_create`/`yield`/`block`/`join`/`sleep` all take
- * the real path — corresponding one-to-one with the semantics of `switch.S` on the target.
- *
- * Shared fixtures (fake clock / L2 / logging / panic / ucontext switch layer) live in
- * `tests/host/host_sched.c`; this file holds only **coop-specific checks** and cases.
- *
- * ★ After ADR-0011 the image selects `sched/rr` (timeslice preemption), so **this file is coop's only leg**:
- *   `TC-TASK-101` ("a busy thread that does not yield is not switched away") no longer runs on the
- *   target — it is exactly the coop/preempt boundary, and the image switched to preempt. ⇒ The
- *   red/green of this case now means "coop is still there".
- *
- * Output protocol: [HOSTTEST] PASS|FAIL <tag> <desc> … SUMMARY; any failure ⇒ non-zero exit code.
+ * Host-side semantic gate for the scheduling framework / **coop**. Shared fixtures live in
+ * tests/host/host_sched.c; ucontext gives a real stack switch, so create/yield/block/join/sleep
+ * take the real path. After the image switched to sched/rr this is coop's only leg -- TC-TASK-101
+ * ("a busy thread that does not yield is not switched away") no longer runs on target.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -32,15 +19,13 @@
 
 #include "host_sched.h"
 
-/* TCB common header (opening the ICB window for `wait_status` is the **caller's obligation**, fulfilled by the case itself). */
+/* TCB common header (opening the ICB window for `wait_status` is the caller's obligation). */
 #include "sched_internal.h"
 
-/* Forward declaration of the selftest suite entry (ADR-0010: it no longer appears in br_sched.h). */
+/* Selftest suite entry (not declared in br_sched.h). */
 int br_sched_selftest(void);
 
-/* =====================================================================
- * case framework
- * ===================================================================== */
+/* ---- case framework ---- */
 
 static int s_hpass;
 static int s_hfail;
@@ -220,9 +205,7 @@ static void host_case_sleep_until(void)
                "br_task_sleep_until registers an absolute deadline, does not wake early");
 }
 
-/* =====================================================================
- * supervisor thread: runs all cases then exits with the failure count (the scheduling loop itself does not return)
- * ===================================================================== */
+/* ---- supervisor thread: runs all cases then exits with the failure count ---- */
 
 static void host_supervisor(void *arg)
 {
@@ -236,9 +219,8 @@ static void host_supervisor(void *arg)
     host_case_timeout();
     host_case_sleep_until();
 
-    /* core's selftest suite (`core/selftest/sched_selftest.c`): it runs in real threads itself and
-     * really does create/join/yield/sleep. Return value = number of failing items; red/green is
-     * aggregated by the br_log hooks above. */
+    /* core's selftest suite: runs in real threads (create/join/yield/sleep) and returns the number
+     * of failing items; red/green is aggregated by the br_log hooks above. */
     br_sched_selftest();
 
     host_check(host_sched_idle_calls() > 0u, "HOST-SCHED-IDLE",
@@ -261,7 +243,7 @@ int main(void)
 {
     printf("[HOSTTEST] ==== coop: cooperative scheduler (no preemption) ====\n");
 
-    /* [TASKCONF] FAIL inside the suite must also affect the exit code (the host is the primary judge for sched/sync). */
+    /* [TASKCONF] FAIL inside the suite must also affect the exit code. */
     host_sched_watch("[TASKCONF] FAIL");
 
     const int r = coop_early_init();

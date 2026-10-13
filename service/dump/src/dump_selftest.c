@@ -1,44 +1,15 @@
 /*
- * brickOS prototype v0.2.0 — service/dump **self-test suite**
- * (service/dump/src/dump_selftest.c)
+ * Self-test suite for service/dump: its own cases TC-DBG-030/031/032/100. All four test the public
+ * surface (br_dump_regions / br_dump_memory / br_dump_all, plus sibling plugins' and core's public
+ * observations), so no *_internal.h is needed.
  *
- * Basis and ruling: `docs/decisions/0010-plugin-selftest.md` (self-tests separate from
- * production code). This file takes over the debug-domain conformance entry's **own** cases
- * (TC-DBG-030/031/032/100): case ids, assertions and log strings unchanged — the
- * `tests/gates.toml` gate judges red/green by `[DBGCONF] PASS/FAIL`, `[DBGCONF] SUMMARY` and
- * require_tags.
+ * [DBGCONF] SUMMARY semantics: this function reports only its own cases; core drives all five
+ * self-test hooks in one pass (br_plugin_manager_selftest), so the gate's fail=0 line is satisfied
+ * here, while "everyone ran and is green" is guaranteed by core's [SELFTEST] SUMMARY line plus the
+ * forbid of [DBGCONF] FAIL.
  *
- * ## Boundary (this plugin does **not** need `*_internal.h`)
- *   All four cases test the public surface: this plugin's `br_dump_regions` / `br_dump_memory` /
- *   `br_dump_all`, plus sibling plugins' and core's public observations (`br_hexdump_to` /
- *   `br_hexdump_line_bytes` / `br_mm_region_count` / `br_mem_layout` / `br_bt_last_count` /
- *   `br_memleak_live` / `br_memleak_corruptions`). The `s_cf_pass/s_cf_fail/cf_report/
- *   cf_case_*` helpers were **case-private**, so they moved into this file (static) — no
- *   production private symbol needs exposing.
- *
- * ## `[DBGCONF] SUMMARY` semantics (**changed** after ADR-0010; stated honestly here)
- *   Before the split: that entry was the **orchestrator** — it called trace/backtrace/hexdump/
- *     memleak `*_selftest()` in order, so its SUMMARY `fail` = **sum of the four failures +
- *     its own case failures** (`pass` counted only its own, since child plugins' PASS counts
- *     are not returned on their declared surface).
- *   After the split: **core drives all five self-test hooks in one pass**
- *     (`br_plugin_manager_selftest`), so this function reports only **its own** cases
- *     (`pass`/`fail`/`total` count only TC-DBG-030/031/032/100); the other four print their own
- *     `[DBGCONF] PASS/FAIL` and their own SUMMARY.
- *   ⇒ The `\[DBGCONF\] SUMMARY pass=[0-9]* fail=0 ` line in `tests/gates.toml` is satisfied by
- *     **this function** (it only requires fail=0); "everyone ran and everyone is green" is
- *     guaranteed by core's `[SELFTEST] SUMMARY ... fails=0 errors=0` line plus the forbid of
- *     `[DBGCONF] FAIL`.
- *     In other words: **no stage lost coverage**, only the aggregation point moved from "the sum
- *     over dump" to "core's pass".
- *   ⚠ So this SUMMARY line's meaning **did change** (no longer the debug-domain ledger); that is
- *     ADR-0010's ruling, not an incidental change of semantics. If a "domain ledger" is ever
- *     wanted again, the right place is core's self-test summary, not a plugin.
- *
- * ## Contract with the plugin manager
- *   Returns the **failure count** (0 = all green); **failure does not halt** — the gate judges
- *   red/green. The entry name `dump_selftest` is derived by the generated code from
- *   `symbol_prefix` (see `.selftest` in plugin_desc.c); it is not this plugin's public API.
+ * Returns the failure count (0 = all green); a failure does not halt. The entry name dump_selftest
+ * is derived by the generated code from symbol_prefix; it is not this plugin's public API.
  */
 #include <br/debug/br_bt.h>
 #include <br/debug/br_dump.h>
@@ -51,7 +22,6 @@
 #include <br/core/br_mm.h>
 #include <br/core/br_types.h>
 
-/* Entry prototype (declarations live in the generated code; restated here for prototype discipline). */
 int dump_selftest(void);
 
 static br_u32 s_cf_pass;
@@ -141,35 +111,16 @@ int dump_selftest(void)
 
     br_log_info("[DBGCONF] dump conformance (region listing / bounds decision / full snapshot)");
 
-    /*
-     * Ordering ruling: this function runs only **this plugin's own** cases (03x → 100).
-     * Before the split it first called the four `*_selftest()` (trace → backtrace → hexdump →
-     * memleak) and called their `*_init()` for them (the v0.1 LATE-phase orchestration stand-in,
-     * WORKAROUND(br-wa-boot-001)). After ADR-0010 both of those belong to **plugin_manager**:
-     * it calls init in `[[dep]]` topological order before START (non-zero rc ⇒ `[PLUGIN] FAIL` +
-     * `br_panic`, ADR-0005 ruling G6), and it drives the self-tests in one pass in that same
-     * order. So there are no cross-plugin calls here any more, and the local restatement of the
-     * DBG-INIT "all four inits returned 0" is gone too — it repeats a global invariant carried by
-     * core's phase lines (`[PLUGIN] phase=late name=... rc=0`) plus "any [PANIC] means red", see
-     * the dump_init comment in dump.c.
-     *
-     * `br_dump_all()` inside TC-DBG-100 still prints the full snapshot, so the real
-     * trace/backtrace/memleak output still appears in this section — that is this plugin's
-     * production behaviour (the same one as the boot snapshot), not orchestration.
-     */
+    /* Runs only this plugin's own cases (03x -> 100): cross-plugin init and selftests are driven by
+     * plugin_manager, which replaced the old orchestration stand-in (WORKAROUND(br-wa-boot-001)).
+     * br_dump_all() in TC-DBG-100 still prints the real trace/backtrace/memleak output. */
     cf_case_030();
     cf_case_031();
     cf_case_032();
     cf_case_100();
 
-    /*
-     * This plugin's own summary line (**the only format the gate greps**).
-     * Semantics (different from before the split, reasons in the file header "`[DBGCONF] SUMMARY`
-     * semantics"): `pass`/`fail` count only this plugin's own assertions; the other four failures
-     * show up in their own SUMMARY and in core's `[SELFTEST] SUMMARY ... fails=0`. The gate only
-     * reads `fail=0`, so this line still honestly reports "dump's own cases are all green", while
-     * the whole-domain red/green is guaranteed by core's line.
-     */
+    /* This plugin's own summary line, the only format the gate greps: pass/fail count only this
+     * plugin's assertions; whole-domain red/green comes from core's [SELFTEST] SUMMARY. */
     br_log_info("[DBGCONF] SUMMARY pass=%u fail=%u total=%u",
                 s_cf_pass, s_cf_fail, s_cf_pass + s_cf_fail);
 

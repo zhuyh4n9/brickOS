@@ -1,17 +1,7 @@
 /*
- * brickOS prototype v0.1.0 — **host** tests for compiler support routines
- *
- * Why these four functions deserve a dedicated host test:
- *   They are the product of `core/src/string.c`, part of the foundation the compiler itself emits calls to —
- *   once wrong, **symptoms show up in completely unrelated places** (measured: `bl memcpy` self-recursion inside
- *   memcpy ⇒ unbounded recursion eats through the boot stack ⇒ exception frames land in the page table ⇒ the surface
- *   symptom is "translation fault right at boot after the MMU is on", taking three layers to diagnose, see ADR-0003 §5.2).
- *   The host side can verify them directly: semantics can be compared byte by byte against a reference implementation,
- *   out-of-bounds writes are caught with sentinel bytes, and **self-recursion blows the stack immediately on the host**
- *   (so this case is itself the regression criterion for that bug).
- *
- * Division of labor with the `check-string` gate: the gate looks at **disassembly** (is there a `bl` to itself?),
- * this case looks at **semantics** (copied right? out of bounds?) — one catches "structural self-recursion", the other "incorrect behavior".
+ * Host tests for the compiler support routines in core/src/string.c: semantics compared byte by
+ * byte against a reference, out-of-bounds writes caught by sentinel bytes, self-recursion blows
+ * the host stack immediately. The check-string gate covers the disassembly side instead.
  */
 #include <br/core/br_types.h>
 
@@ -35,8 +25,8 @@ static void rep(int cond, const char *tag, const char *desc)
 }
 
 /*
- * Buffer layout: [leading sentinel PAD][payload BUF][trailing sentinel PAD].
- * Sentinels on both sides, so even a 1-byte overflow is caught (same origin as this project's red-zone requirement).
+ * Buffer layout: [leading sentinel PAD][payload BUF][trailing sentinel PAD], so even a 1-byte
+ * overflow is caught.
  */
 #define PAD 16u
 #define BUF 2048u
@@ -55,8 +45,7 @@ static void fill(br_u8 *b, br_size_t n, br_u32 seed)
     }
 }
 
-/* Sentinels: the first PAD bytes are set to 0xC3 and the PAD bytes starting at `end` to 0x3C.
- * `end` = payload end offset (relative to the buffer head), given by the caller as "where writes really land". */
+/* First PAD bytes = 0xC3, PAD bytes at `end` = 0x3C; `end` = payload end offset. */
 static void pad_set(br_u8 *b, br_size_t end)
 {
     for (br_size_t i = 0; i < PAD; i++) {
@@ -75,7 +64,7 @@ static int pad_ok(const br_u8 *b, br_size_t end)
     return 1;
 }
 
-/* covers 0/1/7/8/17/63/64/257/1024: the small odd ones take the byte path, multiples of 8 the wide-access path */
+/* Sizes 0/1/7/8/17/63/64/257/1024: small odd use the byte path, multiples of 8 the wide path */
 static const br_size_t k_sizes[] = { 0u, 1u, 7u, 8u, 9u, 15u, 16u, 17u, 63u, 64u, 257u, 1024u };
 #define NSIZES (sizeof k_sizes / sizeof k_sizes[0])
 
@@ -90,7 +79,6 @@ static void case_memcpy(void)
     for (br_size_t k = 0; k < NSIZES; k++) {
         const br_size_t n = k_sizes[k];
 
-        /* ① both aligned (wide-access path): contents + return value + both sentinels */
         memset(s_dst, 0, sizeof s_dst);
         pad_set(s_dst, PAD + n);
         void *r = memcpy(dst, src, n);
@@ -98,7 +86,7 @@ static void case_memcpy(void)
         ok = ok && (memcmp(dst, src, n) == 0);
         ok = ok && pad_ok(s_dst, PAD + n);
 
-        /* ② destination not 8-aligned (forces the byte path); sentinels set by "where writes really land" */
+        /* destination not 8-aligned (forces the byte path) */
         for (br_size_t off = 1u; off <= 5u; off += 2u) {
             memset(s_dst, 0, sizeof s_dst);
             pad_set(s_dst, PAD + off + n);
@@ -107,14 +95,12 @@ static void case_memcpy(void)
             ok = ok && pad_ok(s_dst, PAD + off + n);
         }
 
-        /* ③ source not 8-aligned (destination still aligned) */
         memset(s_dst, 0, sizeof s_dst);
         pad_set(s_dst, PAD + n);
         (void)memcpy(dst, src + 3u, n);
         ok = ok && (memcmp(dst, src + 3u, n) == 0);
         ok = ok && pad_ok(s_dst, PAD + n);
 
-        /* ④ compare against the reference implementation (separate buffer + byte-by-byte reference copy): redo a clean aligned copy */
         memset(s_ref, 0, sizeof s_ref);
         for (br_size_t i = 0; i < n; i++) {
             s_ref[PAD + i] = src[i];
@@ -145,7 +131,7 @@ static void case_memmove(void)
             continue;
         }
 
-        /* ① destination below source (forward overlap) */
+        /* destination below source (forward overlap) */
         fill(s_dst, sizeof s_dst, 0xABCDu);
         for (br_size_t i = 0; i < n; i++) {
             s_ref[i] = base[64 + i];
@@ -153,7 +139,7 @@ static void case_memmove(void)
         (void)memmove(base, base + 64, n);
         ok = ok && (memcmp(base, s_ref, n) == 0);
 
-        /* ② destination above source (backward overlap: must copy tail-to-head, else self-overwritten) */
+        /* destination above source (backward overlap: must copy tail-to-head) */
         fill(s_dst, sizeof s_dst, 0x5678u);
         for (br_size_t i = 0; i < n; i++) {
             s_ref[i] = base[i];
@@ -161,7 +147,6 @@ static void case_memmove(void)
         (void)memmove(base + 64, base, n);
         ok = ok && (memcmp(base + 64, s_ref, n) == 0);
 
-        /* ③ partial overlap: 1-byte offset */
         fill(s_dst, sizeof s_dst, 0x9999u);
         for (br_size_t i = 0; i < n; i++) {
             s_ref[i] = base[i];
@@ -169,18 +154,16 @@ static void case_memmove(void)
         (void)memmove(base + 1, base, n);
         ok = ok && (memcmp(base + 1, s_ref, n) == 0);
 
-        /* ④ no overlap: equivalent to a copy (source in a separate buffer) */
         fill(s_dst, sizeof s_dst, 0x2468u);
         (void)memmove(base, s_src + PAD, n);
         ok = ok && (memcmp(base, s_src + PAD, n) == 0);
 
-        /* ⑤ n == 0 must not touch any byte */
+        /* n == 0 must not touch any byte */
         if (n != 0u) {
             continue;
         }
     }
 
-    /* ⑥ overlap edge case: destination = source + 1, backward; compared against the reference */
     for (br_size_t k = 0; k < NSIZES; k++) {
         const br_size_t n = k_sizes[k];
         if (n == 0u) {
@@ -214,7 +197,6 @@ static void case_memset(void)
         for (br_size_t k = 0; k < NSIZES; k++) {
             const br_size_t n = k_sizes[k];
 
-            /* ① aligned destination: sentinels + byte-by-byte comparison against reference */
             memset(s_dst, 0, sizeof s_dst);
             pad_set(s_dst, PAD + n);
             void *r = memset(dst, pats[p], n);
@@ -224,7 +206,6 @@ static void case_memset(void)
                 ok = ok && (dst[i] == pats[p]);
             }
 
-            /* ② destination not 8-aligned: also byte-exact and no overflow */
             memset(s_dst, 0, sizeof s_dst);
             pad_set(s_dst, PAD + 3u + n);
             (void)memset(dst + 3, pats[p], n);

@@ -1,28 +1,12 @@
 #!/usr/bin/env bash
-#
 # brickOS prototype - host platform triple detection (single source of truth).
 #
-# Why a separate script:
-#   Tool artifacts go out-of-tree to build/host/<host-arch>/<host-os>/bin (like Android's
-#   out/host/<os>-<arch>/bin). That path depends on who the host is, and host info is
-#   consumed in three places: make (mk/host.mk), the build gate (tools/check-build.sh) and
-#   the e2e tests (tests/run.sh). A mapping table kept in three places is bound to drift, so
-#   it is converged here; python/brickie/hostinfo.py mirrors the same mapping and
-#   tests/run.sh asserts the two agree.
+# Output is one space-separated line, "<host-arch> <host-os>", so make can use $(word 1/2):
+# x86_64/Linux -> "x86-64 linux". Consumed by mk/host.mk, tools/check-build.sh, tests/run.sh and
+# python/brickie/hostinfo.py (which mirrors it; tests/run.sh asserts the two agree).
 #
-# Output (single line, space separated, so make can use $(word 1/2)):
-#   <host-arch> <host-os>
-# Examples:
-#   x86_64/Linux   ->  x86-64 linux
-#   aarch64/Darwin ->  aarch64 darwin
-#   x86_64/MINGW64 ->  x86-64 win
-#
-# Override: BRICKIE_HOST_ARCH / BRICKIE_HOST_OS (for cross / CI / foreign-host construction)
-#
-# Usage: bash tools/host-detect.sh          # "x86-64 linux"
-#        bash tools/host-detect.sh --arch   # "x86-64"
-#        bash tools/host-detect.sh --os     # "linux"
-#        bash tools/host-detect.sh --path   # "x86-64/linux" (first level under build/host/)
+# Override: BRICKIE_HOST_ARCH / BRICKIE_HOST_OS (cross / CI / foreign-host construction).
+# Usage: bash tools/host-detect.sh [--arch|--os|--path] (--path = first level under build/host/).
 
 set -u
 
@@ -30,7 +14,7 @@ raw_arch="${BRICKIE_HOST_ARCH:-$(uname -m 2>/dev/null || echo unknown)}"
 raw_os="${BRICKIE_HOST_OS:-$(uname -s 2>/dev/null || echo unknown)}"
 
 # ---------------------------------------------------------------- host-arch
-# Normalize to a small set of canonical names (x86-64 with a hyphen, as requested).
+# Normalize to canonical names (x86-64 with a hyphen).
 case "$raw_arch" in
     # canonical names pass through (env may override with an already-normalized value)
     x86-64|aarch64|x86|arm|riscv64|ppc64le|s390x) arch="$raw_arch" ;;

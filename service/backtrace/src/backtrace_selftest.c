@@ -1,26 +1,8 @@
 /*
- * brickOS prototype v0.2.0 — **self-test suite** for service/backtrace
- * (service/backtrace/src/backtrace_selftest.c)
- *
- * Design basis and ruling: `docs/decisions/0010-plugin-selftest.md` (self-tests separate from
- * production code). This file holds the cases (TC-DBG-010/011) **moved verbatim** from
- * `backtrace.c`: case ids, assertions and log strings unchanged — the gate `tests/gates.toml`
- * judges red/green by `[DBGCONF] PASS/FAIL` and require_tags.
- *
- * ## Boundary
- *   Driven only through the **public API** of `br/debug/br_bt.h` (capture / capture_from /
- *   print / set_stack_bounds / last / last_count);
- *   **one exception**: TC-DBG-011 must restore the stack bounds to "as before the call"
- *   (possibly unset 0/0), via the accessors in `src/backtrace_internal.h` that read/write
- *   production state (no copy); rationale in that header.
- *
- * ## Contract with the plugin manager
- *   Returns the **number of failures** (0 = all green); it logs itself
- *   (`[DBGCONF] PASS/FAIL ...`).
- *   **A failure does not halt** — the gate judges (`[DBGCONF] FAIL` is in tests/gates.toml's
- *   forbid list).
- *   The entry name `backtrace_selftest` is derived by the generated artifact from
- *   `symbol_prefix` (see `.selftest` in plugin_desc.c); it is not this plugin's public API.
+ * Self-test suite for service/backtrace, driven only through the public API of br/debug/br_bt.h
+ * except that TC-DBG-011 restores the stack bounds via src/backtrace_internal.h (production state).
+ * Returns the failure count (0 = all green); a failure does not halt. The entry name
+ * backtrace_selftest is derived by the generated artifact from symbol_prefix.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -29,14 +11,12 @@
 
 #include "backtrace_internal.h"
 
-/* Entry prototype (the declaration surface is centralized in the artifact; repeated here only
- * to satisfy the global-function prototype discipline). */
 int backtrace_selftest(void);
 
 /* Scan window used by TC-DBG-010 to decide "pc lies inside the probe function body" */
 #define BT_PROBE_SPAN            512u
 
-/* Record one DBGCONF criterion; returns 0/1 so failures can be accumulated */
+/* Record one DBGCONF criterion; returns 0/1 so failures accumulate. */
 static br_u32 bt_conf(br_bool ok, const char *tag, const char *what)
 {
     br_log_info("[DBGCONF] %s %s %s", ok ? "PASS" : "FAIL", tag, what);
@@ -50,9 +30,8 @@ bt_probe(br_bt_frame_t *out, br_u32 max, br_u32 *n)
     *n = br_bt_capture(out, max);
 }
 
-/* Whether some frame's pc lies in [&bt_probe, &bt_probe + BT_PROBE_SPAN) —
- * that proves the frame chain really crossed "the call site that called capture", not merely
- * that the current frame was read. */
+/* True if some frame's pc lies in [&bt_probe, &bt_probe + BT_PROBE_SPAN): proves the chain really
+ * crossed the call site that called capture, not merely that the current frame was read. */
 static br_bool bt_probe_covered(const br_bt_frame_t *fr, br_u32 n)
 {
     const br_uintptr_t lo = (br_uintptr_t)&bt_probe;
@@ -71,7 +50,7 @@ int backtrace_selftest(void)
     static br_bt_frame_t frames[BR_BT_MAX_FRAMES];
     br_u32 fails = 0u;
 
-    /* ---- TC-DBG-010: chain integrity on the real stack + call-site coverage ---- */
+    /* TC-DBG-010: chain integrity on the real stack + call-site coverage */
     br_u32 n = 0u;
     bt_probe(frames, BR_BT_MAX_FRAMES, &n);
 
@@ -88,23 +67,22 @@ int backtrace_selftest(void)
     fails += bt_conf(ok10, "TC-DBG-010",
                      "frames>=2, pc!=0, fp 16-aligned and strictly increasing, pc covers probe body");
 
-    /* ---- TC-DBG-011: empty/bad context rejected; bounds guard works; max works ---- */
+    /* TC-DBG-011: empty/bad context rejected; bounds guard works; max works */
     br_uintptr_t saved_bottom = 0u;   /* white-box save; the case restores it at the end */
     br_uintptr_t saved_top    = 0u;
     br_bt_internal_read_stack_bounds(&saved_bottom, &saved_top);
     br_bool ok11 = BR_TRUE;
 
-    /* fp == 0 ⇒ 0 frames (no context); fp not 16-aligned ⇒ 0 frames and no dereference (no death) */
+    /* fp == 0 => 0 frames; fp not 16-aligned => 0 frames and no dereference (no death) */
     ok11 = ok11 && (br_bt_capture_from(0u, 0u, frames, 8u) == 0u);
     ok11 = ok11 && (br_bt_capture_from(0x1234u, 0x40080000u, frames, 8u) == 0u);
 
-    /* illegal bounds rejected (the setter validates before writing ⇒ state unchanged; this
-     * also checks the invariant) */
+    /* illegal bounds rejected; the setter validates before writing, so state is unchanged */
     ok11 = ok11 && (br_bt_set_stack_bounds(0u, 0x1000u) == BR_ERR(EINVAL));
     ok11 = ok11 && (br_bt_set_stack_bounds(0x2000u, 0x1000u) == BR_ERR(EINVAL));
 
-    /* legal but very narrow bounds: the current stack is outside ⇒ capture must truncate to
-     * 0 frames (proves bounds are really checked) */
+    /* legal but very narrow bounds: the current stack is outside, so capture must truncate to 0
+     * frames (proves the bounds are really checked) */
     ok11 = ok11 && (br_bt_set_stack_bounds(0x1000u, 0x2000u) == 0);
     ok11 = ok11 && (br_bt_capture(frames, 4u) == 0u);
 

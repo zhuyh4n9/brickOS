@@ -1,6 +1,5 @@
-/*
- * brickOS prototype v0.2.0 - scatter/gather I/O (sys/uio.h; provided by the runtime/posix plugin)
- */#ifndef BR_POSIX_SYS_UIO_H
+/* Scatter/gather I/O. */
+#ifndef BR_POSIX_SYS_UIO_H
 #define BR_POSIX_SYS_UIO_H
 
 #include <sys/types.h>

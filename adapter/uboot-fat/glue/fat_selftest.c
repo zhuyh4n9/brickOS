@@ -1,31 +1,16 @@
 /*
- * adapter/uboot-fat — conformance cases (TC-FAT-*, 8 total)
+ * adapter/uboot-fat - conformance cases (TC-FAT-*, 8 total).
  *
- * WORKAROUND(br-wa-test-001): `TC-FAT-*` are **locally numbered** — the whole group is absent from
- * the case table of design `6-01` (a **new surface** of the 7-storage domain); registered in the
- * same place as the numbering debt of the other families.
+ * WORKAROUND(br-wa-test-001): TC-FAT-* are locally numbered -- the group is absent from the design
+ * case table; registered with the numbering debt of the other families.
  *
- * ============================== where the criteria come from ==============================
- * The FAT volumes on the three emmc devices are built by the **host** in a post-build gate (see
- * "prerequisite artifacts" in the README); each volume is preloaded with the files below (constants
- * in glue/fat_glue.h, shared as one source of truth by self-test and APP):
- *
- *   /fat12: hello.txt  = "fat12 hello\n";  dir/a.bin = 16 'A's
- *   /fat16: hello.txt  = "fat16 hello\n";  dir/a.bin = 256 'B's
- *   /fat32: hello.txt  = "fat32 hello\n";  dir/a.bin = 4096 'C's;
- *           long name file.txt = "lfn\n"
- *
- * ★ This suite **never deletes or modifies** these host files (tags 2/3 depend on them); its own
- *   temporary files always use the tcN_ prefix.
- *
- * ============================== why not internal state ==============================
- * Except TC-FAT-001, which inspects "the FAT type and cluster count derived from the BPB" (that is a
- * **plugin fact**, so only the plugin can be asked), every case is driven solely through the public
- * VFS surface (br_stat/br_open/br_file_xxx/br_opendir/…) — the criterion is "the bytes the host
- * wrote can really be read back through VFS", not "some internal function returned 0".
- *
- * Contract: returns the number of failures (0 = all green); prints `[FATCONF] PASS/FAIL <tag> <desc>`
- * and ends with `[FATCONF] SUMMARY pass=N fail=M` (same shape as uboot-mmc's [EMMCCONF]).
+ * The host preloads the three emmc FAT volumes in a post-build gate (README, prerequisite
+ * artifacts); the expected files come from the constants in glue/fat_glue.h, shared with APP. This
+ * suite never deletes or modifies those host files (tags 2/3 depend on them) and names its own
+ * files with the tcN_ prefix. Except TC-FAT-001 (a plugin fact: FAT type and cluster count from the
+ * BPB), every case goes through the public VFS surface, so the criterion is "the host's bytes read
+ * back through VFS", not "an internal function returned 0". Returns the failure count (0 = green);
+ * prints [FATCONF] PASS/FAIL <tag> <desc> per case and [FATCONF] SUMMARY pass=N fail=M.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -37,19 +22,11 @@
 
 int uboot_fat_selftest(void);
 
-/* ==================================================================== counters and assertions */
-
 static br_u32 s_pass;
 static br_u32 s_fail;
 
-/*
- * Sub-criterion diagnostics. One PASS/FAIL line per case is not enough to localize (measured:
- * TC-FAT-003/006/007 went red and "which step" was completely invisible). So each branch adds one
- * line when it fails:
- *     [FATCONF]   <tag> <step> got=<> want=<>
- * Printed only on the **failure** branch ⇒ green paths keep the same log length; the criteria
- * (SUMMARY counts) are unaffected.
- */
+/* Per-branch diagnostics: one PASS/FAIL line per case cannot localize a failure, so each failing
+ * branch adds "[FATCONF]   <tag> <step> got=<> want=<>" (failure paths only, SUMMARY unaffected). */
 static void fat_diag(const char *tag, const char *step, long got, long want)
 {
     br_log_info("[FATCONF]   %s %s got=%ld want=%ld", tag, step, got, want);
@@ -71,8 +48,6 @@ static void fat_conf(br_bool ok, const char *tag, const char *what)
         br_log_info("[FATCONF] FAIL %s %s", tag, what);
     }
 }
-
-/* ==================================================================== helpers */
 
 static br_bool fat_bytes_eq(const br_u8 *a, const br_u8 *b, br_size_t n)
 {
@@ -112,10 +87,8 @@ static int fat_write_all(const char *path, const void *buf, br_size_t n)
     return 0;
 }
 
-/* Open and read the whole file back, comparing byte by byte against the expected "host content".
- * `want_len == 0` ⇒ expected length = strlen(want) (the host's short text files).
- * Read style: in chunks until EOF (not "one big read") — the criterion is "**exactly** len bytes;
- * one extra byte is wrong too". */
+/* Read a file back and compare byte by byte with the expected host content. want_len == 0 means the
+ * expected length is strlen(want). Reads in chunks and requires exactly len bytes plus EOF. */
 static br_bool fat_read_verify(const char *path, const br_u8 *want, br_size_t want_len)
 {
     br_u8 buf[64];
@@ -154,7 +127,6 @@ static br_bool fat_read_verify(const char *path, const br_u8 *want, br_size_t wa
         }
         got += (br_size_t)r;
     }
-    /* One more read must return 0 (EOF) — the criterion for "no extra bytes in the file" */
     {
         const br_s64 r = br_file_read(f, buf, sizeof(buf));
 
@@ -166,7 +138,6 @@ static br_bool fat_read_verify(const char *path, const br_u8 *want, br_size_t wa
     return BR_TRUE;
 }
 
-/* path = dir + "/" + name (bounded join; too long ⇒ -ENOSPC). */
 static int fat_join(char *out, br_size_t cap, const char *dir, const char *name)
 {
     return uboot_fat_join_path(dir, name, out, cap);
@@ -195,7 +166,6 @@ static int fat_find_dirent(const char *dir, const char *name, br_dirent_t *out)
     return 0;
 }
 
-/* Is this mount point in the mount table (observed via the public br_mount_count/br_mount_path_at) */
 static br_bool fat_mount_listed(const char *path)
 {
     const br_u32 n = br_mount_count();
@@ -209,8 +179,6 @@ static br_bool fat_mount_listed(const char *path)
     }
     return BR_FALSE;
 }
-
-/* ==================================================================== suite */
 
 int uboot_fat_selftest(void)
 {
@@ -226,8 +194,7 @@ int uboot_fat_selftest(void)
 
     br_log_info("[FATCONF] uboot-fat conformance (3 volumes / FAT12-16-32 / VFS round-trip)");
 
-    /* ---- TC-FAT-001: all three mount points present, and each volume's BPB verdict and cluster
-     * count match expectations ---- */
+    /* TC-FAT-001: three mount points present, each volume's BPB type and cluster count match. */
     {
         uboot_fat_vol_info_t vi;
         br_bool ok = BR_TRUE;
@@ -252,8 +219,7 @@ int uboot_fat_selftest(void)
                         mnt[i], (vi.dev != BR_NULL) ? vi.dev : "?",
                         (vi.mnt != BR_NULL) ? vi.mnt : "?",
                         vi.fatsize, vi.clust_size_sectors, vi.max_clust);
-            /* criteria = ① device name matches ② BPB-derived type matches ③ cluster count falls in
-             * the range defined for that FAT type */
+            /* Criteria: device name, BPB-derived type, cluster count in that type's range. */
             if ((vi.mounted == BR_TRUE) && (vi.sector_size == UB_FAT_SECTOR_SIZE) &&
                 (vi.clust_size_sectors > 0u) && (vi.fatsize == want_type[i])) {
                 const br_bool in_range =
@@ -305,8 +271,7 @@ int uboot_fat_selftest(void)
         fat_conf(ok, "TC-FAT-002", "host-preloaded hello.txt of all three volumes reads back byte-identical");
     }
 
-    /* ---- TC-FAT-003: readdir the root of each volume: "."/".." present, preloaded entries visible
-     * with correct type/size ---- */
+    /* TC-FAT-003: readdir each root: "./.." first, preloaded entries with correct type/size. */
     {
         static const struct {
             const char *mnt_path;
@@ -348,24 +313,22 @@ int uboot_fat_selftest(void)
                 (void)br_closedir(d);
             }
 
-            /* Name comparison is **case-insensitive**: FAT directory entries store 8.3 uppercase
-             * plus two "lowercase bits", and entries made by mkfs/mcopy may not set those bits ⇒
-             * readdir reporting "HELLO.TXT" is legal (lookup itself is also case-insensitive, see
-             * TC-FAT-002 managing to read hello.txt). */
+            /* Name comparison is case-insensitive: FAT stores 8.3 uppercase plus two "lowercase
+             * bits" that mkfs/mcopy may not set, so readdir reporting "HELLO.TXT" is legal. */
             if (fat_find_dirent(cases[i].mnt_path, "hello.txt", &de) == 0) {
                 ok = BR_FALSE;
             } else if ((de.type != BR_INODE_FILE) ||
                        (de.name_len != (br_u32)uboot_fat_strlen(de.name)) ||
                        (uboot_fat_strcasecmp(de.name, "hello.txt") != 0)) {
-                
+
                 ok = BR_FALSE;
             }
             if (fat_find_dirent(cases[i].mnt_path, "dir", &de) == 0) {
-                
+
                 ok = BR_FALSE;
             } else if ((de.type != BR_INODE_DIR) ||
                        (uboot_fat_strcasecmp(de.name, "dir") != 0)) {
-                
+
                 ok = BR_FALSE;
             }
             {
@@ -506,28 +469,28 @@ int uboot_fat_selftest(void)
         fat_make_pattern(content, len, 'M');
 
         if (br_mkdir(dir) != 0) {
-            
+
             ok = BR_FALSE;
         }
         if (br_stat(dir, &st) != 0) {
-            
+
             ok = BR_FALSE;
         } else if (st.type != BR_INODE_DIR) {
-            
+
             ok = BR_FALSE;
         }
         if (fat_write_all(path, content, len) != 0) {
-            
+
             ok = BR_FALSE;
         }
         if (br_stat(path, &st) != 0) {
-            
+
             ok = BR_FALSE;
         } else if ((st.type != BR_INODE_FILE) || (st.size != (br_u64)len)) {
-            
+
             ok = BR_FALSE;
         } else if (fat_read_verify(path, content, len) == BR_FALSE) {
-            
+
             ok = BR_FALSE;
         }
         fat_conf(ok, "TC-FAT-006", "/fat32 mkdir + create file + stat size/type match the content");
@@ -546,19 +509,19 @@ int uboot_fat_selftest(void)
         fat_make_pattern(content, sizeof(content), 'R');
 
         if (fat_write_all(oldp, content, sizeof(content)) != 0) {
-            
+
             ok = BR_FALSE;
         }
         if (br_rename(oldp, newp) != 0) {
-            
+
             ok = BR_FALSE;
         }
         if (br_stat(oldp, &st) != BR_ERR(ENOENT)) {
-            
+
             ok = BR_FALSE;
         }
         if (fat_read_verify(newp, content, sizeof(content)) == BR_FALSE) {
-            
+
             ok = BR_FALSE;
         }
         fat_conf(ok, "TC-FAT-007", "after rename the old name is -ENOENT and the new name is byte-identical");
@@ -622,8 +585,7 @@ int uboot_fat_selftest(void)
                 }
             }
         }
-        /* Reverse direction: grow 300 → 600, the new region must read back as 0 (explicitly zeroed,
-         * not leftovers from the previous file) */
+        /* Grow 300 -> 600: the new region must read back as 0, not previous leftovers. */
         if (br_truncate(path, 600u) == 0) {
             f = br_open(path, BR_O_RDONLY);
             if (f != BR_NULL) {
@@ -660,10 +622,7 @@ int uboot_fat_selftest(void)
             fat_diag_str("TC-FAT-008", "stat_after_unlink", path, "(ENOENT)");
             ok = BR_FALSE;
         }
-        /* Volume-level sync = fs_ops.sync (write back the FAT cache first, then let the block device
-         * flush);
-         * ★ it must be the same path as **file-level fsync** (br_file_ops.fsync) — both share
-         *   uboot_fat_flush_volume(), so both entry points are exercised here. */
+        /* Volume sync must use the same path as file fsync (both share uboot_fat_flush_volume). */
         {
             const int rc = uboot_fat_test_sync(UB_FAT_MNT16);
 

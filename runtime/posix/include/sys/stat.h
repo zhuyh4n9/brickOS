@@ -1,15 +1,8 @@
 /*
- * brickOS prototype v0.2.0 — file status (sys/stat.h; provided by the runtime/posix plugin)
- *
- * ★ `struct stat` fields: this prototype has **no** storage for uid/gid/timestamps/device numbers (vfs's
- *   `br_stat_t` is only `{valid, type, size, nlink}`, see br_vfs.h). Hence:
- *     - `st_mode` is **synthesized** from `br_stat_t.type` (S_IFDIR/S_IFREG/S_IFLNK | 0777);
- *     - `st_nlink` / `st_size` are real (from br_stat_t);
- *     - `st_ino` / `st_dev` / `st_uid` / `st_gid` / `st_atime`… are **always 0** (not "read failed",
- *       but an honest answer that "this surface does not exist"). This is recorded in ADR-0014's
- *       debt — code relying on inode numbers for dedup cannot get them this generation.
- *   `struct stat` keeps these fields for **layout stability**: when vfs adds them later, consumers
- *   need not change their structs.
+ * struct stat: vfs's br_stat_t is only {valid, type, size, nlink}, so st_mode is synthesized
+ * from type (S_IFDIR/S_IFREG/S_IFLNK | 0777); st_nlink/st_size are real; st_ino/st_dev/st_uid/
+ * st_gid/st_*time are always 0 (this surface does not exist). Fields are kept for layout
+ * stability when vfs adds them later.
  */
 #ifndef BR_POSIX_SYS_STAT_H
 #define BR_POSIX_SYS_STAT_H
@@ -50,7 +43,7 @@ struct stat {
 #define S_ISFIFO(m) (((m) & S_IFMT) == S_IFIFO)
 #define S_ISSOCK(m) (((m) & S_IFMT) == S_IFSOCK)
 
-/* ---- permission bits (not enforced, but expressible; see ADR-0014's "permission model" debt) ---- */
+/* ---- permission bits (expressible; not enforced) ---- */
 #define S_ISUID  0004000
 #define S_ISGID  0002000
 #define S_ISVTX  0001000
@@ -67,7 +60,7 @@ struct stat {
 #define S_IWOTH  0000002
 #define S_IXOTH  0000001
 
-/* Fixed permissions reported this generation (no permission model ⇒ honestly report "all open" rather than inventing an 0644) */
+/* Fixed mode reported for every file (no permission model). */
 #define BR_POSIX_MODE_BITS  0777
 
 int stat(const char *path, struct stat *st);

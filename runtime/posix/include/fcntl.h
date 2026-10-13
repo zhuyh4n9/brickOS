@@ -1,16 +1,6 @@
 /*
- * brickOS prototype v0.2.0 — file control (fcntl.h; provided by the runtime/posix plugin)
- *
- * ★ `O_*` **take Linux's numeric values** (octal, following the kernel convention), for
- *   two reasons:
- *   ① the same discipline as errno — third-party code often has conditions written
- *     against Linux numbers, so alignment buys compatibility for free;
- *   ② they are implementation-defined (POSIX does not fix the values), so copying an
- *     authoritative table is less error-prone than assigning our own numbers.
- *   Note: the native side of this repo uses `BR_O_*` (a different value set, see
- *   br_vfs.h); the two are translated **explicitly** by runtime/posix's
- *   `posix_to_br_flags()` — one side is the standard, the other the kernel, so a layer
- *   between them is unavoidable.
+ * O_* use Linux's octal values (implementation-defined in POSIX, so copying an authoritative
+ * table is safer). The native side uses BR_O_*; posix_to_br_flags() translates explicitly.
  */
 #ifndef BR_POSIX_FCNTL_H
 #define BR_POSIX_FCNTL_H
@@ -30,9 +20,8 @@
 #define O_NONBLOCK   0004000
 #define O_DSYNC      0010000
 #define O_DIRECT     0040000
-#define O_LARGEFILE  0        /* ★ it is 0 on a 64-bit host (off_t is already 64-bit);
-                              *   the original 0100000 is the 32-bit Linux value, which
-                              *   disagrees with the host */
+/* 0 on 64-bit hosts (off_t already 64-bit); 0100000 is the 32-bit value and disagrees with it. */
+#define O_LARGEFILE  0
 #define O_DIRECTORY  0200000
 #define O_NOFOLLOW   0400000
 #define O_NOATIME    01000000

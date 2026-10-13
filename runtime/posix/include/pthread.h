@@ -1,55 +1,28 @@
 /*
- * brickOS prototype v0.2.0 — threads (pthread.h; provided by the runtime/posix plugin)
- *
- * ★★ This is a **mapping layer**, not a second thread implementation: every `pthread_*` lands on
- *    core's `br_task_*` / `br_sync_*` (`3-01` §2/§3). A few platform differences to know:
- *
- *   ① **The stack is caller-provided**: `br_task_create`'s contract is "stack supplied by caller"
- *      (`br_sched.h`), but the POSIX signature of `pthread_create` has no stack. This generation
- *      = **this service carves a block from the core heap** (`pthread_attr_setstacksize` changes
- *      the size, default 4 KiB). Thread count is bounded by both the heap and `BR_TASK_MAX` (8);
- *      creation failure returns `EAGAIN`.
- *   ② **`join`'s return value needs a second table**: core's `br_task_join` returns only
- *      `int exit_code`, while POSIX wants `void *retval`. So this service keeps a small table of
- *      `{thread, retval, stack}`; `pthread_exit(v)` and "entry function returns v" both record v,
- *      and `join` reads it back.
- *   ③ **`pthread_detach` = lazy reclaim** (since v0.2): core has only `br_task_join` as a path to
- *      reclaim a ZOMBIE ⇒ this layer records detached threads in the table and, **on the next entry
- *      into any pthread call of this layer**, joins threads that "have exited (state == ZOMBIE) and
- *      are detached" (returning the stack too). Semantically "resources are eventually reclaimed";
- *      the cost is inexact reclaim timing (only reclaimed on a later pthread call) — recorded
- *      honestly in ADR-0019, not pretending to be `br_task_detach`.
- *   ④ **Per-thread `errno` lives in this layer** (since v0.2): `errno` is a macro pointing at a slot
- *      in this layer's thread record (`br_posix_errno()`) ⇒ thread A's failure is not read by
- *      thread B. core still has no general TLS slot (`11-02` P-4), but the pthread layer has its own
- *      "per-thread record" table, so core need not change.
- *   ⑤ **`pthread_key_*` (TLS) likewise**: slots live in this layer's thread record (see ④).
- *
- * ★ Sync objects: the **kernel objects** of mutex/cond directly use core types (`br_mutex_t`/`br_cond_t`,
- *   layout public), but `pthread_mutex_t` adds three outer fields `type/owner/count` —— POSIX
- *   RECURSIVE/ERRORCHECK semantics (core's mutex is a plain mutex) are thus implemented in this layer.
- *   The static initializer `PTHREAD_MUTEX_INITIALIZER` covers all fields.
- *   `destroy` is a **no-op returning 0**: core has no `br_mutex_destroy` (`11-02` P-5), while POSIX
- *   requires destroying an unused mutex to succeed (Linux does the same) ⇒ the no-op is the
- *   **correct** answer; the real gap is that "still referenced after destroy" cannot be detected,
- *   recorded in ADR-0014/0019.
- *
- * ★ **Not done** (honest-subset duty; design `11-02` TR-C and this layer's boundary):
- *   `pthread_cancel`/cleanup handlers (cancellation points and cleanup stacks need extra semantics),
- *   robust mutex (`EOWNERDEAD`), **same-thread recursive read** on rwlocks, signal-related
- *   (`pthread_kill`/`sigmask`). Callers needing them see the missing symbol at **compile time** —
- *   that is more honest than pretending success at runtime.
+ * POSIX threads mapped onto core's br_task_* and br_sync_* calls. Notes:
+ * - Stack is caller-provided by core's contract, but pthread_create has no stack argument:
+ *   this layer carves one from the core heap (pthread_attr_setstacksize changes the size,
+ *   default 4 KiB). Thread count is bounded by heap and BR_TASK_MAX (8); failure gives EAGAIN.
+ * - join needs a second table: br_task_join returns int exit_code only, so pthread_exit(v)
+ *   and "entry returns v" record v here, and join reads it back.
+ * - pthread_detach reclaims lazily: finished detached threads are joined on the next entry
+ *   into any pthread call of this layer (semantics hold, timing is inexact).
+ * - errno and pthread_key_* slots live in this layer's thread record (br_posix_errno()).
+ * - pthread_mutex_t adds type/owner/count around core's plain br_mutex_t for
+ *   RECURSIVE/ERRORCHECK; destroy is a no-op returning 0 (core has no destroy).
+ * - Not provided: pthread_cancel/cleanup handlers, robust mutex (EOWNERDEAD), same-thread
+ *   recursive read on rwlocks, signals; callers see the missing symbol at compile time.
  */
 #ifndef BR_POSIX_PTHREAD_H
 #define BR_POSIX_PTHREAD_H
 
 #include <sys/types.h>
-#include <time.h>                 /* struct timespec / CLOCK_MONOTONIC */
+#include <time.h>
 #include <br/core/br_sched.h>
 #include <br/core/br_sync.h>
 #include <br/core/br_time.h>
 
-/* ==================================================================== thread */
+/* ---- thread ---- */
 
 typedef br_thread_t *pthread_t;
 
@@ -73,7 +46,6 @@ void pthread_exit(void *retval);
 pthread_t pthread_self(void);
 int pthread_equal(pthread_t a, pthread_t b);
 int pthread_yield(void);
-/* Resource reclaim for a detached thread is **lazy** (see file header ③): semantics hold, timing is inexact. */
 int pthread_detach(pthread_t t);
 
 int pthread_attr_init(pthread_attr_t *a);
@@ -87,11 +59,11 @@ int pthread_attr_getdetachstate(const pthread_attr_t *a, int *state);
 int pthread_attr_setguardsize(pthread_attr_t *a, size_t size);
 int pthread_attr_getguardsize(const pthread_attr_t *a, size_t *size);
 
-/* Thread name (diagnostics; glibc's `_np` surface. `t == BR_NULL` = current thread). */
+/* Thread name (diagnostics). t == BR_NULL = current thread. */
 int pthread_setname_np(pthread_t t, const char *name);
 int pthread_getname_np(pthread_t t, char *buf, size_t len);
 
-/* ==================================================================== once */
+/* ---- once ---- */
 
 typedef struct pthread_once {
     br_mutex_t   m;         /* statically initialized ⇒ ready to use */
@@ -102,7 +74,7 @@ typedef struct pthread_once {
 
 int pthread_once(pthread_once_t *once, void (*init)(void));
 
-/* ==================================================================== TLS key */
+/* ---- TLS key ---- */
 
 #define PTHREAD_KEYS_MAX              8u
 #define PTHREAD_DESTRUCTOR_ITERATIONS 4
@@ -114,7 +86,7 @@ int pthread_key_delete(pthread_key_t key);
 int pthread_setspecific(pthread_key_t key, const void *value);
 void *pthread_getspecific(pthread_key_t key);
 
-/* ==================================================================== mutex */
+/* ---- mutex ---- */
 
 #define PTHREAD_MUTEX_NORMAL      0
 #define PTHREAD_MUTEX_RECURSIVE   1
@@ -160,7 +132,7 @@ int pthread_mutex_trylock(pthread_mutex_t *m);
 int pthread_mutex_timedlock(pthread_mutex_t *m, const struct timespec *abstime);
 int pthread_mutex_unlock(pthread_mutex_t *m);
 
-/* ==================================================================== cond */
+/* ---- cond ---- */
 
 typedef struct pthread_condattr {
     int clock;              /* CLOCK_MONOTONIC (the only available time base) */
@@ -189,7 +161,7 @@ int pthread_cond_timedwait(pthread_cond_t *c, pthread_mutex_t *m,
 int pthread_cond_signal(pthread_cond_t *c);
 int pthread_cond_broadcast(pthread_cond_t *c);
 
-/* ==================================================================== rwlock */
+/* ---- rwlock ---- */
 
 #define PTHREAD_RWLOCK_PREFER_READER_NP              0
 #define PTHREAD_RWLOCK_PREFER_WRITER_NONRECURSIVE_NP 1
@@ -229,7 +201,7 @@ int pthread_rwlock_trywrlock(pthread_rwlock_t *rw);
 int pthread_rwlock_timedwrlock(pthread_rwlock_t *rw, const struct timespec *abstime);
 int pthread_rwlock_unlock(pthread_rwlock_t *rw);
 
-/* ==================================================================== barrier */
+/* ---- barrier ---- */
 
 #define PTHREAD_BARRIER_SERIAL_THREAD  (-1)
 

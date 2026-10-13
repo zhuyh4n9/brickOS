@@ -1,30 +1,9 @@
 /*
- * brickOS prototype v0.2.0 — **self-test suite** of io/uart-pl011 (io/uart-pl011/src/uart_selftest.c)
- *
- * Design basis and ruling: `docs/decisions/0010-plugin-selftest.md` (self-test separated from core code).
- *
- * ## Why the self-test is not in `uart_pl011.c` (the reason this file exists)
- *   The test entry point is not part of the device's public surface (see the notes in
- *   `include/br/io/br_uart_pl011.h`): if it entered the golden interface hash, "add one case" would
- *   become an interface change. Moved into `src/`, the production file keeps only the driver itself;
- *   cases still live in the same plugin compile unit set (`[build].sources` covers every `.c` under `src/`).
- *
- * ## What it tests, and where the boundary with production code lies
- *   Device round-trip (locally numbered `TC-IO-*`): driven only through the **public API**
- *   (br_stat / br_open_err / br_file_* / ioctl), touching no internal symbol — otherwise "the device
- *   really opens through devfs + the cdev adapter" would have no criterion covering it.
- *   **The only exception is "platform facts"**: the base / refclk / baud constants (same source as the
- *   platform console) come from `src/pl011_internal.h` — those are not "internal mechanism" but the
- *   **platform data truth** the suite must assert; writing them separately in the production file and
- *   in the suite would reduce the criterion to "a copy equals a copy". Register access is **not**
- *   borrowed from there: the suite does not touch MMIO (it asks the device via ioctl), so that header
- *   has no register accessors either.
- *
- * ## Contract with br_plugin_manager_selftest()
- *   Returns the **number of failures** (0 = all green); logs its own output
- *   (`[IOCONF] PASS/FAIL ...` + `SUMMARY`).
- *   **A failure does not halt** — red/green is judged by the gate (`[IOCONF] FAIL` is in the forbid
- *   list of `tests/gates.toml`).
+ * io/uart-pl011 self-test suite: conformance cases TC-IO-* driven only through the public API
+ * (br_stat / br_open_err / br_file_* / ioctl). The only non-public input is the platform data in
+ * src/pl011_internal.h, which is the object under test rather than a copy of it.
+ * Returns the number of failures (0 = green) and logs `[IOCONF] PASS/FAIL ...` + SUMMARY; a
+ * failure does not halt. WORKAROUND(br-wa-test-001): the TC-IO-* ids are self-assigned.
  */
 #include <br/io/br_uart_pl011.h>
 
@@ -36,26 +15,16 @@
 
 #include "pl011_internal.h"
 
-/* Self-test entry prototype (defined at the end of this file; referenced by the generated
- * `plugin_desc.c` `.selftest` hook). */
+/* Self-test entry (referenced by the generated plugin_desc.c .selftest hook). */
 int uart_pl011_selftest(void);
 
-/* =====================================================================
- * Conformance cases (locally numbered `TC-IO-*`; registered under br-wa-test-001)
- *
- *    Driven only through the **public API** (br_stat / br_open_err / br_file_*), touching no
- *    internal symbol — otherwise "the device really opens through devfs + the cdev adapter"
- *    would have no criterion covering it.
- *    ★ Each case opens and closes on its own. Even when it goes red mid-way it must clean up,
- *      otherwise the exclusive claim is not released and later cases go red in a chain (turning
- *      "one real bug" into "twelve fake bugs") while the root cause drowns.
- *    ★ Prints `[IOCONF] PASS/FAIL TC-IO-00N <desc>`, with a SUMMARY at the end; returns the failure count.
- * ===================================================================== */
+/* Conformance cases (TC-IO-*, registered under br-wa-test-001). Each case opens and closes on its
+ * own: a red case must still clean up, otherwise the exclusive claim blocks the later cases.
+ * Prints `[IOCONF] PASS/FAIL TC-IO-00N <desc>` with a SUMMARY; returns the failure count. */
 
 #define IO_CONF_PATH   "/dev/" BR_UART_PL011_DEV_NAME
 
-/* The two commands recurring in cases, assembled per the header comments (same nr convention as
- * this file's ioctl) */
+/* Commands recurring in the cases, assembled per the header's nr convention. */
 #define IO_CONF_CMD_GET_INFO  BR_IOR(BR_UART_IOC_MAGIC, BR_UART_IOC_GET_INFO, br_uart_pl011_info_t)
 #define IO_CONF_CMD_SET_BAUD  BR_IOW(BR_UART_IOC_MAGIC, BR_UART_IOC_SET_BAUD, br_u32)
 
@@ -81,15 +50,15 @@ int uart_pl011_selftest(void)
     br_log_info("[IOCONF] uart-pl011 conformance (%s: stat/open/ioctl/write/poll/close)",
                 IO_CONF_PATH);
 
-    /* ---- TC-IO-001: device node visible and of FILE type ---- */
+    /* TC-IO-001: device node visible and of FILE type */
     {
-        br_stat_t  st = { 0u, 0u, 0u, 0u };   /* ADR-0013: the nlink field was appended */
+        br_stat_t  st = { 0u, 0u, 0u, 0u };   /* start from zero */
         const int  rc = br_stat(IO_CONF_PATH, &st);
         io_conf((rc == 0) && (st.type == BR_INODE_FILE), "TC-IO-001",
                 "br_stat(" IO_CONF_PATH ") succeeds and type = FILE");
     }
 
-    /* ---- TC-IO-002: exclusivity (7-01 §1: policy belongs to the driver) ---- */
+    /* TC-IO-002: second open while already open => -EBUSY */
     {
         int        e1 = 0;
         int        e2 = 0;
@@ -101,8 +70,7 @@ int uart_pl011_selftest(void)
         io_conf(ok, "TC-IO-002",
                 "first open succeeds; a second open while already open ⇒ -EBUSY");
 
-        /* Cleanup must happen outside the criterion: if f2 unexpectedly succeeded it must still be
-         * closed, otherwise every later case is blocked by the exclusive claim */
+        /* Cleanup outside the criterion: a leaked open would block every later case. */
         if (f2 != BR_NULL) {
             (void)br_file_close(f2);
         }
@@ -111,7 +79,7 @@ int uart_pl011_selftest(void)
         }
     }
 
-    /* ---- TC-IO-003: GET_INFO reports the platform facts ---- */
+    /* TC-IO-003: GET_INFO reports the platform facts */
     {
         int                  err  = 0;
         br_file_t           *f    = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
@@ -134,10 +102,8 @@ int uart_pl011_selftest(void)
         }
     }
 
-    /* ---- TC-IO-004: write goes through (bytes appearing on the QEMU console are evidence, not a
-     * criterion) ----
-     * Device write is **byte transparent**: no '\n' → CRLF conversion (that is the console's policy,
-     * see console_pl011.c) ⇒ the test string carries CRLF itself, to avoid stair-stepped line breaks. */
+    /* TC-IO-004: write returns the byte count. Device write is byte-transparent (no '\n' -> CRLF
+     * conversion, which is console policy), so the literal carries CRLF itself. */
     {
         static const char msg[] = "uart-pl011: /dev/" BR_UART_PL011_DEV_NAME
                                   " write path OK\r\n";
@@ -158,11 +124,8 @@ int uart_pl011_selftest(void)
         }
     }
 
-    /* ---- TC-IO-005: empty RX FIFO + non-blocking ⇒ -EAGAIN ----
-     * The premise is "the FIFO is empty" (nobody typed into the QEMU serial port since boot). If the
-     * host pressed a key first, this case honestly reports red — that is a broken premise, not a
-     * driver bug; we do not flush first just to "always be green" (that would turn this criterion
-     * into a criterion for something else). */
+    /* TC-IO-005: empty RX FIFO + non-blocking => -EAGAIN. Premise: nobody typed into the QEMU
+     * serial port; we do not flush first just to stay green. */
     {
         int        err = 0;
         br_file_t *f   = br_open_err(IO_CONF_PATH, BR_O_RDONLY | BR_O_NONBLOCK, &err);
@@ -181,7 +144,7 @@ int uart_pl011_selftest(void)
         }
     }
 
-    /* ---- TC-IO-006: poll sets POLLOUT and **clears** the bits not set ---- */
+    /* TC-IO-006: poll sets POLLOUT and clears the bits not set */
     {
         int        err = 0;
         br_file_t *f   = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
@@ -202,7 +165,7 @@ int uart_pl011_selftest(void)
         }
     }
 
-    /* ---- TC-IO-007: wrong magic / unknown nr ⇒ -ENOTSUP (not -EINVAL) ---- */
+    /* TC-IO-007: wrong magic / unknown nr => -ENOTSUP (not -EINVAL) */
     {
         int        err  = 0;
         br_file_t *f    = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
@@ -225,7 +188,7 @@ int uart_pl011_selftest(void)
         }
     }
 
-    /* ---- TC-IO-008: the cdev file surface has no lseek/fsync (empty slots ⇒ -ENOTSUP) ---- */
+    /* TC-IO-008: the cdev file surface has no lseek/fsync (empty slots => -ENOTSUP) */
     {
         int        err    = 0;
         br_file_t *f      = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
@@ -248,7 +211,7 @@ int uart_pl011_selftest(void)
         }
     }
 
-    /* ---- TC-IO-009: close returns 0 and the exclusive claim is released with it ---- */
+    /* TC-IO-009: close returns 0 and releases the exclusive claim */
     {
         int         e1 = 0;
         int         e2 = 0;
@@ -262,7 +225,7 @@ int uart_pl011_selftest(void)
         io_conf(ok, "TC-IO-009", "close returns 0 and a later open succeeds again (claim released)");
     }
 
-    /* ---- TC-IO-010: a call needing an argument given NULL ⇒ -EINVAL (a different thing from -ENOTSUP) ---- */
+    /* TC-IO-010: NULL argument where one is required => -EINVAL (distinct from -ENOTSUP) */
     {
         int        err    = 0;
         br_file_t *f      = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
@@ -288,15 +251,14 @@ int uart_pl011_selftest(void)
         }
     }
 
-    /* ---- TC-IO-011: SET_BAUD representability validation and "current baud rate" update ----
-     * QEMU's stdio serial backend does not throttle by baud rate, so changing the divisor here does
-     * **not** garble later logs; on real hardware it would also change the console rate (heading ⑦)
-     * ⇒ the case therefore always writes 115200 back at the end. */
+    /* TC-IO-011: SET_BAUD representability check and current-baud update. QEMU's stdio backend
+     * does not throttle by baud, so restoring 115200 at the end keeps real-hardware console risk
+     * out. */
     {
         int                  err    = 0;
         br_file_t           *f      = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);
-        br_u32               too_hi = 4000000u;   /* > refclk/16 ⇒ IBRD computes to 0 */
-        br_u32               zero   = 0u;         /* baud=0 ⇒ divisor 0, must be explicitly rejected */
+        br_u32               too_hi = 4000000u;   /* > refclk/16 => IBRD computes to 0 */
+        br_u32               zero   = 0u;         /* baud=0 => divisor 0, must be rejected */
         br_u32               good   = 9600u;      /* representable: IBRD=156 FBRD=16 */
         br_u32               back   = BR_PL011_BAUD;
         int                  r_hi = 0;
@@ -330,7 +292,7 @@ int uart_pl011_selftest(void)
         }
     }
 
-    /* ---- TC-IO-012: FLUSH_RX drains the FIFO ---- */
+    /* TC-IO-012: FLUSH_RX drains the FIFO */
     {
         int                  err   = 0;
         br_file_t           *f     = br_open_err(IO_CONF_PATH, BR_O_RDWR | BR_O_NONBLOCK, &err);

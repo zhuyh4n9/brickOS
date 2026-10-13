@@ -1,18 +1,8 @@
 /*
- * brickOS prototype v0.2.0 — semaphores (semaphore.h; provided by the runtime/posix plugin)
- *
- * Base = core's `br_sem_t` (allocation-free wait chain, `3-01` §7). `sem_post` may be called
- * directly from an ISR (core's `br_sem_give` is ISR-safe, `3-02` §11.3) — one of this
- * service's few legal interrupt-to-thread channels.
- *
- * ★ `sem_t` **is** `br_sem_t`: the layout is public + there is a static initializer
- *   (`BR_SEM_INIT_VALUE`), so both `sem_init` and static initialization work; there is no
- *   lazy-initialization ambiguity.
- * ★ `sem_getvalue` is an **observation** (core's `br_sem_count`) and does not change
- *   semantics.
- * ★ `sem_open`/`sem_close`/`sem_unlink` (named semaphores) are **not in this generation**:
- *   they need a kernel object namespace, which is a v2 topic — not declaring them = exposed
- *   at compile time.
+ * Semaphores over core's br_sem_t (allocation-free wait chain). sem_post is ISR-safe (core's
+ * br_sem_give) -- one of the few legal interrupt-to-thread channels. sem_t is br_sem_t:
+ * public layout plus BR_SEM_INIT_VALUE, so static initialization works. sem_getvalue is a
+ * snapshot (br_sem_count). Named semaphores (sem_open/close/unlink) are not in this generation.
  */
 #ifndef BR_POSIX_SEMAPHORE_H
 #define BR_POSIX_SEMAPHORE_H

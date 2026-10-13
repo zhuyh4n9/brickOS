@@ -1,37 +1,10 @@
 /*
- * tests/host/sync_test.c — host-side sync primitive semantics cases (design 6-01 §3.2/§3.3, TC-SYNC/TC-TIME)
- *
- * ## Why the host side is the primary check
- *
- * The hard part of mutex/sem/cond is entirely in the blocking path: "push the wait chain → yield
- * the CPU → wakeup/timeout → unlink → re-lock/hand off ownership". Testing only the lock-free
- * fast path is no test at all. On the host a fake scheduler really implements
- * `br_sched_block_current()`/`br_sched_wake()`/timeout scanning — so blocking, wakeup and
- * timeout really run once, instead of inspecting data structures.
- *
- * ## Test-harness boundary (matches ADR-0007 §2.7)
- *
- * - Host context switching uses `swapcontext()` from `ucontext.h`. It is a test harness, not a
- *   second target implementation — the target switch is asm in `core/src/sched/`, and the host
- *   side only needs "can block / can be woken". Hand-writing aarch64 switch asm on an x86 host
- *   is pointless.
- * - Files under test = `core/src/sync/sync.c` (sync primitives) + `core/src/time.c`
- *   (br_deadline_from_now) + `core/src/string.c` (compiler support routines). It does NOT
- *   compile `core/src/sched/sched_core.c` (it contains `wfi` inline asm, which the host cannot
- *   build): the four wait-chain primitives and the TCB layout are reimplemented on the host
- *   exactly per the frozen contract in `sched_internal.h` (it is a 30-line singly linked list,
- *   not an algorithm).
- * - The fake scheduler strictly follows the handshake protocol sync.c relies on (see the ICB
- *   protocol in the sync.c header): `br_sched_wake()` writes `wait_status=0` first;
- *   `br_sched_block_current()` sees `wait_status==0` and does not switch away; timeouts apply
- *   only to threads with `state==BLOCKED`.
- *
- * ## Output protocol
- *
- *   [SYNCCONF] PASS/FAIL/SKIP <tag> <desc>     (printed by the same sync.c as on target)
- *   [HOSTTEST] PASS/FAIL <tag> <desc>
- *   [HOSTTEST] SUMMARY pass=N fail=0 total=N
- * Any failure ⇒ non-zero exit code.
+ * Host-side sync primitive semantics cases (TC-SYNC/TC-TIME). The hard part of mutex/sem/cond is
+ * the blocking path, so a fake ucontext scheduler really runs br_sched_block_current() /
+ * br_sched_wake() / timeout scanning (a test harness, not a second target implementation). The
+ * fake scheduler follows the ICB handshake sync.c relies on: br_sched_wake() writes
+ * wait_status=0 first, br_sched_block_current() then does not switch away, and timeouts apply only
+ * to BLOCKED threads. Output: [SYNCCONF] PASS/FAIL/SKIP, [HOSTTEST] PASS/FAIL + SUMMARY.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -45,14 +18,8 @@
 
 #include "sched_internal.h"
 
-/*
- * Forward declaration of the self-test suite entry. After ADR-0010 it no longer appears in
- * `br_sync.h` — the self-test entry is not a plugin's public capability, and keeping it on the
- * golden surface would turn "change one case" into an interface change. Declarations are
- * centralized in `core/selftest/core_selftest.c`; this file is a caller, so it carries its own
- * (the implementation lives with the suite in `core/selftest/sync_selftest.c`, compiled together
- * by the gates.toml sync-test sources).
- */
+/* Self-test suite entry (not in br_sync.h; the implementation lives in
+ * core/selftest/sync_selftest.c, compiled in by the gates.toml sync-test sources). */
 int br_sync_selftest(void);
 
 #include <stdarg.h>
@@ -61,9 +28,7 @@ int br_sync_selftest(void);
 #include <string.h>
 #include <ucontext.h>
 
-/* =====================================================================
- * Case framework
- * ===================================================================== */
+/* ---- case framework ---- */
 
 static int s_pass;
 static int s_fail;
@@ -84,9 +49,7 @@ static void section(const char *tag, const char *desc)
     printf("[HOSTTEST] ---- %s %s\n", tag, desc);
 }
 
-/* =====================================================================
- * Fake platform clock (the host stand-in for time.c): 1 MHz ⇒ 1 tick == 1 us (virtual clock, for exact checks)
- * ===================================================================== */
+/* ---- fake platform clock (stand-in for time.c): 1 MHz => 1 tick == 1 us ---- */
 
 #define FAKE_TICKS_HZ 1000000u
 
@@ -115,14 +78,8 @@ BR_NORETURN void br_panic_bare(const char *fmt, ...)
     abort();
 }
 
-/* =====================================================================
- * Fake L2 interrupt lock (host stand-in for br_irq_lock/unlock)
- *
- * The host has no maskable interrupts; but scheduling is cooperative (only an explicit
- * block/yield switches), so "no switch inside an interrupts-off critical section" holds on the
- * host as well. The state encoding is isomorphic to the real implementation (I bit + depth), so
- * the spinlock pairing cases are meaningful on the host too.
- * ===================================================================== */
+/* Fake L2 interrupt lock: cooperative scheduling plus the real state encoding (I bit + depth)
+ * keeps the spinlock pairing cases meaningful on the host. */
 
 static br_u32 g_irq_depth;
 
@@ -146,9 +103,7 @@ void br_irq_unlock(br_irq_state_t st)
     g_irq_depth--;
 }
 
-/* =====================================================================
- * The four wait-chain primitives (reimplemented exactly per the frozen contract in sched_internal.h; see the file header)
- * ===================================================================== */
+/* ---- the four wait-chain primitives (per the contract in sched_internal.h) ---- */
 
 void br_waitq_push(void **head, br_thread_t *t)
 {
@@ -219,9 +174,7 @@ void *br_thread_priv(br_thread_t *t)
     return (void *)((br_u8 *)t + sizeof(struct br_thread));
 }
 
-/* =====================================================================
- * Fake scheduler (ucontext)
- * ===================================================================== */
+/* ---- fake scheduler (ucontext) ---- */
 
 #define FAKE_MAX          12u
 #define FAKE_STACK_BYTES  (128u * 1024u)
@@ -285,9 +238,8 @@ static br_bool sched_all_done(void)
 
 /*
  * Timeout scan: with no ready thread, push the virtual clock to the nearest deadline and mark
- * every expired BLOCKED thread -ETIMEDOUT + READY. It applies ONLY to BLOCKED threads — a thread
- * that is already READY/woken is not timed out again, which is the key to "timeout vs ownership
- * handoff" never producing two winners (same discipline as the real tick scan).
+ * every expired BLOCKED thread -ETIMEDOUT + READY. A thread already READY/woken is not timed out
+ * again, so "timeout vs ownership handoff" cannot produce two winners.
  */
 static br_bool advance_timeouts(void)
 {
@@ -381,9 +333,8 @@ int br_sched_block_current(br_time_t abs_deadline)
     t->wake_at     = abs_deadline;
     (void)swapcontext(&g_uc[tcb_index(t)], &g_sched_uc);
 
-    /* on return g_current has been set back to this thread by the scheduler; re-read it rather
-     * than depend on "locals across setjmp" (GCC treats swapcontext like setjmp, and reading a
-     * local across it trips -Wclobbered-style assumptions). */
+    /* g_current was set back to this thread by the scheduler; re-read it rather than keep a local
+     * across swapcontext (GCC treats it like setjmp). */
     return g_current->wait_status;
 }
 
@@ -426,9 +377,8 @@ br_u32 br_thread_pool_used(void)
     return br_sched_task_count();
 }
 
-/* find an empty TCB slot. Separate function + no-inline: GCC treats `getcontext/makecontext`
- * like setjmp, and once inlined it counts the loop variable as a "local across setjmp" and
- * reports -Wclobbered (the value does not actually need to survive it). */
+/* Empty-TCB scan, noinline: GCC treats getcontext/makecontext like setjmp, and inlining would
+ * trip -Wclobbered on the loop variable. */
 #if defined(__GNUC__)
 #  define HOST_NOINLINE __attribute__((noinline))
 #else
@@ -508,9 +458,8 @@ int br_task_join(br_thread_t *t, int *exit_code)
 
     g_join_waiter[tcb_index(t)] = g_current;
     while (t->state != BR_TASK_ZOMBIE) {
-        /* ICB protocol: before yielding the CPU, wait_status must be set to the pessimistic
-         * default (otherwise the 0 left by a previous wake would be read by block_current as
-         * "already woken again", so it never switches away — a busy-wait deadlock). */
+        /* ICB: set wait_status to the pessimistic default before yielding, else a stale 0 from a
+         * previous wake makes block_current never switch away (busy-wait deadlock). */
         g_current->wait_status = BR_ERR(ETIMEDOUT);
         (void)br_sched_block_current(BR_TIMEOUT_INF);
     }
@@ -567,9 +516,7 @@ br_u32 br_task_state(const br_thread_t *t)
     return (t != NULL) ? t->state : BR_TASK_NEW;
 }
 
-/* =====================================================================
- * Host-side supplementary cases (beyond the conformance cases)
- * ===================================================================== */
+/* ---- host-side supplementary cases ---- */
 
 static br_mutex_t    s_def_m  = BR_MUTEX_INIT_VALUE;
 static br_sem_t      s_def_s  = BR_SEM_INIT_VALUE(3u);
@@ -649,7 +596,7 @@ static void host_sleep_resolution(void)
     CHECK(br_task_sleep(BR_TIMEOUT_INF) == BR_ERR(EINVAL), "TC-TIME-SLEEP", "sleep(INF) -EINVAL(G13)");
 }
 
-/* ---- Randomized stress (LCG styled after tests/host/mem_test.c) ---- */
+/* ---- randomized stress ---- */
 
 #define STRESS_WORKERS 3u
 #define STRESS_OPS     50000u
@@ -770,15 +717,12 @@ static void host_stress(void)
           "TC-SYNC-STRESS", "sem wait chain empty after stress (no ghost nodes)");
 }
 
-/* =====================================================================
- * Main flow (runs in the "main thread" materialized by the fake scheduler)
- * ===================================================================== */
+/* ---- main flow (runs in the fake scheduler's main thread) ---- */
 
 static void host_body(void)
 {
-    /* the SAME self-test suite as on target (`core/selftest/sync_selftest.c`): it really creates
-     * threads + joins them, and the blocking path really runs (return value = failure count;
-     * red/green comes from the logs and the host summary). */
+    /* The same self-test suite as on target: it really creates and joins threads and the blocking
+     * path really runs (return value = failure count; red/green from the logs). */
     br_sync_selftest();
 
     host_static_define();
@@ -786,7 +730,7 @@ static void host_body(void)
     host_sleep_resolution();
     host_stress();
 
-    /* global wrap-up: no case should leave a waiter behind */
+    /* global wrap-up: no case may leave a waiter behind */
     printf("[HOSTTEST] final: task_count=%lu ready=%lu\n",
            (unsigned long)br_sched_task_count(), (unsigned long)br_sched_ready_count());
 }
@@ -822,7 +766,7 @@ int main(void)
     makecontext(&g_uc[0], host_main_trampoline, 0);
     rq_push(&g_tcb[0]);
 
-    /* startup: switch to the scheduler, which runs the main thread; when all threads are done it switches back here */
+    /* Switch to the scheduler, which runs the main thread and returns here when all are done. */
     (void)swapcontext(&g_boot_uc, &g_sched_uc);
 
     printf("[HOSTTEST] SUMMARY pass=%d fail=%d total=%d\n", s_pass, s_fail, s_pass + s_fail);

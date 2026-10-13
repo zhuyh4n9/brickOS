@@ -1,17 +1,9 @@
-//! L0 declaration-surface model + loader (contract §7.1 / §7.2 field tables).
-//!
-//! - Scan the plugin tree under `root`: recurse for `brick.toml`, skipping `.git` /
-//!   `build` / `prebuilts` / `tools` / `api` / `docs` / `Design` and dot-prefixed dirs;
-//!   only directories that really contain `brick.toml` are picked.
-//! - `Product` is optional (`root/product.toml`).
-//! - Shape errors (missing required / type mismatch / name contract / enum out of range /
-//!   4-segment version / 4-segment range) ⇒ `BRV-MF-0001` or `BRV-VER-0005/0006`, exit
-//!   code 2 (BRV-D2: schema is per-record shape; cross-field invariants are engine-side).
-//! - Cross-field invariants within one **record** (export taxonomy TAX-0016..19, phase,
-//!   privilege) are also reported at load time for V-18a (`brickie-core --selftest`
-//!   provable standalone). **agent-B's check.rs must not re-report them.**
-//! - `Snapshot` (`api/iface/**`) / `Lock` (`brickie.lock`) are **read-only**; unreadable = unpublished.
-//! All text parsing uses `toml::Value` (no serde derive); decisions here + `rules`.
+//! Declaration-surface model + loader for `brick.toml` / `product.toml`.
+//! Scan skips `.git` / `build` / `prebuilts` / `tools` / `api` / `docs` / `Design` and dot-dirs;
+//! `product.toml` is optional. Shape errors (incl. 4-segment version/range) exit 2 with
+//! `BRV-MF-0001` / `BRV-VER-0005/0006`; per-record invariants (taxonomy, phase, privilege) are
+//! reported here for V-18a -- check.rs must not re-report them. `Snapshot` / `Lock` are read-only;
+//! parsing is via `toml::Value` (no serde derive).
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -21,10 +13,7 @@ use crate::diag::{Diags, Severity};
 use crate::rules;
 use crate::version::{self, Range, Version};
 
-/// Directory names skipped during scanning (contract §7.1 loader discipline).
 pub const SKIP_DIRS: &[&str] = &[".git", "build", "prebuilts", "tools", "api", "docs", "Design"];
-
-// ------------------------------------------------------------------ model types
 
 /// One `[[res]]` entry.
 #[derive(Clone, Debug, Default)]
@@ -53,7 +42,6 @@ pub struct RequiresIface {
     pub mode: String,
 }
 
-/// `[compat]`.
 #[derive(Clone, Debug, Default)]
 pub struct Compat {
     pub core: Option<Range>,
@@ -72,12 +60,11 @@ pub struct Dep {
     pub range: Range,
     pub range_raw: String,
     pub kind: String,
-    /// Phase **assertion** (only `kind = "init"`; default = consumer's own phase, §7.2 R2).
+    /// Phase assertion (only `kind = "init"`; default = consumer's own phase).
     pub phase: Option<String>,
     pub symbol: Option<String>,
 }
 
-/// One `[[export.entries]]` entry.
 #[derive(Clone, Debug, Default)]
 pub struct ExportEntry {
     pub kind: String,
@@ -113,7 +100,6 @@ impl Export {
     }
 }
 
-/// `[privileged.resources]`.
 #[derive(Clone, Debug, Default)]
 pub struct PrivilegedResources {
     pub irq: Vec<i64>,
@@ -131,7 +117,6 @@ impl PrivilegedResources {
     }
 }
 
-/// `[privileged]`.
 #[derive(Clone, Debug, Default)]
 pub struct PrivilegedDecl {
     pub level: Option<String>,
@@ -139,10 +124,7 @@ pub struct PrivilegedDecl {
     pub resources: PrivilegedResources,
 }
 
-/// One `[[mount]]` entry (ADR-0030: **the APP's mount plan**).
-///
-/// Formerly this table lived on FS plugins ("where this plugin mounts"); now it belongs to
-/// the **consumer** (APP): what to mount and where — FS plugins only register drivers (fstype).
+/// One `[[mount]]` entry: the APP declares what to mount where; FS plugins only register drivers.
 #[derive(Clone, Debug, Default)]
 pub struct MountDecl {
     /// POSIX `mount()` arg 1: source device name (media FS only; empty when no media).
@@ -155,7 +137,7 @@ pub struct MountDecl {
     pub order: i64,
 }
 
-/// `[build]` (consumed by `brickie build` — ADR-0004 / design ADR-0003 S1–S3).
+/// `[build]` (consumed by `brickie build`).
 #[derive(Clone, Debug, Default)]
 pub struct BuildDecl {
     /// Globs relative to the plugin root (`src/*.c`; expansion rules in `build.rs`).
@@ -164,16 +146,11 @@ pub struct BuildDecl {
     pub includes: Vec<String>,
     /// Extra `-D<name>` (optional; the product-level `[build]` has the same key).
     pub defines: Vec<String>,
-    /// This plugin's own compile flags, appended after the **product-level** `cflags` ⇒ can
-    /// disable individual warnings. Use case (vendor code): upstream u-boot's `fs/erofs/**`
-    /// is written against u-boot's own warning set, without our `-Wshadow`/`-Wpointer-arith`/… .
+    /// Plugin-local flags, appended after the product-level `cflags`; can disable warnings.
     pub cflags: Vec<String>,
 }
 
-/// Platform plugin `[build.target]`: **target facts** (arch / cross prefix / linker script / QEMU model).
-///
-/// Ownership: "exactly one platform per image" (§8.3 ④), and arch plus linker script are
-/// part of "what the platform is" — putting them in `product.toml` would give two writers.
+/// Platform `[build.target]`: target facts; ownership is the platform (one platform per image).
 #[derive(Clone, Debug, Default)]
 pub struct BuildTarget {
     pub arch: String,
@@ -199,11 +176,7 @@ pub struct ProductBuild {
     pub core_includes: Vec<String>,
     /// Generated-source set (`build/gen/**`, produced by `brickie gen`), relative to the repo root.
     pub gen_sources: Vec<String>,
-    /// **Core selftest suite source set** (ADR-0010), relative to the repo root.
-    ///
-    /// Kept separate from `core_sources` on purpose: selftest is switched off by
-    /// `product.toml [selftest]`, and "off" means **not compiled in** (not "compiled but
-    /// not run") — so `core/selftest/**` must not fall inside `core_sources` globs.
+    /// Core selftest sources (repo-root relative); outside `core_sources` (off = not compiled).
     pub selftest_sources: Vec<String>,
     pub cflags: Vec<String>,
     pub asflags: Vec<String>,
@@ -215,7 +188,6 @@ pub struct ProductBuild {
     pub obj_dir: Option<String>,
 }
 
-/// Normalized model of one plugin.
 #[derive(Clone, Debug, Default)]
 pub struct Plugin {
     /// `brick.toml` path relative to `root`.
@@ -227,23 +199,14 @@ pub struct Plugin {
     pub plugin_type: String,
     pub api_type: String,
     pub subkind: Option<String>,
-    /// `[plugin].symbol_prefix`: **hook/descriptor symbol prefix override** (optional).
-    ///
-    /// Default = the generator derives it from `symbol_prefix(name_short)`. But **different
-    /// namespaces can share a short name** (e.g. `iface/posix` and `runtime/posix`), so derived
-    /// values collide into the same `posix_*` ⇒ duplicate symbols at link time. This field lets
-    /// skins/same-named plugins give an explicit unique prefix (e.g. `iface_posix_`).
+    /// `[plugin].symbol_prefix`: hook/descriptor symbol prefix override. Default derives from the
+    /// short name, so same-named plugins in different namespaces collide at link time.
     pub symbol_prefix: Option<String>,
     pub lang: String,
     pub phase: String,
     pub sched_class: String,
     pub sched_kind: Option<String>,
-    /// Whether this plugin declares `[selftest]` (ADR-0010).
-    ///
-    /// **Why declare it in the manifest instead of guessing**: the generator must decide
-    /// whether to emit the `.selftest = <prefix>selftest` **symbol reference** — a missing
-    /// symbol fails the link, and "which plugins have selftests" is derivable neither from
-    /// `phase` (selftest is not a phase) nor from scanning sources. It is a declaration fact.
+    /// Declares `[selftest]`: emit the `.selftest` symbol reference only then (not derivable).
     pub has_selftest: bool,
     /// `[selftest].cases`: self-declared case count (**presentation/diagnostics only**).
     pub selftest_cases: Option<i64>,
@@ -258,10 +221,8 @@ pub struct Plugin {
     pub deps: Vec<Dep>,
     pub exports: Vec<Export>,
     pub privileged: Option<PrivilegedDecl>,
-    /// `[[mount]]` entries (the APP's mount plan; ADR-0030).
     pub mounts: Vec<MountDecl>,
     pub build: Option<BuildDecl>,
-    /// `[build.target]` (platform plugins only; target facts for `brickie build`).
     pub build_target: Option<BuildTarget>,
 }
 
@@ -280,7 +241,6 @@ impl Plugin {
         (ram, stack)
     }
 
-    /// List of export unit ids.
     pub fn unit_ids(&self) -> Vec<String> {
         self.exports.iter().map(|e| e.unit_id(&self.name)).collect()
     }
@@ -427,7 +387,6 @@ impl Plugin {
     }
 }
 
-/// Normalized model of `product.toml`.
 #[derive(Clone, Debug, Default)]
 pub struct Product {
     pub file: String,
@@ -440,17 +399,14 @@ pub struct Product {
     pub select: Vec<String>,
     pub budget_ram_kib: Option<i64>,
     pub budget_stack_kib: Option<i64>,
-    /// `[kernel].hz`: tick frequency in Hz (cf. Linux `CONFIG_HZ`).
-    ///
-    /// `None` = undeclared (or the whole table absent) ⇒ **default 200** (5 ms per tick).
-    /// `brickie build` passes it as `-DBR_CFG_TICK_HZ=<hz>` to **all compilation units**
-    /// (core / plugins / generated sources), so tick rate has a single source of truth (ADR-0017).
+    /// `[kernel].hz`: tick frequency in Hz. `None` = undeclared ⇒ default 200 (5 ms/tick);
+    /// passed to all compilation units as `-DBR_CFG_TICK_HZ=<hz>` (single source of truth).
     pub kernel_hz: Option<i64>,
     pub lint_frozen_deps: String,
     pub allow_edges: Vec<(String, String)>,
-    /// `[build]`: product-level build policy (ADR-0004; consumed by `brickie build`).
+    /// `[build]`: product-level build policy (consumed by `brickie build`).
     pub build: Option<ProductBuild>,
-    /// `[selftest].enabled`: master selftest switch (ADR-0010). `None` = undeclared ⇒ follow stage.
+    /// `[selftest].enabled`: master selftest switch; `None` = undeclared ⇒ follow stage.
     pub selftest_enabled: Option<bool>,
     /// `[selftest].plugins`: run only the listed plugins (empty = all declaring `[selftest]`).
     pub selftest_plugins: Vec<String>,
@@ -459,11 +415,7 @@ pub struct Product {
 }
 
 impl Product {
-    /// The **single** decision point for the selftest master switch (ADR-0010 §2.3).
-    ///
-    /// Semantics: `enabled = true|false` explicit; absent (whole table missing) = **follow
-    /// `stage`** — on for `dev`, off for `release` (dev images carry selftests, release don't).
-    /// Writing `"inherit"` equals the default (makes the default visible in review).
+    /// Selftest master switch: explicit true/false, else follow `stage` (dev on, release off).
     pub fn selftest_on(&self) -> bool {
         match self.selftest_enabled {
             Some(v) => v,
@@ -471,9 +423,7 @@ impl Product {
         }
     }
 
-    /// Whether this plugin emits the `selftest` hook now (master switch ∧ list).
-    ///
-    /// Empty list = no per-plugin filtering (every plugin that **declares** `[selftest]` emits it).
+    /// Whether this plugin emits the `selftest` hook now (switch ∧ list); empty = no filtering.
     pub fn selftest_for(&self, plugin: &str) -> bool {
         if !self.selftest_on() {
             return false;
@@ -481,7 +431,7 @@ impl Product {
         self.selftest_plugins.is_empty() || self.selftest_plugins.iter().any(|n| n == plugin)
     }
 
-    /// §7.5: `[lint].frozen_deps` overrides the `stage` default.
+    /// `[lint].frozen_deps` overrides the `stage` default.
     pub fn release_strict(&self) -> bool {
         match self.lint_frozen_deps.as_str() {
             "deny" => true,
@@ -533,7 +483,6 @@ impl Product {
     }
 }
 
-/// Result of loading the plugin tree.
 #[derive(Clone, Debug, Default)]
 pub struct TreeLoad {
     pub diags: Diags,
@@ -555,9 +504,7 @@ impl TreeLoad {
             .unwrap_or_default()
     }
 
-    /// Ruling R-6: a `plugin_type = "platform"` `[[res]]` is also **platform capacity**.
-    ///
-    /// `(ram_kib, stack_kib)`; summed across platforms (theoretically exactly 1 per image).
+    /// Ruling R-6: platform `[[res]]` is also platform capacity; `(ram_kib, stack_kib)`, summed.
     pub fn platform_capacity(&self) -> (i64, i64) {
         let mut ram = 0;
         let mut stack = 0;
@@ -576,8 +523,6 @@ impl TreeLoad {
         self.has_product
     }
 }
-
-// ------------------------------------------------------------------ shape helpers
 
 fn req_str(
     t: &toml::Table,
@@ -758,13 +703,8 @@ fn int_array(t: &toml::Table, key: &str, target: &str, file: &str, span: &str, d
     }
 }
 
-/// Parse the `[[mount]]` array (ADR-0030).
-///
-/// Shape: `[[mount]] source = "emmc0" / target = "/fat12" / fstype = "fat" / order = 2`
-///   - `target` / `fstype` are **required** (missing either = "cannot mount" or "mount what?");
-///   - `source` is optional (= media-less FS, e.g. tmpfs/devfs);
-///   - `order` is optional (default 0); equal orders sort stably by declaration order.
-/// Ownership: only `plugin_type = "app"` may declare it — the mount plan belongs to the consumer.
+/// Parse `[[mount]]`: `target` / `fstype` required, `source` optional (media-less FS), `order`
+/// optional (default 0, ties keep declaration order). Only `plugin_type = "app"` may declare it.
 fn parse_mounts(
     top: &toml::Table,
     name: &str,
@@ -861,9 +801,8 @@ fn array_of_tables<'a>(t: &'a toml::Table, key: &str) -> Vec<&'a toml::Table> {
     }
 }
 
-/// `[[export.entries]].value`: ruling R-4 / schema `oneOf[string, string[]]`.
-///
-/// Array form is normalized to a `,` join (hash input must be one deterministic string; IFACE-IR rule 9).
+/// `[[export.entries]].value`: string or string array (R-4). The array form is joined with `,`
+/// so the hash input is one deterministic string.
 fn load_entry_value(
     t: &toml::Table,
     target: &str,
@@ -963,7 +902,7 @@ fn parse_version_field(
     }
 }
 
-/// Parse the `range` field; 4 segments ⇒ `BRV-VER-0006`; other shape errors ⇒ `BRV-MF-0001`. Both exit code 2.
+/// Parse the `range` field: 4 segments ⇒ `BRV-VER-0006`, else `BRV-MF-0001` (both exit 2).
 fn parse_range_field(
     raw: &str,
     target: &str,
@@ -984,8 +923,6 @@ fn parse_range_field(
         }
     }
 }
-
-// ------------------------------------------------------------------ brick.toml
 
 fn rel_path(root: &Path, p: &Path) -> String {
     p.strip_prefix(root)
@@ -1037,7 +974,6 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         ..Default::default()
     };
 
-    // schema
     match req_int(top, "schema", target, &file, "", d) {
         Some(1) => p.schema = 1,
         Some(other) => d.shape(
@@ -1087,7 +1023,6 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     if let Some(sk) = &p.subkind {
         check_enum(d, &p.name, &file, "plugin", "subkind", sk, rules::SUBKINDS);
     }
-    // Hook/descriptor symbol prefix override (optional; see Plugin::symbol_prefix).
     p.symbol_prefix = opt_str(plugin, "symbol_prefix", &p.name, &file, "plugin", d);
     if let Some(sp) = &p.symbol_prefix {
         if sp.is_empty() || !sp.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
@@ -1108,8 +1043,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     p.phase = req_str(plugin, "phase", &p.name, &file, "plugin", d).unwrap_or_default();
     p.sched_class = opt_str(plugin, "sched_class", &p.name, &file, "plugin", d)
         .unwrap_or_else(|| "SAFE_PREEMPT".to_string());
-    // `[selftest]` (ADR-0010): **table present = this plugin has selftests**. Its only field
-    // today is `cases` (self-reported count, presentation only); the hook symbol comes from symbol_prefix.
+    // `[selftest]` present = has selftests; `cases` is a self-reported count (presentation only).
     if let Some(st) = opt_table(top, "selftest") {
         p.has_selftest = true;
         p.selftest_cases = opt_int(st, "cases", &p.name, &file, "selftest", d);
@@ -1140,17 +1074,15 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     p.summary = opt_str(plugin, "summary", &p.name, &file, "plugin", d);
     p.license = opt_str(plugin, "license", &p.name, &file, "plugin", d);
 
-    // ---- subkind derivation and conflicts (§8.4 / BRV-TAX-0015) ----
+    // subkind derivation and conflicts (BRV-TAX-0015)
     validate_subkind(&mut p, d);
 
-    // ---- phase and plugin_type constraints (§7.2; schema/rule errors) ----
     if !p.phase.is_empty() && !p.plugin_type.is_empty() {
         if let Some(reason) = rules::phase_reason(&p.plugin_type, p.subkind.as_deref(), &p.phase) {
             d.shape("BRV-MF-0001", &p.name, &file, "plugin.phase", reason, "§7.2");
         }
     }
 
-    // ---- [[res]] ----
     for (i, t) in array_of_tables(top, "res").into_iter().enumerate() {
         let span = format!("res[{i}]");
         let kind = req_str(t, "kind", &p.name, &file, &span, d).unwrap_or_default();
@@ -1166,7 +1098,6 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         });
     }
 
-    // ---- [sched.tt] ----
     if let Some(tt) = opt_sub_table(top, &["sched", "tt"]) {
         p.sched_tt = Some(SchedTt {
             period_us: req_int(tt, "period_us", &p.name, &file, "sched.tt", d).unwrap_or(0),
@@ -1184,10 +1115,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         );
     }
 
-    // ---- [compat] ----
     load_compat(top, &mut p, d);
 
-    // ---- [iface.typedefs] ----
     if let Some(td) = opt_sub_table(top, &["iface", "typedefs"]) {
         for (k, v) in td {
             match v.as_str() {
@@ -1205,7 +1134,6 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         p.typedefs.sort();
     }
 
-    // ---- [[dep]] ----
     for (i, t) in array_of_tables(top, "dep").into_iter().enumerate() {
         let span = format!("dep[{i}]");
         let name = req_str(t, "name", &p.name, &file, &span, d).unwrap_or_default();
@@ -1273,7 +1201,6 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         });
     }
 
-    // ---- [[export]] ----
     for (i, t) in array_of_tables(top, "export").into_iter().enumerate() {
         let span = format!("export[{i}]");
         let mut e = Export::default();
@@ -1286,7 +1213,6 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             check_enum(d, &p.name, &file, &span, "form", &e.form, rules::EXPORT_FORMS);
         }
         e.name = req_str(t, "name", &p.name, &file, &span, d).unwrap_or_default();
-        // schema/plugin.schema.json: `version` / `compat_gen` / `freeze_state` / `status` are all required.
         let vraw = req_str(t, "version", &p.name, &file, &span, d);
         e.version_raw = vraw.clone();
         if let Some(raw) = &vraw {
@@ -1314,7 +1240,6 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             en.name = req_str(et, "name", &p.name, &file, &espan, d).unwrap_or_default();
             en.sig = opt_str(et, "sig", &p.name, &file, &espan, d);
             en.layout = opt_str(et, "layout", &p.name, &file, &espan, d);
-            // Ruling R-4 / schema: `value` = string **or** string array.
             en.value = load_entry_value(et, &p.name, &file, &espan, d);
             en.ops = et.get("ops").map(|_| str_array(et, "ops", &p.name, &file, &espan, d));
             en.status = opt_str(et, "status", &p.name, &file, &espan, d)
@@ -1327,10 +1252,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         p.exports.push(e);
     }
 
-    // ---- export-surface taxonomy invariants (§3.5; the per-record decidable part) ----
     check_export_invariants(&p, d);
 
-    // ---- [privileged] ----
     if let Some(priv_t) = opt_table(top, "privileged") {
         let level = opt_str(priv_t, "level", &p.name, &file, "privileged", d);
         if let Some(l) = &level {
@@ -1342,7 +1265,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         for (i, mt) in array_of_tables(priv_t, "memory").into_iter().enumerate() {
             let span = format!("privileged.memory[{i}]");
             let granularity = req_str(mt, "granularity", &p.name, &file, &span, d).unwrap_or_default();
-            // schema: `ops` required (absent ⇒ shape error; an empty table is handled by BRV-PRIV-0002).
+            // `ops` is required (an empty table is handled by BRV-PRIV-0002).
             if !mt.contains_key("ops") {
                 d.shape(
                     "BRV-MF-0001",
@@ -1359,8 +1282,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
                 regions: str_array(mt, "regions", &p.name, &file, &span, d),
             });
         }
-        // `[[privileged.resources]]` is an **array of tables** (contract §7.1 / schema):
-        // entries accumulate per field; presence of content decides P1's lower bound.
+        // `[[privileged.resources]]` is an array of tables; entries accumulate per field.
         let mut resources = PrivilegedResources::default();
         for rt in array_of_tables(priv_t, "resources") {
             resources
@@ -1406,13 +1328,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
         });
     }
 
-    // ---- [[mount]] (ADR-0030: the **consumer**'s mount plan) ----
-    // ★ Why only app gets "missing fstype"-style errors: [[mount]] used to mean "where I mount"
-    //   on FS plugins; it now belongs to the APP. To avoid silently swallowing the old form (which
-    //   would look mounted but isn't), a **non-app** plugin declaring [[mount]] gets a shape error.
     p.mounts = parse_mounts(top, &p.name, &file, &p.plugin_type, d);
 
-    // ---- [build] ----
     if let Some(bt) = opt_table(top, "build") {
         p.build = Some(BuildDecl {
             sources: str_array(bt, "sources", &p.name, &file, "build", d),
@@ -1420,7 +1337,6 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             defines: str_array(bt, "defines", &p.name, &file, "build", d),
             cflags: str_array(bt, "cflags", &p.name, &file, "build", d),
         });
-        // `[build.target]`: target facts. Only platform may declare it (§8.3 ④: one platform per image).
         if let Some(tt) = opt_table(bt, "target") {
             if p.plugin_type != "platform" {
                 d.shape(
@@ -1500,7 +1416,7 @@ fn validate_subkind(p: &mut Plugin, d: &mut Diags) {
             }
         }
         (Some(der), None) => {
-            // Derivable from the name: fill in the model's subkind (not written back to the file).
+            // Derivable from the name; not written back to the file.
             p.subkind = Some(der.to_string());
         }
         (None, None) => {
@@ -1520,10 +1436,7 @@ fn validate_subkind(p: &mut Plugin, d: &mut Diags) {
     }
 }
 
-/// Export-surface taxonomy invariants (§3.5, `BRV-TAX-0016/0017/0018/0019`).
-///
-/// Invariant 3 — "every re-exported unit's `api_iface` equals its own" — is a **cross-file**
-/// decision owned by agent-B's `iface`/`check` (this function checks non-empty + element shape).
+/// Export-surface taxonomy invariants (`BRV-TAX-0016/0017/0018/0019`); invariant 3 is cross-file.
 fn check_export_invariants(p: &Plugin, d: &mut Diags) {
     let views: Vec<rules::ExportView<'_>> = p
         .exports
@@ -1548,13 +1461,10 @@ fn check_export_invariants(p: &Plugin, d: &mut Diags) {
     }
 }
 
-// ------------------------------------------------------------------ compat
-
 fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
     let Some(c) = opt_table(top, "compat") else {
         return;
     };
-    // schema/plugin.schema.json: `core` is required when `[compat]` exists.
     if c.contains_key("core") {
         if let Some(raw) = opt_str(c, "core", &p.name, &p.file, "compat", d) {
             p.compat.core = parse_range_field(&raw, &p.name, &p.file, "compat.core", d);
@@ -1575,7 +1485,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
     p.compat.truth = opt_str(c, "truth", &p.name, &p.file, "compat", d);
     p.compat.abi_id = opt_str(c, "abi_id", &p.name, &p.file, "compat", d);
 
-    // v0.1 allows only hash_scope/truth both = "decl" (BRV-IFACE-0011, §6.6 / V-11②).
+    // v0.1 allows only hash_scope/truth both = "decl" (BRV-IFACE-0011).
     let hs = p.compat.hash_scope.clone().unwrap_or_else(|| "decl".to_string());
     let tr = p.compat.truth.clone().unwrap_or_else(|| "decl".to_string());
     if hs != "decl" || tr != "decl" {
@@ -1609,7 +1519,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
         if !api_iface.is_empty() {
             check_enum(d, &p.name, &p.file, &span, "api_iface", &api_iface, rules::API_TYPES);
         }
-        // Required: compat_gen and range are separate (§5.6).
+        // compat_gen and range are separate required fields.
         let compat_gen = req_int(t, "compat_gen", &p.name, &p.file, &span, d)
             .map(|v| v.max(0) as u64)
             .unwrap_or(0);
@@ -1635,7 +1545,7 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
         });
     }
 
-    // Taxonomy compatibility (§3.5 consumer 2) reports info only in v0.1 (V-10③).
+    // Taxonomy compatibility: info only in v0.1 (V-10).
     for r in &p.compat.requires_iface {
         if p.api_type == "native" && r.api_iface == "runtime_adapter" {
             d.coded(
@@ -1653,8 +1563,6 @@ fn load_compat(top: &toml::Table, p: &mut Plugin, d: &mut Diags) {
         }
     }
 }
-
-// ------------------------------------------------------------------ product.toml
 
 /// Load `root/product.toml` (optional). Returns `(file present, model)`.
 pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
@@ -1712,7 +1620,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
         return (true, Some(prod));
     };
     prod.name = req_str(product, "name", &file, &file, "product", d).unwrap_or_default();
-    // schema/product.schema.json: `version` is **not** required inside `[product]`; default 0.0.0.0.
+    // `version` is not required inside `[product]`; default 0.0.0.0.
     if let Some(vraw) = opt_str(product, "version", &file, &file, "product", d) {
         if let Some(v) = parse_version_field(&vraw, &file, &file, "product.version", d) {
             prod.version = v;
@@ -1741,7 +1649,6 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     if let Some(sel) = opt_table(top, "select") {
         prod.select = str_array(sel, "plugins", &file, &file, "select", d);
     }
-    // ---- [selftest] (ADR-0010: master switch for selftests + optional list) ----
     if let Some(st) = opt_table(top, "selftest") {
         prod.has_selftest_table = true;
         match st.get("enabled") {
@@ -1766,7 +1673,6 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
         prod.budget_ram_kib = opt_int(b, "ram_kib", &file, &file, "budget", d);
         prod.budget_stack_kib = opt_int(b, "stack_kib", &file, &file, "budget", d);
     }
-    // ---- [kernel] (tick rate: cf. Linux CONFIG_HZ; ADR-0017) ----
     if let Some(k) = opt_table(top, "kernel") {
         prod.kernel_hz = opt_int(k, "hz", &file, &file, "kernel", d);
     }
@@ -1814,7 +1720,6 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
         }
     }
 
-    // ---- [build] (product-level build policy: consumed by `brickie build`) ----
     if let Some(b) = opt_table(top, "build") {
         let rel = opt_table(b, "release");
         prod.build = Some(ProductBuild {
@@ -1841,8 +1746,6 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
     (true, Some(prod))
 }
 
-// ------------------------------------------------------------------ tree scan
-
 fn scan_plugin_files(dir: &Path, out: &mut Vec<PathBuf>) {
     let entries = match fs::read_dir(dir) {
         Ok(e) => e,
@@ -1867,9 +1770,7 @@ fn scan_plugin_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-// ------------------------------------------------------ dependency closure and include-use scan
-
-/// Transitive closure of a plugin's **declared dependencies** (by name; excludes itself).
+/// Transitive closure of a plugin's declared dependencies (by name; excludes itself).
 pub fn dep_closure(tree: &TreeLoad, name: &str) -> std::collections::BTreeSet<String> {
     let mut seen: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
     let mut stack: Vec<String> = vec![name.to_string()];
@@ -1894,24 +1795,15 @@ pub struct IncludeUse {
     pub file: String,
 }
 
-/// Scan `#include`s in selected plugins' sources (`src/` + `include/`) and map them to the
-/// plugin providing the header across the **whole tree** (consumers = selected only).
-///
-/// Why needed (`-I` narrowing is not enough): the target toolchain ships glibc headers, so a common
-/// name like `#include <unistd.h>` gets **caught by system headers** — after narrowing `-I` nothing
-/// is "missing"; it silently resolves to the glibc declaration (wrong and dangerous in bare-metal).
-/// A filesystem-level "header → provider" map is compiler-search-path independent (ADR-0018).
-///
-/// Limitation (stated honestly): `#include` is detected line by line, **comments are not parsed** —
-/// an `#include` inside a comment counts too. No such false positive in the current tree.
+/// Scan `#include`s in selected plugins' sources (`src/` + `include/`) and map each to the header's
+/// owner across the whole tree. Narrowing `-I` is not enough: a common name like `<unistd.h>` is
+/// silently satisfied by the toolchain's glibc headers. Limitation: comments are not parsed.
 pub fn cross_plugin_includes(
     root: &Path,
     tree: &TreeLoad,
     selected: &std::collections::BTreeSet<String>,
 ) -> Vec<IncludeUse> {
-    // (include dir relative to root, owning plugin name) — **whole-tree** map: a header's
-    // ownership is independent of whether it is in this product's closure. Looking at selected
-    // plugins only would miss the worst case: including a header of an out-of-closure plugin.
+    // (include dir, owning plugin) for the whole tree: header ownership is closure-independent.
     let mut inc_owner: Vec<(String, String)> = Vec::new();
     for p in &tree.plugins {
         if let Some(b) = &p.build {
@@ -1929,9 +1821,8 @@ pub fn cross_plugin_includes(
         for f in plugin_source_files(root, p) {
             let Ok(text) = fs::read_to_string(root.join(&f)) else { continue };
             for h in scan_include_names(&text) {
-                // core headers: core **is not a plugin** (no provider#unit), but "APP includes
-                // a core header directly" is forbidden by A-2 (ADR-0020 / design 1-01 §7.3) ⇒
-                // record it with synthetic provider `"core"`; the caller judges by consumer class.
+                // core headers: core is not a plugin, so record synthetic provider `"core"`;
+                // the caller judges by consumer class (direct core includes are forbidden, A-2).
                 if h.starts_with("br/core/") {
                     out.push(IncludeUse {
                         consumer: p.name.clone(),
@@ -2054,8 +1945,6 @@ pub fn load_tree(root: &Path) -> TreeLoad {
     load
 }
 
-// ------------------------------------------------------------------ snapshots / lock
-
 /// One interface-surface snapshot entry (read side; same shape as [`ExportEntry`]).
 #[derive(Clone, Debug, Default)]
 pub struct SnapshotEntry {
@@ -2158,7 +2047,7 @@ fn snapshot_from_table(file: &str, _base: &Path, top: &toml::Table) -> Snapshot 
             .components()
             .map(|c| c.as_os_str().to_string_lossy().to_string())
             .collect();
-        // drop "api", "iface" and the file name
+        // drop "api" / "iface" segments and the file name
         if comps.len() >= 3 {
             comps.drain(0..2);
             comps.pop();
@@ -2308,11 +2197,7 @@ pub struct LockUnit {
     pub truth: String,
 }
 
-/// `[lock.product]` — an **extension field** of this implementation.
-///
-/// The authoritative schema (`schema/lock.schema.json`) declares `additionalProperties: true`
-/// at the top level and on `lock`, so this is a legal extension (lets core record the product
-/// header); if the schema tightens later, just delete it.
+/// `[lock.product]`: extension field; the lock schema allows additional properties.
 #[derive(Clone, Debug, Default)]
 pub struct LockProduct {
     pub name: String,
@@ -2342,9 +2227,7 @@ impl Default for Lock {
     }
 }
 
-/// Read `brickie.lock` (absent ⇒ `None` = "unpublished" / "never solved").
-///
-/// Shape = `schema/lock.schema.json` (v0.1 weak validation: nothing required at top level).
+/// Read `brickie.lock` (absent ⇒ `None` = unpublished); weak v0.1 validation, nothing required.
 pub fn load_lock(root: &Path, d: &mut Diags) -> Option<Lock> {
     let abs = root.join("brickie.lock");
     if !abs.is_file() {
@@ -2408,8 +2291,6 @@ pub fn load_lock(root: &Path, d: &mut Diags) -> Option<Lock> {
     Some(lock)
 }
 
-// ------------------------------------------------------------------ reverse dependency index
-
 /// One reverse edge of `build/index/dependents.json`.
 #[derive(Clone, Debug, Default)]
 pub struct DependentEdge {
@@ -2426,9 +2307,8 @@ pub struct DependentsIndex {
 }
 
 impl DependentsIndex {
-    /// Rebuild fully from the plugin tree (§6.3: semantics of `brickie dep index`).
-    ///
-    /// Edges come only from **declared** `[[dep]]`; runtime registry use creates no edge (§3.1 / BRV-Q13).
+    /// Rebuild fully from the plugin tree; edges come only from declared `[[dep]]` (runtime
+    /// registry use creates no edge).
     pub fn build(tree: &TreeLoad) -> Self {
         let mut idx = DependentsIndex {
             schema: 1,

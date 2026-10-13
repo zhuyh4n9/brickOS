@@ -1,20 +1,8 @@
 #!/usr/bin/env bash
-# brickie v0.1 — end-to-end acceptance regression baseline (V-1…V-19 + negative acceptance N-1…N-4).
-#
-# Blueprint = tests/ACCEPTANCE.md (acceptance matrix); contract = docs/contract.md;
-# Design authority = Design/docs/2-toolchain/brickie/brickie-v0.1.md §10.
-#
-# Conventions (all taken from BRV-D9 / contract):
-#   exit code 0 success / 1 validation red / 2 usage or environment error;
-#   `--json` is one serialization of `data`; diagnostics are stably sorted by (code,file,span,target).
-#
-# Three hard rules:
-#   1. every case does `cp -r` of its fixture into a mktemp dir before running — no cross-case pollution;
-#   2. this suite calls **no** compiler (cc/g++/cargo/nm), see V-9;
-#   3. assertions are never loosened to go green: actual != expected is FAIL, and implementation defects go into ACCEPTANCE.md.
-#
-# Usage: bash tests/run.sh          (usually via `make test` / `make tools-test`)
-#        bash tests/run.sh -v       (print each case's exit code/diagnostics for triage)
+# brickie v0.1 end-to-end acceptance regression baseline (V-1…V-19, negative N-1…N-4). Exit code
+# 0 success / 1 validation red / 2 usage or environment error; --json serializes `data`, diagnostics
+# sorted by (code,file,span,target). Every case copies its fixture into a fresh mktemp dir, no case
+# calls a compiler, assertions are never loosened. Usage: bash tests/run.sh [-v] (via make test).
 set -u
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -28,7 +16,6 @@ init_report "$TMPROOT/failures.log"
 VERBOSE=0
 [ "${1:-}" = "-v" ] && VERBOSE=1
 
-# Diagnostics array key order (contract §3 + L5 envelope)
 ENVELOPE_KEYS="command,data,diagnostics,exit_code,protocol,status,written"
 
 printf '=== brickie v0.1 end-to-end acceptance (V-1…V-19 + N-1…N-4) ===\n'
@@ -36,7 +23,6 @@ printf 'host triple: %s/%s\n' "$HOST_ARCH" "$HOST_OS"
 printf 'core: %s\n' "$CORE"
 printf 'gen : %s\n' "$GEN"
 
-# ---------------------------------------------------------------- 0. environment self-check
 section "0. environment and binaries"
 eq "core is executable" "yes" "$([ -x "$CORE" ] && echo yes || echo no)"
 eq "gen is executable" "yes" "$([ -x "$GEN" ] && echo yes || echo no)"
@@ -50,10 +36,9 @@ eqj "--version --json version" "$JQ_RESP" "data.version" "0.1.0"
 eqj "--version --json language fingerprint includes rust" "$JQ_RESP" "data.languages.0.name" "rust"
 run_json "$W" --version --deps
 eqjc "--version --deps --json three direct deps" "$JQ_RESP" "data.deps" "3"
-# Contract: the front end shares core's protocol number
 eq "core --selftest runs directly" "0" "$("$CORE" --selftest >/dev/null 2>&1; echo $?)"
 
-# ================================================================ V-1 skeleton generation
+# ---- V-1 skeleton generation
 section "V-1 new for all four kinds × c, immediate check has 0 errors"
 for pair in "app:app/hsm:" "interface:iface/posix:" "ability:service/crypto:--subkind service" "platform:platform/qemu-aarch64:";
 do
@@ -76,7 +61,6 @@ do
     eqj "V-1 new $ptype immediate check errors=0" "$JQ_RESP" "data.summary.errors" "0"
     eqj "V-1 new $ptype hand-written files untouched (git semantics: nothing written)" "$JQ_RESP" "written" "[]"
 done
-# All four kinds in one tree (ACCEPTANCE's fx/quad shape, built inline by the case)
 W="$(new_work)"
 run_brickie "$W" new app app/hsm
 run_brickie "$W" new interface iface/posix
@@ -86,7 +70,7 @@ run_json "$W" check
 eq "V-1 four kinds one tree check exit code 0" "0" "$RC"
 eqj "V-1 four kinds one tree closure has 4 plugins" "$JQ_RESP" "data.summary.closure.plugins" "4"
 
-# ================================================================ V-2 generated artifacts idempotent
+# ---- V-2 generated artifacts idempotent
 section "V-2 gen idempotence / --check byte-identical"
 W="$(new_work)"
 run_brickie "$W" new ability service/crypto --subkind service
@@ -99,7 +83,6 @@ eq "V-2 two gen runs byte-identical" "$H1" "$H2"
 run_brickie "$W" gen --check
 eq "V-2 gen --check consistent exit code 0" "0" "$RC"
 grep_at_least "V-2 gen --check text" 'byte-identical to recomputation' "$OUT"
-# Tampering with a generated artifact ⇒ --check must go red, and gen must repair it
 printf '\n/* hand edit */\n' >>"$W/build/gen/service/crypto/plugin_desc.c"
 run_brickie "$W" gen --check
 eq "V-2 tampered gen --check exit code 1" "1" "$RC"
@@ -111,11 +94,10 @@ run_brickie "$W" gen
 eq "V-2 gen repair exit code 0" "0" "$RC"
 run_brickie "$W" gen --check
 eq "V-2 after repair --check exit code 0" "0" "$RC"
-# **Stale descriptors** after a plugin rename/delete: `gen --check` must go red first, `gen` must clean them up —
-# if we only write and never delete, the `build/gen/**/plugin_desc.c` glob in `[build].gen_sources` pulls old descriptors
-# into the image and they become **ghost plugins**. Real incident: after `third_party/uboot-mmc` was renamed `adapter/uboot-mmc`,
-# both descriptors' start pointed at the same `uboot_mmc_start`, plugin_manager registered it twice ⇒
-# the second start returned -ENOSPC(-28) ⇒ boot-time halt under G6.
+# Stale descriptors after a plugin rename/delete: `gen --check` must go red first, and `gen` must
+# delete them -- a leftover descriptor in the `[build].gen_sources` glob becomes a ghost plugin
+# (after the uboot-mmc rename both descriptors pointed at one start symbol, so the second start
+# returned -ENOSPC and boot halted under G6).
 mkdir -p "$W/build/gen/third_party/uboot-mmc"
 printf '/* brickie:generated */\nint ghost;\n' >"$W/build/gen/third_party/uboot-mmc/plugin_desc.c"
 run_brickie "$W" gen --check
@@ -129,7 +111,7 @@ grep_at_least "V-2 stale descriptor: gen leaves a trace" 'stale generated files'
 run_brickie "$W" gen --check
 eq "V-2 stale descriptor: after cleanup --check exit code 0" "0" "$RC"
 
-# ================================================================ V-3 cycle detection
+# ---- V-3 cycle detection
 section "V-3 cycle ⇒ full cycle path + exit 1"
 W="$(cp_fx cycle)"
 run_json "$W" check
@@ -147,7 +129,7 @@ eqjc "V-3 cycles[0].edges structured edge list has 3 entries" "$JQ_RESP" "data.c
 eqj "V-3 cycles[0].edges[0] shape {from,to}" "$JQ_RESP" "data.cycles.0.edges.0.from" "service/a"
 eqj "V-3 cycles[0].edges[0].to" "$JQ_RESP" "data.cycles.0.edges.0.to" "service/b"
 
-# ================================================================ V-4 version bump table
+# ---- V-4 version bump table
 section "V-4 event → segment bump table, row by row"
 W="$(cp_fx ver-matrix)"
 printf 'RFC: unfreeze decision record\n' >"$W/rfc.md"
@@ -161,13 +143,11 @@ segments_of() { # segments_of <work> <id> ⇒ "cg.major.minor.revise"
 }
 run_brickie "$W" iface publish service/crypto#crypto
 eq "V-4 first publish = file creation, no segment bump (S-8)" "0.1.0.0" "$(segments_of "$W" service/crypto#crypto)"
-# (f) empty unfreeze ⇒ all four segments stay put
 run_brickie "$W" iface unfreeze service/crypto#crypto --note rfc.md
 eq "V-4(f) unfreeze enters the window" "0" "$RC"
 run_brickie "$W" iface refreeze service/crypto#crypto
 eq "V-4(f) empty-unfreeze refreeze exit code 0" "0" "$RC"
 eq "V-4(f) empty unfreeze ⇒ all four segments stay put" "0.1.0.0" "$(segments_of "$W" service/crypto#crypto)"
-# (a) unfreeze + edit an existing frozen entry + refreeze ⇒ only COMPAT_GEN+1
 run_brickie "$W" iface unfreeze service/crypto#crypto --note rfc.md
 sed -i 's/int(const uint8_t\*, size_t)/int(const uint8_t*, size_t, uint8_t*)/' \
     "$W/service/crypto/brick.toml"
@@ -175,7 +155,6 @@ run_brickie "$W" iface refreeze service/crypto#crypto --note rfc.md
 eq "V-4(a) refreeze exit code 0" "0" "$RC"
 eq "V-4(a) edited frozen entry ⇒ only COMPAT_GEN+1 (MAJOR not dragged in)" "1.1.0.0" \
     "$(segments_of "$W" service/crypto#crypto)"
-# (b) added entry ⇒ COMPAT_GEN stays put, MINOR+1
 python3 - "$W/service/crypto/brick.toml" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
@@ -186,11 +165,9 @@ PY
 run_brickie "$W" iface publish service/crypto#crypto
 eq "V-4(b) added entry publish exit code 0" "0" "$RC"
 eq "V-4(b) addition ⇒ COMPAT_GEN stays put + MINOR+1" "1.1.1.0" "$(segments_of "$W" service/crypto#crypto)"
-# (c) major product version ⇒ only MAJOR+1 (COMPAT_GEN stays put)
 run_brickie "$W" ver bump service/crypto#crypto --rule major
 eq "V-4(c) ver bump major exit code 0" "0" "$RC"
 eq "V-4(c) only MAJOR+1, COMPAT_GEN stays put" "1.2.0.0" "$(segments_of "$W" service/crypto#crypto)"
-# (d)(e) minor / revise
 run_brickie "$W" ver bump service/crypto#crypto --rule minor
 eq "V-4(d) minor ⇒ MINOR+1" "1.2.1.0" "$(segments_of "$W" service/crypto#crypto)"
 run_brickie "$W" ver bump service/crypto#crypto --rule revise
@@ -198,7 +175,7 @@ eq "V-4(e) revise ⇒ REVISE+1" "1.2.1.1" "$(segments_of "$W" service/crypto#cry
 run_brickie "$W" ver bump service/crypto#crypto --rule compat_gen
 eq "V-4 COMPAT_GEN is not a rule (usage error 2)" "2" "$RC"
 
-# ================================================================ V-5 interface publishing
+# ---- V-5 interface publishing
 section "V-5 publish output + idempotence + --check independent recompute"
 W="$(cp_fx publish)"
 run_json "$W" iface publish service/a#a
@@ -229,14 +206,13 @@ eqj "V-5 status --check consistent=true" "$JQ_RESP" "data.consistent" "true"
 run_json "$W" iface publish service/a#a --check
 eq "V-5 publish --check exit code 0" "0" "$RC"
 eqjc "V-5 publish --check writes nothing" "$JQ_RESP" "written" "0"
-# Independent recompute mismatch ⇒ red (hand-edited hash record in the snapshot)
 sed -i 's/^hash = "sha256:[0-9a-f]*"$/hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000"/' \
     "$W/api/iface/service/a/a.toml"
 run_json "$W" iface status service/a#a --check
 eq "V-5 hand-edited snapshot ⇒ status --check exit code 1" "1" "$RC"
 eqj "V-5 hand-edited snapshot ⇒ consistent=false" "$JQ_RESP" "data.consistent" "false"
 
-# ================================================================ V-6 impact report
+# ---- V-6 impact report
 section "V-6 impact report for a frozen-entry edit / --note hard gate"
 W="$(cp_fx dependents)"
 printf 'RFC: signature change\n' >"$W/rfc.md"
@@ -263,11 +239,11 @@ eq "V-6 publish with --note exit code 0" "0" "$RC"
 eqj "V-6 COMPAT_GEN bumped after publish" "$JQ_RESP" "data.compat_gen" "1"
 run_brickie "$W" iface refreeze service/crypto#crypto
 eq "V-6 publish in window consumed the baseline ⇒ refreeze is an empty unfreeze" "0" "$RC"
-# --note points at a missing file ⇒ usage error 2 (front-end gate); use unfreeze (with an unchanged surface publish is a no-op and skips the gate)
+# Use unfreeze here: an unchanged-surface publish is a no-op and skips the --note gate.
 run_brickie "$W" iface unfreeze service/crypto#crypto --note no-such.md
 eq "V-6 --note points at a missing path ⇒ usage error 2" "2" "$RC"
 
-# ================================================================ V-7 dependency solving
+# ---- V-7 dependency solving
 section "V-7 correct closure / VER-0001 / VER-0002 / budget totals"
 W="$(cp_fx ver-conflict)"
 run_json "$W" check
@@ -278,13 +254,12 @@ W="$(cp_fx ver-range)"
 run_json "$W" check
 eq "V-7 same-generation range out of bounds ⇒ exit code 1" "1" "$RC"
 eq "V-7 reports BRV-VER-0002" "1" "$(grep -c 'BRV-VER-0002' "$ERR" || true)"
-# closure correctness (showcase)
 W="$(cp_fx showcase)"
 run_json "$W" dep closure
 eq "V-7 closure exit code 0" "0" "$RC"
 eqj "V-7 closure plugin list" "$JQ_RESP" "data.selected" \
     '["app/hsm", "iface/hsm-api", "platform/qemu-aarch64", "sched/coop", "service/crypto"]'
-# the topological-order **invariant** is "the provider of every init edge comes first" (nodes without init edges may sit anywhere)
+# Only the "provider first" invariant is required; nodes without init edges may sit anywhere.
 init_order_ok() {
     python3 - "$1" <<'PYX'
 import json, sys
@@ -302,7 +277,7 @@ eqj "V-7 total stack" "$JQ_RESP" "data.totals.stack_kib" "4"
 eqj "V-7 platform capacity reported separately" "$JQ_RESP" "data.totals.platform_capacity.ram_kib" "8192"
 eqj "V-7 budget" "$JQ_RESP" "data.totals.budget.ram_kib" "512"
 
-# ================================================================ V-8 taxonomy and phase
+# ---- V-8 taxonomy and phase
 section "V-8 three hard prohibitions, positive and negative cases / phase monotonicity"
 for fx in tax-01-app-ability tax-02-native-adapter tax-03-iface-leaf; do
     W="$(cp_fx "$fx")"
@@ -330,9 +305,8 @@ eq "V-8 sched-coop → platform is not a false positive, exit code 0" "0" "$RC"
 eq "V-8 no false positive: no DEP-0009" "0" "$(grep -c 'BRV-DEP-0009' "$ERR" || true)"
 eq "V-8 no false positive: no DEP-0010" "0" "$(grep -c 'BRV-DEP-0010' "$ERR" || true)"
 
-# ================================================================ V-9 zero build dependencies
+# ---- V-9 zero build dependencies
 section "V-9 zero build dependencies (minimal PATH + single-file bootstrap seed entry)"
-# 1. minimal PATH: only symlinks to python3 / sh / coreutils —— there is no compiler at all
 MINBIN="$TMPROOT/minpath"
 mkdir -p "$MINBIN"
 for t in python3 sh env cat cp mkdir rm mv ls cmp sort head tail wc sed grep find \
@@ -344,7 +318,6 @@ eq "V-9 minimal PATH has no cc/g++/cargo/nm" "0" \
     "$(ls "$MINBIN" | grep -cE '^(cc|gcc|g\+\+|c\+\+|cargo|nm|ld)$' || true)"
 eq "V-9 python3 is visible in the minimal PATH" "1" \
     "$(PATH="$MINBIN" command -v python3 >/dev/null 2>&1 && echo 1 || echo 0)"
-# bootstrap seed entry: single-file self-contained (only this one file is copied); native pieces use **the real ones** (explicitly injected)
 SEED_LAUNCHER_LOCAL="${SEED_LAUNCHER:-}"
 eq "V-9 bootstrap seed entry exists" "yes" \
     "$([ -n "$SEED_LAUNCHER_LOCAL" ] && [ -x "$SEED_LAUNCHER_LOCAL" ] && echo yes || echo no)"
@@ -374,32 +347,28 @@ run_seed "$W" gen --check
 eq "V-9 loop ⑥ gen --check exit code 0" "0" "$RC"
 eq "V-9 the whole loop is green with no compiler present" "yes" \
     "$([ -f "$W/api/iface/service/crypto/crypto.toml" ] && echo yes || echo no)"
-# 2. the suite itself must not call a compiler (scan scripts for call shapes; only cargo/g++, to avoid false hits on prose)
 grep_none "V-9 suite scripts do not call cargo/g++" \
     '(^|[;&|(])[[:space:]]*(cargo|g\+\+)[[:space:]]' \
     "$TESTS_DIR/run.sh" "$TESTS_DIR/purity.sh" "$TESTS_DIR/lib.sh"
 
-# ================================================================ V-10 requires_iface
+# ---- V-10 requires_iface
 section "V-10 requires_iface: schema / not part of the closure / info only"
 W="$(cp_fx req-iface)"
 run_json "$W" check
 eq "V-10 baseline check exit code 0 (info only)" "0" "$RC"
 eqj "V-10 consuming an unfrozen interface under dev = info" "$JQ_RESP" "diagnostics.0.severity" "info"
-# ② add/remove requires_iface, the closure is byte-identical
 W2="$(cp_fx req-iface-plain)"
 run_brickie "$W" dep closure --json
 A="$(cat "$OUT")"
 run_brickie "$W2" dep closure --json
 B="$(cat "$OUT")"
 eq "V-10② closure byte-identical with/without requires_iface" "$A" "$B"
-# ③ iface show reports info only for this field
 run_json "$W" iface show service/consumer#consumer
 eq "V-10③ iface show exit code 0" "0" "$RC"
 eq "V-10③ registered as info (NOT_ABI + requires_iface, two entries)" "2" \
     "$(grep -c '"severity": "info"' "$JQ_RESP" || true)"
 grep_at_least "V-10③ message says v0.1 does not scan" 'does not scan' "$JQ_RESP"
 grep_at_least "V-10③ span = compat.requires_iface[0]" 'compat.requires_iface\[0\]' "$JQ_RESP"
-# ① missing field ⇒ shape-class error + exit code 2
 W3="$(cp_fx req-iface)"
 sed -i '/^compat_gen = 0$/d' "$W3/service/consumer/brick.toml"
 run_json "$W3" check
@@ -411,7 +380,7 @@ sed -i '/^api_iface  = "native"$/d' "$W3/service/consumer/brick.toml"
 run_json "$W3" check
 eq "V-10① missing api_iface ⇒ exit code 2" "2" "$RC"
 
-# ================================================================ V-11 hash semantics
+# ---- V-11 hash semantics
 section "V-11 hash_scope/truth paired / NOT_ABI / hash cross-check"
 W="$(cp_fx truth)"
 run_json "$W" iface show service/x#x
@@ -419,7 +388,6 @@ eqj "V-11① --json carries hash_scope" "$JQ_RESP" "data.hash_scope" "decl"
 eqj "V-11① --json carries truth" "$JQ_RESP" "data.truth" "decl"
 eqj "V-11③ --json carries not_abi" "$JQ_RESP" "data.not_abi" "true"
 grep_at_least "V-11③ text folds in the NOT_ABI hint" 'NOT_ABI' "$OUT"
-# ② sym/header not paired ⇒ red
 Ws="$(cp_fx truth)"
 sed -i 's/^hash_scope = "decl"$/hash_scope = "sym"/' "$Ws/service/x/brick.toml"
 run_json "$Ws" check
@@ -430,7 +398,6 @@ sed -i 's/^truth      = "decl"$/truth      = "header"/' "$Wt/service/x/brick.tom
 run_json "$Wt" check
 eq "V-11② truth=header ⇒ exit code 1" "1" "$RC"
 eq "V-11② reports BRV-IFACE-0011" "1" "$(grep -c 'BRV-IFACE-0011' "$ERR" || true)"
-# ④ brick.toml [[export]].hash differs from the snapshot ⇒ red
 Wp="$(cp_fx publish)"
 run_brickie "$Wp" iface publish service/a#a
 sed -i 's/^hash         = ""$/hash         = "sha256:deadbeef"/' "$Wp/service/a/brick.toml"
@@ -439,7 +406,7 @@ eq "V-11④ hash mismatch ⇒ status exit code 1" "1" "$RC"
 eq "V-11④ reports BRV-IFACE-0012" "1" "$(grep -c 'BRV-IFACE-0012' "$ERR" || true)"
 grep_at_least "V-11④ message names both recorded places" 'one truth recorded in two places' "$ERR"
 
-# ================================================================ V-12 export classification invariants
+# ---- V-12 export classification invariants
 section "V-12 TAX-0016/17/18/19 + third-party pieces + skin three small items"
 for pair in "export-tax16:BRV-TAX-0016" "export-tax17:BRV-TAX-0017" \
             "export-tax18:BRV-TAX-0018" "export-tax19:BRV-TAX-0019"; do
@@ -465,7 +432,7 @@ run_json "$W" check
 eq "V-12 positive ③: app → third-party piece + adapter type edges only ⇒ exit code 0" "0" "$RC"
 eqj "V-12 positive ③ errors=0" "$JQ_RESP" "data.summary.errors" "0"
 
-# ================================================================ V-13 version strings and ranges
+# ---- V-13 version strings and ranges
 section "V-13 version strings / range segment count / monotonic, no rollback"
 W="$(cp_fx ver-badstr)"
 run_json "$W" check
@@ -480,8 +447,6 @@ run_json "$W" check
 eq "V-13 short range right-padded with 0 (>=0.1 ≡ >=0.1.0) ⇒ exit code 0" "0" "$RC"
 run_brickie "$W" dep tree
 grep_at_least "V-13 canonical output right-pads with 0" '\[runtime >=0\.1\.0\]' "$OUT"
-# missing compat_gen: see V-10① (shape gate BRV-MF-0001 / exit code 2; BRV-VER-0003 has no construction point, noted in ACCEPTANCE)
-# --set rollback ⇒ BRV-VER-0007
 W="$(cp_fx publish)"
 run_brickie "$W" iface publish service/a#a
 python3 - "$W/service/a/brick.toml" <<'PY'
@@ -496,7 +461,7 @@ eq "V-13 reports BRV-VER-0007" "1" "$(grep -c 'BRV-VER-0007' "$ERR" || true)"
 run_json "$W" iface publish service/a#a --set 0.1.9.0
 eq "V-13 --set forward ⇒ exit code 0" "0" "$RC"
 
-# ================================================================ V-14 profile gating
+# ---- V-14 profile gating
 section "V-14 same input, two profiles, two conclusions"
 W="$(cp_fx req-iface)"
 run_json "$W" check --profile dev
@@ -509,7 +474,7 @@ eq "V-14 release reports BRV-VER-0004" "1" "$(grep -c 'BRV-VER-0004' "$ERR" || t
 grep_at_least "V-14 under release it is upgraded to error" 'error' "$ERR"
 snapj "check-release-ver0004" "$JQ_RESP"
 
-# ================================================================ V-15 append vs modify
+# ---- V-15 append vs modify
 section "V-15 entry-level append vs modify (§5.4)"
 W="$(cp_fx iface-enum)"
 run_brickie "$W" iface publish service/enums#enums
@@ -521,7 +486,6 @@ eqj "V-15 EXTENDED verdict=green" "$JQ_RESP" "data.verdict" "green"
 run_json "$W" iface publish service/enums#enums
 eq "V-15 EXTENDED publish exit code 0" "0" "$RC"
 eqj "V-15 EXTENDED ⇒ MINOR+1" "$JQ_RESP" "data.version" "0.1.1.0"
-# negative case: enum reordering
 W="$(cp_fx iface-enum)"
 run_brickie "$W" iface publish service/enums#enums
 sed -i 's/^value = \["A", "B"\]$/value = ["B", "A"]/' "$W/service/enums/brick.toml"
@@ -531,7 +495,6 @@ eqj "V-15 enum reordering ⇒ compat_gen_changed" "$JQ_RESP" "data.compat_gen_ch
 eqj "V-15 not unfrozen ⇒ verdict=red" "$JQ_RESP" "data.verdict" "red"
 run_json "$W" iface publish service/enums#enums
 eq "V-15 publish without unfreeze ⇒ exit code 1" "1" "$RC"
-# negative case: adding a field to a frozen struct
 W="$(cp_fx iface-struct)"
 run_brickie "$W" iface publish service/st#st
 sed -i 's/^layout = "{ void\* p; }"$/layout = "{ void* p; int n; }"/' "$W/service/st/brick.toml"
@@ -540,14 +503,12 @@ eqj "V-15 struct field added ⇒ CHANGED(D22)" "$JQ_RESP" "data.changes.0.kind" 
 eqj "V-15 struct field added ⇒ verdict=red" "$JQ_RESP" "data.verdict" "red"
 run_json "$W" iface publish service/st#st
 eq "V-15 struct field added without unfreeze ⇒ exit code 1" "1" "$RC"
-# negative case: adding a slot to service ops
 W="$(cp_fx iface-ops)"
 run_brickie "$W" iface publish service/sv#sv
 sed -i 's/^ops = \["open", "close"\]$/ops = ["open", "close", "seek"]/' "$W/service/sv/brick.toml"
 run_json "$W" iface diff service/sv#sv
 eqj "V-15 ops slot added ⇒ CHANGED" "$JQ_RESP" "data.changes.0.kind" "CHANGED"
 eqj "V-15 ops slot added ⇒ verdict=red" "$JQ_RESP" "data.verdict" "red"
-# positive case: a new standalone entry ⇒ ADDED needs no unfreeze
 W="$(cp_fx iface-macro)"
 run_brickie "$W" iface publish service/crypto#crypto
 python3 - "$W/service/crypto/brick.toml" <<'PY'
@@ -561,7 +522,7 @@ eqj "V-15 added entry ⇒ ADDED" "$JQ_RESP" "data.changes.0.kind" "ADDED"
 eqj "V-15 ADDED needs no unfreeze ⇒ verdict=green" "$JQ_RESP" "data.verdict" "green"
 eqj "V-15 ADDED ⇒ compat_gen unchanged" "$JQ_RESP" "data.compat_gen_changed" "false"
 
-# ================================================================ V-16 unfreeze window
+# ---- V-16 unfreeze window
 section "V-16 unfreeze gate / release block / empty unfreeze leaves all four segments alone"
 W="$(cp_fx unfreeze)"
 printf 'RFC\n' >"$W/rfc.md"
@@ -586,7 +547,7 @@ run_json "$W" ver show service/crypto#crypto
 eq "V-16 empty unfreeze ⇒ all four segments stay put" "$before_cg" "$(jqget "$JQ_RESP" data.version)"
 eqj "V-16 empty unfreeze leaves compat_gen alone" "$JQ_RESP" "data.segments.compat_gen" "0"
 
-# ================================================================ V-17 hash input completeness
+# ---- V-17 hash input completeness
 section "V-17 macro values / service ops / enum order must all enter the hash"
 hash_of() { # hash_of <work> <id>
     run_json "$1" iface show "$2"
@@ -611,7 +572,6 @@ sed -i 's/^value = \["A", "B"\]$/value = ["B", "A"]/' "$W/service/enums/brick.to
 H1="$(hash_of "$W" service/enums#enums)"
 eq "V-17 enum reordering is seen by the hash" "different" \
     "$([ "$H0" != "$H1" ] && echo different || echo same)"
-# declaration order does not affect the hash (IFACE-IR rule 1)
 W="$(cp_fx iface-macro)"
 H0="$(hash_of "$W" service/crypto#crypto)"
 python3 - "$W/service/crypto/brick.toml" <<'PY'
@@ -626,7 +586,6 @@ p.write_text(out + "[build]" + tail)
 PY
 run_json "$W" iface show service/crypto#crypto
 eq "V-17 declaration order does not affect the hash (IFACE-IR rule 1)" "$H0" "$(jqget "$JQ_RESP" data.declaration_hash)"
-# two publish runs are byte-reproducible
 W="$(cp_fx publish)"
 run_brickie "$W" iface publish service/a#a
 S1="$(sha256sum "$W/api/iface/service/a/a.toml" "$W/brickie.lock" "$W/api/iface/CHANGELOG.md")"
@@ -635,10 +594,8 @@ run_brickie "$W2" iface publish service/a#a
 S2="$(sha256sum "$W2/api/iface/service/a/a.toml" "$W2/brickie.lock" "$W2/api/iface/CHANGELOG.md")"
 eq "V-17 same input, two publish runs byte-identical" "${S1//$W/}" "${S2//$W2/}"
 
-# ================================================================ full command-surface coverage
+# ---- full command-surface coverage
 section "command surface: 23 leaf commands + 2 global switches (human-readable + --json, two output modes)"
-# run the same sequence in two independent workspaces: MODE=text / MODE=json.
-# each one asserts the exit code; text asserts key text, json asserts envelope keys + protocol + diagnostic order + key data fields.
 sweep() {
     MODE="$1"
     local W J
@@ -699,7 +656,6 @@ sweep() {
     S dep-add         0 'dep add only prints a snippet'      data.found          true       dep add app/hsm iface/hsm-api --kind runtime
     S dep-rm          0 'dep rm only prints a snippet'       data.found          false      dep rm app/hsm service/nowhere
 
-    # run new / init in their own empty workspaces (so they do not pollute the state above)
     local W0="$W"
     W="$(new_work)"
     S new  0 'skeleton generated' data.count 6 new ability service/svc --subkind service
@@ -710,7 +666,7 @@ sweep() {
 sweep text
 sweep json
 
-# ================================================================ V-18 glue-layer purity
+# ---- V-18 glue-layer purity
 section "V-18 glue-layer purity (three criteria in tests/purity.sh)"
 PURITY_OUT="$TMPROOT/purity.out"
 bash "$TESTS_DIR/purity.sh" >"$PURITY_OUT" 2>&1
@@ -729,7 +685,7 @@ if [ "$PURITY_RC" -ne 0 ]; then
     grep -E '^FAIL' "$PURITY_OUT" >>"$FAILLOG" || true
 fi
 
-# ================================================================ V-19 privilege and budget
+# ---- V-19 privilege and budget
 section "V-19 privilege declarations / budget / resource exclusivity"
 W="$(cp_fx priv-ability-p3)"
 run_json "$W" check
@@ -760,17 +716,11 @@ W="$(cp_fx priv-platform-p4)"
 run_json "$W" check
 eq "V-19 orthogonality table: map/protect are P4, platform may declare them ⇒ legal, 0" "0" "$RC"
 
-# ================================================================ V-B build family
-# Blueprint = ACCEPTANCE.md §V-B; contract = docs/contract.md §5.4/§7.1/§7.2/§7.4 + §9 R-13…R-16.
-#
-# ★ this section calls **no compiler** (V-9's discipline binds the tests too): only `build --dry-run` /
-#   `--emit-backends` (core emits the plan, L5 dry-runs) + a direct call to core's `judge` envelope.
-#   every criterion is on the **declaration surface and planning data**: whether argv carries arch flags/linker script,
-#   whether the candidate order is right, whether the codes are right — never "did it actually compile" (that needs a cross compiler and belongs to real-build criteria).
+# V-B build family: declaration-surface and planning criteria only -- no compiler is called (V-9's
+# discipline binds the tests too); the judge's log arrives as body text in context.log.
 section "V-B build family (criteria that call no compiler)"
 FX_BUILD="$(cp_fx build)"
 
-# direct call to core's envelope (judge's log is **body text**, passed via context.log; the criteria live in core).
 JUDGE_RESP=""
 core_judge() { # core_judge <work> <gate-name> <log-file> ⇒ JUDGE_RESP
     local w="$1" name="$2" logf="$3"
@@ -786,8 +736,7 @@ PYX
     JUDGE_RESP="$TMPROOT/.judge.resp.json"
 }
 
-# ---------------------------------------------------------------- ① plan shape
-# `build --dry-run` needs no compiler: core emits the plan, L5 only prints it.
+# ---- ① plan shape: build --dry-run needs no compiler (core emits the plan, L5 prints it). ----
 W="$(cp_fx build)"
 run_json "$W" build --dry-run
 eq "V-B① build --dry-run exit code 0" "0" "$RC"
@@ -816,8 +765,7 @@ contains "V-B① -Wl,-Map uses the artifact path" '"-Wl,-Map,build/brick.map"' "
 contains "V-B① declared cflags enter argv" '"-DFX_BUILD=1"' "$STEPS_JSON"
 contains "V-B① the assembly source (.S) is in the plan too (paths relative to root)" \
     'platform/qemu-aarch64/src/start.S' "$STEPS_JSON"
-# ★ path convention: every path in the plan is **relative to root**; while the `[build].sources` glob on the declaration surface is **relative to the plugin root**.
-#   this assertion also pins "assembly is not compiled as C" (it must go through asflags, never mixed into C's -std=c11).
+# Every plan path is relative to root; the [build].sources glob is relative to the plugin root.
 asm_ok() { # asm_ok <resp.json> ⇒ yes / no:…
     "$PY" - "$1" <<'PYX'
 import json, sys
@@ -959,17 +907,16 @@ grep_at_least "V-B⑨ build.mk writes the linker script into the rule" '-Wl,-T,p
 grep_at_least "V-B⑨ build.ninja carries the generated marker" 'brickie:generated' "$W/build/gen/build.ninja"
 grep_at_least "V-B⑨ build.ninja is BR-D4 backend B" '^rule link$' "$W/build/gen/build.ninja"
 grep_at_least "V-B⑨ build.ninja bakes in the resolved compiler" '^cc = ' "$W/build/gen/build.ninja"
-# C sources and assembly sources get **one rule each** (treating assembly as C only "happens to pass", it is not a criterion).
 grep_at_least "V-B⑨ ninja has a cc rule (C sources)" '^rule cc$' "$W/build/gen/build.ninja"
 grep_at_least "V-B⑨ ninja has an asm rule (.S sources)" '^rule asm$' "$W/build/gen/build.ninja"
 grep_at_least "V-B⑨ .S goes through the asm rule" ': asm .*src/start\.S' "$W/build/gen/build.ninja"
-# ninja's .ninja_log/.ninja_deps must not land in the repo root (we got burned): builddir is pinned under build/gen.
+# Ninja's .ninja_log/.ninja_deps must not land in the repo root; builddir is pinned under build/gen.
 grep_at_least "V-B⑨ ninja builddir is pinned under build/gen" '^builddir = build/gen/ninja$' \
     "$W/build/gen/build.ninja"
 eq "V-B⑨ dry-run writes no incremental state (it is derived)" "no" \
     "$([ -f "$W/build/gen/build-state.json" ] && echo yes || echo no)"
 
-# ================================================================ N-1 negative acceptance: help surface
+# ---- N-1 negative acceptance: help surface
 section "N-1 no undelivered §5.4 command appears in --help"
 help_commands() { # <help output file> ⇒ comma-separated subcommand names (sorted, deduped)
     awk '/^positional arguments:/{f=1;next} /^options:/{f=0} f' "$1" \
@@ -980,7 +927,6 @@ run_brickie "$W" --help
 eq "N-1 top-level help exit code 0" "0" "$RC"
 eq "N-1 top-level command surface = 13 groups (7 composition + 6 build family)" \
     "build,check,clean,dep,disasm,gen,iface,init,new,run,size,test,ver" "$(help_commands "$OUT")"
-# build/test/run used to be on the §5.4 forbidden-name list; ADR-0004 now delivers them (second family) ⇒ only reverse-check what is **still not done**.
 for c in api-dump verify dbg pack add show env; do
     eq "N-1 top-level help excludes $c" "0" \
         "$(help_commands "$OUT" | tr ',' '\n' | grep -cx "$c" || true)"
@@ -997,10 +943,9 @@ eq "N-1 dep subcommand surface" "add,closure,graph,index,rm,tree,why" "$(help_co
 run_brickie "$W" ver --help
 eq "N-1 ver subcommand surface" "bump,show" "$(help_commands "$OUT")"
 
-# ================================================================ N-2 negative acceptance: undelivered commands
+# ---- N-2 negative acceptance: undelivered commands
 section "N-2 undelivered §5.4 commands called directly ⇒ exit code 2"
 W="$(new_work)"
-# build / test / run are delivered now (see the N-1 note), so they are no longer on the "undelivered" list.
 for c in api-dump verify dbg pack add show env; do
     run_brickie "$W" "$c"
     eq "N-2 brickie $c ⇒ exit code 2" "2" "$RC"
@@ -1012,7 +957,7 @@ eq "N-2 unknown subcommand ⇒ exit code 2" "2" "$RC"
 run_brickie "$W"
 eq "N-2 no subcommand ⇒ exit code 2" "2" "$RC"
 
-# ================================================================ N-3 machine-file ownership
+# ---- N-3 machine-file ownership
 section "N-3 machine files are written only by machines / hand edits go red"
 W="$(cp_fx publish)"
 run_brickie "$W" iface publish service/a#a
@@ -1028,7 +973,7 @@ run_json "$W" iface status service/a#a
 eq "N-3 hand-edited snapshot ⇒ status exit code 1" "1" "$RC"
 eqj "N-3 hand-edited snapshot ⇒ consistent=false" "$JQ_RESP" "data.consistent" "false"
 
-# ================================================================ N-4 protocol snapshots
+# ---- N-4 protocol snapshots
 section "N-4 --json structured snapshots (protocol version locked)"
 W="$(cp_fx showcase)"
 run_brickie "$W" --version --json
@@ -1056,7 +1001,7 @@ snapj "publish" "$JQ_RESP"
 run_json "$W" iface status service/a#a
 snapj "iface-status" "$JQ_RESP"
 
-# ================================================================ summary
+# ---- summary
 printf '\n=== passed %s / failed %s ===\n' "$PASS" "$FAIL"
 if [ "$FAIL" -ne 0 ]; then
     printf '\nFailure details:\n'

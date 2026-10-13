@@ -1,29 +1,9 @@
 /*
- * tests/host/rr_test.c — host-side semantics gate for **sched/rr** (time-slice round-robin preemption; no QEMU needed)
- *
- * ## How the host "manufactures an interrupt"
- *
- * On target the preemption chain is: timer ISR → `br_sched_on_tick()` → the plugin's `on_tick` (decrements the slice)
- * → `br_sched_request_resched()`; then the **IRQ exit** path's `br_sched_irq_epilogue()` switches stacks.
- * The host has no real interrupt, but both steps are ordinary C calls — a case only needs to call them
- * **while some thread is running**, which is equivalent to "this tick interrupted this thread":
- *
- *     host_tick_from_current():  advance the fake clock → br_sched_on_tick() → br_sched_irq_epilogue()
- *
- * Key property: the caller *is* the "interrupted thread" — so the context `resched_from_irq()` saves really is
- * its own, and it returns from this call when scheduled again. This maps point-for-point onto "whose stack does
- * the ISR run on" on target.
- *
- * ## Criteria (the report's trace is the core evidence of this section)
- *
- *   HOST-RR-SLICE      two busy threads that never yield, each "taking ticks" in its own loop;
- *                      slice = 2 ticks ⇒ the alternation must be AABB AABB (not AAAA BBBB)
- *   HOST-RR-NOTICK     **no tick ⇒ never preempt**: the busy thread finishes its whole loop and the
- *                      opponent never runs — paired with the item above, showing "the only source of preemption is a tick"
- *   HOST-RR-RESCHED    need_resched set/consume (including "do not switch stacks when only self is runnable")
- *   HOST-RR-CONF       core's br_sched_selftest() (kind=preempt ⇒ runs TC-TASK-102/103)
- *
- * Output protocol: [HOSTTEST] PASS|FAIL … SUMMARY; any failure ⇒ non-zero exit code.
+ * Host-side semantics gate for **sched/rr** (time-slice round-robin preemption). The host has no
+ * interrupt: host_tick_from_current() calls br_sched_on_tick() + br_sched_irq_epilogue() from the
+ * running thread, equivalent to "this tick interrupted this thread" (the saved context really is
+ * the caller's own). Cases: HOST-RR-SLICE (AABB alternation), HOST-RR-NOTICK (no tick, no
+ * preempt), HOST-RR-RESCHED, HOST-RR-CONF.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -42,9 +22,7 @@
 
 int br_sched_selftest(void);
 
-/* =====================================================================
- * Case framework
- * ===================================================================== */
+/* ---- case framework ---- */
 
 static int s_hpass;
 static int s_hfail;
@@ -62,7 +40,8 @@ static void host_check(br_bool ok, const char *tag, const char *what)
 
 #define HOST_STACK_BYTES  8192u
 #define HOST_STACK_SLOTS  8u
-#define TICK_US           100000u   /* this host case's own virtual tick (decoupled from product [kernel].hz; criteria do not depend on it) */
+/* Case's own virtual tick, decoupled from product [kernel].hz (criteria do not depend on it). */
+#define TICK_US           100000u
 
 static br_u8 s_stk[HOST_STACK_SLOTS][HOST_STACK_BYTES] BR_ALIGN(16);
 
@@ -86,7 +65,7 @@ static void host_tick_from_current(void)
     br_sched_irq_epilogue();
 }
 
-/* ---- ① time-slice round-robin: busy threads preempted by tick ⇒ AABB AABB ---- */
+/* ---- 1) time-slice round-robin: busy threads preempted by tick => AABB AABB ---- */
 
 #define RR_ITERS 4
 
@@ -103,8 +82,7 @@ static void trace_put(char c)
     }
 }
 
-/* busy thread: does not yield (same shape as TC-TASK-101's busy), only takes ticks **in its own loop**.
- * This is exactly the target shape "the timer interrupted the running me". */
+/* Busy thread: never yields; takes ticks in its own loop (the target shape). */
 static void host_busy_ticks(void *arg)
 {
     const char c = (char)(br_intptr_t)arg;
@@ -137,7 +115,7 @@ static void host_case_slice(void)
     const int r1 = br_task_create(&ta, &aa, host_busy_ticks, (void *)(br_intptr_t)'A');
     const int r2 = br_task_create(&tb, &ab, host_busy_ticks, (void *)(br_intptr_t)'B');
 
-    /* Yield ourselves so A/B can run (they self-generate ticks in their loops); when we wake, both are done. */
+    /* Yield so A/B can run (they self-generate ticks); when we wake, both are done. */
     while ((ta != BR_NULL && br_task_state(ta) != BR_TASK_ZOMBIE) ||
            (tb != BR_NULL && br_task_state(tb) != BR_TASK_ZOMBIE)) {
         br_task_yield();
@@ -150,9 +128,8 @@ static void host_case_slice(void)
     printf("[HOSTTEST] TRACE rr slice seq=%.8s (n=%d, slice=%u ticks)\n",
            p, (int)s_trace_n, (unsigned)RR_SLICE_TICKS);
 
-    /* Criterion: strictly AABB AABB — each same-letter run is **no longer than the slice**, and the two alternate.
-     * A counterexample (like CCCD) turns red immediately: it means "the slice did not take effect" or "preemption
-     * happened in the wrong place". */
+    /* Criterion: strictly AABB AABB -- each run no longer than the slice. Anything else means the
+     * slice did not take effect or preemption happened in the wrong place. */
     const br_bool seq_ok = (s_trace_n == 2 * RR_ITERS) &&
                            (p[0] == 'A') && (p[1] == 'A') &&
                            (p[2] == 'B') && (p[3] == 'B') &&
@@ -167,7 +144,7 @@ static void host_case_slice(void)
                "both busy threads complete all their iterations (preemption swallowed no execution)");
 }
 
-/* ---- ② no tick ⇒ never preempt (paired with ①: the only source of preemption is a tick) ---- */
+/* ---- 2) no tick => never preempt (paired with 1: the only source of preemption is a tick) ---- */
 
 static volatile int s_notick_victim;
 
@@ -181,7 +158,7 @@ static void host_busy_notick(void *arg)
 {
     (void)arg;
 
-    /* A whole busy loop that **emits no tick** ⇒ the opponent must not be switched in (preempt only happens on a tick). */
+    /* A whole busy loop that emits no tick => the opponent must not be switched in. */
     for (volatile br_u32 i = 0u; i < 200000u; i++) {
         if (s_notick_victim != 0) {
             s_notick_victim = 99;      /* marker: truly preempted */
@@ -210,7 +187,7 @@ static void host_case_no_tick(void)
                "no tick ⇒ the busy thread is not preempted (the only source of preemption is a tick; the opponent runs only after an explicit yield)");
 }
 
-/* ---- ③ setting and consuming need_resched ---- */
+/* ---- 3) setting and consuming need_resched ---- */
 
 static void host_case_resched(void)
 {
@@ -219,8 +196,8 @@ static void host_case_resched(void)
     br_sched_request_resched();
     const br_bool set = br_sched_resched_pending();
 
-    /* Right now only main (not on the queue) + supervisor exist ⇒ pick_next only picks self:
-     * the exit should "consume the request but not switch stacks" (switching to self is pointless). */
+    /* Right now only main (not on the queue) + supervisor exist => pick_next only picks self: the
+     * exit consumes the request but does not switch stacks (switching to self is pointless). */
     br_sched_irq_epilogue();
     const br_bool consumed = br_sched_resched_pending();
     const br_bool still_self = (br_task_name(br_task_self()) != NULL) &&
@@ -231,9 +208,7 @@ static void host_case_resched(void)
                "need_resched: set is visible → exit consumes it → no stack switch when nobody else is runnable");
 }
 
-/* =====================================================================
- * Supervisor thread
- * ===================================================================== */
+/* ---- supervisor thread ---- */
 
 static void host_supervisor(void *arg)
 {
@@ -245,11 +220,9 @@ static void host_supervisor(void *arg)
     host_case_no_tick();
     host_case_resched();
 
-    /* core's suite: kind=preempt ⇒ it runs TC-TASK-102 (slice preemption) and TC-TASK-103
-     * (preemption vs lock/critical-section interaction), while TC-TASK-101's coop criterion is skipped
-     * by the "fork by kind". ★ Turn on the **automatic tick source**: those two cases' busy loops do not
-     * yield and can only be interrupted by "it reading the clock itself" (see host_sched.h); the three
-     * cases earlier in this file use deterministic injection, so it was off then. */
+    /* core's suite with kind=preempt runs TC-TASK-102/103 and skips TC-TASK-101's coop criterion.
+     * Turn on the automatic tick source: those busy loops never yield and can only be interrupted
+     * by their own clock reads (see host_sched.h). */
     host_sched_auto_tick(BR_TRUE);
     br_sched_selftest();
     host_sched_auto_tick(BR_FALSE);

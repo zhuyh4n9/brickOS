@@ -1,29 +1,8 @@
 /*
- * brickOS prototype v0.2.0 — cdev-core selftest suite (framework/cdev-core/src/cdev_selftest.c)
- *
- * Design basis and rulings: `docs/decisions/0010-plugin-selftest.md` (selftest separated from core code).
- *
- * ## Why selftest is not in `cdev_core.c` (why this file exists)
- *   The test entry is not part of a plugin's public surface (see
- *   `include/br/dev/br_cdev.h`). After moving into `src/`, the production file keeps
- *   only production paths, and "cases read internals" is confined to the two accessors
- *   in `src/cdev_internal.h` —— that is exactly how this file differs from dev-core.
- *
- * ## What it tests, and where the boundary with production code lies
- *   Character-device subcategory and adapter layer (own numbering `TC-CDEV-*`): almost
- *   all criteria go only through the public API of `br_cdev.h`/`br_dev.h` (registration
- *   precondition checks / lookup / flash subtype). The exceptions are two criteria tied
- *   to the internal mechanism itself: TC-CDEV-004/005 identify "which entries carry this
- *   file's open_file hook" by pointer identity, and TC-CDEV-006 inspects the adapter
- *   table slot by slot (lseek/fsync/poll_attach must be null). Neither can be expressed
- *   with the public API ⇒ they read via the two accessors in `src/cdev_internal.h`,
- *   which always delegate to the production implementation (no logic copied); see that
- *   header for the rationale.
- *
- * ## Contract with br_plugin_manager_selftest()
- *   Returns the number of failed items (0 = all green); it logs itself
- *   (`[CDEVCONF] PASS/FAIL ...` + `SUMMARY`). Failure does not stop the machine ——
- *   red/green is judged by the gate (`tests/gates.toml` forbids `[CDEVCONF] FAIL`).
+ * brickOS prototype v0.2.0: cdev-core selftest suite (TC-CDEV-*). Cases go through the public
+ * br_cdev.h/br_dev.h API except TC-CDEV-004/005 (cdev entries recognized by open_file pointer
+ * identity) and TC-CDEV-006 (adapter slot shape), which read src/cdev_internal.h. Returns the
+ * failure count; logs [CDEVCONF] PASS/FAIL and SUMMARY.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -34,17 +13,13 @@
 
 #include "cdev_internal.h"
 
-/* Selftest entry prototype (defined at the end of this file; referenced by the
- * `.selftest` hook in the generated `plugin_desc.c`). */
+/* Selftest entry (referenced by the generated plugin_desc.c `.selftest` hook). */
 int cdev_core_selftest(void);
 
-/* ==================================================================== conformance cases */
+/* ---- conformance cases ---- */
 
-/*
- * A minimal pair of ops for the cases only (just to exercise the two pure precondition
- * checks: "illegal name" / "required slot not set"). They are never registered (the
- * case asserts the registry count is unchanged), so nothing is added to /dev.
- */
+/* Minimal ops for the cases only, exercising "illegal name / missing required slot". They are
+ * never registered, so /dev is untouched. */
 static int conf_open(void *dev_priv, br_u32 flags, void **sess)
 {
     (void)dev_priv; (void)flags;
@@ -85,10 +60,8 @@ int cdev_core_selftest(void)
     good.open  = conf_open;
     good.close = conf_close;
 
-    /* ---- TC-CDEV-001: illegal name ⇒ -EINVAL, and does NOT pollute the registry ----
-     * Why only "illegal input": dev-core has no unregister API (v1 has no hotplug) ⇒ once
-     * registered, an entry appears in /dev forever. The positive path is covered by real
-     * drivers (io/uart-pl011 registers uart0 in CORE init). */
+    /* ---- TC-CDEV-001: illegal name => -EINVAL and no registry pollution. Only invalid input
+     * is tested: v1 has no unregister, so the positive path is left to real drivers. ---- */
     {
         const br_u32 before = br_dev_count();
         const int r_upper = br_cdev_register("Cdev0", &good, BR_NULL);   /* leading uppercase */
@@ -101,7 +74,7 @@ int cdev_core_selftest(void)
         pc(ok, "TC-CDEV-001", "illegal name => -EINVAL and registry count unchanged");
     }
 
-    /* ---- TC-CDEV-002: required slots (open/close) missing ⇒ -EINVAL ---- */
+    /* ---- TC-CDEV-002: open/close missing or ops NULL => -EINVAL ---- */
     {
         br_cdev_ops_t only_open = { 0 };
         only_open.open = conf_open;                    /* close missing */
@@ -117,7 +90,7 @@ int cdev_core_selftest(void)
         pc(ok, "TC-CDEV-002", "ops missing open/close or ops NULL => -EINVAL");
     }
 
-    /* ---- TC-CDEV-003: unregistered name ⇒ BR_NULL, and does not write the out-param ---- */
+    /* ---- TC-CDEV-003: unregistered/empty name => BR_NULL and out-param untouched ---- */
     {
         void *priv = (void *)(br_uintptr_t)1u;
         const br_bool ok = (br_cdev_get("nosuchcdev", &priv) == BR_NULL) &&
@@ -126,9 +99,9 @@ int cdev_core_selftest(void)
         pc(ok, "TC-CDEV-003", "unregistered/empty name => BR_NULL and out-param untouched");
     }
 
-    /* ---- TC-CDEV-004: round-trip for a registered cdev (get returns the entry's registered ops) ---- */
+    /* ---- TC-CDEV-004: br_cdev_get round trip over registered cdev entries ---- */
     {
-        /* The open_file hook this file installs on cdev entries - identify "own entries" by pointer identity */
+        /* open_file hook this file installs: identifies "own entries" by pointer identity */
         const cdev_open_file_hook_t own_hook = cdev_internal_open_file_hook();
         br_bool ok = BR_TRUE;
         br_u32  checked = 0u;
@@ -152,7 +125,7 @@ int cdev_core_selftest(void)
         pc(ok, "TC-CDEV-004", "br_cdev_get(name) == entry's registered ops (per-cdev round-trip)");
     }
 
-    /* ---- TC-CDEV-005: duplicate name ⇒ -EEXIST (using a real device name already in the table) ---- */
+    /* ---- TC-CDEV-005: duplicate name => -EEXIST (existing name from the table) ---- */
     {
         const cdev_open_file_hook_t own_hook = cdev_internal_open_file_hook();
         const char *first = BR_NULL;
@@ -175,7 +148,7 @@ int cdev_core_selftest(void)
         pc(ok, "TC-CDEV-005", "duplicate name => -EEXIST (uniqueness enforced by dev-core, passed through here)");
     }
 
-    /* ---- TC-CDEV-006: adapter-layer slot shape (lseek/fsync/poll_attach always null => -ENOTSUP mechanism) ---- */
+    /* ---- TC-CDEV-006: adapter slot shape (lseek/fsync/poll_attach null => -ENOTSUP) ---- */
     {
         const br_file_ops_t *fops = cdev_internal_file_ops();
         const br_bool ok = (fops->open != BR_NULL) &&
@@ -214,10 +187,8 @@ int cdev_core_selftest(void)
         pc(ok, "TC-CDEV-007", "flash: geometry self-consistency/required actions checked at registration; unregistered lookup => BR_NULL/-ENODEV");
     }
 
-    /* ---- TC-CDEV-008: flash entries provide no file surface (open_file == BR_NULL ⇒ /dev node cannot be opened) ----
-     * This is the mechanical criterion for "v1 raw flash has no file surface" (ADR-0009 §3
-     * ruling 6): if someone ever wires open_file onto flash in passing, it turns red —— then
-     * the criterion and the doc should change, not a silent pass. */
+    /* ---- TC-CDEV-008: flash entries have open_file == BR_NULL (v1 raw flash has no file
+     * surface); wiring one on turns this red, so the case and the doc must change. ---- */
     {
         br_bool ok = BR_TRUE;
         for (br_u32 i = 0u; i < br_dev_count(); i++) {

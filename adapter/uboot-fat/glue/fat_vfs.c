@@ -1,37 +1,15 @@
 /*
- * adapter/uboot-fat — VFS integration + lifecycle hooks (new here, no upstream counterpart)
+ * adapter/uboot-fat - VFS integration and lifecycle hooks (no upstream counterpart).
  *
- * ============================== what this file does ==============================
- * Connect the **upstream path-style API** (`fat_exists`/`fat_read_file`/`file_fat_write_at`/
- * `fat_unlink`/…, defined in the single compilation unit `third_party/uboot-imx/fs/fat/fat_write.c`)
- * to this project's VFS contract
- * (framework/vfs-core/include/br/vfs/br_vfs.h):
+ * Bridges the upstream path-style API (fat_exists/fat_read_file/file_fat_write_at/fat_unlink/...,
+ * from the single compilation unit third_party/uboot-imx/fs/fat/fat_write.c) to the VFS contract:
+ * layer 1 super (mount/sync/free_inode/unmount), layer 2 inode (lookup/create/unlink/mkdir/rmdir/
+ * rename/getattr/setattr), layer 3 file (read/write/lseek/close, dir read/close).
  *
- *   layer 1 (super): mount (read BPB, decide 12/16/32 + check volume geometry) / sync (bdev flush) /
- *                    free_inode / unmount (BR_NULL)
- *   layer 2 (inode): lookup / create / unlink / mkdir / rmdir / rename / getattr / setattr
- *   layer 3 (file):  file side read/write/lseek/close; dir side read (one br_dirent_t)/close
- *
- * ## inode = transient **path wrapper** (design SD-3, opposite of fs/tmpfs's "persistent node")
- *   Each lookup/create br_malloc's a `uboot_fat_ino_t`:
- *       { volume id, path relative to mount point (root = ""), type, size snapshot }
- *   So a "node" needs no on-media index — the glue hands the path to the upstream path API.
- *   Ownership: **whoever holds it frees it**. free_inode must br_free it (br_vfs.c ino_put contract);
- *   the only exception is the **mount root**: mount allocates it and it lives on uboot_fat_fs_t; vfs
- *   never passes it to free_inode — but it must still br_malloc (never BSS, see glue/fat_glue.h).
- *
- * ## why this layer synthesizes "." and ".." for directory reads
- *   FAT's **root directory** has no "." / ".." (non-FAT32 roots are not even on the cluster chain),
- *   while VFS consumers (and TC-VFS-*) treat it as a POSIX directory ⇒ synthesize the first two here
- *   (same as fs/tmpfs).
- *
- * ## intentional deviations / debt (see README)
- *   · `link`/`symlink`/`readlink` slots are **unfilled** (BR_NULL ⇒ -ENOTSUP): FAT has no links.
- *   · name bound: FAT long names reach 255 bytes, but br_dirent_t.name is only BR_NAME_MAX(32) ⇒
- *     names > 31 bytes return -ENOSPC from readdir (same rule as fs/tmpfs, see uboot_fat_name_ok).
- *   · `BR_O_APPEND` and `O_TRUNC` are handled in fops->open; permission checks (no write on a
- *     read-only fd) belong to vfs/posix.
- * ==========================================================================
+ * Inodes are transient path wrappers (ownership: glue/fat_glue.h). Directory reads synthesize "."
+ * and ".." because FAT roots have neither. link/symlink/readlink stay BR_NULL (-ENOTSUP); names
+ * over BR_NAME_MAX-1 = 31 bytes give -ENOSPC from readdir (fixed br_dirent_t.name).
+ * BR_O_APPEND and BR_O_TRUNC are handled in fops->open; permission checks belong to vfs/posix.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -41,19 +19,12 @@
 
 #include "fat_glue.h"
 
-/* ==================================================================== mount table (plugin-private "mount point → volume")
- * ★ why keep our own table: vfs's mount table only records {path, ops, fs_priv, root}; but the
- *   mapping "which mount point maps to which block device" is now **the mount plan's fact**
- *   (ADR-0030): the APP calls `mount(source, target, "fat", …)` handing (dev, mnt) to this file,
- *   and `uboot_fat_vol_claim()` in `glue/fat_blk.c` claims a volume slot.
- *   Only the id is cached here for mount; no duplicate root inode with vfs's table.
- */
+/* ---- mount table (plugin-private "mount point -> volume"): only the volume id is cached, since
+ * which mount point maps to which device is the mount plan's fact. No duplicate root inode. */
 typedef struct uboot_fat_mount_slot {
-    /* ★ the mount point is **our own copy** (fixed-size, bounded), not a vfs pointer: `cfg->path`
-     *   points at a **stack buffer** (`norm`) inside `br_vfs_mount()` and dies when mount returns —
-     *   storing the pointer reads overwritten stack in self-tests (observed: `TC-FAT-001
-     *   vol_info_failed` / `TC-FAT-008 fs_ops.sync_rc=-2`, while the mount-time log looked fine).
-     *   Bound = UB_FAT_PATH_MAX (this plugin's path rule). */
+    /* Our own bounded copy, not a vfs pointer: cfg->path points at a stack buffer inside
+     * br_vfs_mount() that dies on return, and storing it read overwritten stack (TC-FAT-001
+     * vol_info_failed, TC-FAT-008 fs_ops.sync_rc=-2) while the mount-time log looked fine. */
     char            mnt[UB_FAT_PATH_MAX];
     uboot_fat_fs_t *fs;      /* set only after a successful mount */
     br_bool         mounted;
@@ -61,7 +32,7 @@ typedef struct uboot_fat_mount_slot {
 
 static uboot_fat_mount_slot_t s_slots[UB_FAT_VOL_MAX];
 
-/* ==================================================================== ops tables (forward decls first) */
+/* ---- ops tables (forward decls first) ---- */
 
 static br_inode_t *uboot_fat_lookup (br_inode_t *dir, const char *name);
 static int  uboot_fat_create (br_inode_t *dir, const char *name, br_u32 flags, br_inode_t **out);
@@ -88,20 +59,9 @@ static int  uboot_fat_mount     (void *fs_priv, const br_fs_cfg_t *cfg, br_inode
 static void uboot_fat_free_inode(br_inode_t *ino);
 static int  uboot_fat_sync      (void *fs_priv);
 
-/*
- * Volume-level flush (**the only implementation**): make the block device flush.
- *
- * Why only one place: `fs_ops.sync` and `br_file_ops.fsync` are two entries (volume/handle) to the
- * same thing; two copies = a second truth that will drift.
- *
- * ★ after ADR-0026 this is **only** bdev.flush — there is no "glue-held FAT cache" anymore:
- *   each upstream write entry (`file_fat_write_at`/`fat_unlink`/`fat_mkdir`/`fat_rename`) flushes
- *   its dirty FAT window (`flush_dirty_fat_buffer`) and directory entries (`flush_dir`) internally,
- *   and its `fsdata` is a per-call local freed before return (the upstream model; the earlier
- *   "fsdata owned by the volume" was our deviation, reverted with ADR-0026). So no unflushed plugin
- *   state spans two API calls, and `sync` degrades to "make the device really commit written
- *   sectors" (SD-8 rule of design `7-02` §1).
- */
+/* Volume-level flush, the only implementation (fs_ops.sync and br_file_ops.fsync are the volume and
+ * handle entries to the same thing). Only bdev.flush: each upstream write entry flushes its own FAT
+ * window and dirents and frees its per-call fsdata, so no plugin state spans two API calls. */
 static int uboot_fat_flush_volume(uboot_fat_vol_t *vol)
 {
     int rc;
@@ -119,20 +79,19 @@ static int uboot_fat_flush_volume(uboot_fat_vol_t *vol)
     return (vol->ops->flush(vol->priv) == 0) ? 0 : BR_ERR(EIO);
 }
 
-/* file side: six slots filled + three explicit BR_NULL (contract: unsupported slot = BR_NULL ⇒ -ENOTSUP) */
+/* file side: unfilled slots are BR_NULL => -ENOTSUP (contract: unsupported slot = BR_NULL). */
 static const br_file_ops_t s_file_fops = {
     .open        = uboot_fat_file_open,
     .read        = uboot_fat_file_read,
     .write       = uboot_fat_file_write,
     .lseek       = uboot_fat_file_lseek,
     .ioctl       = BR_NULL,
-    .fsync       = uboot_fat_fsync,   /* same as fs_ops.sync: write back FAT cache, then flush device */
+    .fsync       = uboot_fat_fsync,   /* same as fs_ops.sync: write back then flush */
     .poll        = BR_NULL,   /* block media are always ready; the wait face is v2 (SD-7) */
     .poll_attach = BR_NULL,   /* reserved for v2 (wait-queue); always NULL in v1 */
     .close       = uboot_fat_file_close,
 };
 
-/* dir side (read = one br_dirent_t). write/seek have no meaning for a dir; slots left empty. */
 static const br_file_ops_t s_dir_fops = {
     .open        = uboot_fat_dir_open,
     .read        = uboot_fat_dir_read,
@@ -145,13 +104,9 @@ static const br_file_ops_t s_dir_fops = {
     .close       = uboot_fat_dir_close,
 };
 
-/*
- * Layer 2: inode ops. ★ dirs and files **share one table**: lookup/create/… slots check the type
- * themselves, and a "file node" only ever reaches getattr/setattr (truncate), since vfs dispatches
- * namespace ops to dirs only. Why not share a single table like tmpfs: a namespace op dispatched to
- * a file node must give a clear -ENOTDIR/-EISDIR rather than "the table happened to implement it" —
- * so this file splits by **type** (only two tables, zero cost).
- */
+/* Layer 2 inode ops: dirs and files use separate tables and every op checks the node type, so a
+ * namespace op dispatched to a file node gives a clear -ENOTDIR/-EISDIR instead of whatever the
+ * table happened to implement. Two tables, zero cost. */
 static const br_inode_ops_t s_dir_iops = {
     .lookup  = uboot_fat_lookup,
     .create  = uboot_fat_create,
@@ -161,14 +116,12 @@ static const br_inode_ops_t s_dir_iops = {
     .rename  = uboot_fat_rename,
     .getattr = uboot_fat_getattr,
     .setattr = uboot_fat_setattr,
-    /* ADR-0013 addition (table tail): FAT has no links ⇒ three slots explicitly BR_NULL (-ENOTSUP) */
     .symlink  = BR_NULL,
     .readlink = BR_NULL,
     .link     = BR_NULL,
 };
 
-/* file node iops: only getattr/setattr are meaningful (vfs never dispatches namespace ops to a
- * non-dir, while br_fstat / br_truncate come through here). */
+/* file node iops: only getattr/setattr are meaningful (br_fstat/br_truncate land here). */
 static const br_inode_ops_t s_file_iops = {
     .lookup  = BR_NULL,
     .create  = BR_NULL,
@@ -190,14 +143,8 @@ static const br_fs_ops_t s_fs_ops = {
     .sync       = uboot_fat_sync,
 };
 
-/* ==================================================================== small helpers */
-
-/*
- * Bounded copy (cap **includes** the trailing '\0'). ★ deliberately named apart from
- * `uboot_fat_strcpy()` in the compat env header (2 args, bound 256 — that env implementation is
- * **for upstream**): this is glue's own helper, with the length given by the caller (this plugin's
- * path buffer `UB_FAT_PATH_MAX`).
- */
+/* Bounded copy; the cap includes the trailing '\0'. Glue's own helper, deliberately distinct from
+ * the compat env's uboot_fat_strcpy() (that one is for upstream, fixed bound 256). */
 static void uboot_fat_strcpy_bounded(char *dst, const char *src, br_size_t cap)
 {
     br_size_t i = 0u;
@@ -215,14 +162,10 @@ static void uboot_fat_strcpy_bounded(char *dst, const char *src, br_size_t cap)
     dst[cap - 1u] = '\0';
 }
 
-/*
- * Name rule (single enforcement point; lookup/create/mkdir/rmdir/rename all go through it):
- *   non-empty, no '/', length ≤ UB_FAT_NAME_MAX-1 (= BR_NAME_MAX-1 = 31).
- * Why a **length bound** instead of "the 255 FAT allows": this repo's dirent is the fixed-size
- * br_dirent_t with name[] only 32 bytes ⇒ a long name could be created but not listed, which is
- * worse than rejecting it (same rule as fs/tmpfs). Scan byte by byte until NUL or BR_NAME_MAX ⇒ an
- * unterminated string is **read as 32 bytes only**.
- */
+/* Name rule, the single enforcement point for lookup/create/mkdir/rmdir/rename: non-empty, no '/',
+ * at most UB_FAT_NAME_MAX-1 = BR_NAME_MAX-1 = 31 bytes. The bound follows the fixed
+ * br_dirent_t.name[32]: a longer name could be created but never listed. The scan stops at
+ * BR_NAME_MAX, so an unterminated string is read as 32 bytes only. */
 br_bool uboot_fat_name_ok(const char *name)
 {
     br_u32 i;
@@ -244,7 +187,6 @@ br_bool uboot_fat_name_ok(const char *name)
     return BR_FALSE;                 /* window filled without NUL ⇒ longer than BR_NAME_MAX-1 */
 }
 
-/* is the name "." / ".."? (mutating ops reject explicitly; root self-reference is in lookup) */
 static br_bool uboot_fat_name_dot(const char *name)
 {
     if (name == BR_NULL) {
@@ -259,12 +201,9 @@ static br_bool uboot_fat_name_dot(const char *name)
     return BR_FALSE;
 }
 
-/*
- * Join "parent-relative path + name" → relative path (the only path constructor in this plugin).
- *   dir_path == "" ⇒ the result is just name (a direct child of the mount root)
- *   dir_path != "" ⇒ "dir_path/name"
- * Overwrites out (caller-provided stack buffer, cap ≥ UB_FAT_PATH_MAX). Returns 0 / -ENOSPC.
- */
+/* Join "parent-relative path + name" -> relative path, the only path constructor here: dir_path ==
+ * "" gives just name (a direct child of the mount root), otherwise "dir_path/name". Overwrites out
+ * (caller's stack buffer, cap >= UB_FAT_PATH_MAX). Returns 0 / -ENOSPC. */
 int uboot_fat_join_path(const char *dir_path, const char *name,
                         char *out, br_size_t cap)
 {
@@ -296,7 +235,7 @@ int uboot_fat_join_path(const char *dir_path, const char *name,
     return 0;
 }
 
-/* parent of a relative path (truncate in place): parent of "" is ""; of "a" is ""; of "a/b" is "a". */
+/* parent of a relative path, in place: parent of "" is ""; of "a" is ""; of "a/b" is "a". */
 static void uboot_fat_parent_path(const char *path, char *out, br_size_t cap)
 {
     br_size_t n = uboot_fat_strlen(path);
@@ -314,7 +253,7 @@ static void uboot_fat_parent_path(const char *path, char *out, br_size_t cap)
     out[n] = '\0';
 }
 
-/* depth of a relative path (component count; "" = 0). Gives "loops" a static bound (matches vfs). */
+/* depth of a relative path (component count; "" = 0); static bound for loops (matches vfs). */
 static br_u32 uboot_fat_path_depth(const char *path)
 {
     br_u32 depth = 0u;
@@ -327,16 +266,11 @@ static br_u32 uboot_fat_path_depth(const char *path)
     return depth;
 }
 
-/*
- * **Session state** of a dir handle: upstream `fat_opendir()` returns an opaque
- * `struct fs_dir_stream *` (its concrete `fat_dir` type is private to that upstream compilation
- * unit, invisible to glue), while the VFS-side dir read also synthesizes two "."/".." records ⇒ the
- * cursor must be glue-owned. So every open makes a wrapper {upstream stream, cursor}; close returns
- * both.
- * Cursor: 0 = ".", 1 = "..", ≥2 = the (cursor-2)-th real directory entry.
- */
+/* Dir-handle session state: fat_opendir() returns an opaque struct fs_dir_stream* (its fat_dir type
+ * is private to upstream) and the VFS read also synthesizes "."/"..", so the cursor is glue-owned:
+ * 0 = ".", 1 = "..", >= 2 = the (cursor-2)-th real entry. Close returns both. */
 typedef struct uboot_fat_dirstream {
-    struct fs_dir_stream *ds;      /* stream from upstream fat_opendir (given back by fat_closedir) */
+    struct fs_dir_stream *ds;      /* from upstream fat_opendir; returned by fat_closedir */
     br_u32                cursor;  /* vfs-side iteration cursor (see above) */
 } uboot_fat_dirstream_t;
 
@@ -362,7 +296,6 @@ static uboot_fat_ino_t *uboot_fat_node_new(br_u32 vol, br_u32 type,
     n->vol        = (br_u8)vol;
     n->type       = (br_u8)type;
     n->size       = size;
-    /* the path was already length-bounded by uboot_fat_join_path; this second copy is pure defense. */
     uboot_fat_strcpy_bounded(n->path, path, UB_FAT_PATH_MAX);
     return n;
 }
@@ -386,9 +319,8 @@ static int uboot_fat_size_of(const uboot_fat_ino_t *n, br_u32 *out)
         return rc;
     }
     if (fat_exists(n->path) == 0) {
-        /* ★ key: check existence first. u-boot's fs_size() **deliberately returns success + size 0**
-         * for "this is a directory" (its comment says fs_size must not fail on dirs) — using it
-         * directly would treat a directory as a 0-byte file. */
+        /* Check existence first: u-boot's fs_size() deliberately returns success + size 0 for a
+         * directory, so using it directly would treat a dir as a 0-byte file. */
         return BR_ERR(ENOENT);
     }
     rc = fat_size(n->path, &sz);
@@ -437,7 +369,7 @@ static int uboot_fat_kind_of(const uboot_fat_ino_t *n, br_bool *is_dir)
     return BR_ERR(ENOENT);
 }
 
-/* volume-absolute path (upstream style): "/hello.txt" / "/dir" / "/". Returns 0 or negative errno. */
+/* volume-absolute path (upstream style): "/hello.txt" / "/dir" / "/". Returns 0 or -errno. */
 static int uboot_fat_raw_path(const uboot_fat_ino_t *n, char *out, br_size_t cap)
 {
     const br_size_t need = uboot_fat_strlen(n->path) + 2u;
@@ -450,7 +382,7 @@ static int uboot_fat_raw_path(const uboot_fat_ino_t *n, char *out, br_size_t cap
     return 0;
 }
 
-/* dirent name → br_dirent_t (VFS's fixed-size record). Name over the bound ⇒ -ENOSPC (see header). */
+/* dirent name -> br_dirent_t (VFS's fixed-size record). Over the bound => -ENOSPC (see header). */
 static int uboot_fat_fill_dirent(br_dirent_t *de, br_u32 type, const char *name)
 {
     const br_size_t len = uboot_fat_strlen(name);
@@ -465,7 +397,6 @@ static int uboot_fat_fill_dirent(br_dirent_t *de, br_u32 type, const char *name)
     return 0;
 }
 
-/* ==================================================================== layer 3: file side */
 
 static int uboot_fat_file_open(br_file_t *f, br_u32 flags)
 {
@@ -548,7 +479,7 @@ static br_s64 uboot_fat_file_read(br_file_t *f, void *buf, br_size_t n)
     if (want > (br_size_t)((br_u64)size - (br_u64)off)) {
         want = (br_size_t)((br_u64)size - (br_u64)off);
     }
-    /* ★ len must be given explicitly as want: upstream `len == 0` means "read to EOF", unlike POSIX. */
+    /* len must be explicit as want: upstream `len == 0` means "read to EOF", unlike POSIX. */
     rc = fat_read_file(raw, buf, (loff_t)off, (loff_t)want, &act);
     if (rc < 0) {
         return rc;
@@ -569,7 +500,7 @@ static br_s64 uboot_fat_file_write(br_file_t *f, const void *buf, br_size_t n)
     if ((node == BR_NULL) || (node->type != BR_INODE_FILE)) {
         return BR_ERR(EISDIR);
     }
-    /* BR_O_APPEND means "seek to the end **before every write**", so even a zero-length write seeks */
+    /* BR_O_APPEND means "seek to the end before every write", so a zero-length write seeks too. */
     if ((br_file_flags(f) & BR_O_APPEND) != 0u) {
         br_u32 sz = 0u;
 
@@ -601,14 +532,14 @@ static br_s64 uboot_fat_file_write(br_file_t *f, const void *buf, br_size_t n)
         return rc;
     }
 
-    /* upstream semantics: write size bytes at pos; **no holes allowed** (pos > current len ⇒ -EINVAL) */
+    /* upstream semantics: write size bytes at pos; no holes (pos > current len => -EINVAL). */
     rc = file_fat_write_at(raw, off, (void *)(br_uintptr_t)buf, (loff_t)n, &act);
     if (rc < 0) {
         return rc;
     }
     br_file_set_offset(f, off + (br_s64)act);
     if ((br_u64)(off + (br_s64)act) > (br_u64)node->size) {
-        node->size = (br_u32)(off + (br_s64)act);   /* keep the snapshot in step (truth is on media) */
+        node->size = (br_u32)(off + (br_s64)act);   /* keep the snapshot in step */
     }
     return (br_s64)act;
 }
@@ -654,20 +585,11 @@ static br_s64 uboot_fat_file_lseek(br_file_t *f, br_s64 off, int whence)
     return pos;
 }
 
-/*
- * `fops->fsync` (= `fsync(fd)` in runtime/posix).
- *
- * ★ why it must exist (instead of BR_NULL as in early v1):
- *   `fsync` means "get the bytes I wrote onto the media", and this plugin's write path already
- *   commits data and dirents **call by call**; the only thing possibly left in memory is the **FAT
- *   cache** (`fsdata.fatbuf`, a 6-sector window, marked dirty by set_fatent_value). So fsync =
- *   ① write back the dirty FAT window ② let bdev flush. Leaving BR_NULL would hand consumers
- *   -ENOTSUP, which is not semantically "unsupported".
- *
- * Use `br_file_inode()` rather than `br_file_fpriv()` to get the node: a **dir handle**'s fpriv is
- * already taken by the dir iterator (fat_dir*), while an inode's fpriv always equals the node
- * itself (CA-2 first-field layout).
- */
+/* fops->fsync (= fsync(fd) in runtime/posix). The write path commits data and dirents call by call;
+ * the only state possibly left in memory is the FAT cache (fsdata.fatbuf, a 6-sector window dirtied
+ * by set_fatent_value), so fsync writes back that window and lets bdev flush -- BR_NULL would
+ * wrongly hand consumers -ENOTSUP. Node via br_file_inode(), not br_file_fpriv(): a dir handle's
+ * fpriv is the iterator, while an inode's fpriv is the node itself (CA-2 first-field layout). */
 static int uboot_fat_fsync(br_file_t *f)
 {
     const br_inode_t *ino = br_file_inode(f);
@@ -683,13 +605,11 @@ static int uboot_fat_fsync(br_file_t *f)
 
 static int uboot_fat_file_close(br_file_t *f)
 {
-    /* session state = the path in the inode (no second copy in fpriv) ⇒ nothing to give back.
-     * vfs then frees the **transient inode** itself via free_inode. */
+    /* Nothing to give back: the session state is the path in the inode, which free_inode frees. */
     (void)f;
     return 0;
 }
 
-/* ==================================================================== layer 3: dir side */
 
 static int uboot_fat_dir_open(br_file_t *f, br_u32 flags)
 {
@@ -720,7 +640,6 @@ static int uboot_fat_dir_open(br_file_t *f, br_u32 flags)
     if (rc < 0) {
         return rc;
     }
-    /* session state (iteration cursor) goes on the **file handle**'s fpriv, not on node identity */
     st = (uboot_fat_dirstream_t *)br_malloc(sizeof(*st));
     if (st == BR_NULL) {
         fat_closedir(ds);
@@ -742,13 +661,11 @@ static br_s64 uboot_fat_dir_read(br_file_t *f, void *buf, br_size_t n)
     if ((st == BR_NULL) || (st->ds == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
-    /* a fixed-size record cannot be truncated (same rule as fs/tmpfs): too small ⇒ -EINVAL —
-     * returning 0 would be read by br_readdir as "directory exhausted", which is a lie. */
+    /* Too small for a fixed-size record => -EINVAL (0 would read as "directory exhausted"). */
     if ((buf == BR_NULL) || (n < (br_size_t)sizeof(br_dirent_t))) {
         return BR_ERR(EINVAL);
     }
 
-    /* first two synthesized in place (see file header): FAT's root dir has no "."/".." */
     if (st->cursor == 0u) {
         st->cursor = 1u;
         rc = uboot_fat_fill_dirent(de, BR_INODE_DIR, ".");
@@ -791,7 +708,6 @@ static int uboot_fat_dir_close(br_file_t *f)
     return 0;
 }
 
-/* ==================================================================== layer 2: inode ops */
 
 static br_inode_t *uboot_fat_lookup(br_inode_t *dir, const char *name)
 {
@@ -824,13 +740,11 @@ static br_inode_t *uboot_fat_lookup(br_inode_t *dir, const char *name)
         return (out != BR_NULL) ? &out->head : BR_NULL;
     }
 
-    /* an invalid name (empty / contains '/') is just "not found" during lookup; too long ⇒ this layer
-     * has no error-code channel (returns BR_NULL, vfs yields -ENOENT). create/mkdir/readdir carry an
-     * explicit errno for the over-bound **criterion**. */
+    /* An invalid name (empty or containing '/') is just "not found"; a too-long one has no
+     * error-code channel here (BR_NULL, vfs yields -ENOENT) -- create/mkdir/readdir do carry it. */
     if (uboot_fat_name_ok(name) == BR_FALSE) {
         return BR_NULL;
     }
-    /* depth bound: ≤ BR_NAME_MAX-1 components (pure defense; vfs's path buffer holds the truth) */
     if (uboot_fat_path_depth(d->path) >= (UB_FAT_NAME_MAX - 1u)) {
         return BR_NULL;
     }
@@ -886,7 +800,7 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
     if ((dir == BR_NULL) || (dir->type != BR_INODE_DIR)) {
         return BR_ERR(ENOTDIR);
     }
-    /* the "too long" branch of the name rule gives -ENOSPC (same rule as fs/tmpfs: fixed dirents) */
+    /* the "too long" branch of the name rule gives -ENOSPC (fixed dirents, as in fs/tmpfs) */
     if (uboot_fat_name_dot(name) == BR_TRUE) {
         return BR_ERR(EINVAL);
     }
@@ -911,7 +825,7 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
         uboot_fat_strcpy_bounded(probe.path, child, UB_FAT_PATH_MAX);
         rc = uboot_fat_kind_of(&probe, &is_dir);
         if (rc == 0) {
-            /* already exists: O_EXCL ⇒ -EEXIST; else reuse (Linux rule; vfs already looked it up) */
+            /* exists: O_EXCL => -EEXIST; else reuse (Linux rule; vfs already looked it up) */
             if ((flags & BR_O_EXCL) != 0u) {
                 return BR_ERR(EEXIST);
             }
@@ -935,9 +849,8 @@ static int uboot_fat_create(br_inode_t *dir, const char *name, br_u32 flags, br_
         }
     }
 
-    /* actually create the file. Same shape as fs/tmpfs create: first the "admission" checks (can we
-     * write), then the media. Write 0 bytes first (upstream file_fat_write_at's create_link path) to
-     * create the dirent, so later writes take the "file exists" branch. */
+    /* Create the file: write 0 bytes first (upstream file_fat_write_at's create_link path) so the
+     * dirent exists and later writes take the "file exists" branch. */
     {
         uboot_fat_vol_t *vol = uboot_fat_vol_get(d->vol);
         char raw[UB_FAT_PATH_MAX];
@@ -1048,7 +961,6 @@ static int uboot_fat_mkdir(br_inode_t *dir, const char *name)
     if (rc != 0) {
         return rc;
     }
-    /* upstream raw paths are "/a/b"; the mount root ⇒ "/" */
     raw[0] = '/';
     memcpy(raw + 1, child, uboot_fat_strlen(child) + 1u);
     /* upstream returns -EEXIST for "already exists" (see fat_mkdir), matching what vfs expects */
@@ -1162,8 +1074,7 @@ static int uboot_fat_rename(br_inode_t *dir, const char *name,
     memcpy(old_raw + 1, child, uboot_fat_strlen(child) + 1u);
     new_raw[0] = '/';
     memcpy(new_raw + 1, nchild, uboot_fat_strlen(nchild) + 1u);
-    /* upstream fat_rename already rejects "move a directory into its own subtree"
-     * (check_path_prefix); this layer does not re-implement it (second implementation = second truth). */
+    /* upstream fat_rename rejects "move a directory into its own subtree" (check_path_prefix). */
     return fat_rename(old_raw, new_raw);
 }
 
@@ -1181,13 +1092,13 @@ static int uboot_fat_getattr(br_inode_t *ino, br_stat_t *st)
     if (n == BR_NULL) {
         return BR_ERR(EINVAL);
     }
-    st->valid = BR_STAT_SIZE;      /* nlink not set: FAT has no hard links (contract allows omitting) */
+    st->valid = BR_STAT_SIZE;      /* nlink unset: FAT has no hard links */
     st->type  = ino->type;
     if (ino->type == BR_INODE_DIR) {
         st->size = 0u;             /* a dir's size has no contract here, use 0 (same as tmpfs) */
     } else {
         br_u32 sz = 0u;
-        const int rc = uboot_fat_size_of(n, &sz);   /* ask the media each time (dirent size is truth) */
+        const int rc = uboot_fat_size_of(n, &sz);   /* ask the media (dirent size is truth) */
 
         if (rc != 0) {
             return rc;
@@ -1209,8 +1120,7 @@ static int uboot_fat_setattr(br_inode_t *ino, const br_stat_t *st)
     if ((ino == BR_NULL) || (st == BR_NULL)) {
         return BR_ERR(EINVAL);
     }
-    /* v1 honors only size (truncate). Unrecognized bits **must** give -ENOTSUP: faking success is
-     * more dangerous than refusing. */
+    /* v1 honors only size (truncate); any other bit gives -ENOTSUP rather than faking success. */
     if ((st->valid & ~(br_u32)BR_STAT_SIZE) != 0u) {
         return BR_ERR(ENOTSUP);
     }
@@ -1243,25 +1153,15 @@ static int uboot_fat_setattr(br_inode_t *ino, const br_stat_t *st)
     return rc;
 }
 
-/* ==================================================================== layer 1: super */
-
-/*
- * BPB check + **volume geometry validation**. Upstream get_fs_info only checks whether the
- * parameters are self-consistent; this file's mount must also answer "does this BPB match the
- * geometry of the device behind it" — if not, refuse to mount (fail-fast is intentional).
- * Check three things (all mechanically decidable from BPB and geometry):
- *   ① total sectors in the volume ≤ device sectors (else reads run past the device);
- *   ② data area start (can be negative under FAT12/16's "negative cluster" rule) + cluster count ≥ 0
- *      and inside the volume;
- *   ③ the cluster count falls in the **defining range** of the FAT type (12: < 4085; 16: 4085..65524;
- *      32: ≥ 65525) — this also validates determine_legacy_fat_bits' decision against the BPB.
- */
+/* BPB check plus volume geometry validation: upstream get_fs_info only checks self-consistency, but
+ * mount must also check the BPB against the device and refuse otherwise. Three decidable checks:
+ * total_sect <= device sectors; the data area (start can be a "negative cluster" for FAT12/16)
+ * begins inside the volume with >= 0 clusters; the cluster count is in the FAT type's defining
+ * range (12: < 4085, 16: 4085..65524, 32: >= 65525), cross-checking determine_legacy_fat_bits. */
 static int uboot_fat_mount_check(const uboot_fat_vol_t *vol, char *why, br_size_t cap)
 {
-    /* ★ the `vol->*` fields here are **observations parsed from the BPB at mount time**
-     * (uboot_fat_vol_probe in fat_blk.c), not a second fsdata: every upstream API carries its own
-     * fsdata, glue cannot see it and does not need it — the checks only need "type / cluster count /
-     * data area inside the volume". */
+    /* vol's fields are BPB observations parsed at mount time (uboot_fat_vol_probe in fat_blk.c),
+     * not a second fsdata -- glue cannot see upstream's per-call fsdata and does not need it. */
     const uboot_fat_vol_t *fs = vol;
     const br_u64 n_sectors = vol->geom.n_sectors;
     br_u32 data_start;
@@ -1334,7 +1234,7 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
     }
     *root = BR_NULL;
 
-    /* a volume = the (source device, mount point) pair given by the APP's mount plan; claim a slot. */
+    /* a volume = the (source device, mount point) pair from the APP's mount plan; claim a slot. */
     rc = uboot_fat_vol_claim(cfg->dev, cfg->path, &id);
     if (rc != 0) {
         br_log_error("uboot-fat: volume claim failed (dev=%s mnt=%s) rc=%d", cfg->dev, cfg->path, rc);
@@ -1345,7 +1245,6 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
         return BR_ERR(EINVAL);
     }
 
-    /* each mount gets its own mount body (it holds the root inode; vfs's mount table keeps it) */
     fs = (uboot_fat_fs_t *)br_malloc(sizeof(*fs));
     if (fs == BR_NULL) {
         return BR_ERR(ENOMEM);
@@ -1376,18 +1275,14 @@ static int uboot_fat_mount(void *fs_priv, const br_fs_cfg_t *cfg, br_inode_t **r
     }
     fs->root = &r->head;
 
-    /* ★ ADR-0030: the mount body is **made per mount**, so register the internal view **here**
-     *   (the query face for sync / vol_info). This table used to be preset in the init phase; now it
-     *   is filled by mount facts. `cfg->path` is held by vfs's mount table (until shutdown), long
-     *   enough. */
+    /* Register the internal view (the query face for sync/vol_info) here, because the mount body is
+     * made per mount. cfg->path lives in vfs's mount table until shutdown. */
     uboot_fat_strcpy_bounded(s_slots[id].mnt, cfg->path, (br_size_t)sizeof(s_slots[id].mnt));
     s_slots[id].fs      = fs;
     s_slots[id].mounted = BR_TRUE;
 
-    /* ★ the **shape of the ready line is an integration contract**: the `fat-test` gate in
-     *   `tests/gates.toml` requires each volume to be named as `uboot-fat: <mount point> ready`
-     *   (same as `uboot-erofs: /assets ready` in `adapter/uboot-erofs` and `uboot-mmc: eMMC ready`
-     *   in `adapter/uboot-mmc`). The trailing parenthesis is a human diagnostic, not a criterion. */
+    /* The ready line's shape is an integration contract: the fat-test gate in tests/gates.toml
+     * requires "uboot-fat: <mount point> ready". The trailing parenthesis is only diagnostic. */
     br_log_info("uboot-fat: %s ready (dev=%s, FAT%d, %u sectors x %u B, cluster %u sectors, %u clusters)",
                 cfg->path, vol->dev, vol->fatsize, vol->total_sect,
                 (unsigned)vol->sect_size, vol->clust_size,
@@ -1403,7 +1298,6 @@ static void uboot_fat_free_inode(br_inode_t *ino)
     }
 }
 
-/* volume-level sync (= the other entry of `br_file_ops.fsync`, sharing uboot_fat_flush_volume). */
 static int uboot_fat_sync(void *fs_priv)
 {
     uboot_fat_fs_t *fs = (uboot_fat_fs_t *)fs_priv;
@@ -1413,8 +1307,6 @@ static int uboot_fat_sync(void *fs_priv)
     }
     return uboot_fat_flush_volume(fs->vol);
 }
-
-/* ==================================================================== internal views for self-tests */
 
 /* internal view of volume-level sync (the TC-FAT-008 criterion; fs_ops.sync is exactly it) */
 int uboot_fat_test_sync(const char *mnt)
@@ -1444,32 +1336,24 @@ int uboot_fat_mount_vol_info(const char *mnt, uboot_fat_vol_info_t *out)
     return BR_ERR(ENOENT);
 }
 
-/* ==================================================================== lifecycle
- *
- * After ADR-0030 only one thing remains: **register the driver in the start phase** (`"fat"`).
- * Mounting is initiated by the **APP** — it calls POSIX `mount("emmcN", "/fatNN", "fat", …)` per its
- * own `[[mount]]` plan, so `uboot_fat_mount()` claims a volume and makes a mount body each time.
- * Ordering premise: block devices are registered by `adapter/uboot-mmc` in **its** start phase, and
- * the APP's start runs after all non-APP starts (plugin manager phase rule) ⇒ by then the devices
- * must be ready. EARLY/CORE return empty-handed: the early phase has no heap pool yet (br_mem_init
- * is in core.init), and mounting allocates the root inode.
- */
+/* ---- lifecycle ----
+ * The start phase only registers the driver ("fat"); mounting is the APP's call per its [[mount]]
+ * plan. adapter/uboot-mmc registers the block devices in its own start phase, and the APP's start
+ * runs last. EARLY/CORE return empty-handed: no heap pool exists before core.init. */
 int uboot_fat_early_init(void);
 int uboot_fat_init(void);
 int uboot_fat_start(void);
 
 int uboot_fat_early_init(void)
 {
-    /* EARLY phase: no heap pool yet (br_mem_init is in core.init); this file allocates nothing here. */
+    /* EARLY phase: no heap pool yet (br_mem_init is in core.init); allocates nothing here. */
     return 0;
 }
 
 int uboot_fat_start(void)
 {
-    /* ★ ADR-0030: only **register the driver**, no mounting — which card and which mount point is
-     *   the APP mount plan's call (each `mount("emmcN", "/fatNN", "fat", 0, NULL)` claims a volume).
-     *   This used to mount volume by volume from the plugin's own three-row table ⇒ two truths for
-     *   the "mount plan" (that debt was paid off by ADR-0030). */
+    /* Only register the driver; which card mounts where is the APP mount plan's call (each
+     * mount("emmcN", "/fatNN", "fat", 0, NULL) claims a volume). */
     const int rc = br_fs_driver_register("fat", &s_fs_ops, BR_NULL);
 
     if (rc != 0) {
@@ -1481,9 +1365,8 @@ int uboot_fat_start(void)
 
 int uboot_fat_init(void)
 {
-    /* CORE phase: nothing to do. Mount points and source devices now come from the **APP mount
-     * plan** (ADR-0030), volume slots are claimed at mount time — no preset "three-volume table" here
-     * (that was a second truth for the mount plan). */
+    /* CORE phase: nothing to do -- mount points and source devices come from the APP's mount plan,
+     * and volume slots are claimed at mount time. */
     return 0;
 }
 

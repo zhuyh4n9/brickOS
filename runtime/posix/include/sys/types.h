@@ -1,26 +1,12 @@
 /*
- * brickOS prototype v0.2.0 — POSIX base types (provided by the runtime/posix plugin)
- *
- * ============================== what this is ==============================
- * `runtime/posix` is the **POSIX runtime service** from design D18 (sole owner of the fd table + POSIX symbol
- * surface + libc stubs); this directory is the **POSIX header surface** it exposes to consumers.
- *
- * * Relation to `br_*`: every type here is **an alias or thin wrapper of `br_*`** -- there is no second set of
- *   semantics. For example `typedef long ssize_t` has the same width as core's `br_s64`, so the return value of
- *   `read()` is directly the return value of `br_file_read()`; `errno = -ret` is a **zero-cost conversion**
- *   (design `11-01` §2). The only reason this layer exists is "the standard names", not another abstraction layer.
- *
- * * Subset honesty obligation (cost 2 of `1-01` §7.6): **this directory declares only what is implemented**.
- *   No `gettimeofday`, because the prototype has no wall-clock source (see P-1 in
- *   `docs/11-service/11-02-svc-posix-subset.md`); no `fork`/`exec`/signals, because the design premise is a
- *   single address space (`1-01` §2.1). Declaring something that cannot link is worse than not declaring it.
+ * POSIX base types for runtime/posix. Every type is an alias or thin wrapper of br_*; ssize_t
+ * matches br_s64, so read() returns br_file_read() directly and errno = -ret is zero-cost.
+ * Only what is implemented is declared: no gettimeofday, fork/exec or signals.
  */
 #ifndef BR_POSIX_SYS_TYPES_H
 #define BR_POSIX_SYS_TYPES_H
 
-/* size_t / ptrdiff_t come from compiler builtins: this prototype is -ffreestanding and has no <stddef.h>
- * dependency (GCC and Clang both provide these macros), so "is our size_t the same as the compiler's size_t"
- * never becomes a question. */
+/* Compiler builtins: -ffreestanding, no <stddef.h> dependency. */
 #ifndef _BR_POSIX_SIZE_T_DEFINED
 #define _BR_POSIX_SIZE_T_DEFINED
 typedef __SIZE_TYPE__    size_t;
@@ -47,10 +33,7 @@ typedef long          suseconds_t;
 typedef unsigned int  useconds_t;
 typedef unsigned long id_t;
 
-/* `SEEK_*`: POSIX declares these in <stdio.h> and <unistd.h> respectively; placing them in the **base type
- * header** is deliberate -- this prototype is freestanding, so one less implicit "some header happens to include
- * another" dependency means one less class of "fails to compile under a different include order". Values follow
- * Linux (0/1/2). */
+/* In the base type header so there is no include-order dependency; Linux values. */
 #ifndef SEEK_SET
 #define SEEK_SET  0
 #define SEEK_CUR  1

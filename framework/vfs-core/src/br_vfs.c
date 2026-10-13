@@ -1,33 +1,8 @@
 /*
- * brickOS prototype v0.2.0 — VFS core (framework/vfs-core)
- *
- * Design basis: `docs/7-storage/7-01-vfs.md` (§1 unified openable model SD-1/D21, §2 mount and ops
- * four-layer split SD-15/D23, §3 poll staging SD-7), `docs/8-device/8-01-device.md` §2 (open_file hook's
- * {fops, fpriv}), `docs/3-os-core/3-04-memory.md` (handles come from the core heap).
- * Contract: `include/br/vfs/br_vfs.h`; per-item rulings and deviations: `docs/decisions/0009-vfs-storage-stack.md`.
- *
- * ## Everything this file implements
- *   (1) mount table + longest-prefix match (§1's single route: `br_open` only walks this table);
- *   (2) path normalization + component-by-component lookup walk chain (§2 "path walking lives in vfs-core")
- *       + lifetime management of transient inodes (v1 has no cache; walk and discard — SD-3);
- *   (3) file handle (`br_file_t`) alloc/free + layer-3 dispatch (layers 1/2/4 ops tables are filled by the FS);
- *   (4) directory iteration (generic: reads fixed-size dirents through the file-side `read`);
- *   (5) path-level convenience surface (stat/mkdir/rmdir/unlink/rename/truncate — runtime/posix's 1:1 map);
- *   (6) **no** conformance cases: the storage-domain suite (TC-VFS-*) moved to `src/vfs_selftest.c`,
- *       driven by the core self-test pass (ADR-0010; test entry points are not in [[export]]).
- *
- * ## What this file does **not** do (D21's "pure VFS")
- *   Zero device knowledge: no `br_cdev`/`br_dev`/device-name branches — devices appear via fs/devfs
- *   as file nodes, so vfs only sees "some FS's inode carrying fops/fpriv". This is the shape after
- *   D21 revoked "vfs-core depends on dev-core".
- *
- * ## inode ownership rules (the one easy place to get wrong, so they are at the top of the file)
- *   - **the root inode held by the mount table is not transient**: vfs never hands it to `free_inode`;
- *   - inodes returned by `lookup`/`create` **are transient**: whoever gets one owns it — intermediate
- *     walk levels are discarded after use, the final inode goes to `br_file_t` and is freed by `br_file_close`;
- *   - "use and go" paths like `br_stat`/`br_mkdir`/… release the final inode **immediately**.
- *   The whole file converges this rule into one `ino_put()`; every release site goes through it —
- *   there is no second decision point.
+ * VFS core: mount table + longest-prefix match, path normalization, the lookup walk (transient
+ * inodes, no cache), br_file_t dispatch, directory iteration and the path-level surface; no device
+ * knowledge. Ownership: the mount table's root inode is never freed; lookup/create inodes are
+ * transient and owned by the caller -- every release goes through ino_put().
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -35,26 +10,28 @@
 #include <br/core/br_types.h>
 #include <br/vfs/br_vfs.h>
 
-#include "vfs_internal.h"      /* internal view for self-test (see that header; production paths do not use it) */
+#include "vfs_internal.h"
 
-/* lifecycle hook prototypes (name = symbol_prefix + phase; referenced by generated `plugin_desc.c`; not in [[export]]) */
+/* lifecycle hooks (referenced by generated plugin_desc.c; not exported) */
 int vfs_core_early_init(void);
 int vfs_core_init(void);
 int vfs_core_start(void);
 
-/* ==================================================================== static limits */
+/* ---- limits ---- */
 
-#define BR_VFS_MAX_MOUNTS    8u    /* mount table limit (design SD-4: v1 static mounts) */
-#define BR_VFS_DRIVER_NAME_MAX 16u  /* driver name limit (e.g. "erofs"/"fat"); shorter than path names */
-#define BR_VFS_PATH_MAX      128u  /* normalized path buffer (incl. trailing '\0'); 64 -> 128 since ADR-0013
-                                    * — must fit the symlink "prefix + target + remaining components" concat */
-#define BR_VFS_SYMLINK_DEPTH 8u    /* symlink expansion depth limit (exceeded ⇒ -ELOOP) */
+/* Mount table limit (v1: static mounts); driver name bound (shorter than paths); normalized path
+ * buffer (NUL-terminated), sized to fit "link prefix + target + remaining components"; symlink
+ * depth (exceeded => -ELOOP). */
+#define BR_VFS_MAX_MOUNTS    8u
+#define BR_VFS_DRIVER_NAME_MAX 16u
+#define BR_VFS_PATH_MAX      128u
+#define BR_VFS_SYMLINK_DEPTH 8u
 
-/* Any bit outside the allowed flags ⇒ -EINVAL (silently ignoring it would hide "I asked for O_EXCL and nobody cared") */
+/* Any flag bit outside the allowed set => -EINVAL (not silently ignored). */
 #define BR_VFS_KNOWN_FLAGS   (BR_O_ACCMODE | BR_O_CREAT | BR_O_EXCL | \
                               BR_O_TRUNC | BR_O_APPEND | BR_O_NONBLOCK | BR_O_NOFOLLOW)
 
-/* ==================================================================== mount table */
+/* ---- mount table ---- */
 
 typedef struct vfs_mount {
     br_bool            used;
@@ -62,14 +39,12 @@ typedef struct vfs_mount {
     br_u32             len;                     /* strlen(path); root = 1 */
     const br_fs_ops_t *ops;
     void              *priv;
-    br_inode_t        *root;                    /* held by the mount table, **never** given to free_inode */
+    br_inode_t        *root;                    /* held by the mount table, never given to free_inode */
 } vfs_mount_t;
 
 static vfs_mount_t s_mounts[BR_VFS_MAX_MOUNTS];
 
-/* ---- FS driver registry (ADR-0029): fstype name -> {ops, fs_priv} -------------------
- * FS plugins register themselves in the start phase; APPs mount by name via POSIX `mount(..., fstype, ...)`.
- * The name is a **contract** (the APP's [[mount]].fstype looks it up) ⇒ declared in brick.toml, checked by name in self-test. */
+/* Driver registry: plugins register at start; APPs mount by fstype (a brick.toml contract). */
 #define BR_VFS_MAX_DRIVERS   8u
 
 typedef struct vfs_driver {
@@ -82,20 +57,13 @@ typedef struct vfs_driver {
 static vfs_driver_t s_drivers[BR_VFS_MAX_DRIVERS];
 static br_u32       s_driver_n;
 
-/* ★ layout guard (ADR-0013 addendum): `br_vfs_internal_mounts()` **casts** `s_mounts` to
- *   `vfs_mount_internal_t*` for the self-test (see src/vfs_internal.h). If the two declarations
- *   disagree, the self-test reads misaligned bytes — a real past pitfall (changing only the
- *   production path limit made TC-VFS-002 red at once, and the symptom was "all mounts point to /"),
- *   so "must match field by field" was upgraded from a comment to a compile-time assertion. */
 _Static_assert(sizeof(vfs_mount_t) == sizeof(vfs_mount_internal_t),
                "vfs_mount_t and vfs_mount_internal_t layouts must match (internal view relies on the cast)");
 _Static_assert(BR_VFS_PATH_MAX == BR_VFS_PATH_MAX_INTERNAL,
                "BR_VFS_PATH_MAX and BR_VFS_PATH_MAX_INTERNAL must match");
 static br_u32      s_mount_n;   /* successful mount count (equals used entries in the table) */
 
-/* ==================================================================== handle model
- * `br_file_t` is **opaque** to plugins (br_vfs.h only forward-declares it) ⇒ the layout lives only here;
- * plugins always go through `br_file_*` accessors (D14's "handles are opaque" + CA-5's surface budget). */
+/* br_file_t is opaque to plugins: its layout lives here, plugins use the br_file_* accessors. */
 struct br_file {
     const vfs_mount_t   *m;              /* owning mount (its free_inode is used at close) */
     const br_file_ops_t *fops;
@@ -110,7 +78,7 @@ struct br_dir {
     br_file_t *f;
 };
 
-/* ==================================================================== small helpers */
+/* ---- small helpers ---- */
 
 static br_bool vfs_str_eq(const char *a, const char *b)
 {
@@ -160,12 +128,8 @@ br_bool br_vfs_internal_mem_eq(const void *a, const void *b, br_size_t n)
     return BR_TRUE;
 }
 
-/*
- * Path normalization (design §2 "native API accepts absolute paths only"): must be absolute; collapse
- * repeated '/'; strip trailing '/' (except root). **Does not resolve "." / ".."** — that is FS lookup
- * semantics (each FS answers "parent of root" differently, e.g. devfs's ".." is itself), vfs does not decide it.
- * Returns 0 / `-EINVAL` (relative or empty) / `-ENOSPC` (buffer exceeded).
- */
+/* Normalize: collapse '//', strip trailing '/' (except root); 0 / -EINVAL (relative or empty) /
+ * -ENOSPC (buffer exceeded). No "." / ".." resolution -- that is FS lookup semantics. */
 static int path_norm(const char *in, char *out, br_size_t cap)
 {
     if (in == BR_NULL || in[0] != '/') {
@@ -178,7 +142,7 @@ static int path_norm(const char *in, char *out, br_size_t cap)
     for (br_size_t i = 0u; in[i] != '\0'; i++) {
         if (in[i] == '/') {
             if (prev_slash == BR_TRUE) {
-                continue;               /* "//" ⇒ "/" */
+                continue;               /* "//" -> "/" */
             }
             prev_slash = BR_TRUE;
         } else {
@@ -197,7 +161,6 @@ static int path_norm(const char *in, char *out, br_size_t cap)
     return BR_OK;
 }
 
-/* mount-point prefix compare (**component boundary**, not a bare string prefix — otherwise "/devx" would mismatch "/dev") */
 static br_bool mount_prefix_eq(const vfs_mount_t *m, const char *norm)
 {
     if (m->len == 1u) {
@@ -211,7 +174,6 @@ static br_bool mount_prefix_eq(const vfs_mount_t *m, const char *norm)
     return (norm[m->len] == '\0' || norm[m->len] == '/') ? BR_TRUE : BR_FALSE;
 }
 
-/* **longest-prefix match** (design §1: "/data/xxx" -> littlefs, not rootfs) */
 static const vfs_mount_t *mount_match(const char *norm)
 {
     const vfs_mount_t *best = BR_NULL;
@@ -228,7 +190,6 @@ static const vfs_mount_t *mount_match(const char *norm)
     return best;
 }
 
-/* path relative to the mount point (**no leading '/'**; returns "" when the target is the mount point) */
 static const char *mount_rest(const vfs_mount_t *m, const char *norm)
 {
     if (m->len == 1u) {
@@ -240,7 +201,7 @@ static const char *mount_rest(const vfs_mount_t *m, const char *norm)
     return norm + m->len + 1u;
 }
 
-/* the **only** entry for releasing transient inodes (see the ownership rules at the file top) */
+/* The only release point for transient inodes. */
 static void ino_put(const vfs_mount_t *m, br_inode_t *ino, br_bool is_root)
 {
     if (ino == BR_NULL || is_root == BR_TRUE) {
@@ -251,23 +212,10 @@ static void ino_put(const vfs_mount_t *m, br_inode_t *ino, br_bool is_root)
     }
 }
 
-/* ==================================================================== walk chain (SD-3, ADR-0013 adds symlinks)
- *
- * **Who resolves symlinks**: vfs-core (not the FS). The target string may be an absolute path (must
- * restart mount-table matching) or a relative path (relative to "the directory containing the link");
- * only vfs, which owns the mount table and the full path, can do both. The FS only provides
- * `readlink` (supplies the target string) and `symlink`/`link` (creates links).
- *
- * **Expansion restarts instead of recursing**: this function is called by APP threads with a 4 KiB
- * stack; 8 levels of recursion would blow it. Restarting costs "walk again from the mount root",
- * negligible at v1's single-APP file scale (SD-3 already logged the "no cache" performance ceiling as R-S3).
- *
- * **`..` does not cross mounts**: the walk always descends **within one mount** (`mount_match` picks
- * the mount, `lookup` resolves `..`), so `..` inside a relative target stops at the mount root — a
- * deliberate v1 boundary (not Linux semantics), logged in ADR-0013 §2.4.
- */
+/* Symlink expansion (vfs-core resolves links, not the FS: the target may be absolute or relative
+ * to the containing directory). Restarts the walk instead of recursing -- APP threads have a
+ * 4 KiB stack. The walk stays within one mount, so ".." in a relative target stops at its root. */
 
-/* push one char into the concat buffer (single length enforcement point ⇒ overlong is always -ENAMETOOLONG). */
 static int np_push(char *np, br_size_t *n, char c)
 {
     if (*n + 1u >= (br_size_t)BR_VFS_PATH_MAX) {
@@ -277,15 +225,11 @@ static int np_push(char *np, br_size_t *n, char c)
     return BR_OK;
 }
 
-/*
- * Resolve a **normalized** absolute path starting from the mount table, returning the final inode.
- * `*is_root_out` = whether the final level is "the mount table's root" (the caller decides if it can free).
- * `nofollow_last` = do **not** expand when the final level is a symlink (used by stat/readlink/link/unlink).
- * Errors: `-ENOENT` (miss) / `-ENOTDIR` (intermediate level not a directory) / `-ENOSPC` (component over limit) /
- *       `-ENAMETOOLONG` (expansion exceeds the path buffer) / `-ELOOP` (expansion depth over limit) / readlink errors.
- *
- * ★ Looking up at every level (no caching) is a direct consequence of SD-3: v1 **has inode ops, no inode cache**.
- */
+/* Resolve a normalized absolute path from the mount table, returning the final inode.
+ * *is_root_out: whether the final level is the mount table's root (caller decides if it can free).
+ * nofollow_last: do not expand a symlink at the final level (stat/readlink/link/unlink).
+ * Errors: -ENOENT (miss) / -ENOTDIR (intermediate not a directory) / -ENOSPC (component over limit)
+ * / -ENAMETOOLONG (buffer) / -ELOOP (depth) / readlink errors. Each level is re-looked up. */
 static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                         const vfs_mount_t **m_out, br_inode_t **ino_out, br_bool *is_root_out,
                         char *final_out, br_size_t final_cap)
@@ -294,9 +238,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
     vfs_str_copy(path, norm_in, (br_size_t)sizeof(path));
 
     for (br_u32 depth = 0u; depth <= (br_u32)BR_VFS_SYMLINK_DEPTH; depth++) {
-        /* Record "which path this walk is actually on" (it changes after expansion). Callers of
-         * `-ENOENT` need it: when `O_CREAT` hits a dangling link, what must be created is the **target**,
-         * not the link name (ADR-0013 §2.5). */
+/* Path this walk is on (changes after expansion); O_CREAT needs the post-expansion target. */
         if (final_out != BR_NULL && final_cap > 0u) {
             vfs_str_copy(final_out, path, final_cap);
         }
@@ -320,11 +262,8 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
             const br_bool   last = (rest[j] == '\0') ? BR_TRUE : BR_FALSE;
             const br_size_t clen = j - i;
 
-            /* ★ Use `type` to decide "is a directory", **not** `iops == NULL`:
-             *   whether iops is null is each FS's **shape convention** (tmpfs shares one table with a
-             *   lookup slot across all nodes), while type is the semantic fact. Judging semantics from
-             *   a shape convention ⇒ the same mistake yields different errno per FS (walking a file as
-             *   a directory would become -ENOENT instead of -ENOTDIR). */
+/* Decide "is a directory" from type, not iops == NULL: iops is filled by FS shape convention
+ * (tmpfs shares one all-node table), and judging by it would give -ENOENT instead of -ENOTDIR. */
             if (cur->type != BR_INODE_DIR || cur->iops == BR_NULL || cur->iops->lookup == BR_NULL) {
                 ino_put(m, cur, cur_is_root);
                 return BR_ERR(ENOTDIR);
@@ -346,7 +285,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                 return BR_ERR(ENOENT);
             }
 
-            /* ---- symlink expansion (skipped when the final level is nofollow) ---- */
+/* ---- symlink expansion ---- */
             if ((next->type == BR_INODE_SYMLINK) &&
                 !((last == BR_TRUE) && (nofollow_last == BR_TRUE))) {
                 char tgt[BR_SYMLINK_MAX + 1u];
@@ -370,8 +309,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                 int       pr = BR_OK;
 
                 if (tgt[0] != '/') {
-                    /* relative target: prefix = path of the directory **containing** the link
-                     * (when i == 0 it is the mount path itself; otherwise the segment before '/') */
+/* relative target: prefix = directory containing the link (mount path when i == 0) */
                     const br_size_t plen = (i == 0u) ? (br_size_t)m->len : (rest_off + i - 1u);
                     for (br_size_t k = 0u; k < plen && pr == BR_OK; k++) {
                         pr = np_push(np, &n, path[k]);
@@ -390,7 +328,7 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
                     np[n] = '\0';
                     pr = path_norm(np, path, (br_size_t)sizeof(path));
                     if (pr != BR_OK) {
-                        pr = BR_ERR(ENAMETOOLONG);   /* over buffer after concat ⇒ semantically name too long */
+                        pr = BR_ERR(ENAMETOOLONG);   /* over buffer after concat => name too long */
                     }
                 }
 
@@ -424,13 +362,10 @@ static int resolve_norm(const char *norm_in, br_bool nofollow_last,
     return BR_ERR(ELOOP);
 }
 
-/*
- * Resolve "parent directory inode + final name" (shared by mkdir/unlink/rmdir/rename/create/symlink/link).
- *   `buf`/`cap`: caller-provided **writable** buffer (the final name is copied into it; `*leaf_out` points to it).
- * Intermediate components **follow** symlinks (parent is a link ⇒ lands in the target directory) — POSIX semantics.
- * Errors: `-EINVAL` (illegal path) / `-EBUSY` (target is the mount point itself: there is no "final name") /
- *       `-ENOENT` (parent missing) / `-ENOTDIR` (a non-directory on the parent path) / `-ENOSPC` (name too long).
- */
+/* Resolve "parent directory inode + final name" (mkdir/unlink/rmdir/rename/create/symlink/link).
+ * buf/cap: caller-provided writable buffer for the final name; *leaf_out points into it.
+ * Intermediate components follow symlinks (POSIX). Errors: -EINVAL / -EBUSY (target is the mount
+ * point itself) / -ENOENT (parent missing) / -ENOTDIR / -ENOSPC (name too long). */
 static int resolve_parent(const char *path,
                           char *buf, br_size_t cap,
                           const vfs_mount_t **m_out,
@@ -448,8 +383,7 @@ static int resolve_parent(const char *path,
         return BR_ERR(ENOENT);
     }
 
-    /* Target is the **mount point itself** ⇒ there is no operable "final name".
-     * Distinguish mount root from subdirectory: "/dev/x" has final name x (legal), "/dev" is a mount point (illegal). */
+/* Target is the mount point itself: no operable final name ("/dev/x" is legal, "/dev" is not). */
     const char *rest = mount_rest(m, norm);
     if (rest[0] == '\0') {
         return BR_ERR(EBUSY);
@@ -504,7 +438,6 @@ static int resolve_parent(const char *path,
     return BR_OK;
 }
 
-/* resolve to the "final inode" (used by stat/lstat/truncate/open/link/readlink) */
 static int resolve_leaf(const char *path, br_bool nofollow_last,
                         const vfs_mount_t **m_out, br_inode_t **ino_out, br_bool *is_root_out,
                         char *final_out, br_size_t final_cap)
@@ -517,15 +450,8 @@ static int resolve_leaf(const char *path, br_bool nofollow_last,
     return resolve_norm(norm, nofollow_last, m_out, ino_out, is_root_out, final_out, final_cap);
 }
 
-/* ==================================================================== auto-create mount point directories
- * Design `7-03` §6: "**auto mkdir the mount point when missing in the parent FS**" — static composition
- * convenience beats explicit mkdir ceremony (the manifest already validated it). Here directories are
- * created **level by level** (`/a/b` creates `/a` first).
- *
- * Since ADR-0013 resolution goes level by level over **prefixes of the normalized full path** (rather
- * than "descending rest from the parent mount root"): this also expands symlinks on intermediate
- * components (a previous mount point may be a link). The mount point itself is **not yet registered**,
- * so `mount_match` hits the parent mount — exactly the one we want it to land in. */
+/* Auto-create mount point directories level by level in the parent mount. Resolution walks
+ * prefixes of the full path (expanding symlinks); the mount point itself is not yet registered. */
 static int mkdir_p(const char *full_norm)
 {
     br_size_t i = 0u;
@@ -566,7 +492,7 @@ static int mkdir_p(const char *full_norm)
                 } else {
                     rc = parent->iops->mkdir(parent, leaf);
                     if (rc == BR_ERR(EEXIST)) {
-                        rc = BR_OK;                     /* race/already exists ⇒ not an error (original semantics) */
+                        rc = BR_OK;                     /* already exists => not an error */
                     }
                 }
                 ino_put(pm, parent, pir);
@@ -589,7 +515,7 @@ static int mkdir_p(const char *full_norm)
     return BR_OK;
 }
 
-/* ==================================================================== layer 1: mount registration */
+/* ---- layer 1: mount registration ---- */
 
 int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
 {
@@ -605,16 +531,14 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
     if (s_mount_n >= (br_u32)BR_VFS_MAX_MOUNTS) {
         return BR_ERR(ENOSPC);
     }
-    /* Duplicate mount of the same path (compared after normalization) ⇒ -EEXIST. Why not "overwrite":
-     * overwriting would leave the old FS's root inode and its fs_priv without a unique owner — a silent
-     * leak is worse than an error. */
+/* Duplicate path (after normalization) => -EEXIST: overwriting would orphan the old root inode. */
     for (br_u32 i = 0u; i < s_mount_n; i++) {
         if (s_mounts[i].used == BR_TRUE && vfs_str_eq(s_mounts[i].path, norm) == BR_TRUE) {
             return BR_ERR(EEXIST);
         }
     }
 
-    /* (1) The mount point must land in the **parent mount**; create it level by level when missing (design `7-03` §6) */
+/* (1) The mount point lands in the parent mount; create it level by level when missing. */
     if (vfs_str_eq(norm, "/") == BR_FALSE) {
         const vfs_mount_t *parent = mount_match(norm);
         if (parent == BR_NULL) {
@@ -630,7 +554,7 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
         }
     }
 
-    /* (2) FS-side mount (creates the root inode). cfg.path gives the FS its own normalized path. */
+/* (2) FS-side mount; cfg.path gives the FS its own normalized path. */
     const br_fs_cfg_t cfg = {
         .path = norm,
         .dev  = BR_NULL,     /* used by media FSes (littlefs/EROFS); tmpfs/devfs do not need it */
@@ -658,7 +582,7 @@ int br_mount_register(const char *path, const br_fs_ops_t *ops, void *fs_priv)
     return BR_OK;
 }
 
-/* ==================================================================== FS driver registry */
+/* ---- FS driver registry ---- */
 
 int br_fs_driver_register(const char *name, const br_fs_ops_t *ops, void *fs_priv)
 {
@@ -700,11 +624,11 @@ const char *br_fs_driver_name_at(br_u32 index)
     return s_drivers[index].name;
 }
 
-/* the **media-carrying** form of `br_mount_register`: one extra `dev` in cfg (media FSes use it to get a bdev). */
+/* Media-carrying variant of br_mount_register: one extra cfg.dev. */
 static int mount_with_dev(const char *path, const br_fs_ops_t *ops, void *fs_priv,
                           const char *dev)
 {
-    /* Same body as br_mount_register plus cfg.dev — factored out so the two mount paths cannot drift. */
+/* Same body as br_mount_register plus cfg.dev, so the two mount paths cannot drift. */
     if (ops == BR_NULL || ops->mount == BR_NULL) {
         return BR_ERR(EINVAL);
     }
@@ -731,13 +655,8 @@ static int mount_with_dev(const char *path, const br_fs_ops_t *ops, void *fs_pri
             return rc;
         }
     }
-    /* ★ `cfg.path` must be a **long-lived** buffer, not the stack buffer `norm` here.
-     *   Why: media FSes record `cfg->path` (and `cfg->dev`) in their volume table and still need it in
-     *   the **self-test phase** after mount returns (e.g. `uboot-fat`'s `vol_info`/`sync`). With a stack
-     *   buffer it becomes invalid the moment mount returns — the symptom is "logs at mount time look
-     *   perfectly fine, yet self-test reports vol_info_failed / sync_rc=-2" (hit in practice).
-     *   Fix: first write the normalized path into the **mount table slot** (lifetime = until shutdown),
-     *   then point `cfg.path` at it. The slot is rolled back if mount fails (not occupied). */
+/* cfg.path must be long-lived, not the stack buffer below: media FSes record it and need it in the
+ * self-test phase. Write it into the mount table slot first; rolled back on mount failure. */
     vfs_mount_t *m = &s_mounts[s_mount_n];
     vfs_str_copy(m->path, norm, (br_size_t)sizeof(m->path));
     m->len = (br_u32)vfs_str_len(m->path);
@@ -794,7 +713,7 @@ const char *br_mount_path_at(br_u32 index)
     return s_mounts[index].path;
 }
 
-/* ==================================================================== unified entry */
+/* ---- unified entry ---- */
 
 br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
 {
@@ -824,7 +743,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
                           open_final, (br_size_t)sizeof(open_final));
 
     if (rc != BR_OK) {
-        /* miss + O_CREAT ⇒ create on the parent directory (design §2's "miss and O_CREAT") */
+/* miss + O_CREAT: create on the parent directory */
         if (rc != BR_ERR(ENOENT) || (flags & BR_O_CREAT) == 0u) {
             if (err != BR_NULL) {
                 *err = rc;
@@ -837,10 +756,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
         br_bool     parent_is_root = BR_FALSE;
         char       *leaf = BR_NULL;
 
-        /* ★ Create on the **post-expansion** path, not the original one: if the final level is a
-         *   **dangling symlink**, POSIX `open(link, O_CREAT)` creates the **target** (`link` itself
-         *   already exists, so it cannot be created). `open_final` is written by resolve_leaf as
-         *   "which path this walk actually reached". */
+/* Create on the post-expansion path: open(link, O_CREAT) on a dangling link creates the target. */
         rc = resolve_parent(open_final, buf, (br_size_t)sizeof(buf), &m, &parent,
                             &parent_is_root, &leaf);
         if (rc != BR_OK) {
@@ -852,14 +768,14 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
         if (parent->type != BR_INODE_DIR) {
             ino_put(m, parent, parent_is_root);
             if (err != BR_NULL) {
-                *err = BR_ERR(ENOTDIR);     /* "parent" is actually a file ⇒ same code as "intermediate level not a directory" */
+                *err = BR_ERR(ENOTDIR);     /* parent is a file == intermediate not a directory */
             }
             return BR_NULL;
         }
         if (parent->iops == BR_NULL || parent->iops->create == BR_NULL) {
             ino_put(m, parent, parent_is_root);
             if (err != BR_NULL) {
-                *err = BR_ERR(ENOTSUP);     /* this FS does not support create (read-only / device projection) */
+                *err = BR_ERR(ENOTSUP);     /* FS does not support create (read-only / device) */
             }
             return BR_NULL;
         }
@@ -883,8 +799,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
         return BR_NULL;
     }
 
-    /* The final level is still a symlink ⇒ only one possibility: the caller passed O_NOFOLLOW. POSIX's
-     * answer is -ELOOP (**not** -ENOTSUP) — a link has no file face and should not be opened. */
+/* Still a symlink => the caller passed O_NOFOLLOW; POSIX answers -ELOOP. */
     if (ino->type == BR_INODE_SYMLINK) {
         ino_put(m, ino, ino_is_root);
         if (err != BR_NULL) {
@@ -893,8 +808,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
         return BR_NULL;
     }
 
-    /* Directories may only be opened read-only (their "file face" is the dirent stream); write open ⇒ -EISDIR.
-     * Files/devices must have a file face, otherwise it is "visible but unopenable" (v2's raw flash/bdev is this). */
+/* Directories open read-only (write => -EISDIR); a node without a file face => -ENOTSUP. */
     if (ino->type == BR_INODE_DIR && (flags & BR_O_ACCMODE) != BR_O_RDONLY) {
         ino_put(m, ino, ino_is_root);
         if (err != BR_NULL) {
@@ -932,7 +846,7 @@ br_file_t *br_open_err(const char *path, br_u32 flags, int *err)
             ino_put(m, ino, ino_is_root);
             br_free(f);
             if (err != BR_NULL) {
-                *err = rc;              /* an exclusive device's -EBUSY propagates from here (policy belongs to the driver) */
+                *err = rc;              /* -EBUSY from an exclusive device propagates */
             }
             return BR_NULL;
         }
@@ -946,7 +860,7 @@ br_file_t *br_open(const char *path, br_u32 flags)
     return br_open_err(path, flags, BR_NULL);
 }
 
-/* ==================================================================== accessors */
+/* ---- accessors ---- */
 
 br_inode_t *br_file_inode(br_file_t *f)
 {
@@ -982,7 +896,7 @@ void br_file_set_offset(br_file_t *f, br_s64 off)
     }
 }
 
-/* ==================================================================== layer 3 dispatch */
+/* ---- layer 3 dispatch ---- */
 
 br_s64 br_file_read(br_file_t *f, void *buf, br_size_t n)
 {
@@ -1065,7 +979,7 @@ int br_file_close(br_file_t *f)
     return rc;
 }
 
-/* ==================================================================== directory iteration */
+/* ---- directory iteration ---- */
 
 br_dir_t *br_opendir(const char *path)
 {
@@ -1116,12 +1030,7 @@ int br_closedir(br_dir_t *d)
     return rc;
 }
 
-/* ==================================================================== path-level convenience surface
- *
- * Why this layer exists (design `7-01` §1 only wrote `br_open`/`br_file_*`): directory namespace
- * changes (create/mkdir/unlink/rename/getattr) are two-part "parent directory inode + name" in the ops
- * table, and **consumers cannot get an inode** (that is a transient walk product). So vfs must provide
- * the "path -> two-part" translation layer — runtime/posix's POSIX face is its 1:1 map (ADR-0009 §3 ruling 3). */
+/* Path-level convenience surface (1:1 map for runtime/posix): two-part "parent inode + name". */
 
 int br_fstat(br_file_t *f, br_stat_t *st)
 {
@@ -1134,7 +1043,7 @@ int br_fstat(br_file_t *f, br_stat_t *st)
     return f->ino->iops->getattr(f->ino, st);
 }
 
-/* `stat` follows the final symlink, `lstat` does not (POSIX). Both follow intermediate components. */
+/* stat follows the final symlink, lstat does not; both follow intermediate components. */
 static int stat_common(const char *path, br_stat_t *st, br_bool nofollow_last)
 {
     if (st == BR_NULL) {
@@ -1166,7 +1075,7 @@ int br_lstat(const char *path, br_stat_t *st)
     return stat_common(path, st, BR_TRUE);
 }
 
-/* Common skeleton for mkdir/rmdir/unlink/rename: resolve the parent → call the slot → release the parent inode. */
+/* Shared skeleton: resolve the parent -> call the slot -> release the parent inode. */
 static int parent_op(const char *path, int (*fn)(br_inode_t *, const char *))
 {
     char        buf[BR_VFS_PATH_MAX];
@@ -1193,7 +1102,7 @@ static int parent_op(const char *path, int (*fn)(br_inode_t *, const char *))
     return rc;
 }
 
-/* Three thin adapters (only to extract the function pointers from iops — avoids scattered null checks in parent_op) */
+/* Thin adapters extracting the function pointers from iops. */
 static int call_mkdir(br_inode_t *d, const char *name)
 {
     return (d->iops->mkdir != BR_NULL) ? d->iops->mkdir(d, name) : BR_ERR(ENOTSUP);
@@ -1247,8 +1156,7 @@ int br_rename(const char *old_path, const char *new_path)
         return rc;
     }
 
-    /* Cross-mount rename: not supported in v1 (it needs "cross-FS move" semantics, which is a copy+unlink
-     * combination, in v2/v3 scope). Use -ENOTSUP rather than inventing -EXDEV (not in the SD-10 subset). */
+/* Cross-mount rename needs copy+unlink semantics (v2/v3) => -ENOTSUP (not -EXDEV). */
     if (m_old != m_new) {
         ino_put(m_old, d_old, root_old);
         ino_put(m_new, d_new, root_new);
@@ -1291,19 +1199,14 @@ int br_truncate(const char *path, br_u64 size)
     return rc;
 }
 
-/* ==================================================================== links (ADR-0013)
-
- * Common shape of the three entries: namespace changes ⇒ all need "parent directory + name"
- * (`resolve_parent`), so **symlinks on the parent path are expanded when creating a link** (the link
- * gets created in the directory the link points to), which is POSIX semantics.
- */
+/* Link entries need "parent directory + name"; symlinks on the parent path are expanded (POSIX). */
 
 int br_symlink(const char *target, const char *path)
 {
     if (target == BR_NULL || target[0] == '\0') {
         return BR_ERR(EINVAL);
     }
-    /* The target's existence is **not checked** (a dangling link is legal); but its length has a static limit. */
+/* Target existence is not checked (a dangling link is legal); its length has a static limit. */
     if (vfs_str_len(target) > (br_size_t)BR_SYMLINK_MAX) {
         return BR_ERR(ENAMETOOLONG);
     }
@@ -1337,13 +1240,13 @@ int br_readlink(const char *path, char *buf, br_size_t cap)
     br_inode_t        *ino = BR_NULL;
     br_bool            ir = BR_FALSE;
 
-    int rc = resolve_leaf(path, BR_TRUE, &m, &ino, &ir, BR_NULL, 0u);   /* readlink does **not** follow the final level */
+    int rc = resolve_leaf(path, BR_TRUE, &m, &ino, &ir, BR_NULL, 0u);   /* readlink does not follow the final level */
     if (rc != BR_OK) {
         return rc;
     }
     if (ino->type != BR_INODE_SYMLINK) {
         ino_put(m, ino, ir);
-        return BR_ERR(EINVAL);            /* POSIX: not a symlink ⇒ EINVAL */
+        return BR_ERR(EINVAL);            /* POSIX: not a symlink */
     }
     if (ino->iops == BR_NULL || ino->iops->readlink == BR_NULL) {
         ino_put(m, ino, ir);
@@ -1356,7 +1259,7 @@ int br_readlink(const char *path, char *buf, br_size_t cap)
 
 int br_link(const char *old_path, const char *new_path)
 {
-    /* POSIX `link(2)`: the final level is **not** followed (link to the link itself, not to its target). */
+/* POSIX link(2): the final level is not followed (link to the link itself). */
     const vfs_mount_t *m_old = BR_NULL;
     br_inode_t        *target = BR_NULL;
     br_bool            tir = BR_FALSE;
@@ -1382,9 +1285,7 @@ int br_link(const char *old_path, const char *new_path)
         return rc;
     }
 
-    /* Cross-mount hard links do not exist (v1 has no "cross-FS inode" concept) ⇒ -EXDEV.
-     * ★ This is the **first enablement point** of `EXDEV` (18) — it was always in the error-code table
-     *   and only gains meaning here. */
+/* No cross-FS inodes in v1 => -EXDEV (the first place EXDEV gains meaning). */
     if (m_old != m_new) {
         ino_put(m_old, target, tir);
         ino_put(m_new, parent, pir);
@@ -1407,13 +1308,7 @@ int br_link(const char *old_path, const char *new_path)
     return rc;
 }
 
-/* ==================================================================== internal view for self-test
- *
- * See `src/vfs_internal.h`: these exist **only** for `vfs_selftest.c` — what they expose under test is
- * this file's own mechanism (mount table / longest-prefix match / path normalization), which the public
- * API cannot express. ★ Always **forward** to the production implementation, never copy logic: cases must
- * run the real algorithm, otherwise they verify a copy.
- */
+/* Internal view for the self-test (src/vfs_internal.h); always forwards to production code. */
 const vfs_mount_internal_t *br_vfs_internal_mounts(br_u32 *n)
 {
     if (n != BR_NULL) {
@@ -1441,7 +1336,7 @@ br_bool br_vfs_internal_str_eq(const char *a, const char *b)
     return vfs_str_eq(a, b);
 }
 
-/* ==================================================================== lifecycle */
+/* ---- lifecycle ---- */
 
 int vfs_core_early_init(void)
 {
@@ -1450,18 +1345,13 @@ int vfs_core_early_init(void)
 
 int vfs_core_init(void)
 {
-    /* vfs-core has no state of its own to initialize: it "enters" when each FS calls `br_mount_register`.
-     * Deliberately no empty API (R-S4: every line added to framework code must have a consumer). */
+/* No state of its own: vfs "enters" when each FS calls br_mount_register. */
     return 0;
 }
 
 int vfs_core_start(void)
 {
-    /* The START phase leaves only a one-line mount summary as boot evidence.
-     * ★ The storage domain's **full suite** (TC-VFS-*) does not run here: it lives in
-     *   `src/vfs_selftest.c`, driven uniformly by core's self-test pass **after all starts**
-     *   (ADR-0010). ADR-0009 §2.5 once hung it on the APP's start (there was no unified self-test
-     *   point then); that version was voided with ADR-0010. */
+/* START logs only a mount summary; the TC-VFS-* suite runs in the core self-test pass. */
     br_log_info("vfs: %u mount(s) active", s_mount_n);
     for (br_u32 i = 0u; i < s_mount_n; i++) {
         br_log_info("vfs:   [%u] %s", i, s_mounts[i].path);

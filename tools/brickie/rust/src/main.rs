@@ -1,14 +1,9 @@
 //! `brickie-core` — brickie v0.1 L0 (model) + L1 (solver / version / interface engines).
-//!
-//! Process boundary (contract §2): one JSON request line is read from stdin, one JSON response line written to stdout.
-//! `--selftest` does **not** use the envelope (§5.3 / V-18a); `--version` prints the version.
-//!
-//! Process exit code: always 0 (**except** `internal_error` and crashes) — business exit codes live in the
-//! response's `exit_code`, so "tool failure" and "validation red" stay distinguishable (BRV-D9).
+//! One JSON request line on stdin, one JSON response line on stdout; `--selftest` bypasses the
+//! envelope. Process exit code is always 0 except `internal_error` and crashes: business exit
+//! codes live in the response's `exit_code`, so "tool failure" ≠ "validation red" (BRV-D9).
 
-// Some APIs in this crate are **reusable primitives for agent-B** (see rust/README.md): this
-// change has no call sites yet, but they are exported and stabilized (ranges/advance table/emit
-// primitives/rule predicates). Hence the blanket dead_code exemption — not "useless code" but "part of a cross-module contract".
+// Reusable primitives for agent-B (rust/README.md), exported ahead of their call sites.
 #![allow(dead_code)]
 
 mod check;
@@ -32,10 +27,9 @@ use serde_json::json;
 
 use crate::proto::{Request, Response};
 
-/// Tool version (v0.1).
 pub const VERSION: &str = "0.1.0";
 
-/// `rustc` version captured at build time (unavailable = "unknown").
+/// `rustc` version captured at build time; "unknown" if unavailable.
 pub const RUSTC_VERSION: &str = match option_env!("BRICKIE_RUSTC_VERSION") {
     Some(v) => v,
     None => "unknown",
@@ -120,7 +114,6 @@ fn main() {
     }
 
     let response = dispatch(&req);
-    // Business exit codes live in the response; the process exit code stays 0 (unless internal_error).
     let internal = response.status == "internal_error";
     response.write_stdout();
     if internal {
@@ -137,12 +130,10 @@ fn dispatch(req: &Request) -> Response {
         "gen-plan" => cmd_gen_plan(req),
         "dep-add" => cmd_dep_add(req),
         "dep-rm" => cmd_dep_rm(req),
-        // ---- solver / check / interface surface (agent-B's three command families) ----
         "check" => check::run(req),
         "closure" | "dep-tree" | "dep-graph" | "dep-why" | "dep-index" => solver::run(req),
         "ver-show" | "ver-bump" => iface::run(req),
         c if c.starts_with("iface-") => iface::run(req),
-        // ---- build family (ADR-0004 / design ADR-0003 S1–S3) ----
         "build" | "clean" | "run" | "size" | "disasm" | "test" | "judge" => build::run(req),
         other => {
             let mut d = diag::Diags::new();
@@ -155,8 +146,6 @@ fn dispatch(req: &Request) -> Response {
     }
 }
 
-// ------------------------------------------------------------------ implemented commands
-
 fn cmd_version() -> Response {
     let d = diag::Diags::new();
     Response::ok(
@@ -165,7 +154,7 @@ fn cmd_version() -> Response {
             "version": VERSION,
             "protocol": proto::PROTOCOL,
             "languages": [{"name": "rust", "version": RUSTC_VERSION}],
-            // Fingerprint for G-01 `--version --deps`: direct dependencies of this crate (§9.3 minimal dependency set).
+            // Fingerprint for G-01 `--version --deps`: direct crate dependencies.
             "deps": [
                 {"name": "toml", "version": "0.8"},
                 {"name": "serde_json", "version": "1"},
@@ -220,7 +209,7 @@ fn cmd_dep_add(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
     let tree = model::load_tree(&root);
     let (d, snippet) = dep::dep_add(&tree, &req.args);
-    // Surface tree-shape diagnostics too (snippet generation does not stop for them, but humans must see them).
+    // Surface tree-shape diagnostics too; snippet generation does not stop for them.
     let mut all = tree.diags.clone();
     all.merge(d);
     let data = snippet.map(|s| s.to_data()).unwrap_or_else(|| json!({}));

@@ -1,21 +1,13 @@
 // brickie-gen — C++ generator (L2), **template rendering only**, makes no decisions
-//
-// Process boundary (contract §1/§2/§6): input and output are **JSON over stdio**.
-//   stdin  = request object;  stdout = response object (always valid JSON)
-// Exit codes: this process uses **only** 0 (protocol handling succeeded; diagnostics and the business
-// exit code live in the response) and 2 (its own failure: input is not JSON, etc.). The business exit
-// code travels in the response field exit_code and is turned into a process exit code by the Python L5
-// front-end — so "tool failure" and "validation failure" are never conflated.
-//
-// Command surface (contract §6): only `render` (template rendering).
-//   * Name contract / subkind derivation / phase / path layout / version segmentation — all such
-//     **decisions** have moved to `brickie-core` (Rust, L0/L1); this tool only handles
-//     "plan + variables → file contents".
-//   * The old `plan-new` / `new` are gone (rules and plans belong to Rust's `plan-new` / `plan-init`).
-//
-// `--selftest`: does not read stdin; runs the built-in self-check (JSON round-trip / rendering / paths
-// and modes / payload determinism) for CI's "glue-layer purity check" (§9.1: the generator-side
-// counterpart of brickie-core --selftest).
+// Process boundary: stdin = request JSON object, stdout = response JSON object (always valid).
+// Process exit codes: only 0 (protocol handling succeeded; diagnostics and the business exit
+// code live in the response) and 2 (its own failure, e.g. input is not JSON). The Python L5
+// front-end turns the response field exit_code into the process exit code, so "tool failure"
+// and "validation failure" are never conflated. Only `render` is supported: decisions (name
+// contract / subkind / phase / path layout / version segmentation) belong to brickie-core
+// (Rust, L0/L1); this tool only does "plan + variables → file contents".
+// `--selftest` does not read stdin; runs the built-in self-check (JSON round-trip / rendering /
+// paths and modes / payload determinism) for CI's glue-layer purity check.
 #include <cstdio>
 #include <iostream>
 #include <sstream>
@@ -31,7 +23,7 @@ namespace {
 
 using brickie::J;
 
-// Response envelope (contract §2). status is only ever ok / internal_error.
+// Response envelope; status is only ever ok / internal_error.
 J makeResponse(int exitCode, J diagnostics, J files, J data) {
     J o = J::obj();
     o.set("protocol", J::num(1));
@@ -59,7 +51,7 @@ std::string readStdin() {
     return ss.str();
 }
 
-// ---------------------------------------------------------------- selftest
+// selftest
 
 int selftest() {
     int failures = 0;
@@ -91,8 +83,7 @@ int selftest() {
         check(!brickie::parseJson("{\"a\":}", v, err), "invalid JSON is rejected");
     }
 
-    // Rendering: the new variable contract uses lowercase keys; missing keys must fail (never a silent
-    // empty string); no branch syntax
+    // Rendering: missing keys must fail (never a silent empty string); no branch syntax
     {
         brickie::Vars vars;
         vars["name"] = "service/crypto";
@@ -135,7 +126,7 @@ int selftest() {
         check(!brickie::parseMode("0x1", mode), "parseMode: rejects hexadecimal");
     }
 
-    // Generated-file marker (contract §6: first line carries `brickie:generated`)
+    // Generated-file marker (first line carries `brickie:generated`)
     {
         const std::string marker = brickie::kGeneratedMarker;
         check(marker == "brickie:generated", "generated marker = brickie:generated");
@@ -147,8 +138,8 @@ int selftest() {
               "generated first line may carry the marker");
     }
 
-    // Payload checks: rendering the same input twice is byte-identical (a prerequisite for a
-    // byte-reproducible embedded payload); the response envelope (including files[].mode) round-trips stably.
+    // Payload: rendering twice is byte-identical (needed for the byte-reproducible payload); the
+    // response envelope (including files[].mode) round-trips stably.
     {
         brickie::Vars vars;
         vars["name"] = "service/crypto";
@@ -185,8 +176,8 @@ int selftest() {
               "payload: files[] carries kind/mode with a stable shape");
     }
 
-    // File ownership (contract §4): `kind=machine` content is owned by brickie-core, so render skips it
-    // (no template read, not an error) — plan-init's `brickie.lock` carries this kind.
+    // File ownership: `kind=machine` content is owned by brickie-core, so render skips it (no
+    // template read, not an error) -- plan-init's `brickie.lock` carries this kind.
     {
         J args = J::obj();
         J arts = J::arr();
@@ -209,10 +200,10 @@ int selftest() {
     return 1;
 }
 
-// ---------------------------------------------------------------- protocol dispatch
+// protocol dispatch
 
-// Handshake failure response: BRV-PROTO-0001, exit_code 2, status stays "ok"
-// (protocol handling itself succeeded; the business exit code is in the response; contract §2).
+// Handshake failure: BRV-PROTO-0001 with exit_code 2 and status "ok" (protocol handling itself
+// succeeded; the business exit code is in the response).
 int protoMismatch(const std::string &detail) {
     brickie::Diags diags;
     diags.coded("BRV-PROTO-0001", brickie::Severity::Error, "", "",
@@ -250,7 +241,7 @@ int main(int argc, char **argv) {
     if (!brickie::parseJson(input, req, err)) return failInternal("request is not valid JSON", err);
     if (!req.isObj()) return failInternal("request must be a JSON object");
 
-    // ---- protocol handshake (contract §2) ----
+    // protocol handshake
     const J *proto = req.find("protocol");
     if (proto == nullptr) return protoMismatch("request is missing the `protocol` field");
     if (!(proto->t == brickie::JType::Num && proto->n == 1.0)) {
@@ -280,7 +271,7 @@ int main(int argc, char **argv) {
         return 0;
     }
 
-    // templates_root: contract §6 puts it in args; top-level field accepted too (old front-end shape).
+    // templates_root lives in args; a top-level field is accepted too (old front-end shape).
     std::string templatesRoot;
     if (const J *t = args.find("templates_root"); t != nullptr && t->isStr()) {
         templatesRoot = t->s;

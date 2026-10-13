@@ -7,9 +7,8 @@
 namespace brickie {
 namespace {
 
-// vars values must be substitutable text. The contract uses only strings, but to avoid flagging
-// obviously unambiguous JSON scalars ("number/bool") as usage errors, stringify them here;
-// null ⇒ empty string (optional variable).
+// vars values must be substitutable text. The contract uses only strings, but stringify
+// unambiguous JSON scalars here instead of flagging them as usage errors; null ⇒ empty string.
 bool scalarToText(const J &v, std::string &out) {
     switch (v.t) {
         case JType::Str:
@@ -82,10 +81,9 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
         const std::string kind =
             item.find("kind") != nullptr ? item.find("kind")->asStr() : std::string();
 
-        // contract §4 file ownership: content for `kind = "machine"` (e.g. brickie.lock / snapshots) is
-        // owned by `brickie-core` and does not go through template rendering ⇒ **skip** it when the plan
-        // carries one; that is not a usage error (L5 writes core's content per §4). The renderer only
-        // handles human/generated/rendered.
+        // `kind = "machine"` content (brickie.lock / snapshots) is owned by brickie-core and does
+        // not go through rendering ⇒ skip it when the plan carries one; not a usage error (L5
+        // writes core's content). The renderer only handles human/generated/rendered.
         if (kind == "machine") continue;
 
         std::string why;
@@ -161,8 +159,8 @@ RenderResult runRender(const J &args, const std::string &templatesRoot) {
         files.push_back(std::move(f));
     }
 
-    // files are emitted only when not a single error remains -- a half-generated set is worse than none
-    // (§8.4's established rule).
+    // files are emitted only when not a single error remains -- a half-generated set is worse
+    // than none.
     if (anyError || res.diags.hasError()) return res;
     res.files = std::move(files);
     return res;

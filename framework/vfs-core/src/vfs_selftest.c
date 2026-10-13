@@ -1,29 +1,9 @@
 
 /*
- * brickOS prototype v0.2.0 — vfs-core **self-test suite** (framework/vfs-core/src/vfs_selftest.c)
- *
- * Design basis and ruling: `docs/decisions/0010-plugin-selftest.md` (self-test separated
- * from core code).
- *
- * ## What it tests, and the boundary with production code
- *   Storage-domain **master suite** (self-numbered `TC-VFS-*`): driven only through the
- *   **public API** of `br/vfs/br_vfs.h` — it knows no FS name and calls no FS/device
- *   internal function. "rootfs is tmpfs" is only "the mount table has a '/'";
- *   "devices list under /dev" is only "some mount has some file nodes".
- *   ⇒ The suite scales with the composition: no fs/devfs means no /dev cases
- *   (honestly reported "not applicable", not falsely green).
- *
- *   **One exception**: TC-VFS-002 asserts "each mount point's path hits itself via
- *   longest-prefix match", and the object under test is the match algorithm itself
- *   ⇒ it reads the mount table / calls the match function via accessors in
- *   `src/vfs_internal.h`. Those accessors always **forward to the production
- *   implementation** (no duplicated logic); rationale in that header.
- *
- * ## Contract with br_plugin_manager_selftest()
- *   Returns the **number of failures** (0 = all green); logs its own output
- *   (`[VFSCONF] PASS/FAIL ...` + `SUMMARY`).
- *   **Failure does not halt** — red/green is judged by the gate (`[VFSCONF] FAIL`
- *   is in the forbid list of `tests/gates.toml`).
+ * vfs-core self-test suite: runs the TC-VFS-* cases through the public API of br/vfs/br_vfs.h
+ * only (no FS name, no FS/device internals), so it scales with the composition. TC-VFS-002
+ * inspects the match algorithm itself via src/vfs_internal.h accessors, which forward to the
+ * production implementation. Returns the failure count; logs [VFSCONF] PASS/FAIL and SUMMARY.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -32,19 +12,9 @@
 
 #include "vfs_internal.h"
 
-/* Lifecycle hook prototypes live in the production files (they are not self-test);
- * this file implements only `vfs_core_selftest`. */
+/* Implements only vfs_core_selftest; lifecycle hooks live in the production files. */
 int vfs_core_selftest(void);
 
-/* ============================================ conformance cases
- *
- * Storage-domain **master suite**: driven only through the public API of `br_vfs.h` —
- * it knows no FS name and calls no FS/device internal function directly.
- * "rootfs is tmpfs" is only "the mount table has a '/'"; "devices list under /dev" is
- * only "some mount has some file nodes".
- * ⇒ The suite scales with the composition: no fs/devfs means no /dev cases
- * (honestly reported "not applicable", not falsely green).
- */
 static br_u32 s_pass;
 static br_u32 s_fail;
 
@@ -59,7 +29,6 @@ static void pc(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* Concatenate "base + '/' + name" (base = "/" does not produce "//") */
 static void conf_path(char *dst, br_size_t cap, const char *base, const char *name)
 {
     br_size_t n = 0u;
@@ -75,7 +44,6 @@ static void conf_path(char *dst, br_size_t cap, const char *base, const char *na
     dst[n] = '\0';
 }
 
-/* Count entries of one directory; `skip_dots` = skip "." / ".." */
 static int conf_count_dir(const char *path, br_u32 *total, br_u32 *files)
 {
     br_dir_t *d = br_opendir(path);
@@ -116,7 +84,7 @@ int vfs_core_selftest(void)
 
     br_log_info("[VFSCONF] vfs-core conformance (mount table / walk chain / file face / dir face)");
 
-    /* ---- TC-VFS-001: mount table non-empty, with a root mount (single-route fallback, design §1) ---- */
+/* ---- TC-VFS-001: mount table non-empty with a root mount ---- */
     br_u32 root_idx = (br_u32)-1;
     {
         br_bool have_root = BR_FALSE;
@@ -135,7 +103,7 @@ int vfs_core_selftest(void)
            (br_mount_path_at(br_mount_count()) == BR_NULL),
            "TC-VFS-001", "mount table non-empty / has root mount '/' / all paths absolute / out-of-range path lookup => NULL");
 
-        /* Find the root mount for later cases; if absent, stop here (else cascading FAILs) */
+/* Locate the root mount; if absent, stop here (else cascading FAILs). */
         for (br_u32 i = 0u; i < br_mount_count(); i++) {
             const char *p = br_mount_path_at(i);
             if (p != BR_NULL && br_vfs_internal_str_eq(p, "/") == BR_TRUE) {
@@ -151,12 +119,10 @@ int vfs_core_selftest(void)
     }
     const char *base = "/";     /* the '/' mount was asserted above */
 
-    /* ---- TC-VFS-002: longest-prefix match + duplicate mount => -EEXIST ---- */
+/* ---- TC-VFS-002: longest-prefix match + duplicate mount => -EEXIST ---- */
     {
         br_bool ok = BR_TRUE;
-        /* Per entry: each mount point's path must hit itself via **longest-prefix match**
-         * (nothing is longer than it). Both steps go through internal accessors — the
-         * object under test is the match algorithm itself, see src/vfs_internal.h. */
+/* Each mount point's path must hit itself via longest-prefix match (internal accessors). */
         br_u32 n = 0u;
         const vfs_mount_internal_t *ms = br_vfs_internal_mounts(&n);
         for (br_u32 i = 0u; i < n; i++) {
@@ -164,14 +130,11 @@ int vfs_core_selftest(void)
                 ok = BR_FALSE;
             }
         }
-        /* Registering the same path again: verify in a way that **cannot succeed**
-         * (no table pollution) — re-register an existing mount's fs_ops, expect -EEXIST. */
         const int r = br_mount_register("/", br_vfs_internal_mounts(BR_NULL)[root_idx].ops,
                                         br_vfs_internal_mounts(BR_NULL)[root_idx].priv);
         if (r != BR_ERR(EEXIST)) {
             ok = BR_FALSE;
         }
-        /* Invalid arguments: null ops / relative path */
         if (br_mount_register("/x", BR_NULL, BR_NULL) != BR_ERR(EINVAL) ||
             br_mount_register(BR_NULL, br_vfs_internal_mounts(BR_NULL)[root_idx].ops, BR_NULL) != BR_ERR(EINVAL) ||
             br_mount_register("relative", br_vfs_internal_mounts(BR_NULL)[root_idx].ops, BR_NULL) != BR_ERR(EINVAL)) {
@@ -180,7 +143,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-002", "longest-prefix match (own path hits itself); duplicate mount -EEXIST; bad args -EINVAL");
     }
 
-    /* ---- Create a private temp directory (does not rely on tmpfs-prebuilt /dev /data /tmp) ---- */
+/* ---- Private temp directory (does not rely on tmpfs-prebuilt /dev /data /tmp) ---- */
     char dir[BR_VFS_PATH_MAX_INTERNAL];
     char file[BR_VFS_PATH_MAX_INTERNAL];
     char file2[BR_VFS_PATH_MAX_INTERNAL];
@@ -193,16 +156,14 @@ int vfs_core_selftest(void)
     (void)br_unlink(dir);
     (void)br_rmdir(dir);
 
-    /* ---- TC-VFS-003: mkdir / idempotent conflict / file ops on a directory ---- */
+/* ---- TC-VFS-003: mkdir / idempotent conflict / file ops on a directory ---- */
     {
         br_bool ok = (br_mkdir(dir) == BR_OK) && (br_mkdir(dir) == BR_ERR(EEXIST));
         br_stat_t st;
         ok = ok && (br_stat(dir, &st) == BR_OK) && (st.type == BR_INODE_DIR);
-        /* Open directory for write => -EISDIR */
         int err = BR_OK;
         br_file_t *f = br_open_err(dir, BR_O_WRONLY, &err);
         ok = ok && (f == BR_NULL) && (err == BR_ERR(EISDIR));
-        /* Walk into a file as if a directory => -ENOTDIR (create a file first) */
         int err2 = BR_OK;
         br_file_t *fa = br_open_err(file, BR_O_CREAT | BR_O_RDWR, &err2);
         ok = ok && (fa != BR_NULL);
@@ -217,7 +178,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-003", "mkdir/repeat -EEXIST; stat reports DIR; write-open dir -EISDIR; file as dir -ENOTDIR");
     }
 
-    /* ---- TC-VFS-004: file roundtrip (create -> write x3 -> lseek -> read -> stat) ---- */
+/* ---- TC-VFS-004: file roundtrip (create -> write x3 -> lseek -> read -> stat) ---- */
     {
         static const char p1[] = "brickOS ";
         static const char p2[] = "vfs ";
@@ -231,7 +192,6 @@ int vfs_core_selftest(void)
             ok = (br_file_write(f, p1, sizeof(p1) - 1u) == (br_s64)(sizeof(p1) - 1u)) &&
                  (br_file_write(f, p2, sizeof(p2) - 1u) == (br_s64)(sizeof(p2) - 1u)) &&
                  (br_file_write(f, p3, sizeof(p3) - 1u) == (br_s64)(sizeof(p3) - 1u));
-            /* SEEK_END => file length */
             ok = ok && (br_file_lseek(f, 0, BR_SEEK_END) == (br_s64)want);
             ok = ok && (br_file_lseek(f, 0, BR_SEEK_SET) == 0);
             ok = ok && (br_file_offset(f) == 0);
@@ -243,7 +203,6 @@ int vfs_core_selftest(void)
                 static const char whole[] = "brickOS vfs roundtrip";
                 ok = ok && br_vfs_internal_mem_eq(back, whole, want);
             }
-            /* Read again after EOF => 0 (not -EIO / infinite loop) */
             ok = ok && (br_file_read(f, back, 1u) == 0);
             pc(ok, "TC-VFS-004", "file roundtrip: three writes / SEEK_END / SEEK_SET / read-back byte-identical / EOF returns 0");
 
@@ -258,7 +217,7 @@ int vfs_core_selftest(void)
         }
     }
 
-    /* ---- TC-VFS-006: negative open semantics (O_EXCL / missing / null args / relative path) ---- */
+/* ---- TC-VFS-006: negative open semantics (O_EXCL / missing / null args / relative path) ---- */
     {
         int e1 = BR_OK, e2 = BR_OK, e3 = BR_OK, e4 = BR_OK;
         br_file_t *f1 = br_open_err(file, BR_O_CREAT | BR_O_EXCL | BR_O_RDWR, &e1);
@@ -272,8 +231,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-006", "O_CREAT|O_EXCL existing -EEXIST; missing -ENOENT; NULL/relative path -EINVAL");
     }
 
-    /* ---- TC-VFS-007: directory iteration (enumerate the file just created; entries
-     * fixed-length and fully readable) ---- */
+/* ---- TC-VFS-007: directory iteration (fixed-length entries) ---- */
     {
         br_u32 total = 0u, files = 0u;
         const int rc = conf_count_dir(dir, &total, &files);
@@ -281,7 +239,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-007", "readdir: '.' + '..' + 1 file = 3 entries, 1 of them FILE type");
     }
 
-    /* ---- TC-VFS-008: rename + truncate ---- */
+/* ---- TC-VFS-008: rename + truncate ---- */
     {
         br_bool ok = (br_rename(file, file2) == BR_OK);
         br_stat_t st;
@@ -302,7 +260,6 @@ int vfs_core_selftest(void)
         if (f != BR_NULL) {
             (void)br_file_close(f);
         }
-        /* Open with O_TRUNC => length reset to zero */
         int et = BR_OK;
         br_file_t *ft = br_open_err(file2, BR_O_WRONLY | BR_O_TRUNC, &et);
         ok = ok && (ft != BR_NULL);
@@ -313,7 +270,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-008", "rename: old name gone / new name present; truncate(7) keeps content; O_TRUNC zeroes");
     }
 
-    /* ---- TC-VFS-009: lseek boundaries + handle accessors ---- */
+/* ---- TC-VFS-009: lseek boundaries + handle accessors ---- */
     {
         int err = BR_OK;
         br_file_t *f = br_open_err(file2, BR_O_RDWR, &err);
@@ -330,7 +287,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-009", "lseek: negative offset -EINVAL / bad whence -EINVAL; accessors match open flags");
     }
 
-    /* ---- TC-VFS-010: unlink / rmdir (including negatives) ---- */
+/* ---- TC-VFS-010: unlink / rmdir (including negatives) ---- */
     {
         br_bool ok = (br_unlink(file2) == BR_OK) &&
                      (br_unlink(file2) == BR_ERR(ENOENT)) &&
@@ -340,7 +297,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-010", "unlink/rmdir succeed and are idempotent (repeat => -ENOENT)");
     }
 
-    /* ---- TC-VFS-011: null handle/args robustness (no crash, contract error codes) ---- */
+/* ---- TC-VFS-011: null handle/args robustness (no crash, contract error codes) ---- */
     {
         char byte = 0;
         const br_bool ok =
@@ -359,7 +316,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-011", "null handle/null path: return -EINVAL; close(NULL)/closedir(NULL) idempotent 0");
     }
 
-    /* ---- TC-VFS-012: mount points cannot be deleted (v1: needs unmount semantics, O-S3/v3) ---- */
+/* ---- TC-VFS-012: mount points cannot be rmdir/unlink (no unmount before v3) ---- */
     {
         br_bool ok = BR_TRUE;
         for (br_u32 i = 0u; i < br_mount_count(); i++) {
@@ -374,11 +331,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-012", "mount point itself cannot be rmdir/unlink => -EBUSY (no unmount before v3)");
     }
 
-    /* ---- TC-VFS-013: directory face of a non-root mount (/dev) + honest "visible but
-     * not openable" answer ----
-     * Generic verification of devfs + cdev adapter layer: only via br_opendir/br_stat/br_open.
-     * Knows no device name — matching device names belongs in the **device plugin**
-     * (see io/uart-pl011). */
+/* ---- TC-VFS-013: non-root mount (/dev): readdir enumerable, stat ok, open only 0/-ENOTSUP ---- */
     {
         const char *dev = BR_NULL;
         for (br_u32 i = 0u; i < br_mount_count(); i++) {
@@ -416,9 +369,7 @@ int vfs_core_selftest(void)
                     if (f != BR_NULL) {
                         ok = ok && (br_file_close(f) == BR_OK);     /* has a file face: open/close paired */
                     } else {
-                        /* No file face (e.g. v1 raw flash) must be -ENOTSUP — any other error
-                         * code means the adapter or node construction is broken, so fail
-                         * (no relaxation). */
+/* No file face (v1 raw flash) must be -ENOTSUP; any other code means broken node construction. */
                         ok = ok && (err == BR_ERR(ENOTSUP));
                     }
                     checked++;
@@ -433,11 +384,7 @@ int vfs_core_selftest(void)
         }
     }
 
-    /* ==================================================================
-     * Link family (ADR-0013): symlink **expansion lives in vfs-core**, hard link
-     * **shared data lives in the FS**. Cases drive only the public API — how the
-     * "target string" and "data body" are stored is the FS's business, not ours here.
-     * ================================================================== */
+/* ---- Link family: symlink expansion lives in vfs-core, hard-link data lives in the FS ---- */
     char ldir[BR_VFS_PATH_MAX_INTERNAL];
     char tgt[BR_VFS_PATH_MAX_INTERNAL];
     char lnk[BR_VFS_PATH_MAX_INTERNAL];
@@ -453,7 +400,7 @@ int vfs_core_selftest(void)
     (void)br_rmdir(ldir);
     (void)br_mkdir(ldir);
 
-    /* ---- TC-VFS-014: symlink creation + lstat sees the link + stat follows (incl. dangling) ---- */
+/* ---- TC-VFS-014: symlink creation + lstat sees the link + stat follows (incl. dangling) ---- */
     {
         br_stat_t lst;
         br_stat_t fst;
@@ -468,7 +415,6 @@ int vfs_core_selftest(void)
                              ((lst.valid & BR_STAT_NLINK) != 0u) && (lst.nlink == 1u);
         const br_bool dangling = (br_stat(lnk, &fst) == BR_ERR(ENOENT));
 
-        /* Create the target, then stat again: same name, this time follow succeeds */
         int err = BR_OK;
         br_file_t *tf = br_open_err(tgt, BR_O_CREAT | BR_O_RDWR | BR_O_TRUNC, &err);
         br_bool follow_ok = BR_FALSE;
@@ -483,8 +429,7 @@ int vfs_core_selftest(void)
            "TC-VFS-014", "symlink: may dangle / repeat -EEXIST / empty target -EINVAL; lstat sees link, stat follows");
     }
 
-    /* ---- TC-VFS-015: readlink boundaries (truncation still reports full length / non-link
-     * -EINVAL / null buf reports length only) ---- */
+/* ---- TC-VFS-015: readlink boundaries ---- */
     {
         char        small[4];
         char        full[BR_SYMLINK_MAX + 2u];
@@ -506,7 +451,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-015", "readlink: truncation still reports full length / null buf reports length / non-link -EINVAL / missing -ENOENT");
     }
 
-    /* ---- TC-VFS-016: read/write through a link = writes to the **target** (end-to-end single-route evidence) ---- */
+/* ---- TC-VFS-016: read/write/truncate through a link land on the target ---- */
     {
         char      buf[16];
         br_bool   ok = BR_TRUE;
@@ -521,7 +466,6 @@ int vfs_core_selftest(void)
         } else {
             ok = BR_FALSE;
         }
-        /* Truncate+rewrite through the link => target file's length and content both change */
         br_file_t *wf = br_open_err(lnk, BR_O_WRONLY | BR_O_TRUNC, &err);
         if (wf != BR_NULL) {
             (void)br_file_write(wf, "world!", 6u);
@@ -531,7 +475,7 @@ int vfs_core_selftest(void)
         }
         ok = ok && (br_stat(tgt, &st) == BR_OK) && (st.size == 6u);
 
-        br_file_t *df = br_open_err(tgt, BR_O_RDONLY, &err);   /* read back via the **target name** */
+        br_file_t *df = br_open_err(tgt, BR_O_RDONLY, &err);   /* read back via the target name */
         if (df != BR_NULL) {
             const br_s64 r = br_file_read(df, buf, (br_size_t)sizeof(buf));
             ok = ok && (r == 6) && (buf[0] == 'w') && (buf[5] == '!');
@@ -542,7 +486,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-016", "read/write/truncate through a link land on the target (link is not a copy)");
     }
 
-    /* ---- TC-VFS-017: absolute target and relative target containing '..' ---- */
+/* ---- TC-VFS-017: absolute target and relative target containing '..' ---- */
     {
         char abs_link[BR_VFS_PATH_MAX_INTERNAL];
         char rel_link[BR_VFS_PATH_MAX_INTERNAL];
@@ -561,7 +505,6 @@ int vfs_core_selftest(void)
                      (br_stat(abs_link, &st1) == BR_OK) && (st1.type == BR_INODE_FILE) &&
                      (br_stat(rel_link, &st2) == BR_OK) && (st2.size == 6u);
 
-        /* -ENAMETOOLONG: target string exceeds BR_SYMLINK_MAX */
         char longtgt[BR_SYMLINK_MAX + 8u];
         for (br_size_t i = 0u; i < sizeof(longtgt) - 1u; i++) {
             longtgt[i] = 'x';
@@ -574,7 +517,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-017", "absolute target / relative target with '..' both follow; overlong target -ENAMETOOLONG");
     }
 
-    /* ---- TC-VFS-018: O_NOFOLLOW / loops => -ELOOP ---- */
+/* ---- TC-VFS-018: O_NOFOLLOW / loops => -ELOOP ---- */
     {
         char loop_a[BR_VFS_PATH_MAX_INTERNAL];
         char loop_b[BR_VFS_PATH_MAX_INTERNAL];
@@ -594,7 +537,7 @@ int vfs_core_selftest(void)
             (void)br_file_close(ff);
         }
 
-        /* 2-cycle: a -> b -> a. stat/open must both return -ELOOP and must **not** hang. */
+/* 2-cycle a -> b -> a: stat/open must return -ELOOP and must not hang. */
         br_bool loop_ok = (br_symlink("loop_b", loop_a) == BR_OK) &&
                           (br_symlink("loop_a", loop_b) == BR_OK);
         br_stat_t lst;
@@ -602,7 +545,6 @@ int vfs_core_selftest(void)
         loop_ok = loop_ok && (br_lstat(loop_a, &lst) == BR_OK) &&
                   (lst.type == BR_INODE_SYMLINK);                /* lstat does not look at cycles */
 
-        /* Self-reference */
         char self[BR_VFS_PATH_MAX_INTERNAL];
         conf_path(self, (br_size_t)sizeof(self), ldir, "self1");
         (void)br_unlink(self);
@@ -616,7 +558,7 @@ int vfs_core_selftest(void)
            "O_NOFOLLOW does not expand the final component => -ELOOP; 2-cycle/self-ref => -ELOOP (lstat still sees the link)");
     }
 
-    /* ---- TC-VFS-019: hard link = same data body; directory -EPERM; cross-mount -EXDEV ---- */
+/* ---- TC-VFS-019: hard link = same data body; directory -EPERM; cross-mount -EXDEV ---- */
     {
         br_stat_t st_t;
         br_stat_t st_h;
@@ -628,7 +570,7 @@ int vfs_core_selftest(void)
         char      buf[16];
         int       err = BR_OK;
 
-        /* Write 3 bytes via hard1 (offset 0), read back from target — truly one data body */
+/* Write via hard1, read back from target: truly one data body. */
         br_file_t *hf = br_open_err(hard, BR_O_RDWR, &err);
         if (hf != BR_NULL) {
             (void)br_file_write(hf, "ABC", 3u);
@@ -645,7 +587,7 @@ int vfs_core_selftest(void)
             ok = BR_FALSE;
         }
 
-        /* Delete one name: data must remain (nlink 2 -> 1), the other name still readable */
+/* Deleting one name keeps the data (nlink 2 -> 1); the other name stays readable. */
         ok = ok && (br_unlink(tgt) == BR_OK) && (br_stat(hard, &st_h) == BR_OK) &&
              (st_h.nlink == 1u) && (st_h.size == 6u);
         tf = br_open_err(hard, BR_O_RDONLY, &err);
@@ -657,11 +599,10 @@ int vfs_core_selftest(void)
             ok = BR_FALSE;
         }
 
-        /* Directories cannot be hard-linked (vfs layer: -EPERM) */
+/* Directories cannot be hard-linked => -EPERM. */
         ok = ok && (br_link(ldir, lnk) == BR_ERR(EPERM));
 
-        /* Cross-mount => -EXDEV: use a node in the first non-root mount as target
-         * (if none, honestly record "not applicable") */
+/* Cross-mount => -EXDEV, using a node in the first non-root mount as target. */
         {
             const char *other = BR_NULL;
             for (br_u32 i = 0u; i < br_mount_count(); i++) {
@@ -677,7 +618,7 @@ int vfs_core_selftest(void)
                 char deep[BR_VFS_PATH_MAX_INTERNAL];
                 conf_path(deep, (br_size_t)sizeof(deep), other, "uart0");
                 const int r = br_link(deep, hard);
-                /* Target may not exist (no uart0 in that mount) => only -ENOENT or -EXDEV */
+/* Target may not exist (no uart0 there) => only -ENOENT or -EXDEV. */
                 ok = ok && ((r == BR_ERR(EXDEV)) || (r == BR_ERR(ENOENT)));
                 if (r == BR_ERR(EXDEV)) {
                     br_log_info("[VFSCONF] note: cross-mount hard link => -EXDEV (%s -> %s)", deep, hard);
@@ -687,7 +628,7 @@ int vfs_core_selftest(void)
         pc(ok, "TC-VFS-019", "hard links share the data body / nlink counting / deleting one name keeps data / directory -EPERM / cross-mount -EXDEV");
     }
 
-    /* ---- TC-VFS-020: links participate in namespace changes (unlink/rename act on the **name**) ---- */
+/* ---- TC-VFS-020: unlink/rename act on the name; links count as directory entries ---- */
     {
         char f20[BR_VFS_PATH_MAX_INTERNAL];
         char sym20[BR_VFS_PATH_MAX_INTERNAL];
@@ -717,24 +658,24 @@ int vfs_core_selftest(void)
         }
 
         br_stat_t st;
-        /* Following works; then delete the **link itself**, target unaffected */
+/* Following works; then unlink the link itself, target unaffected. */
         s[1] = (br_symlink("f20.bin", sym20) == BR_OK) &&
                (br_stat(sym20, &st) == BR_OK) && (st.type == BR_INODE_FILE);
         s[2] = (br_unlink(sym20) == BR_OK);
         s[3] = (br_lstat(sym20, &(br_stat_t){0}) == BR_ERR(ENOENT)) &&
                (br_stat(f20, &st) == BR_OK) && (st.size == 1u);
 
-        /* rename changes the **name**: data and nlink unchanged */
+/* rename changes the name only: data and nlink unchanged. */
         s[4] = (br_link(f20, hard20) == BR_OK);
         s[5] = (br_stat(hard20, &st) == BR_OK) && (st.nlink == 2u);
         s[6] = (br_rename(hard20, ren20) == BR_OK) &&
                (br_stat(ren20, &st) == BR_OK) && (st.nlink == 2u) &&
                (br_lstat(hard20, &(br_stat_t){0}) == BR_ERR(ENOENT));
 
-        /* Links count as **directory entries**: non-empty directory => rmdir refuses */
+/* Links count as directory entries: non-empty directory => rmdir refuses. */
         s[7] = (br_rmdir(ldir) == BR_ERR(ENOTEMPTY));
 
-        /* Cleanup: ldir still holds link1 (from TC-VFS-014) and hard1 (from TC-VFS-019) */
+/* Cleanup: ldir still holds link1 and hard1 from earlier cases. */
         s[8] = (br_unlink(ren20) == BR_OK) && (br_unlink(f20) == BR_OK) &&
                (br_unlink(lnk) == BR_OK) && (br_unlink(hard) == BR_OK) &&
                (br_rmdir(ldir) == BR_OK);

@@ -1,20 +1,14 @@
 # framework/bdev-core — 块设备子分类(ability / framework / native)
 
-> 设计依据: `docs/7-storage/7-02-bdev.md` §1~§4;`docs/8-device/8-01-device.md` §1.3/§3(D20 形状分离)。
-> 决策与偏离: `docs/decisions/0021-bdev-pci-emmc.md`。接口面快照: `api/iface/framework/bdev-core/bdev.toml`。
-
 ## 1. 它是什么
+接口面快照: `api/iface/framework/bdev-core/bdev.toml`。
 
-`dev-core` 只管"是个设备"(唯一扁平命名空间 + 子分类注册协议 + `open_file` 钩子);**形状归子分类框架**。
-`cdev-core` 是字符设备子分类,`bdev-core` 是**块设备子分类**: 磁盘型介质(无擦除、有 flush)的
-扇区读写面。它把块设备注册进 `dev-core` 的命名空间 ⇒ `/dev/<name>` 自动出现(devfs 是注册表的投影)。
+`dev-core` 只管"是个设备"(唯一扁平命名空间 + 子分类注册协议 + `open_file` 钩子);**形状归子分类框架**。`cdev-core` 是字符设备子分类,`bdev-core` 是**块设备子分类**: 磁盘型介质(无擦除、有 flush)的扇区读写面。它把块设备注册进 `dev-core` 的命名空间 ⇒ `/dev/<name>` 自动出现(devfs 是注册表的投影)。
 
 ```
-器件(eMMC / NOR / virtio-blk)
-  → bdev-core(br_bdev_ops: read/write/flush/geometry + DMA/PIO 标示)
-    → dev-core(唯一扁平命名空间 + 子分类注册协议)
-      → fs/devfs(/dev 节点)
-        → 消费者(FS 插件经 br_bdev_get 绑定; page cache 以堆叠 bdev 构建于其上, SD-8)
+器件(eMMC / NOR / virtio-blk) → bdev-core(br_bdev_ops: read/write/flush/geometry + DMA/PIO 标示)
+  → dev-core(唯一扁平命名空间 + 子分类注册协议) → fs/devfs(/dev 节点)
+    → 消费者(FS 插件经 br_bdev_get 绑定; page cache 以堆叠 bdev 构建于其上)
 ```
 
 ## 2. 对外面(全部在这三样里)
@@ -51,47 +45,30 @@ const br_bdev_ops_t *br_bdev_get(const char *name, void **priv);   /* FS 绑定�
 | `BR_BDEV_F_DMA` | 当前数据通路 = DMA |
 | `BR_BDEV_F_PIO` | 当前数据通路 = PIO |
 
-`DMA`/`PIO` 是**本刀新增**的两位(设计 `7-02` §1 只写了"可堆叠/只读/...")。为什么放在**几何**里:
-几何是每次调用都可重新回答的观测面 ⇒ 运行期切换 DMA/PIO 后, 消费者下一次 `geometry` 就看到新值;
-若做成 ops 的常量字段, 切换就得改 const 且入 golden 的 ops 表。二者**不可同置**(注册期 `-EINVAL`)。
-
 ## 3. 注册期校验(为什么调一次 geometry)
-
 `br_bdev_register` 的校验顺序(全部在**入表之前**):
 
 1. `ops` 非空;`read`/`write`/`flush`/`geometry` **四个必填槽位**齐备(只读设备用 flags 声明, 不豁免槽位);
 2. 名字合规(`br_dev_name_valid`: `[a-z][a-z0-9]*` 风格, 无斜杠/大写/下划线);
-3. **调一次 `ops->geometry(priv, &g)`** 并校验几何自洽:
-   - `sector_size` 是 2 的幂(非 2 的幂几乎必然是单位写错)且非 0;
-   - `n_sectors > 0`;
-   - `0 < max_rw <= n_sectors`;
-   - `align == 0` 或是 2 的幂;
-   - `DMA` 与 `PIO` 不同置。
+3. **调一次 `ops->geometry(priv, &g)`** 并校验几何自洽: `sector_size` 是 2 的幂且非 0;`n_sectors > 0`;`0 < max_rw <= n_sectors`;`align == 0` 或是 2 的幂;`DMA` 与 `PIO` 不同置。
 
-"注册期调 geometry" 是一条**增量**: 设计只把它列为 ops 槽位。理由 = `flush` 是 page cache 的
-语义前提(SD-8), 而"介质是不是只读、几何是否自洽"只有几何答得出来 —— 与其放进一堆半成品等
-第一次 I/O 才炸, 不如把"几何自洽"当成注册的**前置条件**。驱动自己的错误码原样上传。
-
-错误码: `-EINVAL`(名字/ops/几何非法)/ `-EEXIST`(重名, dev-core 执法)/ `-ENOSPC`(静态池满)。
+驱动自己的错误码原样上传。错误码: `-EINVAL`(名字/ops/几何非法)/ `-EEXIST`(重名, dev-core 执法)/ `-ENOSPC`(静态池满)。
 
 ## 4. 边界(本件**不**做什么)
-
 * **不认识任何具体介质** —— eMMC/NOR/virtio-blk 是对接本件的驱动;
-* **不做分区解析**(MBR/GPT 与 `br_bdev_partition` 是 v1.x, SD-9) —— 本刀只留设计;
-* **不做缓存策略** —— page cache 是**堆叠插件**(SD-8);本件只保证"上层看到同一 `br_bdev_ops`";
+* **不做分区解析**(MBR/GPT 与 `br_bdev_partition` 是 v1.x) —— 本刀只留设计;
+* **不做缓存策略** —— page cache 是**堆叠插件**;本件只保证"上层看到同一 `br_bdev_ops`";
 * **不做设备生命周期策略** —— 注册 = 上线, 无注销(v1 静态组合, 与 dev-core/cdev-core 同款);
-* **不提供 raw 文件面** —— `/dev/<bdev>` 属 v2(D21), 条目的 `open_file` **恒 `BR_NULL`**
-  (看得见、打不开; 与 flash 同款, ADR-0009 §3 裁定 6), 并由 TC-BDEV-005 钉成机械判据。
+* **不提供 raw 文件面** —— `/dev/<bdev>` 属 v2, 条目的 `open_file` **恒 `BR_NULL`**(看得见、打不开; 与 flash 同款), 并由 TC-BDEV-005 钉成机械判据。
 
 ## 5. 依赖与构建
 
 | 边 | kind | 理由 |
 |---|---|---|
-| `framework/dev-core` | `init` | 注册要走它的注册表(设计 §1 的"块设备注册进 dev-core 的命名空间") |
+| `framework/dev-core` | `init` | 注册要走它的注册表 |
 | `framework/vfs-core` | `type` | `br_dev_class_entry_t.open_file` 的类型引用 `br_file_ops_t`(O-S7 的类型成本, 与 cdev-core 同款) |
 
-`src/bdev_core.c` = 生产;`src/bdev_selftest.c` = 自检(ADR-0010: 表在场 = 有自检,
-`[selftest].cases = 8`);`src/bdev_internal.h` = 自检用的内部视图(容量/占用数, **不导出**)。
+`src/bdev_core.c` = 生产;`src/bdev_selftest.c` = 自检(表在场 = 有自检, `[selftest].cases = 8`);`src/bdev_internal.h` = 自检用的内部视图(容量/占用数, **不导出**)。
 
 ## 6. 一致性用例(`TC-BDEV-*`,`tests/smoke.toml` 是声明面骨架)
 
@@ -101,11 +78,9 @@ const br_bdev_ops_t *br_bdev_get(const char *name, void **priv);   /* FS 绑定�
 | TC-BDEV-002 | `ops` 空 / 缺 read\|write\|flush\|geometry ⇒ `-EINVAL` 且名字仍空闲 |
 | TC-BDEV-003 | 几何自洽逐条拒绝(0/非 2 幂扇区、0 容量、max_rw 越界、非 2 幂 align、DMA\|PIO 同置) |
 | TC-BDEV-004 | 未注册 ⇒ `NULL` 且不改写 `*priv`;`br_bdev_get(NULL, NULL) == NULL` |
-| TC-BDEV-005 | 所有 `BR_CLASS_BDEV` 条目 `open_file == NULL`(D21: raw 块访问属 v2) |
+| TC-BDEV-005 | 所有 `BR_CLASS_BDEV` 条目 `open_file == NULL`(raw 块访问属 v2) |
 | TC-BDEV-006 | 活设备: `br_bdev_get` 的 ops == 条目 `class_priv`;几何自洽;重名重注册 ⇒ `-EEXIST` |
 | TC-BDEV-007 | 池簿记: `slot_count <= capacity` 且 `slot_count ==` 注册表 bdev 条目数 |
 | TC-BDEV-008 | 活设备: `flags` 只含已知位且 `DMA`/`PIO` 不同置 |
 
-TC-BDEV-006/008 在"组合里还没有 bdev 驱动"时走**不适用(平凡通过)**分支 —— 它们的存在意义是
-在 eMMC 等驱动接入后立刻变成真判据(与 cdev-core 的 TC-CDEV-004 同款)。红绿由门禁
-`smoke`/`fs-test` 上的 `[BDEVCONF] SUMMARY pass=N fail=0` 与 forbid `[BDEVCONF] FAIL` 判。
+TC-BDEV-006/008 在"组合里还没有 bdev 驱动"时走**不适用(平凡通过)**分支 —— 驱动接入后立刻变成真判据(与 cdev-core 的 TC-CDEV-004 同款)。红绿由门禁 `smoke`/`fs-test` 上的 `[BDEVCONF] SUMMARY pass=N fail=0` 与 forbid `[BDEVCONF] FAIL` 判。

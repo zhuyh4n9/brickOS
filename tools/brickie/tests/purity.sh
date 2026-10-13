@@ -1,15 +1,8 @@
 #!/usr/bin/env bash
-# V-18 glue-layer purity (no business rules in L5) — three **executable** criteria.
-#
-#   (a) independence: `brickie-core --selftest` is all-green in an environment with no PYTHONPATH
-#       and not even python3 on PATH ⇒ domain decisions don't depend on Python packages.
-#   (b) stub-substitution proof: replace `brickie-core` with a "canned-JSON stub"; `brickie check`'s
-#       **diagnostic set (codes + count + order)** must match the real core exactly ⇒ L5 adds/filters/
-#       reorders no business diagnostics (only "shape gate" ones, empty for shape-clean fixtures).
-#   (c) static check: `python/brickie/**` must not contain **implementation vehicles** for business
-#       rules (see the §denylist), which bans only decision-layer wording, not presentation/IO terms.
-#
-# Usage: bash tests/purity.sh        (normally pulled in via run.sh; also `make test-purity` alone)
+# V-18 glue-layer purity (no business rules in L5) — three executable criteria: (a) `brickie-core
+# --selftest` is all-green with no PYTHONPATH and no python3 on PATH; (b) swapping in a canned-JSON
+# stub leaves the check diagnostic set (codes + count + order) identical; (c) python/brickie/**
+# carries no implementation vehicle for business rules (denylist below). Usage: tests/purity.sh.
 set -u
 
 TESTS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -23,8 +16,7 @@ init_report "$TMPROOT/failures.log"
 
 printf '\n=== V-18 glue-layer purity ===\n'
 
-# ------------------------------------------------------------------ (a) selftest without Python
-# `env -i` wipes the entire environment (including PYTHONPATH); `PATH=/nonexistent` hides even python3.
+# ---- (a) selftest without Python: env -i wipes the environment, PATH=/nonexistent hides python3.
 SELFTEST_OUT="$TMPROOT/selftest.txt"
 env -i PATH=/nonexistent "$CORE" --selftest >"$SELFTEST_OUT" 2>&1
 SELFTEST_RC=$?
@@ -36,12 +28,11 @@ eq "(a) --selftest has no failure lines" "0" \
 eq "(a) python3 is indeed absent from the stripped env" "absent" \
     "$(PATH=/nonexistent command -v python3 >/dev/null 2>&1 && echo found || echo absent)"
 
-# ------------------------------------------------------------------ (b) stub-substitution proof
-# Stub: ignore stdin, echo back verbatim "the real core's response for the same fixture".
+# ---- (b) stub-substitution proof: the diagnostic set (codes + count + order) must match the real
+# core, and the real core's diagnostics must be non-empty, else the proof is vacuous.
 make_stub() { # make_stub <canned.json> <output path>
     cat >"$2" <<EOF
 #!/bin/sh
-# Stub: returns fixed JSON only, with no decision logic (never reads the input).
 cat >/dev/null
 cat "$1"
 EOF
@@ -77,7 +68,6 @@ stub_probe() { # stub_probe <fixture name> <label> <path for the real core's dia
         "$("$PY" "$JSONQ" count "$stubout" diagnostics)"
     eq "(b) $label stub substitution: code set matches" \
         "$("$PY" "$JSONQ" diagcodes "$realout")" "$("$PY" "$JSONQ" diagcodes "$stubout")"
-    # Reverse check: the real core's diagnostics are indeed non-empty (else the three above hold trivially)
     eq "(b) $label real core diagnostics non-empty" "no" \
         "$([ "$("$PY" "$JSONQ" count "$realout" diagnostics)" -gt 0 ] && echo no || echo yes)"
 }
@@ -86,23 +76,16 @@ stub_probe "export-tax16" "tax16" "$TMPROOT/real-tax16.json"
 stub_probe "cycle" "cycle" "$TMPROOT/real-cycle.json"
 stub_probe "budget" "budget" "$TMPROOT/real-budget.json"
 
-# ------------------------------------------------------------------ (c) static check
-# Denylist (**narrow and exact**: bans only what "only the decision layer would write"):
-#   1. business BRV codes — L5 may only use shape-class `MF` (BRV-D2's schema gate) and handshake `PROTO`;
-#      a DEP/VER/IFACE/TAX/PRIV/GEN code ⇒ the frontend is inventing decision conclusions itself.
-#   2. computation libraries — hashlib/hmac (IFACE-IR hash), networkx/graphlib (topology/cycles), z3 (interval solving).
-#   3. rule-shaped function names — solve/topo/cycle detection/interval intersection/version advance/canonical hash/taxonomy/privilege/budget.
-#      (deliberately not banning `def ...closure`: the presentation function `_render_closure` is allowed.)
-#   4. version-segment arithmetic — +-*/ on compat_gen/major/minor/revise.
-#   5. range/version parsing primitives — L5 only passes `range` strings through as arguments, never parses them.
-#   6. state-machine transition literals — `->`/`=>` transition tables between three/frozen states.
-#   7. ownership of machine-file bodies — generated markers and snapshot/lock render function names;
-#      path joining for `api/iface/**` also belongs to core (files[] is provided by core).
+# ---- (c) static check: denylist, narrow and exact -- only what the decision layer would write.
+# 1) business BRV codes (L5 may use only shape-class MF and handshake PROTO); 2) computation
+# libraries (hashlib/hmac, networkx/graphlib, z3, numpy/scipy); 3) rule-shaped function names
+# (solve/topo/cycle/intersect/advance/canonical/classify/privilege/budget); 4) version-segment
+# arithmetic; 5) range/version parsing primitives; 6) state-machine transition literals;
+# 7) ownership of machine-file bodies (generated markers, snapshot/lock render names).
 PY_DIR="$TOOL_ROOT/python/brickie"
 purity_pattern_check() { # <name> <ERE> <reason>
     local label="$1" pat="$2" why="$3"
     local hits
-    # Scan code only (`*.py`): code names/terms quoted in a README are docs, not decision implementations.
     hits="$(grep -rInE --include='*.py' -- "$pat" "$PY_DIR" 2>/dev/null || true)"
     if [ -z "$hits" ]; then
         ok "(c) $label"
@@ -133,13 +116,11 @@ purity_pattern_check "no ownership of machine-file bodies" \
     '(brickie:generated|render_snapshot|render_lock|api/iface/)' \
     "lock/snapshot/CHANGELOG bodies must come from core (files[]); L5 only writes them to disk"
 
-# Positive control: the six allowed things need implementation vehicles (else "empty denylist" = empty files)
 grep_at_least "(c) positive: argparse parsing"     'import argparse' "$PY_DIR/cli.py"
 grep_at_least "(c) positive: schema shape check"   'import json'     "$PY_DIR/schema.py"
 grep_at_least "(c) positive: subprocess used"      'subprocess'      "$PY_DIR/native.py"
 grep_at_least "(c) positive: idempotent write"     'def write_files' "$PY_DIR/writer.py"
 
-# ------------------------------------------------------------------ summary
 printf '\n--- purity passed %s / failed %s ---\n' "$PASS" "$FAIL"
 if [ "$FAIL" -ne 0 ]; then
     printf 'purity failure details:\n'

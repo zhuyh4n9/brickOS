@@ -1,22 +1,9 @@
-"""**Single-record shape** validation for the declaration surface (BRV-D2) — a bundled minimal JSON-Schema subset, stdlib only.
+"""Single-record shape validation of the declaration surface (BRV-D2): a bundled minimal JSON-Schema
+subset, stdlib only. A shape mismatch produces ``BRV-MF-0001`` and exit code 2 (BRV-D9).
 
-## Boundary (§8 allowed/forbidden)
-
-**Allowed**: single-record shape validation against ``schema/*.schema.json``; failure ⇒ ``BRV-MF-0001`` +
-exit code 2 (contract §8 / BRV-D9).
-
-**Forbidden**: cross-field / cross-file invariants — e.g. ``export.api_iface == [plugin].api_type``
-(TAX-0016), whether ``compat_gen`` is missing (VER-0003), version string segment count (VER-0005), ``range``
-semantics (VER-0006), closures and topology. Those are **always coded by brickie-core**, so this module's schemas
-**deliberately omit** version-segment-count/range patterns (otherwise they would mask core's code as MF-0001).
-
-## Supported keywords (just enough, not exhaustive)
-
-``type`` / ``properties`` / ``required`` / ``items`` / ``enum`` / ``oneOf`` /
-``additionalProperties`` / ``minimum`` / ``pattern``
-
-**No third-party ``jsonschema`` dependency** (§9.3 zero-dependency discipline): this is a **smaller
-allowed set** that happens to cover the four files under ``schema/`` (see python/brickie/README.md).
+Cross-field / cross-file invariants (api_iface vs api_type, missing ``compat_gen``, version segment
+count, ``range`` semantics, closures, topology) are always coded by brickie-core, so the schemas
+deliberately omit version-segment-count/range patterns (they would mask core's code as MF-0001).
 """
 
 from __future__ import annotations
@@ -30,10 +17,9 @@ from pathlib import Path
 
 from .native import repo_root, tool_root
 
-#: Declaration-surface shape error (BRV-D8's MF-0001: "required field missing / field shape does not match schema")
+#: Shape error for one declaration record (BRV-MF-0001).
 MF_CODE = "BRV-MF-0001"
 
-#: Record kinds supported by shape validation → schema file name
 SCHEMA_FILES = {
     "plugin": "plugin.schema.json",   # <plugin>/brick.toml      (contract §7.1)
     "product": "product.schema.json", # <root>/product.toml       (contract §7.2)
@@ -41,23 +27,15 @@ SCHEMA_FILES = {
     "index": "index.schema.json",     # build/index/dependents.json
 }
 
-#: Record kind → parser (TOML is the only human-authored format; lock/index are machine JSON)
 _TOML_KINDS = frozenset({"plugin", "product"})
 
 
-# ------------------------------------------------------------------ schema lookup
-
-
 def schema_search_roots() -> list[Path]:
-    """Search order for the schema directory (first hit wins).
-
-    1. ``$BRICKIE_SCHEMA_ROOT`` — test cases / installed layout override;
-    2. ``<tool_root>/schema/`` — the **canonical location**: ``tools/brickie/schema/`` in the source tree,
-       the payload unpack root ``<work>/schema/`` in the entry ELF (``BRICKIE_TOOL_ROOT`` points at it,
-       see `freeze.py`'s `PAYLOAD_ROOTS = ("python", "templates", "schema")`);
-    3. ``python/brickie/schema/`` — compatibility read path (older symlink mirror fallback; now **optional**,
-       a missing directory is simply skipped, no mirroring);
-    4. ``<repo_root>/tools/brickie/schema/`` — fallback from outside the working directory.
+    """Schema directory search order, first hit wins:
+    1. ``$BRICKIE_SCHEMA_ROOT`` -- test cases / installed layout override;
+    2. ``<tool_root>/schema/`` -- canonical; source tree or entry-ELF payload root;
+    3. ``python/brickie/schema/`` -- compatibility read path; a missing directory is skipped;
+    4. ``<repo_root>/tools/brickie/schema/`` -- fallback from outside the working directory.
     """
     roots: list[Path] = []
     override = os.environ.get("BRICKIE_SCHEMA_ROOT")
@@ -99,9 +77,6 @@ def any_schema_available() -> bool:
     return any(schema_path(name) is not None for name in SCHEMA_FILES)
 
 
-# ------------------------------------------------------------------ validators
-
-
 def _type_name(value: object) -> str:
     return {
         dict: "object",
@@ -133,10 +108,7 @@ def _type_ok(value: object, expected: str) -> bool:
 
 
 def _span(pointer: str) -> str:
-    """Turn an internal pointer ``/export[0]/entries[2]/sig`` into a TOML-style span.
-
-    contract §3 requires spans to use TOML paths (e.g. ``export[0].entries[2].sig``).
-    """
+    """Turn an internal pointer ``/export[0]/entries[2]/sig`` into its TOML span form."""
     if not pointer:
         return ""
     text = pointer.lstrip("/").replace("/", ".")
@@ -229,7 +201,7 @@ def diagnostics_for(record: object, schema_name: str, *, file: str, target: str 
 
 
 def _record_target(kind: str, record: object) -> str:
-    """Diagnostic ``target``: plugin/product name (a shape error must still point at a person)."""
+    """Diagnostic ``target``: plugin/product name, so a shape error points at a person."""
     if not isinstance(record, dict):
         return ""
     section = record.get("plugin") if kind == "plugin" else record.get("product")
@@ -240,12 +212,8 @@ def _record_target(kind: str, record: object) -> str:
 
 
 def _parse_record(kind: str, text: str) -> object:
-    """Parse according to record kind.
-
-    * ``plugin`` / ``product``: TOML (§7's "TOML is the only expression format");
-    * ``index``: JSON (``build/index/dependents.json``);
-    * ``lock``: the ``brickie.lock`` format is not pinned down in v0.1 (contract §7.3 only says "see lock.schema.json"),
-      so **try TOML first, then fall back to JSON** — L5's parsing taste must not become a second source of truth.
+    """Parse by record kind: ``plugin``/``product`` use TOML, ``index`` uses JSON. ``lock`` is not
+    pinned down in v0.1, so try TOML first, then JSON.
     """
     if kind in _TOML_KINDS:
         return tomllib.loads(text)
@@ -260,10 +228,9 @@ def _parse_record(kind: str, text: str) -> object:
 
 
 def check_declaration(kind: str, rel: str, text: str) -> list[dict]:
-    """Parse + shape-validate a declaration file.
-
-    * parse failure (TOML/JSON syntax) ⇒ one ``BRV-MF-0001`` (BRV-D9: TOML syntax maps to exit code 2);
-    * schema file missing ⇒ empty list (**degraded**, no false positives; the orchestration layer adds an info note).
+    """Parse + shape-validate a declaration file: a parse failure (TOML/JSON syntax) yields one
+    ``BRV-MF-0001`` (BRV-D9: syntax maps to exit code 2); a missing schema file yields an empty list
+    (degraded, no false positives; the orchestration layer adds an info note).
     """
     if schema_path(kind) is None:
         return []
@@ -277,7 +244,9 @@ def check_declaration(kind: str, rel: str, text: str) -> list[dict]:
 
 
 def missing_schema_diagnostic() -> dict:
-    """**Degraded notice** (info; does not decide the exit code) when the schema directory is entirely missing."""
+    """Degraded notice (info; does not decide the exit code) when the schema directory is entirely
+    missing.
+    """
     searched = ", ".join(str(root) for root in schema_search_roots())
     return {
         "code": None,

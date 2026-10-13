@@ -1,14 +1,7 @@
 /*
- * tests/host/host_stubs.c - host-side stand-ins (used only by mem-test with `-DBR_HOSTTEST=1`)
- *
- * Why: the target image is `-ffreestanding -nostdlib`, and core's `br_log_write` ends up at the
- * platform early console (polling PL011). Host tests do not link platform, and should not link
- * the formatter in core/src/log.c (it depends on br_console_*) just to print a few debug lines,
- * so this provides minimal stand-ins:
- *   - `br_log_write` implemented with the host vprintf (tests may use libc);
- *   - `br_console_*` all empty (no PL011 on the host).
- * The stand-ins implement only the **contract** (the signatures in br_log.h / br_console.h) and
- * do not change the semantic surface.
+ * Host-side stand-ins for mem-test (`-DBR_HOSTTEST=1`): br_log_write via host vprintf, and empty
+ * br_console_*. Implements only the br_log.h / br_console.h contracts; the host tests link neither
+ * platform code nor core's log.c formatter.
  */
 #include <br/core/br_console.h>
 #include <br/core/br_log.h>
@@ -49,7 +42,6 @@ br_log_level_t br_log_get_level(void)
 }
 
 /* ---- early console stand-in (no PL011 on the host; empty implementation) ---- */
-
 void br_console_init(void)
 {
 }

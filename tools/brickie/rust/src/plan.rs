@@ -1,16 +1,9 @@
-//! Plan generation: `plan-new` / `plan-init` / `gen-plan` (contract §5.2).
-//!
-//! **Plan only, no content**: returns `data.artifacts: [{path, kind, template, vars}]`;
-//! content is rendered by L2 `brickie-gen render` (two-phase: plan → scan → render).
-//!
-//! Discipline:
-//! - **Never overwrite human-written files**: an existing `human` path ⇒ `BRV-GEN-0002` (error, exit 1).
-//! - `--force` applies **only to generated directories**, and only when the path holds something that is not our generated artifact.
-//! - Generated files are identified by the first-line marker `brickie:generated` (`first_line` is scanned by L5 and passed back).
-//!
-//! Variable naming: provide **both** placeholder sets — current templates use lowercase (`{{name}}` / `{{phase}}`),
-//! the cxx first cut uses uppercase (`{{PLUGIN_NAME}}`). Extra variables are harmless to rendering (the renderer looks up by name),
-//! so templates can use either set.
+//! Plan generation: `plan-new` / `plan-init` / `gen-plan`.
+//! Plan only, no content: returns `data.artifacts: [{path, kind, template, vars}]`; rendering is
+//! L2's job (two-phase: plan → scan → render). Never overwrite human-written files: an existing
+//! `human` path ⇒ `BRV-GEN-0002` (error, exit 1). `--force` applies only to generated directories;
+//! generated files carry the first-line marker `brickie:generated`. Both placeholder sets are
+//! provided (lowercase `{{name}}`, uppercase `{{PLUGIN_NAME}}`).
 
 use std::collections::BTreeMap;
 
@@ -21,10 +14,9 @@ use crate::model::Plugin;
 use crate::rules;
 use crate::version;
 
-/// Generated-file first-line marker — **single source** is [`crate::emit::GENERATED_MARKER`].
+/// Generated-file first-line marker; single source is [`crate::emit::GENERATED_MARKER`].
 pub use crate::emit::GENERATED_MARKER;
 
-/// A generation plan.
 #[derive(Clone, Debug)]
 pub struct Artifact {
     /// Relative to `root`.
@@ -55,7 +47,7 @@ pub struct DepFact {
     pub phase: Option<String>,
 }
 
-/// "Facts" of one plugin (for variable expansion), decoupled from model::Plugin so plan-new can use it before modelling.
+/// Facts of one plugin for variable expansion; decoupled from model::Plugin so plan-new runs first.
 #[derive(Clone, Debug)]
 pub struct PluginFacts<'a> {
     pub name: &'a str,
@@ -77,19 +69,16 @@ pub struct PluginFacts<'a> {
     pub res_stack_kib: i64,
     /// One entry per structural dependency (the descriptor's `.deps` array).
     pub deps: Vec<DepFact>,
-    /// Number of generated artifacts (value of weak symbol `br_plugin_gen_total`; see ADR-0005 §2.4).
+    /// Number of generated artifacts (value of weak symbol `br_plugin_gen_total`).
     pub gen_total: u32,
     /// Declaration-surface anchor header of the descriptor (path relative to the plugin's `include/` root).
     pub decl_include: String,
     /// Has an `init` hook (derived from `phase != "early"`, see rules::derive_phase).
     pub has_init: bool,
-    /// Whether this generation emits the `selftest` hook (ADR-0010).
-    ///
-    /// = plugin declares `[selftest]` **and** the product switch (incl. allowlist) permits it. When false the
-    /// generated file writes `BR_PLUGIN_NO_HOOK` ⇒ nothing references the test code ⇒ `--gc-sections` drops it from the image.
+    /// Whether this generation emits the `selftest` hook: declares `[selftest]` and the product
+    /// switch (incl. allowlist) permits it; false ⇒ `BR_PLUGIN_NO_HOOK` + `--gc-sections` drop.
     pub emit_selftest: bool,
-    /// One entry per `[[mount]]` (ADR-0030: mount plan of **this plugin** (APP)).
-    /// The generated file emits it as a table; the APP's start phase calls POSIX `mount()` per entry.
+    /// One entry per `[[mount]]` (this APP's mount plan); the table is executed by its start phase.
     pub mounts: Vec<MountFact>,
 }
 
@@ -104,8 +93,6 @@ pub struct MountFact {
 
 /// Fallback value for `descriptor_include`: the meta-contract header (present in any composition).
 pub const FALLBACK_DECL_INCLUDE: &str = "br/core/br_plugin.h";
-
-// ------------------------------------------------------------------ syntax surface → C constants
 
 fn plugin_type_const(t: &str) -> &'static str {
     match t {
@@ -143,8 +130,7 @@ fn dep_kind_const(kind: &str) -> &'static str {
     }
 }
 
-/// `br_dep_t.phase`: only meaningful when `kind = "init"`; otherwise/default = `BR_PHASE_NONE`
-/// (frozen header `br_plugin.h`: "does not constrain the completion point").
+/// `br_dep_t.phase`: only for `kind = "init"`; otherwise `BR_PHASE_NONE` (unconstrained).
 fn dep_phase_const(kind: &str, phase: Option<&str>) -> &'static str {
     if kind != "init" {
         return "BR_PHASE_NONE";
@@ -158,11 +144,9 @@ fn dep_phase_const(kind: &str, phase: Option<&str>) -> &'static str {
     }
 }
 
-/// C text of the dependency array + the `.deps` value expression (no edges ⇒ `BR_NULL`).
-/// Emit the mount plan table (ADR-0030). Empty plan ⇒ two empty strings (template emits nothing).
-///
-/// Table name = `<symbol_prefix>mount_plan` (same prefix as the descriptor, easy for the APP to reference).
-/// Empty `source` ⇒ emit `BR_NULL` (media-less FS).
+/// C text of the dependency array + the `.deps` value expression (no edges ⇒ `BR_NULL`), and the
+/// mount plan table `<symbol_prefix>mount_plan`; empty `source` ⇒ `BR_NULL`, empty plan ⇒ two
+/// empty strings so the template emits nothing.
 fn mount_plan_decl(prefix: &str, mounts: &[MountFact]) -> (String, String) {
     if mounts.is_empty() {
         return (String::new(), String::new());
@@ -250,13 +234,8 @@ fn deps_decl(tag: &str, deps: &[DepFact]) -> (String, String) {
     (out, sym)
 }
 
-/// Scan the public headers under the plugin's `include/` and pick the **declaration-surface anchor header**:
-/// the one declaring the most of this plugin's `[[export.entries]]` symbols (ties ⇒ first in lexicographic
-/// order, for determinism); no headers (or unreadable) ⇒ fall back to the meta-contract header.
-///
-/// Why not "any header will do": the anchor header goes into the generated file and `gen --check` flags
-/// changes to it — the rule must be deterministic and tied to **declaration-surface facts**, not to
-/// directory traversal order.
+/// Pick the declaration-surface anchor header: the `include/` header declaring the most
+/// `[[export.entries]]` symbols (ties ⇒ lexicographically first), else the meta-contract header.
 fn scan_decl_include(root: &std::path::Path, plugin: &str, symbols: &[String]) -> Option<String> {
     let base = root.join(plugin).join("include");
     let mut found: Vec<String> = Vec::new();
@@ -293,8 +272,6 @@ fn collect_headers(base: &std::path::Path, dir: &std::path::Path, out: &mut Vec<
     }
 }
 
-// ------------------------------------------------------------------ name-shape helpers
-
 /// Symbol prefix: non-`[a-z0-9]` → `_`, trailing `_` appended (same convention as cxx `rules.cpp`).
 pub fn symbol_prefix(short: &str) -> String {
     let mut out = String::with_capacity(short.len() + 1);
@@ -311,7 +288,6 @@ pub fn symbol_prefix(short: &str) -> String {
     out
 }
 
-/// Header include guard macro.
 pub fn include_guard(ns: &str, short: &str) -> String {
     let base = if ns.is_empty() {
         short.to_string()
@@ -338,12 +314,11 @@ pub fn descriptor_tag(short: &str) -> String {
     p
 }
 
-/// Descriptor instance symbol name.
 pub fn descriptor_symbol(short: &str) -> String {
     format!("_br_plugin_{}", descriptor_tag(short))
 }
 
-/// Expand a plugin's placeholder table (**both lowercase and uppercase sets**, see module comment).
+/// Expand a plugin's placeholder table (both lowercase and uppercase sets).
 pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     let ns = rules::name_namespace(f.name).to_string();
     let short = rules::name_short(f.name).to_string();
@@ -358,7 +333,6 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     let parsed = version::parse_version(f.version).ok();
 
     let mut v: BTreeMap<String, String> = BTreeMap::new();
-    // ---- lowercase (current templates) ----
     v.insert("name".into(), f.name.to_string());
     v.insert("schema".into(), "1".into());
     v.insert("plugin_type".into(), f.plugin_type.to_string());
@@ -375,12 +349,9 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v.insert("header_guard".into(), guard.clone());
     v.insert("symbol_prefix".into(), sym.clone());
     v.insert("descriptor_symbol".into(), dsym.clone());
-    // `#include "{{descriptor_include}}"` in the descriptor: the declaration-surface anchor header. Rule (ADR-0005 §2.4):
-    // **exactly one** public header under the plugin's `include/` ⇒ use it; otherwise fall back to the meta-contract
-    // header (multi-header plugins like platform have no machine-decidable "main header"). The old rule
-    // `{short}/{short}.h` pointed at a path that does **not** exist.
+    // `#include "{{descriptor_include}}"` is the declaration-surface anchor header: exactly one
+    // public header under `include/` ⇒ use it, else the meta-contract header.
     v.insert("descriptor_include".into(), f.decl_include.clone());
-    // ---- fields needed to instantiate the descriptor (syntax surface → C constants/expressions) ----
     v.insert("plugin_type_id".into(), plugin_type_const(f.plugin_type).into());
     v.insert("subkind_id".into(), subkind_const(f.subkind).into());
     v.insert("sched_class_id".into(), sched_class_const(f.sched_class).into());
@@ -389,8 +360,7 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v.insert("res_ram_kib".into(), f.res_ram_kib.max(0).to_string());
     v.insert("res_stack_kib".into(), f.res_stack_kib.max(0).to_string());
     v.insert("gen_total".into(), f.gen_total.to_string());
-    // Hook emission rules (ADR-0005 §2.4): early_init/start for all plugins (§6.2 table);
-    // init only when there is an init hook (phase != "early"), otherwise BR_PLUGIN_NO_HOOK.
+    // early_init/start for all plugins; init only when phase != "early", else BR_PLUGIN_NO_HOOK.
     v.insert(
         "init_hook".into(),
         if f.has_init {
@@ -409,9 +379,7 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
         },
     );
     v.insert("start_proto".into(), format!("int {sym}start(void);"));
-    // selftest (ADR-0010): the hook name is also derived from symbol_prefix; the generated **prototype**, like
-    // init, is emitted only when this plugin really emits the hook (otherwise it would reference a nonexistent
-    // symbol → -Wmissing-prototypes and link errors). Selftest off ⇒ empty proto + hook = NO_HOOK.
+    // selftest prototype only when the hook is emitted (else -Wmissing-prototypes/link errors).
     v.insert(
         "selftest_proto".into(),
         if f.emit_selftest {
@@ -431,8 +399,7 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     let (deps_array, deps_expr) = deps_decl(&dtag, &f.deps);
     v.insert("deps_array".into(), deps_array);
     v.insert("deps_expr".into(), deps_expr);
-    // Mount plan (ADR-0030): emit a table + length. The APP's start phase executes POSIX mount() per entry.
-    // Stable sort by order (same order keeps declaration order) ⇒ the "mount first, then /dev" premise is reproducible.
+    // Mount plan: table + length; stable sort by `order` so the result is reproducible.
     let (mount_plan, mount_plan_n) = mount_plan_decl(&sym, &f.mounts);
     v.insert("mount_plan".into(), mount_plan);
     v.insert("mount_plan_n".into(), mount_plan_n);
@@ -441,7 +408,6 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v.insert("export_name".into(), short.clone());
     v.insert("app".into(), f.name.to_string());
 
-    // ---- uppercase (cxx first-cut variable names; kept for compatibility) ----
     v.insert("PLUGIN_NAME".into(), f.name.to_string());
     v.insert("NS".into(), ns);
     v.insert("SHORT".into(), short.clone());
@@ -480,7 +446,7 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v
 }
 
-/// Path layout (§8.4 / contract §5.2). Returns the six `(path, kind, template)` triples.
+/// Path layout: the six `(path, kind, template)` triples.
 pub fn plugin_paths(f: &PluginFacts<'_>) -> Vec<(String, String, String)> {
     let short = rules::name_short(f.name);
     let skel = format!("{}/{}/{}/", f.api_type, f.plugin_type, f.lang);
@@ -519,8 +485,6 @@ pub fn plugin_paths(f: &PluginFacts<'_>) -> Vec<(String, String, String)> {
     ]
 }
 
-// ------------------------------------------------------------------ conflict detection
-
 fn existing_index(context: &serde_json::Map<String, Value>) -> BTreeMap<String, String> {
     let mut out = BTreeMap::new();
     if let Some(arr) = context.get("existing").and_then(|v| v.as_array()) {
@@ -540,8 +504,7 @@ fn looks_generated(first_line: &str) -> bool {
     first_line.contains(GENERATED_MARKER)
 }
 
-/// Conflict detection (§8.4): human-written files are never overwritten; a generated file conflicts only
-/// when it is not this tool's artifact (`--force` overrides, and `--force` **applies only to generated directories**).
+/// Conflict detection: never overwrite human files; foreign generated files need `--force`.
 fn apply_conflicts(
     artifacts: &mut Vec<Artifact>,
     existing: &BTreeMap<String, String>,
@@ -587,8 +550,6 @@ fn apply_conflicts(
     *artifacts = keep;
 }
 
-// ------------------------------------------------------------------ plan-new
-
 /// `plan-new`: validate args → derive → conflict detection → plan.
 pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map<String, Value>) -> (Diags, Vec<Artifact>) {
     let mut d = Diags::new();
@@ -601,7 +562,6 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
     let explicit_subkind = get("subkind").filter(|s| !s.is_empty());
     let force = args.get("force").and_then(|v| v.as_bool()).unwrap_or(false);
 
-    // ---- 1. shape (contract §7 / §8.1) ----
     if plugin_type.is_empty() {
         d.shape("BRV-MF-0001", &name, "", "args.plugin_type", "missing required argument `plugin_type`", &format!("valid values: {}", rules::list_of(rules::PLUGIN_TYPES)));
         return (d, Vec::new());
@@ -627,7 +587,6 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         return (d, Vec::new());
     }
     if !rules::in_list(rules::TEMPLATE_LANGS, &lang) {
-        // v0.1 delivers only c templates; rust is scheduled for v2.0, cxx pending BRV-Q8.
         d.usage(
             format!("v0.1 delivers only the `c` template, got `{lang}`"),
             "`rust` is scheduled for v2.0 (1-03); `cxx` pending BRV-Q8",
@@ -635,8 +594,7 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         return (d, Vec::new());
     }
 
-    // ---- 2. api_type template delivery status (§8.4) ----
-    // BRV-TAX-0014 severity = info, but the command **cannot complete** ⇒ explicitly set exit code 2 (G-1).
+    // BRV-TAX-0014 is info, but the command cannot complete ⇒ exit code 2 (G-1).
     if !rules::template_available(&api_type, &lang) {
         d.coded(
             "BRV-TAX-0014",
@@ -651,7 +609,6 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         return (d, Vec::new());
     }
 
-    // ---- 3. subkind (§8.4) ----
     let mut subkind = String::new();
     if plugin_type == "ability" {
         match (rules::derive_subkind(&name), &explicit_subkind) {
@@ -699,7 +656,6 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         return (d, Vec::new());
     }
 
-    // ---- 4. recommended-form lint (§8.3; warning, non-blocking) ----
     if !rules::is_recommended_form(&name) {
         d.coded(
             "BRV-TAX-0013",
@@ -712,8 +668,7 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         );
     }
 
-    // ---- 5. phase derivation + plan ----
-    // Note: the `new` skeleton includes an `init` stub (§8.4 src.c: early_init/init/start) ⇒ has_init = true.
+    // The new skeleton includes an init stub (early_init/init/start) ⇒ has_init = true.
     let sub_for_phase = if plugin_type == "ability" {
         Some(subkind.as_str())
     } else {
@@ -735,9 +690,9 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         res_ram_kib: 0,
         res_stack_kib: 0,
         deps: Vec::new(),
-        // Skeleton phase: generated-artifact count is "one for this plugin"; after it joins the tree, `brickie gen` recomputes it from the plugin tree.
+        // Skeleton phase: one artifact; `brickie gen` recomputes it from the plugin tree.
         gen_total: 1,
-        // Skeleton phase: the plan itself creates `include/<short>/<short>.h` (the first header in a fresh workspace).
+        // Skeleton phase: the plan creates `include/<short>/<short>.h` itself.
         decl_include: format!(
             "{short}/{short}.h",
             short = rules::name_short(&name)
@@ -757,7 +712,6 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
         })
         .collect();
 
-    // ---- 6. conflict detection (second phase of the two-phase flow: L5 passes back the scanned `existing`) ----
     let existing = existing_index(context);
     if context.contains_key("existing") {
         apply_conflicts(&mut artifacts, &existing, force, &name, &mut d);
@@ -768,13 +722,10 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
     (d, artifacts)
 }
 
-// ------------------------------------------------------------------ plan-init
-
 /// `plan-init`: `product.toml` + `app/<name>/` skeleton + initial `brickie.lock`.
 ///
-/// `brickie.lock` is a **machine file** (core owns the content, contract §4), so the plan gives it
-/// `kind = "machine"` and `template = ""`; the text also goes into `data.lock_content`
-/// (generated deterministically by [`crate::emit::render_lock`]). See "deviations from contract" in the README.
+/// The lock is a machine file (core owns the content): `kind = "machine"`, `template = ""`, and the
+/// text goes into `data.lock_content` from [`crate::emit::render_lock`].
 pub fn plan_init(
     args: &serde_json::Map<String, Value>,
     context: &serde_json::Map<String, Value>,
@@ -804,7 +755,6 @@ pub fn plan_init(
         return (d, Vec::new(), None);
     }
 
-    // product.toml
     let mut pvars: BTreeMap<String, String> = BTreeMap::new();
     pvars.insert("name".into(), name.clone());
     pvars.insert("schema".into(), "1".into());
@@ -822,7 +772,6 @@ pub fn plan_init(
         vars: pvars,
     }];
 
-    // app/<name>/ skeleton (plugin_type = app)
     let app_facts = PluginFacts {
         name: &app,
         plugin_type: "app",
@@ -854,7 +803,6 @@ pub fn plan_init(
         });
     }
 
-    // brickie.lock (machine file; content comes from core). Shape = schema/lock.schema.json.
     let lock = crate::model::Lock {
         schema: 1,
         profile: "dev".into(),
@@ -887,12 +835,8 @@ pub fn plan_init(
     (d, artifacts, Some(lock_content))
 }
 
-// ------------------------------------------------------------------ gen-plan
-
-/// `gen-plan`: plan for rebuilding `build/gen/**` (descriptors).
-///
-/// In v0.1 `include/<short>/<short>.h` is a **human-written** file (§8.4), so this emits descriptors only;
-/// generating the header too is left to v0.3 (see the deviation table in the README).
+/// `gen-plan`: plan for rebuilding `build/gen/**` (descriptors only — in v0.1 the plugin header is
+/// human-written). Generating the header too is left to v0.3.
 pub fn gen_plan(
     root: &std::path::Path,
     args: &serde_json::Map<String, Value>,
@@ -901,16 +845,9 @@ pub fn gen_plan(
     let tree = crate::model::load_tree(root);
     let mut d = tree.diags.clone();
     let mut out = Vec::new();
-    // Generated-artifact count = number of descriptors that **get compiled into the image**. Every artifact
-    // carries the same value, so the weak symbol `br_plugin_gen_total` agrees whichever one is taken (see ADR-0005 §2.4).
-    //
-    // Why **closure size** rather than "number of plugins in the tree": core's TC-PLUG-001 asserts
-    //   "entries in `.br_plugins` == value of this symbol". But the build **filters generated files by closure**
-    //   (see build.rs filter_gen_sources: an unselected plugin's descriptor does not enter the image),
-    //   so "plugins in the tree" necessarily exceeds the section count in a tree with **unselected plugins** — that assertion would fail.
-    //   The first production encounter was sched/coop and sched/rr coexisting while the product can pick only one
-    //   scheduler (ADR-0011). ⇒ switch to closure size: that is the truth of "how many descriptors are in the image".
-    //   A tree without product.toml (pure plugin-tree check, R-1) falls back to the whole tree.
+    // Generated-artifact count = descriptors compiled into the image (same in every artifact, so
+    // the weak symbol `br_plugin_gen_total` agrees). Closure size, not tree size: the build
+    // filters generated files by closure and core's TC-PLUG-001 checks the `.br_plugins` count.
     let gen_total = match &tree.product {
         Some(prod) => {
             let sol = crate::solver::solve(&tree, &prod.stage, false);
@@ -926,9 +863,7 @@ pub fn gen_plan(
         }
         let mut facts = facts_of(p);
         facts.gen_total = gen_total;
-        // Selftest switch (ADR-0010 §2.3): decided at generation time — when off, the descriptor writes
-        // BR_PLUGIN_NO_HOOK, so "selftest off" = test code does **not enter the image**, not merely "does not run".
-        // A tree without product.toml (pure plugin-tree check / R-1) is treated as "no emission": it is an incomplete composition.
+        // Selftest off ⇒ BR_PLUGIN_NO_HOOK (test code not in the image); no product.toml ⇒ off.
         facts.emit_selftest = p.has_selftest
             && tree
                 .product
@@ -957,10 +892,8 @@ pub fn gen_plan(
     (d, out)
 }
 
-/// Build [`PluginFacts`] from a model plugin.
-///
-/// `gen_total` / `decl_include` are **plan-level** facts (they need disk scans / plugin-tree counts), filled by the caller:
-/// `gen_plan` uses real values, `plan_new` / `plan_init` use skeleton-phase predictions.
+/// Build [`PluginFacts`] from a model plugin. `gen_total` / `decl_include` are plan-level facts
+/// (disk scans / tree counts) filled by the caller: real in `gen_plan`, skeletons predict.
 pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
     let (ram, stack) = p.res_totals();
     PluginFacts {
@@ -989,10 +922,9 @@ pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
         gen_total: 0,
         decl_include: String::new(),
         has_init: p.phase != "early",
-        // Default is **no emission**: only gen_plan (which knows the product switch) turns it on.
-        // This way plan_new/plan_init skeleton-phase predictions are naturally "no selftest".
+        // Default no emission: only gen_plan knows the product switch; skeletons have no selftest.
         emit_selftest: false,
-        // Mount plan (ADR-0030): carried over entry by entry from brick.toml's [[mount]].
+        // Carried over entry by entry from brick.toml's [[mount]].
         mounts: p
             .mounts
             .iter()
@@ -1006,7 +938,6 @@ pub fn facts_of(p: &Plugin) -> PluginFacts<'_> {
     }
 }
 
-/// Render a plan into the `data` payload.
 pub fn artifacts_data(artifacts: &[Artifact]) -> Value {
     let arr: Vec<Value> = artifacts.iter().map(|a| a.to_json()).collect();
     let planned: Vec<Value> = artifacts

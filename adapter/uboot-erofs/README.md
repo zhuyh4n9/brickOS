@@ -1,22 +1,13 @@
 # adapter/uboot-erofs — u-boot EROFS 移植(ability / fs / third_party)
 
-> ⚠ **本插件整体以 GPL-2.0-or-later 分发**: 上游原件是 GPL-2.0+(两处例外见 [NOTICE](NOTICE)),
-> `compat/` 与 `glue/` 是本项目代码但与上游原件同插件分发; 静态链进同一镜像后**整镜像**在
-> 分发时仍构成 GPL 组合作品(ADR-0021 D-3; 残余风险登记在 `../../../WORKAROUNDS.md` 的
-> `br-wa-tp-001`)。它和 [uboot-mmc](../uboot-mmc/README.md) 一起是本仓库内的 GPL 代码。
-> 来源与逐件归属见 [NOTICE](NOTICE), 许可全文见 [LICENSE.GPL-2.0](LICENSE.GPL-2.0);
-> 适配层的设计史与边界判据见 [ADAPTER-NOTES.md](ADAPTER-NOTES.md)。
+> ⚠ **本插件整体以 GPL-2.0-or-later 分发**: 上游原件是 GPL-2.0+(两处例外见 [NOTICE](NOTICE)), `compat/` 与 `glue/` 与上游原件同插件分发, 静态链进同一镜像后**整镜像**在分发时仍构成 GPL 组合作品(残余风险见 `../../../WORKAROUNDS.md` 的 `br-wa-tp-001`)。它与 [uboot-mmc](../uboot-mmc/README.md) 一起是本仓库内的 GPL 代码; 来源归属见 [NOTICE](NOTICE), 许可全文见 [LICENSE.GPL-2.0](LICENSE.GPL-2.0), 设计史见 [ADAPTER-NOTES.md](ADAPTER-NOTES.md)。
 
 ## 1. 它是什么
 
-把 u-boot(NXP 分支)的 **EROFS 只读压缩文件系统**接进 brickOS, 出口是 `framework/vfs-core`
-的 `br_fs_ops` / `br_inode_ops` / `br_file_ops` 契约。
-
-**架构口径(ADR-0026)**: 上游 `.c` **原样参与编译, 没有副本** —— [brick.toml](brick.toml) 的
-`[build].sources` 直接指向 `third_party/uboot-imx/` 下的原件(于是"副本与原件漂移"这件事
-在结构上不可能发生); 我们只提供两样东西 —— `compat/`(上游依赖的**运行环境**)与
-`glue/`(上游需要的**块层与 VFS 出口**)。旧结构(`src/` 上游改写副本 + `adapter/` 适配层)
-**已被 ADR-0026 取代**: 本目录**没有 `src/`**。
+把 u-boot(NXP 分支)的 **EROFS 只读压缩文件系统**接进 brickOS, 出口是 `framework/vfs-core` 的
+`br_fs_ops` / `br_inode_ops` / `br_file_ops` 契约。上游 `.c` **原样参与编译, 没有副本**:
+[brick.toml](brick.toml) 的 `[build].sources` 直指 `third_party/uboot-imx/` 下的原件; 本件只提供
+`compat/`(上游依赖的**运行环境**)与 `glue/`(**块层与 VFS 出口**)。本目录**没有 `src/`**。
 
 ```
 emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注册)
@@ -39,10 +30,9 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 ```
 
 `compat/erofs_env.h` 是运行环境的**唯一实现**(类型/宏/日志/字符串/分配器接地);
-`compat/` 下其余头是 u-boot 头名的**薄壳**(每个 `<linux/...>` / `<asm/...>` /
-`<u-boot/...>` 名一个, 只 include 环境实现)。其中 `compat/u-boot/lz4.h` 特殊 —— 它是
-**相对路径转发**到 vendor 原件, 不复制内容(为什么必须相对路径见
-[ADAPTER-NOTES.md](ADAPTER-NOTES.md))。
+`compat/` 其余头是 u-boot 头名的**薄壳**(每个 `<linux/...>` / `<asm/...>` / `<u-boot/...>` 名一个,
+只 include 环境实现)。`compat/u-boot/lz4.h` 特殊 —— **相对路径转发**到 vendor 原件, 整个文件只有一行
+相对路径 `#include`, 不复制内容(原因见 [ADAPTER-NOTES.md](ADAPTER-NOTES.md))。
 
 ## 2. 目录结构(实际在场的东西)
 
@@ -53,8 +43,8 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 | `glue/` | 本项目(适配层) | `erofs_glue.h`(适配层内部契约)、`erofs_vfs.c`(块层 shim + VFS 四层 ops + `sbi` 存储 + on-disk 静态判据)、`erofs_selftest.c`(TC-EROFS-*) |
 | `LICENSE.GPL-2.0` `NOTICE` `README.md` `ADAPTER-NOTES.md` | 本项目文档 | 许可全文 / 来源归属 / 本文件 / 适配层设计史 |
 
-**没有 `src/`**, `compat/` 与 `glue/` 里也**没有上游源码副本**(唯一的"转发"是
-`compat/u-boot/lz4.h`, 它整个文件只有一行相对路径 `#include`)。
+**没有 `src/`**, `compat/` 与 `glue/` 里也没有上游源码副本(唯一的"转发"是
+`compat/u-boot/lz4.h` 的那一行 `#include`)。
 
 ## 3. 卷与接口(私有契约, 不导出)
 
@@ -71,8 +61,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 
 ## 4. 与上游的关系: 适配在哪(逐条落点)
 
-**总口径**: 上游 `.c` 一行不改; 下面每一条都是**给它环境**或**在本项目侧对接**,
-不是改上游。旧 `src/` 那版对应的"改写上游"手法已随 ADR-0026 取消。
+总口径: 上游 `.c` 一行不改, 下面每条都是**给它环境**或**在本项目侧对接**。
 
 | # | 落点 | 事实 |
 |---|---|---|
@@ -89,24 +78,19 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 
 ## 5. 名字上界:本仓库 `BR_NAME_MAX` = 32, EROFS 是 255
 
-这是一个**取舍**, 两处口径不同且都是刻意的:
-
-- **目录面(`readdir`)**: 名字 ≥ 32 字节的条目**跳过并计数** —— 到穷尽那一刻打一行
-  `br_log_warn` 报总数。为什么不是 `-ENOSPC`: 目录迭代是"流", 一条超长名字不该让整个
-  枚举失败(调用方连已经能看见的条目都拿不到了)。
-- **`lookup`**: `br_dirent_t`/分量缓冲都装不下 ≥32 字节的名字 ⇒ 本件让 `lookup` 返回
-  `BR_NULL`(vfs 得 `-ENOENT`)。任务书写的"lookup 上返回 `BR_ERR(ENOSPC)`"在本件的
-  落点是 **vfs 自己**: `resolve_norm()` 对 `clen >= BR_NAME_MAX` 的分量返回 `-ENOSPC`,
-  于是同一个超长名字从路径面看仍是 `-ENOSPC`。`lookup` 的签名没有错误码通道
-  (返回 inode 指针), 所以 FS 侧只能 `BR_NULL`。
-- 同理, `path[UBOOT_EROFS_REL_PATH_MAX]`(256 B, 定义在 `glue/erofs_glue.h`)放不下的
-  相对路径也返回 `BR_NULL`。
+- **目录面(`readdir`)**: ≥32 字节的名字**跳过并计数**, 到穷尽时打一行 `br_log_warn` 报总数
+  (目录迭代是"流", 所以不用 `-ENOSPC`)。
+- **`lookup`**: `br_dirent_t`/分量缓冲装不下 ≥32 字节的名字 ⇒ 返回 `BR_NULL`(vfs 得 `-ENOENT`);
+  路径面上的 `-ENOSPC` 由 vfs 的 `resolve_norm()` 给(`clen >= BR_NAME_MAX`), 该名字从路径面看仍是
+  `BR_ERR(ENOSPC)`(`lookup` 的签名没有错误码通道, 所以 FS 侧只能 `BR_NULL`)。
+- `path[UBOOT_EROFS_REL_PATH_MAX]`(256 B, 定义在 `glue/erofs_glue.h`)放不下的相对路径同样
+  返回 `BR_NULL`。
 
 ## 6. 一致性用例(`TC-EROFS-*`, `glue/erofs_selftest.c`)
 
 8 条, 判据都经**公开面**(`br_stat`/`br_open`/`br_file_read`/`br_file_lseek`/`br_opendir`/
-`br_readdir`/`br_unlink`/`br_mkdir`)或**盘上事实**(直接读偏移 1024 的 magic)。
-夹具内容与宿主 `tools/mk-fs-images.sh` **逐字节对齐**(常量在 `glue/erofs_glue.h`):
+`br_readdir`/`br_unlink`/`br_mkdir`)或**盘上事实**(直接读偏移 1024 的 magic); 夹具内容与宿主
+`tools/mk-fs-images.sh` **逐字节对齐**(常量在 `glue/erofs_glue.h`):
 
 | id | 判据 |
 |---|---|
@@ -119,12 +103,11 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 | TC-EROFS-007 | 只读执法: `BR_O_WRONLY`/`BR_O_RDWR` 打开 ⇒ NULL; `unlink/mkdir/rmdir/rename/truncate/symlink/link` ⇒ `-EROFS`; 目录**只读打开仍然成功** |
 | TC-EROFS-008 | `raw.bin`(8192, 压不动)与 `a.bin`(4096, 平面)整文件逐字节一致; `SEEK_END` 与越过 EOF 后 `read == 0` |
 
-判据是**生成式**的: `"ABCDEFGH"[i % 8]`、`(i * 1103515245 + 12345) >> 16 & 0xFF`、
-`i & 0xFF` —— 源码里**没有任何大块字面量**。
+判据是**生成式**的: `"ABCDEFGH"[i % 8]`、`(i * 1103515245 + 12345) >> 16 & 0xFF`、`i & 0xFF`
+—— 源码里**没有任何大块字面量**。
 
-> 宿主的两个压缩夹具刻意选成两条不同的 LZ4 路径: `comp/lz4.txt` 是"压得动"
-> (压缩比 5.85%, 且 70000 不是 4096 的整数倍 ⇒ 覆盖尾 extent 的 partial decoding);
-> `raw.bin` 是"压不动"(压缩比 50%, 几乎全是字面量)。
+> 两个压缩夹具刻意走两条 LZ4 路径: `comp/lz4.txt` 压得动(压缩比 5.85%, 70000 不是 4096 的
+> 整数倍 ⇒ 覆盖尾 extent 的 partial decoding); `raw.bin` 压不动(压缩比 50%)。
 
 ## 7. 依赖与构建
 
@@ -134,24 +117,16 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 | `framework/bdev-core` | init | `br_bdev_get("emmc3")` 取块设备 |
 | `adapter/uboot-mmc` | init | 它注册 `emmc3`; 这条**init 边**保证拓扑序在本插件之前 |
 
-编译面由 [brick.toml](brick.toml) 声明, 三件事值得点名:
+[brick.toml](brick.toml) 的编译面: `[build].sources` = vendor 的
+`fs/erofs/{super,namei,data,zmap,decompress}.c` + `lib/lz4.c`(**原样编译, 无副本**) + `glue/*.c`;
+`[build].includes` = `compat`、`glue`、vendor 的 `fs/erofs`(glue 与上游都要 include 上游
+`internal.h`); `[build].cflags` = **vendor 的告警口径**(`-Wno-shadow` 等, 编 vendor 代码时关掉
+本项目的 `-Wshadow`/`-Wpointer-arith`/…), **不为过告警去改上游**。
 
-- **`[build].sources`** = vendor 的 `fs/erofs/{super,namei,data,zmap,decompress}.c` +
-  `lib/lz4.c`(**原样编译, 无副本**) + `glue/*.c`(本项目);
-- **`[build].includes`** = `compat`、`glue`、vendor 的 `fs/erofs`(glue 与上游都要 include
-  上游 `internal.h`);
-- **`[build].cflags`** = **vendor 的告警口径**(`-Wno-shadow` 等)。上游按 u-boot 自己的
-  告警集合写, 那份不含本项目的 `-Wshadow`/`-Wpointer-arith`/… ⇒ 编 vendor 代码时关掉这几条;
-  **不为过告警去改上游**(那正是本刀要消灭的"就地改三方件")。
-
-纪律的机械判据(改文档前先看这两处):
-
-- `tools/check-third-party-pristine.sh` —— `third_party/` 只读 + 逐字节对
-  `adapter/third-party-upstream.lock`(ADR-0026 D-5);
-- `tests/gates.toml` 的 `erofs-test`(见下节)。
-
-> 已废弃: `tools/check-third-party-isolation.sh` **已被 ADR-0026 取代, 文件不存在**;
-> 旧的 `src/` ↔ `adapter/` 边界判据也随之作废。
+纪律的机械判据: `tools/check-third-party-pristine.sh`(`third_party/` 只读 + 逐字节对
+`adapter/third-party-upstream.lock`)与 `tests/gates.toml` 的 `erofs-test`(见下节)。
+> 已废弃: `tools/check-third-party-isolation.sh` **文件不存在**; 旧的 `src/` ↔ `adapter/`
+> 边界判据也随之作废。
 
 ## 8. 门禁契约(改日志措辞前先看这里)
 
@@ -167,25 +142,9 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 adapter/uboot-mmc 注�
 
 ## 9. 欠债(如实记账)
 
-1. ~~挂载点是**代码常量**(两处真值)~~ ⇒ **已还清(ADR-0030)**: 本插件只
-   `br_fs_driver_register("erofs", …)` 登记驱动; 挂载点与**源设备**都由 **APP 的
-   `[[mount]]`** 给出, 经 `cfg->path`/`cfg->dev` 传进 `mount` 槽位。
-   `glue/erofs_glue.h` 的 `BR_EROFS_MOUNT_PATH`/`BR_EROFS_DEV_NAME` 随之退化为**自检夹具名**。
-   判据 = `tools/check-mount-ownership.sh`。
-2. **`br_mount_register` 的挂载点自动 mkdir 在本件用不上**: `/assets` 由 `fs/tmpfs`
-   作为"挂载点在父 FS 缺失时自动 mkdir"建出来(vfs 的 `mkdir_p`)。
-3. **lookup 是 O(深度) 的路径重走**: 每次 `lookup` 都把"父的相对路径 + 名字"交给上游的
-   `erofs_ilookup()` 从卷根重走一遍(因为上游只认路径)。目录块内是线性扫描(上游如此,
-   没有用"dirent 排序 ⇒ 二分")。在 v1 的单 APP 规模下可接受; 真正的改进是给 inode 缓存
-   一个 nid → 包装的映射(v2 的 dcache, SD-3 明确推迟)。
-4. **超级块 checksum 不校验**: 上游 `super.c` 只把 `checksum` 读进 `sbi.checksum`, 不验
-   (`sb_csum` 特性位存在时同样不验)—— 少一次 crc32c 与一次重读。
-5. **`emmc3` 这个设备名是约定**: 本插件按 `br_bdev_get("emmc3")` 取设备。平台侧
-   (`platform/qemu-aarch64/brick.toml` 的 `[build.target.qemu].extra`)挂了**四块**
-   `-device sdhci-pci` + `-device emmc`(`emmc0/1/2` = 三卷 FAT, `emmc3` = EROFS 卡),
-   后备文件与分工见 `tools/mk-fs-images.sh` 与 ADR-0022。**设备不在 ⇒ 挂载失败 ⇒ 首败即
-   停机**(刻意的): 没有 `/assets` 的产品不该在半残命名空间里继续跑。这条与 `br-wa-fs-001`
-   (挂载点/设备名是代码常量)是同一处欠债的两个侧面。
-6. **单块 I/O 走逐扇区**: 4 KiB 块 = 8 次单扇区 `read`。满足 `max_rw ≤ 64` 的最强形式,
-   代价是命令数; 将来可以让 shim 用 `max_rw` 做多扇区批量(bdev 允许 0..n 的短读),
-   但那时"整扇区读进中转缓冲"的约束仍在。
+1. **挂载点已归 APP 的 `[[mount]]`**: 本插件只 `br_fs_driver_register("erofs", …)` 登记驱动, 挂载点与**源设备**由 APP 的 `[[mount]]` 经 `cfg->path`/`cfg->dev` 传进 `mount` 槽位; `glue/erofs_glue.h` 的 `BR_EROFS_MOUNT_PATH`/`BR_EROFS_DEV_NAME` 退化为**自检夹具名**(判据 = `tools/check-mount-ownership.sh`)。
+2. **`br_mount_register` 的挂载点自动 mkdir 在本件用不上**: `/assets` 由 `fs/tmpfs` 的"挂载点在父 FS 缺失时自动 mkdir"(vfs 的 `mkdir_p`)建出来。
+3. **lookup 是 O(深度) 的路径重走**: 每次 `lookup` 都把"父的相对路径 + 名字"交给上游 `erofs_ilookup()` 从卷根重走(上游只认路径), 目录块内是线性扫描; v1 单 APP 规模可接受, 改进方向是 inode 缓存 nid → 包装的映射(v2 的 dcache, SD-3 明确推迟)。
+4. **超级块 checksum 不校验**: 上游 `super.c` 只把 `checksum` 读进 `sbi.checksum` 而不验(`sb_csum` 特性位存在时同样不验)。
+5. **`emmc3` 这个设备名是约定**: 本插件按 `br_bdev_get("emmc3")` 取设备; 平台侧(`platform/qemu-aarch64/brick.toml` 的 `[build.target.qemu].extra`)挂了**四块** `-device sdhci-pci` + `-device emmc`(`emmc0/1/2` = 三卷 FAT, `emmc3` = EROFS 卡), 后备文件与分工见 `tools/mk-fs-images.sh`。**设备不在 ⇒ 挂载失败 ⇒ 首败即停机**(刻意的); 这条与 `br-wa-fs-001`(挂载点/设备名是代码常量)是同一处欠债的两个侧面。
+6. **单块 I/O 走逐扇区**: 4 KiB 块 = 8 次单扇区 `read`, 满足 `max_rw ≤ 64` 的最强形式, 代价是命令数; 将来可用 `max_rw` 做多扇区批量, 但"整扇区读进中转缓冲"的约束仍在。

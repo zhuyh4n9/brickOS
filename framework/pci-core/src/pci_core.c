@@ -1,30 +1,9 @@
 /*
- * brickOS prototype v0.2.0 — generic PCI(e) mechanism (framework/pci-core)
- *
- * Basis: **no design-document entry** (PCI is a domain added by this change); ruling in
- * `docs/decisions/0021-bdev-pci-emmc.md` D-2 (board-level facts stay in platform, generic mechanism
- * here, `highmem=off`) and D-4 (INTx goes through interrupts).
- *
- * ## The four responsibilities of this file (nothing else)
- *   ① ECAM config-space access (32-bit aligned; little-endian; ECAM falls in the low 1 GiB
- *      **Device** background mapping);
- *   ② Bus enumeration (bus×dev×fn; vendor == 0xFFFF = empty slot; header-type bit7 = multifunction);
- *   ③ BAR sizing (write all 1s → read back, invert, + 1) and **allocation from the platform MMIO
- *      window**, then enabling the endpoint's Memory Space + Bus Master while keeping INTx enabled
- *      (command register bit10 = 0);
- *   ④ INTx line **swizzle**: QEMU GPEX rotates INTx A..D onto SPI 3..6 by `(pin_index + slot) % 4`;
- *      the platform supplies only "the virq of INTx A", and this file computes which one (ADR-0021).
- *
- * ## Why BAR allocation is this file's job (instead of "waiting for firmware")
- *   This image is started directly with `-kernel`, **there is no firmware**, and PCIe endpoint BARs
- *   come up as 0 and unmapped (measured: `info pci` shows `BAR0: 32 bit memory (not mapped)`).
- *   Without BAR allocation there is no register window to write. This is the most concrete part of
- *   "fill in platform PCIe enumeration", not an optional step.
- *
- * ## Lock-free note
- *   The device table is filled once in `br_pci_init` during the CORE phase and is read-only after
- *   that ⇒ the query surface is naturally thread-safe. The only writer is `br_pci_cfg_write32` (used
- *   by drivers to walk extended capabilities/vendor registers): callers do their own locking.
+ * Generic PCI(e) mechanism (framework/pci-core): ECAM config access, bus enumeration, BAR sizing
+ * and allocation from the platform MMIO window, INTx swizzle (QEMU GPEX rotates INTx A..D onto SPI
+ * 3..6 by (pin_index + slot) % 4). The image boots with -kernel and no firmware, so endpoint BARs
+ * come up 0 and unmapped and must be allocated here. The table is filled once in CORE, read-only
+ * after that (query surface is lock-free).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -32,23 +11,18 @@
 #include <br/pci/br_pci.h>
 #include <br/platform/br_plat_pci.h>
 
-/* Lifecycle hook prototypes (name = symbol_prefix + phase; referenced by generated `plugin_desc.c`; not in [[export]]) */
+/* Lifecycle hooks referenced by generated plugin_desc.c (not exported). */
 int pci_core_early_init(void);
 int pci_core_init(void);
 int pci_core_start(void);
-
-/* ==================================================================== state */
 
 static br_plat_pci_host_t s_host;
 static br_pci_dev_t       s_devs[BR_PCI_MAX_DEVS];
 static br_u32             s_n;
 static br_bool            s_inited;
 
-/* ==================================================================== config-space access
- *
- * ECAM layout (PCI spec): addr = ecam + (bus << 20) + (dev << 15) + (fn << 12) + (off & 0xFFC).
- * ECAM sits in a Device-nGnRnE background ⇒ 32-bit aligned accesses only (`-mstrict-align` makes
- * this a hard constraint). */
+/* ECAM: addr = ecam_base + (bus << 20) + (dev << 15) + (fn << 12) + (off & 0xFFC). It sits in a
+ * Device-nGnRnE background mapping, so only 32-bit aligned accesses are allowed. */
 
 #define PCI_CFG_VENDOR      0x00u
 #define PCI_CFG_COMMAND     0x04u
@@ -94,21 +68,15 @@ static br_u8 pci_cfg_read8_raw(br_u32 bus, br_u32 dev, br_u32 fn, br_u32 off)
     return (br_u8)((w >> ((off & 3u) * 8u)) & 0xFFu);
 }
 
-/* ==================================================================== small helpers */
-
 static br_uintptr_t pci_align_up(br_uintptr_t v, br_uintptr_t a)
 {
     return (v + (a - 1u)) & ~(a - 1u);
 }
 
-/* ==================================================================== BAR allocation
- *
- * Standard recipe:
- *   ① save the original value; ② write all 1s; ③ read back ⇒ writable bit mask; ④ size = ~mask + 1
- *   (low 4 bits reserved); ⑤ write the original value / new base back. A 64-bit BAR is probed
- *   together with its high half; a non-zero high half ⇒ needs > 4 GiB ⇒ unsupported here, skip.
- * The allocation cursor `*next` walks along the platform MMIO window (each BAR aligned to its size).
- */
+/* Standard BAR probe: write all 1s, read back the writable mask, size = ~mask + 1 (low 4 bits
+ * reserved), then restore/assign. A 64-bit BAR is probed together with its high half; a non-zero
+ * high half needs > 4 GiB and is skipped. The cursor *next walks the platform MMIO window, each BAR
+ * aligned to its size. */
 static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
                            br_pci_dev_t *out, br_uintptr_t *next)
 {
@@ -121,11 +89,9 @@ static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
         out->bar[i] = 0u;
         out->bar_size[i] = 0u;
 
-        /* ★ Do not treat `orig == 0` as "this BAR does not exist": **an unassigned memory BAR has
-         *   address 0** (this image has no firmware, so every endpoint is in that state). The correct
-         *   test is **probing** — write all 1s and read back; only when neither half accepts a write
-         *   is the BAR unimplemented. Measured: using orig==0 as the empty test ⇒ sdhci's BAR0 never
-         *   got an address, and TC-PCI-003 honestly reported red. */
+        /* orig == 0 is not "BAR absent": an unassigned memory BAR has address 0 (no firmware here),
+         * so probe by writing all 1s and reading back; only when neither half accepts a write is
+         * the BAR unimplemented. */
         pci_cfg_write32_raw(bus, dev, fn, off, 0xFFFFFFFFu);
         const br_u32 mask_lo = pci_cfg_read32_raw(bus, dev, fn, off) & ~0xFu;
 
@@ -150,12 +116,10 @@ static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
             continue;                       /* I/O BAR: this file allocates no I/O space (MEM only) */
         }
 
-        /* Size is computed by **BAR width**:
-         *   - 32-bit BAR: only the low half holds its address bits ⇒ `~mask_lo + 1` must be inverted
-         *     in **32 bits** (inverting in 64 bits treats the upper 32 bits as "not writable" and
-         *     yields a bogus ~4 GiB size — measured);
-         *   - 64-bit BAR: only the merged mask determines the size (probing the low half alone
-         *     misjudges a 16 KiB BAR as > 4 GiB). */
+        /* Size by BAR width: a 32-bit BAR holds its address bits only in the low half, so
+         * ~mask_lo + 1 must be computed in 32 bits (64-bit inversion yields a bogus ~4 GiB);
+         * a 64-bit BAR needs the merged mask (the low half alone misjudges a 16 KiB BAR as
+         * > 4 GiB). */
         const br_u64 size64 = (is64 == BR_TRUE)
                             ? ((~((((br_u64)mask_hi) << 32) | (br_u64)mask_lo)) + 1u)
                             : ((br_u64)((~mask_lo) + 1u));
@@ -194,8 +158,6 @@ static int pci_assign_bars(br_u32 bus, br_u32 dev, br_u32 fn,
     return 0;
 }
 
-/* ==================================================================== enumeration */
-
 static int pci_scan(void)
 {
     br_uintptr_t next = s_host.mmio_base;
@@ -207,7 +169,7 @@ static int pci_scan(void)
 
                 if (vendor == 0xFFFFu) {
                     if (fn == 0u) {
-                        break;              /* function 0 absent ⇒ whole slot absent */
+                        break;              /* function 0 absent => whole slot absent */
                     }
                     continue;
                 }
@@ -232,16 +194,15 @@ static int pci_scan(void)
                     return rc;
                 }
 
-                /* INTx: pin (1..4) + slot swizzle ⇒ platform virq base + offset */
+                /* INTx: pin (1..4) + slot swizzle => platform virq base + offset */
                 const br_u8 pin = pci_cfg_read8_raw(bus, dev, fn, PCI_CFG_INTPIN);
                 if (pin >= 1u && pin <= 4u) {
                     d->intx_pin  = pin;
                     d->intx_virq = s_host.intx_virq_a + (((br_u32)pin - 1u + dev) % 4u);
                 }
 
-                /* Enable the endpoint's memory space + Bus Master; keep INTx enabled (bit10 = 0).
-                 * The root bridge (dev 0) keeps its command register untouched — it decodes none of
-                 * the BARs we allocate. */
+                /* Enable Memory Space + Bus Master, keep INTx enabled (bit10 = 0); the root bridge
+                 * (dev 0) keeps its command register untouched (it decodes no allocated BAR). */
                 if (dev != 0u) {
                     br_u32 cmd = pci_cfg_read32_raw(bus, dev, fn, PCI_CFG_COMMAND);
                     cmd |= (PCI_CMD_MEM_SPACE | PCI_CMD_BUS_MASTER);
@@ -251,7 +212,7 @@ static int pci_scan(void)
 
                 s_n++;
 
-                /* Multifunction test: header-type bit7 of function 0 = 0 ⇒ single function, skip 1..7 */
+                /* Multifunction: function 0 bit7 = 0 => single function, skip 1..7 */
                 if (fn == 0u && (pci_cfg_read8_raw(bus, dev, fn, PCI_CFG_HEADER_TYPE) & 0x80u) == 0u) {
                     break;
                 }
@@ -269,7 +230,7 @@ int br_pci_init(void)
 
     const int rc = br_plat_pci_host(&s_host);
     if (rc != 0) {
-        return rc;                          /* platform has no PCIe ⇒ -ENODEV, do not pretend to find 0 devices */
+        return rc;                          /* platform has no PCIe => -ENODEV, not "0 devices found" */
     }
     if (s_host.ecam_base == 0u || s_host.ecam_size < 0x100000u ||
         s_host.mmio_size == 0u || s_host.intx_virq_a == 0u) {
@@ -289,8 +250,6 @@ int br_pci_init(void)
                 (unsigned long)s_host.mmio_base, (unsigned long)s_host.mmio_size);
     return 0;
 }
-
-/* ==================================================================== query surface */
 
 br_u32 br_pci_dev_count(void)
 {
@@ -336,14 +295,12 @@ int br_pci_cfg_write32(br_u8 bus, br_u8 dev, br_u8 fn, br_u8 off, br_u32 value)
     return 0;
 }
 
-/* ==================================================================== lifecycle */
-
 int pci_core_early_init(void)
 {
-    return 0;   /* ECAM is in the low 1 GiB Device background, reachable in EARLY; enumeration waits for CORE */
+    return 0;   /* ECAM is reachable in EARLY; enumeration waits for CORE */
 }
 
-/* CORE phase: enumeration + BAR allocation. Failure = boot failure (no silent downgrade — same discipline as platform IRQ init). */
+/* CORE: enumeration + BAR allocation; failure is a boot failure (no silent downgrade). */
 int pci_core_init(void)
 {
     const int rc = br_pci_init();
@@ -354,7 +311,7 @@ int pci_core_init(void)
     return 0;
 }
 
-/* START phase: only a device summary (per-device detail lives in the CORE-phase debug output). */
+/* START: device summary only (per-device detail is in the CORE-phase debug output). */
 int pci_core_start(void)
 {
     for (br_u32 i = 0u; i < s_n; i++) {

@@ -1,40 +1,11 @@
 /*
- * sched/rr — round-robin **preemptive** scheduler implementation
- *
- * Basis: `3-03-sched.md` §1 ("semantics in core, policy in plugins")/§2;
- *        `3-01-core-api-list.md` §5.1 (br_sched_ops registration point)/§2.1 (coop vs preempt
- *        boundary); `3-02-int.md` §11.2 (preemption seam at the IRQ exit)/§11.3 (v1 coop never
- *        preempts ⇒ this file is exactly the "the next IRQ exit may switch" shape)/§12.4 (bh vs
- *        scheduling order); item-by-item ruling and evidence:
- *        `docs/decisions/0011-round-robin-bh-workqueue.md`.
- *
- * ## All policy owned by this plugin
- *   - **ready queue = FIFO** (singly linked list, nodes in the plugin's private tail — zero
- *     allocation, same shape as coop);
- *   - `pick_next` dequeues **and reloads that thread's time slice**; empty ⇒ BR_NULL ⇒ core runs
- *     idle/WFI (the L2 critical section of 3-02 §11.1, in core);
- *   - `on_tick`: decrement the current thread's slice, **on exhaustion call
- *     `br_sched_request_resched()`** — the **only** difference from coop (the stack switch itself
- *     is still done by core at the IRQ exit, see below);
- *   - `sleep_until` hook returns 0: timeout wakeups are owned centrally by core's `wake_at` table;
- *   - `idle = BR_NULL`: default is core's WFI critical section.
- *
- * ## Split of duties with core (ADR-0006 §1 I2 + ADR-0011)
- *   The plugin **only touches queue membership + its own private tail**; `state` is always changed
- *   by core (I2). "When to switch" belongs to the plugin (time slice), "how to switch" to core:
- *     `br_sched_request_resched()` only sets a bit; core, at the **IRQ exit (after eoi, before
- *     ERET)**, puts the current thread back on the tail, calls `pick_next` and, if needed,
- *     `br_sched_switch_to`.
- *   ⇒ There is **not one line of switch code here, nor one line changing state** — that is exactly
- *     what cutting "mechanism/policy" apart looks like: switching to `sched/coop` is just picking
- *     another plugin, with no core change.
- *
- * ## ISR safety
- *   Every ready-queue change happens inside the L2 critical section of `br_irq_lock()/
- *   br_irq_unlock()`: the timer ISR can wake a thread in `br_sched_on_tick()` (⇒ enqueue) while a
- *   thread may be halfway through `pick_next` — without that critical section the queue would be
- *   torn by the ISR in the middle of a "tail update". `on_tick` itself runs in the ISR; it only
- *   reads `br_task_self()`/`br_task_state()` (core read-only surface) and its own private tail.
+ * sched/rr -- round-robin preemptive scheduler: FIFO ready queue with nodes in the plugin-private
+ * tail (zero allocation); pick_next dequeues and reloads the thread's slice.
+ * on_tick decrements the running thread's slice and on exhaustion calls
+ * br_sched_request_resched() -- the only difference from coop; the switch itself is core's at the
+ * IRQ exit. The plugin touches queue membership and its private tail only; state is core's.
+ * Queue changes hold br_irq_lock() (the timer ISR can enqueue in br_sched_on_tick()); on_tick runs
+ * in the ISR and reads only br_task_self()/br_task_state() and the private tail.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -43,10 +14,10 @@
 
 #include <br/sched/rr.h>
 
-/* Plugin private tail (placed after the TCB common header; size reported to core as `tcb_size`). */
+/* Plugin-private tail (after the TCB common header; size reported to core as `tcb_size`). */
 struct rr_priv {
     struct br_thread *ready_next;  /* ready-queue node (zero allocation) */
-    br_u32            slice_left;  /* remaining slice (ticks; 0 = due for rotation) */
+    br_u32            slice_left;  /* remaining slice in ticks; 0 = due for rotation */
     br_u32            turns;       /* observation: times scheduled in (diagnostics/self-test) */
 };
 
@@ -54,7 +25,7 @@ static struct br_thread *s_head;   /* head (next thread to run) */
 static struct br_thread *s_tail;   /* tail (where preempted/yielding threads rejoin) */
 static br_u32            s_len;
 
-static br_sched_ops_t    s_ops;    /* non-const: tcb_size is computed at runtime (br_sched_tcb_size()) */
+static br_sched_ops_t    s_ops;    /* non-const: tcb_size is set at runtime */
 
 static struct rr_priv *priv_of(br_thread_t *t)
 {
@@ -86,11 +57,8 @@ static int rr_thread_ready(br_thread_t *t)
     return 0;
 }
 
-/*
- * RUNNING → BLOCKED hook. Under RR the RUNNING thread is **not in the queue anyway**, so this is
- * normally a no-op; it still does a defensive linear unlink so that plugin misuse (double ready)
- * cannot leave a ghost node that is "not runnable yet still in the queue".
- */
+/* RUNNING -> BLOCKED hook: normally a no-op (the RUNNING thread is not queued); the defensive
+ * linear unlink keeps plugin misuse (double ready) from leaving a ghost node. */
 static void rr_thread_block(br_thread_t *t)
 {
     if (t == BR_NULL) {
@@ -122,12 +90,8 @@ static void rr_thread_block(br_thread_t *t)
 }
 
 /*
- * Dequeue **+ load the time slice**. Why load here (and not in `thread_ready`):
- *   `thread_ready` is the common "enter ready" entry (create / wake / yield / preempted back to
- *   the queue); resetting the slice there would give away a free full slice on every yield.
- *   Loading at the moment of **being picked** makes "one thread takes one full slice per turn"
- *   depend on a single place.
- * Does not change `state` (core sets RUNNING); empty queue ⇒ BR_NULL ⇒ core idle.
+ * Dequeue + load the time slice. Loading here (not in thread_ready) keeps a yield from handing out
+ * a free full slice. Does not change state; empty queue => BR_NULL => core idle.
  */
 static br_thread_t *rr_pick_next(void)
 {
@@ -145,7 +109,7 @@ static br_thread_t *rr_pick_next(void)
         s_len--;
 
         struct rr_priv *p = priv_of(t);
-        p->slice_left = RR_SLICE_TICKS;   /* ★ your turn: hand out a full time slice */
+        p->slice_left = RR_SLICE_TICKS;   /* hand out a full time slice */
         p->turns++;
     }
 
@@ -154,15 +118,14 @@ static br_thread_t *rr_pick_next(void)
 }
 
 /*
- * tick policy = this plugin's entire "preemption policy".
+ * Tick policy = this plugin's entire preemption policy.
  *
- * Called by core's `br_sched_on_tick()` (= platform timer ISR), so it **must be ISR-safe**:
- * it only writes its own private tail and core's need_resched bit; no locks, no stack switch,
- * no callbacks.
+ * Called from core's br_sched_on_tick() (= platform timer ISR), so it must be ISR-safe: it writes
+ * only its own private tail and core's need_resched bit; no locks, no stack switch, no callbacks.
  *
- * Semantics: decrement every tick; on reaching zero ⇒ request one preemption (core consumes it at
- * this IRQ exit). If nobody else can run right now, core's `pick_next` picks the same thread again
- * and reloads its slice — so "no pointless stack switch when uncontended" also comes free from core.
+ * Decrement every tick; at zero request one preemption (core consumes it at this IRQ exit). If
+ * nobody else can run, core's pick_next picks the same thread and reloads its slice, so no
+ * pointless stack switch happens when uncontended.
  */
 static void rr_on_tick(void)
 {
@@ -179,19 +142,18 @@ static void rr_on_tick(void)
     struct rr_priv *p = priv_of(cur);
 
     if (p->slice_left == 0u) {
-        return;                            /* already requested; await consumption at the IRQ exit */
+        return;                            /* already requested; consumed at IRQ exit */
     }
 
     p->slice_left--;
     if (p->slice_left == 0u) {
-        br_sched_request_resched();         /* ← the only policy exit */
+        br_sched_request_resched();         /* the only policy exit */
     }
 }
 
 /*
- * Timeout registration hook. Core's `wake_at` table is the single source of truth (it scans for
- * expiry on each periodic tick); returning 0 here means "registration accepted", and the slot is
- * left for a future timing wheel to hang its own structures on.
+ * Timeout registration: core's wake_at table owns expiry scanning; returning 0 means the
+ * registration was accepted.
  */
 static int rr_sleep_until(br_thread_t *t, br_time_t abs_us)
 {
@@ -214,9 +176,9 @@ int rr_early_init(void)
     s_ops.thread_ready = rr_thread_ready;
     s_ops.thread_block = rr_thread_block;
     s_ops.pick_next    = rr_pick_next;
-    s_ops.on_tick      = rr_on_tick;       /* ★ the only difference from coop */
+    s_ops.on_tick      = rr_on_tick;       /* the only difference from coop */
     s_ops.sleep_until  = rr_sleep_until;
-    s_ops.idle         = BR_NULL;          /* default = core's L2 critical section + WFI (3-02 §11.1) */
+    s_ops.idle         = BR_NULL;          /* default = core's WFI critical section */
 
     br_sched_register(&s_ops);             /* exactly once; a second registration = core panic */
     return 0;

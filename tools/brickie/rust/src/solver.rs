@@ -1,31 +1,11 @@
-//! L1 closure solving (§7.6) + the `dep` command family.
-//!
-//! `solve` is a **pure function** (no IO besides the `TreeLoad` argument): product selection set → init/runtime/type
-//! three-kind edge closure → exact `compat_gen` match → `range` intersection (single version) → topo + init cycle detection
-//! → phase monotonicity → taxonomy prohibitions → budget totals → profile decision (§7.5).
-//!
-//! Command surface:
-//! - `closure`   -- closure + topological order + budget totals (contract §5.1 `data`);
-//! - `dep-tree`  -- dependency tree (`{roots, nodes, kind}`);
-//! - `dep-graph` -- `dot` / `mermaid` / `json` (for `json`, `data.text` is a canonical JSON string);
-//! - `dep-why`   -- shortest dependency path (not found ⇒ `data.found = false`, still exit 0);
-//! - `dep-index` -- `build/index/dependents.json` (deterministic serialization).
-//!
-//! Diagnostic codes: `BRV-DEP-0009/0010/0011` / `BRV-VER-0001/0002/0004` /
-//! `BRV-MF-0001` (gap substitute: cycle / missing dependency / budget overrun / dependency-direction prohibition -- ruling R-9;
-//! messages must name the **two conflicting sides / the delta / the full cycle path**).
-//!
-//! ## Implementation-time rulings (registered in rust/README.md §10)
-//! - **S-1**: `requires_iface` version checking happens only in `check` (`scan_iface = true`);
-//!   `closure` **ignores** the field entirely ⇒ `dep closure --json` is byte-identical with or without `requires_iface`
-//!   (§10 V-10②). This does not contradict V-7's "`compat_gen` conflicts are constructible":
-//!   conflicts are reported in `check --deps`.
-//! - **S-2**: structural dependency `[[dep]].range` is compared against the **provider plugin's four-part version**
-//!   `MAJOR.MINOR.REVISE` (structural deps do not pin a generation, per F3) ⇒ out of range `BRV-VER-0002`.
-//! - **S-3**: an **empty intersection** of `range` constraints ⇒ `BRV-DEP-0011` (under the single-version policy, the only
-//!   constructible form of "same plugin, multiple coexisting versions" in v0.1: two consumers demanding disjoint ranges).
-//! - **S-4**: a `type` edge pulls the provider into the closure but does **not** expand along its `init`/`runtime` edges
-//!   (§7.1 "closure participation ✅ (but does not pull in runtime deps)").
+//! L1 closure solving + the `dep` command family (`closure` / `dep-tree` / `dep-graph` /
+//! `dep-why` / `dep-index`; `dep-graph --format json` puts a canonical JSON string in `data.text`).
+//! `solve` is pure (no IO beyond `tree`): product selection → init/runtime/type edge closure →
+//! `compat_gen` match → `range` intersection (single version) → topo + init cycle detection →
+//! phase monotonicity → taxonomy prohibitions → budget totals → profile decision.
+//! Diagnostics: `BRV-DEP-0009`, `BRV-DEP-0010`, `BRV-DEP-0011`, `BRV-VER-0001`, `BRV-VER-0002`,
+//! `BRV-VER-0004`, `BRV-MF-0001` (gap substitute); messages must name the conflicting
+//! sides / the delta / the full cycle path. `dep-why` not found ⇒ `data.found = false`, exit 0.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::PathBuf;
@@ -39,13 +19,10 @@ use crate::proto::{Request, Response};
 use crate::rules;
 use crate::version::{self, Range};
 
-/// Domain labels (contract §5.1 `scopes`).
 pub const SCOPE_DEPS: &str = "deps";
 pub const SCOPE_IFACE: &str = "iface";
 pub const SCOPE_TAX: &str = "tax";
 pub const SCOPE_PRIV: &str = "priv";
-
-// ------------------------------------------------------------------ structures
 
 /// One declared structural dependency edge (consumer → provider).
 #[derive(Clone, Debug, Default)]
@@ -54,41 +31,36 @@ pub struct Edge {
     pub to: String,
     /// `init` | `runtime` | `type`.
     pub kind: String,
-    /// Canonical `range` (after expansion).
     pub range: String,
-    /// `[[dep]].phase` assertion (**init edges only**; §7.2 R2).
+    /// `[[dep]].phase` assertion (init edges only).
     pub phase: Option<String>,
     pub symbol: Option<String>,
-    /// Index of the `[[dep]]` in that plugin's declaration (for diagnostic spans).
+    /// `[[dep]]` index within the plugin declaration (diagnostic spans).
     pub index: usize,
 }
 
-/// A cycle (structured: `path` = closed node path, `edges` = edge by edge).
 #[derive(Clone, Debug, Default)]
 pub struct Cycle {
     pub path: Vec<String>,
     pub edges: Vec<Edge>,
 }
 
-/// The closure produced by solving.
 #[derive(Clone, Debug, Default)]
 pub struct Closure {
-    /// Plugin names in the closure (lexicographic).
     pub selected: BTreeSet<String>,
     /// Selection set (roots of the product manifest; no product ⇒ whole tree).
     pub seeds: Vec<String>,
     pub init_edges: Vec<Edge>,
     pub runtime_edges: Vec<Edge>,
     pub type_edges: Vec<Edge>,
-    /// Topological order of init edges (with cycles: acyclic part first, rest appended in lexicographic order).
     pub topo_order: Vec<String>,
-    /// init cycles (structured; V-3).
+    /// Init cycles (structured; V-3).
     pub cycles: Vec<Cycle>,
     pub totals_ram: i64,
     pub totals_stack: i64,
     pub capacity_ram: i64,
     pub capacity_stack: i64,
-    /// Whether the tree contains `plugin_type = "platform"` (whether capacity is meaningful).
+    /// Tree has `plugin_type = "platform"` ⇒ capacity is meaningful.
     pub has_platform: bool,
 }
 
@@ -150,7 +122,7 @@ fn info(
         .hint(hint)
 }
 
-/// Profile-dependent severity (`BRV-VER-0004`: dev ⇒ info / release ⇒ error; §7.5).
+/// Profile-dependent severity (`BRV-VER-0004`: dev ⇒ info / release ⇒ error).
 fn sev_for_profile(profile: &str) -> Severity {
     if profile == "release" {
         Severity::Error
@@ -159,19 +131,15 @@ fn sev_for_profile(profile: &str) -> Severity {
     }
 }
 
-// ------------------------------------------------------------------ solving
-
 const REACH_TYPE_ONLY: u8 = 1;
 const REACH_FULL: u8 = 2;
 
-/// Pure-function closure solving (§7.6).
 pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
     let by_name: BTreeMap<&str, &Plugin> =
         tree.plugins.iter().map(|p| (p.name.as_str(), p)).collect();
     let mut diags: Vec<(&'static str, Diag)> = Vec::new();
     let mut closure = Closure::default();
 
-    // ---- 1. product selection set (ruling R-1: no product ⇒ whole tree) ----
     let mut seeds: Vec<String> = Vec::new();
     if let Some(prod) = &tree.product {
         if !prod.app.is_empty() {
@@ -183,7 +151,6 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
             }
         }
         if seeds.is_empty() {
-            // product exists but the selection set is empty ⇒ fall back to "whole tree" (spirit of R-1: anything declared should be checked)
             for p in &tree.plugins {
                 seeds.push(p.name.clone());
             }
@@ -218,7 +185,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // ---- 2. three-kind edge closure (type edges do not pull in runtime deps, see S-4) ----
+    // Edge closure; type edges do not pull in runtime deps.
     let mut reach: BTreeMap<String, u8> = BTreeMap::new();
     let mut queue: VecDeque<String> = VecDeque::new();
     for s in &seeds {
@@ -257,7 +224,6 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
     }
     closure.selected = reach.keys().cloned().collect();
 
-    // ---- 3. edge sets + missing dependencies ----
     let mut all_edges: Vec<Edge> = Vec::new();
     for name in &closure.selected {
         let p = by_name[name.as_str()];
@@ -300,7 +266,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // ---- 4. `range` out of bounds (BRV-VER-0002) + single-version intersection (BRV-DEP-0011) ----
+    // `range` out of bounds (BRV-VER-0002) + single-version intersection (BRV-DEP-0011).
     let mut constraints: BTreeMap<String, (Range, Vec<String>)> = BTreeMap::new();
     for e in &all_edges {
         let prov = by_name[e.to.as_str()];
@@ -328,7 +294,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         slot.1.push(e.from.clone());
     }
 
-    // ---- 5. `requires_iface` version checking (check only; see S-1) ----
+    // `requires_iface` checks run only when `scan_iface` is set.
     if scan_iface {
         for name in &closure.selected {
             let p = by_name[name.as_str()];
@@ -451,7 +417,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // ---- 6. profile gating of skin re-export edges (V-14; ignores requires_iface) ----
+    // Profile gating of skin re-export edges (V-14); ignores `requires_iface`.
     for name in &closure.selected {
         let p = by_name[name.as_str()];
         for (ei, exp) in p.exports.iter().enumerate() {
@@ -487,7 +453,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // ---- 7. phase monotonicity (R1/R2; declared init edges only) ----
+    // Phase monotonicity (R1/R2), declared init edges only.
     for e in &closure.init_edges {
         let a = by_name[e.from.as_str()];
         let b = by_name[e.to.as_str()];
@@ -513,7 +479,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         if let Some(assert) = &e.phase {
             let rank_assert = rules::phase_rank(assert);
             if let (Some(rank_assert), Some(rb)) = (rank_assert, rb) {
-                // §8.1 convention: "provider self-declares later than the consumer's assertion ⇒ red" (see README §10 S-6).
+                // Provider self-declares later than the consumer's assertion ⇒ red.
                 if rb > rank_assert {
                     diags.push((
                         SCOPE_DEPS,
@@ -534,7 +500,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // ---- 8. taxonomy prohibitions (dependency direction; ruling R-9 ⇒ BRV-MF-0001) ----
+    // Taxonomy prohibitions (dependency direction ⇒ BRV-MF-0001).
     let allow = tree.allow_edges();
     for e in &all_edges {
         let a = by_name[e.from.as_str()];
@@ -546,7 +512,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     .any(|r| r.starts_with(&format!("{}#", b.name)))
         });
         let violation = if skin_exempt {
-            // §3.5 consumer 3: a `form = skin` re-export edge is **exempt from the api_type prohibition** (the direction table still applies).
+            // `form = skin` re-export is exempt from the api_type prohibition (direction table).
             let prov_is_tp = b.api_type == "third_party";
             let whitelisted = allow.iter().any(|(c, p)| c == &a.name && p == &b.name);
             if !whitelisted && !rules::dep_direction_ok(&a.plugin_type, &b.plugin_type, prov_is_tp) {
@@ -584,9 +550,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // ---- 9. budget totals (R-6: platform's [[res]] is **capacity**) ----
-    // See README §10 S-14: for `plugin_type = platform`, `[[res]]` is capacity and is **not** counted into the
-    // consumer-side Σ — otherwise "platform's own usage" would make the physical limit permanently red (§8.1 note ① loses meaning).
+    // Budget totals: platform `[[res]]` is capacity, not counted into the consumer-side Σ.
     let mut used_ram = 0i64;
     let mut used_stack = 0i64;
     for name in &closure.selected {
@@ -685,7 +649,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // ---- 10. cycle detection (init ⇒ hard error + full path; runtime/type ⇒ info only) ----
+    // Cycle detection: init ⇒ hard error with full path; runtime/type ⇒ info only.
     closure.topo_order = topo_order(&closure.selected, &closure.init_edges);
     closure.cycles = find_cycles(&closure.selected, &closure.init_edges);
     for cyc in &closure.cycles {
@@ -736,8 +700,6 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
     SolveResult { closure, diags }
 }
 
-// ------------------------------------------------------------------ cycles / topo
-
 fn adjacency(nodes: &BTreeSet<String>, edges: &[Edge]) -> BTreeMap<String, Vec<String>> {
     let mut adj: BTreeMap<String, Vec<String>> =
         nodes.iter().map(|n| (n.clone(), Vec::new())).collect();
@@ -751,7 +713,7 @@ fn adjacency(nodes: &BTreeSet<String>, edges: &[Edge]) -> BTreeMap<String, Vec<S
     adj
 }
 
-/// Find all elementary cycles (based on nodes on the backtracking stack; dedup by the rotated minimal lexicographic form).
+/// All elementary cycles; dedup by rotated minimal lexicographic form.
 pub fn find_cycles(nodes: &BTreeSet<String>, edges: &[Edge]) -> Vec<Cycle> {
     let adj = adjacency(nodes, edges);
     let mut out: Vec<Cycle> = Vec::new();
@@ -817,12 +779,9 @@ fn dfs_cycles(
     stack.pop();
 }
 
-/// **Initialization** topological order of init edges: provider first, consumer later (Kahn; ready set in lexicographic order ⇒ deterministic).
-///
-/// Edge direction is `consumer → provider` (A depends on B), while "initialization order" requires B before A ⇒
-/// Kahn uses the **reverse** adjacency. With cycles, remaining nodes are appended in lexicographic order.
+/// Init topo order: provider before consumer (Kahn; lexicographic ready set ⇒ deterministic).
+/// Edges point consumer → provider, so Kahn uses the reverse adjacency; cycle nodes come last.
 pub fn topo_order(nodes: &BTreeSet<String>, edges: &[Edge]) -> Vec<String> {
-    // Deduplicate (a given (from,to) pair counts as one edge).
     let mut pairs: BTreeSet<(String, String)> = BTreeSet::new();
     for e in edges {
         if nodes.contains(&e.from) && nodes.contains(&e.to) {
@@ -833,7 +792,7 @@ pub fn topo_order(nodes: &BTreeSet<String>, edges: &[Edge]) -> Vec<String> {
     let mut adj: BTreeMap<String, Vec<String>> =
         nodes.iter().map(|n| (n.clone(), Vec::new())).collect();
     for (from, to) in &pairs {
-        // Initialization-order edges: provider (`to`) → consumer (`from`).
+        // Init-order edges: provider (`to`) → consumer (`from`).
         adj.get_mut(to).unwrap().push(from.clone());
         *indeg.get_mut(from).unwrap() += 1;
     }
@@ -871,8 +830,6 @@ pub fn topo_order(nodes: &BTreeSet<String>, edges: &[Edge]) -> Vec<String> {
     order
 }
 
-// ------------------------------------------------------------------ JSON views
-
 fn edges_json(edges: &[Edge]) -> Value {
     Value::Array(
         edges
@@ -882,7 +839,6 @@ fn edges_json(edges: &[Edge]) -> Value {
     )
 }
 
-/// `data` of the `closure` command (contract §5.1).
 pub fn closure_json(tree: &TreeLoad, c: &Closure, profile: &str) -> Value {
     let plugins: Vec<Value> = tree
         .plugins
@@ -935,7 +891,7 @@ pub fn closure_json(tree: &TreeLoad, c: &Closure, profile: &str) -> Value {
     })
 }
 
-/// Read `args.profile` (default = product.stage / dev).
+/// Read `args.profile`; default = product.stage, then dev.
 pub fn profile_of(req: &Request, tree: &TreeLoad) -> String {
     req.arg_str("profile")
         .filter(|s| !s.is_empty())
@@ -943,9 +899,6 @@ pub fn profile_of(req: &Request, tree: &TreeLoad) -> String {
         .unwrap_or_else(|| "dev".to_string())
 }
 
-// ------------------------------------------------------------------ command entry points
-
-/// Unified entry point for `closure` / `dep-tree` / `dep-graph` / `dep-why` / `dep-index`.
 pub fn run(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
     let tree = model::load_tree(&root);
@@ -968,7 +921,7 @@ pub fn run(req: &Request) -> Response {
 
 fn cmd_closure(req: &Request, tree: &TreeLoad) -> Response {
     let profile = profile_of(req, tree);
-    // S-1: `closure` does **not** scan `requires_iface` ⇒ V-10② byte-for-byte reproducibility holds.
+    // `closure` does not scan `requires_iface` ⇒ `--json` is byte-identical either way.
     let sol = solve(tree, &profile, false);
     let mut d = tree.diags.clone();
     for (_, diag) in sol.diags {
@@ -1027,7 +980,6 @@ fn cmd_tree(req: &Request, tree: &TreeLoad) -> Response {
     )
 }
 
-/// Take edges by `kind`, stable-sorted + deduplicated.
 pub fn sorted_edges(c: &Closure, kind: &str) -> Vec<Edge> {
     let mut out: Vec<Edge> = match kind {
         "init" => c.init_edges.clone(),
@@ -1114,7 +1066,7 @@ fn cmd_why(req: &Request, tree: &TreeLoad) -> Response {
     let to = req.arg_str("to").unwrap_or_default();
     let mut d = tree.diags.clone();
 
-    // BFS (consumer → provider direction, shortest path).
+    // BFS in consumer → provider direction (shortest path).
     let mut adj: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
     for e in sol.closure.all_edges() {
         adj.entry(e.from.clone())

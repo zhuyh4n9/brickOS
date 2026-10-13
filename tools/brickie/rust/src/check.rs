@@ -1,20 +1,14 @@
-//! Composition-time check `check` (§7.7 / §7.5; V-3/V-8/V-12/V-14/V-19).
+//! Composition-time `check` (V-3/V-8/V-12/V-14/V-19): the cross-record / cross-file validation
+//! choke point. Single-record shape errors are already reported by `model::load_tree`; this module
+//! does not re-report those codes.
 //!
-//! `check` is the **cross-record / cross-file** validation choke point: single-record shapes and
-//! invariants are already reported at load time by [`crate::model::load_tree`] (see the list in
-//! rust/README.md §5.3); this module **does not re-report** those codes.
+//! Scopes: `deps` closure/init cycle, `compat_gen` + range intersection, single-version policy,
+//! phase monotonicity (R1/R2), profile gate (`BRV-VER-0004`); `iface` cross-file export
+//! classification invariant 3, unit and symbol-family collisions, `requires_iface` info only,
+//! `unfreezing` under release (`BRV-IFACE-0009`); `tax` dependency-direction prohibitions and
+//! `sched_class` legality; `priv` budget totals and exclusive-resource conflicts (both sides).
 //!
-//! Scopes and coverage:
-//! - `deps`  —— closure / init cycle (full path) / `compat_gen` exact + `range` intersection /
-//!              single-version policy / phase monotonicity (R1/R2) / profile gate (`BRV-VER-0004`);
-//! - `iface` —— the **cross-file** part of export-classification invariant 3 / unit-level and symbol-family collisions /
-//!              `requires_iface` info only (V-10③) / `unfreezing` under release
-//!              (`BRV-IFACE-0009`);
-//! - `tax`   —— dependency-direction prohibitions (reuses solver) / `sched_class` combination legality;
-//! - `priv`  —— budget totals (reuses solver) / IRQ·DMA·pin·device-name **exclusive conflicts** (report both sides).
-//!
-//! `data.summary` shape (contract §5.1):
-//! `{errors, warnings, infos, profile, closure:{plugins, ram_kib, stack_kib}}`.
+//! `data.summary` = `{errors, warnings, infos, profile, closure:{plugins, ram_kib, stack_kib}}`.
 
 use serde_json::{json, Value};
 
@@ -56,7 +50,7 @@ fn info(
         .hint(hint)
 }
 
-/// `sched_kind` (ruling R-5: explicit field first, otherwise inferred from the scheduler plugin name).
+/// `sched_kind`: explicit field first, else inferred from the scheduler plugin name.
 pub fn sched_kind(p: &Plugin) -> Option<&'static str> {
     if let Some(k) = &p.sched_kind {
         return match k.as_str() {
@@ -81,11 +75,10 @@ pub fn sched_kind(p: &Plugin) -> Option<&'static str> {
     }
 }
 
-/// `check` entry point.
 pub fn run(req: &Request) -> Response {
     let root = std::path::PathBuf::from(&req.root);
     let tree = model::load_tree(&root);
-    // V-16: the unfreeze window may exist only in a snapshot (`unfreeze` does not write `brick.toml`) ⇒ check both.
+    // V-16: the unfreeze window may exist only in a snapshot (unfreeze writes no brick.toml).
     let mut snap_diags = crate::diag::Diags::new();
     let snaps = model::load_snapshots(&root, &mut snap_diags);
     let mut base_diags = tree.diags.clone();
@@ -136,7 +129,6 @@ pub fn run(req: &Request) -> Response {
     let sol = solver::solve(&tree, &profile, true);
     let closure = &sol.closure;
 
-    // ---- in-scope diagnostics (with scope tag) ----
     let mut scoped: Vec<(&'static str, Diag)> = sol.diags;
 
     if scopes.iter().any(|s| s == SCOPE_DEPS) {
@@ -152,7 +144,6 @@ pub fn run(req: &Request) -> Response {
         scoped.extend(priv_checks(&tree, closure));
     }
 
-    // `plugin?` filter (by diagnostic target; semantics in README §10 S-7)
     let only = req.arg_str("plugin").filter(|s| !s.is_empty());
 
     let mut summary_diags = base_diags.clone();
@@ -220,13 +211,9 @@ pub fn run(req: &Request) -> Response {
     Response::ok(summary_diags, data)
 }
 
-// ------------------------------------------------------------------ deps scope: declaration ↔ use
-
-/// Source `#include`s another plugin's header, but `brick.toml` declares no dependency (direct or transitive).
-///
-/// Uses the **same scan** as `build` (`model::cross_plugin_includes`) — the two must not diverge.
-/// Why narrowing with `-I` alone is not enough: the target toolchain's glibc headers shadow common
-/// names like `unistd.h`, so narrowing silently falls back to glibc declarations (ADR-0018).
+/// An `#include` of another plugin's header with no declared dependency (direct or transitive).
+/// Uses the same scan as `build` (`model::cross_plugin_includes`) -- the two must not diverge. `-I`
+/// narrowing alone is not enough: the target glibc headers shadow common names.
 fn deps_usage_checks(
     root: &std::path::Path,
     tree: &TreeLoad,
@@ -234,8 +221,7 @@ fn deps_usage_checks(
 ) -> Vec<(&'static str, Diag)> {
     let mut out: Vec<(&'static str, Diag)> = Vec::new();
     for u in model::cross_plugin_includes(root, tree, &closure.selected) {
-        // A-2 (design 1-01 §7.3 / D18; ADR-0020): **APP must not include core headers directly**. core is the kernel surface,
-        // other plugins already use it and include `<br/core/...>` directly, so only an app consumer is a violation.
+        // A-2: only an APP consumer of core headers is a violation (others already include them).
         if u.provider == "core" {
             let is_app = tree
                 .plugins
@@ -281,8 +267,6 @@ fn deps_usage_checks(
     out
 }
 
-// ------------------------------------------------------------------ iface scope
-
 fn iface_checks(
     tree: &TreeLoad,
     closure: &solver::Closure,
@@ -296,7 +280,6 @@ fn iface_checks(
         .filter(|p| closure.selected.contains(&p.name))
         .collect();
 
-    // ---- ① **cross-file** part of export-classification invariant 3 (§3.5 / V-12) ----
     for p in &selected {
         for (ei, exp) in p.exports.iter().enumerate() {
             if exp.form != "skin" {
@@ -343,7 +326,6 @@ fn iface_checks(
         }
     }
 
-    // ---- ② unit-level collision (same unit `name` in two plugins) ----
     let mut by_unit: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
     for p in &selected {
@@ -377,7 +359,6 @@ fn iface_checks(
         }
     }
 
-    // ---- ③ symbol-family collision (overlapping `symbols`) ----
     let mut sym_owner: std::collections::BTreeMap<String, (String, String)> =
         std::collections::BTreeMap::new();
     for p in &selected {
@@ -405,7 +386,6 @@ fn iface_checks(
         }
     }
 
-    // ---- ④ `requires_iface` reports info only (V-10③; never part of the closure) ----
     for p in &selected {
         for (ri, r) in p.compat.requires_iface.iter().enumerate() {
             out.push((
@@ -425,9 +405,7 @@ fn iface_checks(
         }
     }
 
-    // ---- ⑤ `unfreezing` blocks under release (BRV-IFACE-0009, §5.3.4 rule 3) ----
     if profile == "release" {
-        // `unfreeze` only writes a snapshot (does not change `brick.toml`) ⇒ count both (end-to-end observation point for V-16).
         let snapshot_unfreezing: std::collections::BTreeSet<String> = snaps
             .iter()
             .filter(|s| s.freeze_state.as_deref() == Some("unfreezing"))
@@ -459,8 +437,6 @@ fn iface_checks(
     out
 }
 
-// ------------------------------------------------------------------ tax scope
-
 fn tax_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, Diag)> {
     let mut out: Vec<(&'static str, Diag)> = Vec::new();
     let selected: Vec<&Plugin> = tree
@@ -469,9 +445,7 @@ fn tax_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, 
         .filter(|p| closure.selected.contains(&p.name))
         .collect();
 
-    // ---- `sched_class` combination legality (§2 item 3 / §8.1) ----
     for p in &selected {
-        // TT_SAFE must also have [sched.tt]
         if p.sched_class == "TT_SAFE" && p.sched_tt.is_none() {
             out.push((
                 SCOPE_TAX,
@@ -524,8 +498,6 @@ fn tax_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, 
     out
 }
 
-// ------------------------------------------------------------------ priv scope
-
 fn priv_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str, Diag)> {
     let mut out: Vec<(&'static str, Diag)> = Vec::new();
     let selected: Vec<&Plugin> = tree
@@ -534,7 +506,6 @@ fn priv_checks(tree: &TreeLoad, closure: &solver::Closure) -> Vec<(&'static str,
         .filter(|p| closure.selected.contains(&p.name))
         .collect();
 
-    // Exclusive-resource conflict (IRQ / DMA channel / pin / device name) ⇒ report **both sides** (R-9 / V-19④).
     let mut owners: std::collections::BTreeMap<(String, String), (String, String)> =
         std::collections::BTreeMap::new();
     for p in &selected {

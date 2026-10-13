@@ -1,23 +1,7 @@
 /*
- * brickOS prototype v0.2.0 — file table implementation (framework/file-table plugin)
- *
- * Contract and all semantics are in `include/br/ft/br_ft.h` (this file holds mechanism only); per-item
- * rulings are in `docs/decisions/0012-file-table-and-errno.md`.
- *
- * ## Six things, matching the contract header one for one
- *   ① static fixed-size table + "presence test = handle non-NULL" (no separate used bit)
- *   ② lowest free fd allocation / table full -EMFILE / NULL handle -EINVAL
- *   ③ invalid fd always -EBADF (out-of-range and empty slot share one code — POSIX does not distinguish them, and distinguishing would leak information)
- *   ④ refcount = number of present slots (determined by scanning the table, no counter); release reports the "last reference"
- *   ⑤ dup / dup2 (POSIX semantics, including dup2 target displacement and the displaced report)
- *   ⑥ release_all (exit path; dry run first, table unchanged if it does not fit)
- *
- * ## Concurrency (why IRQ masking, not a spinlock)
- *   The table is shared state called concurrently by multiple threads (and a future socket layer). Protection
- *   granularity is one table operation, the critical section is a few instructions (32-slot scan), and it never sleeps inside
- *   the critical section — so IRQ masking (core's `br_irq_lock`, design 3-02 §6.4, nesting-safe) is the correct and cheapest
- *   form: no object, no init, no "lock not initialized" class of defects.
- *   The basis for `sched_class = SAFE_PREEMPT` is the same: no sleeping + full critical-section coverage => preemption-safe.
+ * File table implementation (framework/file-table); contract and semantics in
+ * include/br/ft/br_ft.h. Shared by multiple threads: every operation runs under br_irq_lock
+ * (short critical section, never sleeps), which is also the basis for sched_class = SAFE_PREEMPT.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -25,17 +9,14 @@
 #include <br/core/br_types.h>
 #include <br/ft/br_ft.h>
 
-/* Lifecycle hook prototypes (the generated code derives and references them from `symbol_prefix` = `file_table_`;
- * `-Wmissing-prototypes` is satisfied by the prototypes here, same approach as vfs-core). */
+/* Lifecycle hooks referenced by the generated plugin_desc.c (symbol_prefix = file_table_). */
 int file_table_early_init(void);
 int file_table_init(void);
 int file_table_start(void);
 
-/* ==================================================================== Static table */
-
 typedef struct ft_slot {
     br_file_t *file;    /* BR_NULL = empty slot (this is the presence test) */
-    br_u32     flags;   /* opaque: the table only stores and returns it; the consumer (runtime/posix) interprets it */
+    br_u32     flags;   /* opaque: only stored and returned; the consumer (runtime/posix) interprets it */
 } ft_slot_t;
 
 static ft_slot_t s_slots[BR_FT_MAX];
@@ -44,8 +25,6 @@ static br_u32    s_count;   /* always equals the number of non-empty slots (inva
 _Static_assert(BR_FT_MAX > 0u, "BR_FT_MAX must be positive");
 _Static_assert((sizeof(s_slots) + sizeof(s_count)) <= 1024u,
                "file table exceeds the 1 KiB budget declared in brick.toml [[res]]");
-
-/* ==================================================================== Internal helpers */
 
 static br_bool ft_in_range(int fd)
 {
@@ -57,7 +36,7 @@ static br_bool ft_in_use(br_u32 i)
     return (s_slots[i].file != BR_NULL) ? BR_TRUE : BR_FALSE;
 }
 
-/* Does any fd other than `skip` point to the same handle (= does the handle have another reference)? */
+/* Does any fd other than skip point to the same handle (i.e. another reference)? */
 static br_bool ft_shared_with_others(br_file_t *file, int skip)
 {
     for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
@@ -78,8 +57,6 @@ static void ft_clear_slot(br_u32 i)
     s_slots[i].flags = 0u;
     s_count--;
 }
-
-/* ==================================================================== Lifecycle */
 
 br_u32 br_ft_reset(void)
 {
@@ -127,8 +104,6 @@ int br_ft_fd_at(br_u32 index)
     br_irq_unlock(st);
     return found;
 }
-
-/* ==================================================================== Table operations */
 
 int br_ft_alloc(br_file_t *file, br_u32 flags)
 {
@@ -223,7 +198,7 @@ int br_ft_release(int fd, br_file_t **last_file)
         ft_clear_slot((br_u32)fd);
 
         if ((last_file != BR_NULL) && (shared == BR_FALSE)) {
-            *last_file = f;                 /* last reference: hand to the caller for br_file_close */
+            *last_file = f;     /* last reference: hand back to the caller */
         }
     }
 
@@ -242,8 +217,9 @@ int br_ft_release_all(br_file_t **out, br_u32 cap)
     br_u32 distinct = 0u;
     int    rc;
 
-    /* First pass (before touching anything): mark the first slot of each handle and count the
-     * pointer-deduplicated entries. Dedup must finish before clearing slots — clearing as we go would erase earlier duplicates and report one handle twice. */
+    /* First pass: mark the first slot of each handle and count pointer-deduplicated entries.
+     * Dedup must finish before clearing, or earlier duplicates would be erased and one handle
+     * reported twice. */
     for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
         first_of[i] = BR_FALSE;
         if (ft_in_use(i) == BR_FALSE) {
@@ -283,8 +259,6 @@ int br_ft_release_all(br_file_t **out, br_u32 cap)
     return rc;
 }
 
-/* ==================================================================== dup family */
-
 int br_ft_dup(int oldfd)
 {
     if (ft_in_range(oldfd) == BR_FALSE) {
@@ -300,11 +274,11 @@ int br_ft_dup(int oldfd)
         br_file_t  *f  = s_slots[(br_u32)oldfd].file;
         const br_u32 fl = s_slots[(br_u32)oldfd].flags;
 
-        rc = BR_ERR(EMFILE);             /* on a full table oldfd is untouched (POSIX: failure leaves no side effects) */
+        rc = BR_ERR(EMFILE);             /* on a full table oldfd is untouched (failure leaves no side effects) */
         for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
             if (ft_in_use(i) == BR_FALSE) {
                 s_slots[i].file  = f;
-                s_slots[i].flags = fl;      /* snapshot copy (shared bit: see "flags has two identities" in the contract header) */
+                s_slots[i].flags = fl;      /* snapshot copy; shared bits live on the br_file_t side */
                 s_count++;
                 rc = (int)i;
                 break;
@@ -336,7 +310,7 @@ int br_ft_dup2(int oldfd, int newfd, br_file_t **displaced)
     if (ft_in_use((br_u32)oldfd) == BR_FALSE) {
         rc = BR_ERR(EBADF);
     } else {
-        /* ① target occupied => first do the equivalent of close(newfd). */
+        /* Target occupied: do the equivalent of close(newfd) first. */
         if (ft_in_use((br_u32)newfd) == BR_TRUE) {
             br_file_t  *victim = s_slots[(br_u32)newfd].file;
             const br_bool shared = ft_shared_with_others(victim, newfd);
@@ -347,7 +321,6 @@ int br_ft_dup2(int oldfd, int newfd, br_file_t **displaced)
                 *displaced = victim;
             }
         }
-        /* ② put oldfd's handle on newfd (both fds now share one open file description). */
         s_slots[(br_u32)newfd].file  = s_slots[(br_u32)oldfd].file;
         s_slots[(br_u32)newfd].flags = s_slots[(br_u32)oldfd].flags;
         s_count++;
@@ -358,11 +331,10 @@ int br_ft_dup2(int oldfd, int newfd, br_file_t **displaced)
     return rc;
 }
 
-/* ==================================================================== Lifecycle hooks */
-
 int file_table_early_init(void)
 {
-    /* EARLY: the static table is BSS => already empty. A nonzero return means some plugin touched the table before EARLY. */
+    /* EARLY: the static table is BSS, already empty; a nonzero return means some plugin touched the
+     * table before EARLY. */
     const br_u32 dropped = br_ft_reset();
 
     if (dropped != 0u) {
@@ -373,15 +345,13 @@ int file_table_early_init(void)
 
 int file_table_init(void)
 {
-    /* Nothing to initialize here: the table is BSS and there are no external dependencies (zero [[dep]]).
-     * Deliberately no empty API — same as vfs-core's init (R-S4: every line in a framework piece must have a consumer). */
+    /* CORE: nothing to initialize (BSS table, zero [[dep]]). */
     return 0;
 }
 
 int file_table_start(void)
 {
-    /* START phase leaves one line of startup evidence (table capacity + fds already present — the latter is normally 0:
-     * this piece does not install standard streams, and `runtime/posix` deliberately does not either (v1 has no process model, ADR-0014 §2.9). */
+    /* START: one line of startup evidence; fds open here is normally 0. */
     br_log_info("file-table: cap=%u fd slots, %u open", (br_u32)BR_FT_MAX, br_ft_count());
     return 0;
 }

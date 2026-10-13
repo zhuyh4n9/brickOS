@@ -1,30 +1,11 @@
 /*
- * adapter/uboot-erofs — selftest suite (TC-EROFS-001..008)
- *
- * Design basis: `docs/decisions/0010-plugin-selftest.md` (selftest separate from production).
- * Contract with br_plugin_manager_selftest(): return the **number of failures** (0 = all green); each case logs
- * `[EROFCONF] PASS/FAIL <tag> <desc>`, and the summary logs `[EROFCONF] SUMMARY pass=N fail=M`.
- *
- * WORKAROUND(br-wa-test-001): `TC-EROFS-*` is a **self-assigned numbering** — the whole group does not exist in
- * the design `6-01` case table (it is **new surface** of the 7-storage domain); registered alongside the other
- * families' numbering debt.
- *
- * ============================== Where the criteria come from ==============================
- *   1. **Public-surface driven**: uses `br_stat` / `br_open` / `br_file_read` / `br_file_lseek` /
- *      `br_opendir` / `br_readdir` / `br_unlink` / `br_mkdir` —— exactly what an APP can use.
- *      Only then is "EROFS is really wired into the VFS" actually tested (looking at the internal `erofs_ilookup` is not enough).
- *   2. **On-disk fact**: the criterion "magic must be at offset 1024" reads the **medium bytes** directly and compares
- *      (`erofs_dev_read()`), rather than self-certifying with our own parse result.
- *   3. **Generative content criteria**: the two compressed fixtures have recomputable formulas (see the "fixture constants"
- *      in erofs_internal.h), so this file has **no large literals** — 70000 bytes of content are computed as
- *      `"ABCDEFGH"[i % 8]`, and raw.bin from a linear congruential formula.
- *   4. **Assert directory entries by name, not by total count**: adding one file to the fixture must not turn a case red.
- *
- * ============================== One deliberate tradeoff ==============================
- *   TC-EROFS-007 calls `br_unlink()` / `br_mkdir()` — they do **not** modify the volume
- *   (the return value is just -EROFS, not a byte is written). So these "mutation" cases are safe on a read-only volume
- *   and need no cleanup.
- * ==========================================================================
+ * adapter/uboot-erofs selftest (TC-EROFS-001..008): returns the failure count (0 = all green)
+ * to br_plugin_manager_selftest(); each case logs `[EROFCONF] PASS/FAIL <tag> <desc>` and the
+ * summary logs `[EROFCONF] SUMMARY pass=N fail=M`.
+ * Criteria come from the public surface only (br_stat/br_open/br_file_read/br_file_lseek/
+ * br_opendir/br_readdir/br_unlink/br_mkdir), from on-disk bytes read via erofs_dev_read(), and
+ * from generative formulas (no large literals); dirents are asserted by name, not by count.
+ * WORKAROUND(br-wa-test-001): TC-EROFS-* is a self-assigned numbering outside the case table.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -36,9 +17,7 @@
 
 int uboot_erofs_selftest(void);
 
-/* =====================================================================
- * Summary and printing
- * ===================================================================== */
+/* ---- summary and printing ---- */
 
 static br_u32 s_pass;
 static br_u32 s_fail;
@@ -54,9 +33,7 @@ static void er_conf(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* =====================================================================
- * Small helpers (selftest's own; no dependency on runtime/posix)
- * ===================================================================== */
+/* ---- small helpers (selftest-local; no runtime/posix dependency) ---- */
 
 static br_size_t ef_strlen(const char *s)
 {
@@ -73,7 +50,6 @@ static br_bool ef_streq(const char *a, const char *b)
     return (uboot_erofs_strcmp(a, b) == 0) ? BR_TRUE : BR_FALSE;
 }
 
-/* Do all bytes of the buffer equal (seed + i) & 0xFF? */
 static br_bool ef_check_seq(const u8 *p, br_size_t n, br_size_t base)
 {
     for (br_size_t i = 0u; i < n; i++) {
@@ -84,7 +60,6 @@ static br_bool ef_check_seq(const u8 *p, br_size_t n, br_size_t base)
     return BR_TRUE;
 }
 
-/* Compressed fixture: byte i = "ABCDEFGH"[i % 8] */
 static u8 ef_lz4_byte(br_size_t i)
 {
     static const char pat[EROFS_FX_LZ4_PERIOD + 1u] = EROFS_FX_LZ4_PATTERN;
@@ -92,7 +67,7 @@ static u8 ef_lz4_byte(br_size_t i)
     return (u8)pat[i % (br_size_t)EROFS_FX_LZ4_PERIOD];
 }
 
-/* Compressed fixture: linear congruential formula for raw.bin (identical to the host script) */
+/* raw.bin byte i: linear congruential formula, identical to the host mkfs script. */
 static u8 ef_raw_byte(br_size_t i)
 {
     const br_u32 v = (br_u32)(((br_u64)i * 1103515245u) + 12345u);
@@ -100,10 +75,7 @@ static u8 ef_raw_byte(br_size_t i)
     return (u8)((v >> 16) & 0xFFu);
 }
 
-/*
- * Fetch one directory entry by name. `want_dir` = accept only directory entries (otherwise only non-directory entries).
- * Returns 1 = found, 0 = no such name, negative = errno.
- */
+/* Fetch one dirent by name: 1 = found, 0 = no such name, negative = errno. */
 static int ef_find_dirent(const char *dir_path, const char *name, br_u32 *type_out,
                           br_u64 *size_out)
 {
@@ -126,7 +98,7 @@ static int ef_find_dirent(const char *dir_path, const char *name, br_u32 *type_o
         }
         if (ef_streq(de.name, name) == BR_TRUE) {
             *type_out = de.type;
-            /* A directory entry carries no size (the contract's br_dirent_t has no such field) — caller does br_stat if needed */
+            /* br_dirent_t carries no size; caller does br_stat if needed. */
             *size_out = 0u;
             rc = 1;
             break;
@@ -136,7 +108,7 @@ static int ef_find_dirent(const char *dir_path, const char *name, br_u32 *type_o
     return rc;
 }
 
-/* Read a whole file (through the VFS) and compare against the generative criterion. `kind` selects the formula. */
+/* Read a whole file through the VFS; kind selects the generative formula to compare against. */
 static br_bool ef_read_whole(const char *path, br_u64 expect_size, br_u32 kind)
 {
     br_file_t *f = br_open(path, BR_O_RDONLY);
@@ -195,9 +167,7 @@ static br_bool ef_read_whole(const char *path, br_u64 expect_size, br_u32 kind)
     return BR_TRUE;
 }
 
-/* =====================================================================
- * Test cases
- * ===================================================================== */
+/* ---- test cases ---- */
 
 /* ---- TC-EROFS-001: mount table / superblock / root inode ---- */
 static void ef_tc001(void)
@@ -213,7 +183,7 @@ static void ef_tc001(void)
         }
     }
 
-    /* ★ On-disk fact: read the 4-byte magic at offset 1024 directly, no self-certifying with the parse result */
+/* On-disk fact: read the magic at offset 1024 directly, not via our own parse result. */
     u8 sb[16];
     br_u32 magic = 0u;
     const int rd = erofs_dev_read(0, sb, (u64)EROFS_SUPER_OFFSET, sizeof(sb));
@@ -223,7 +193,7 @@ static void ef_tc001(void)
                 ((br_u32)sb[3] << 24);
     }
 
-    /* Root inode: nid must really be a directory ("nid in range" alone is too weak) */
+/* Root nid must really be a directory ("nid in range" alone is too weak). */
     struct erofs_inode root;
     root.nid = sbi.root_nid;
     const int irc = erofs_read_inode_from_disk(&root);
@@ -253,7 +223,7 @@ static void ef_tc002(void)
     br_stat_t st;
     const int src = br_stat("/assets/" EROFS_FX_HELLO_PATH, &st);
 
-    /* Uncompressed flat criterion: layout is FLAT_INLINE / FLAT_PLAIN and content matches byte for byte */
+/* Flat criterion: layout is FLAT_INLINE/FLAT_PLAIN and content matches byte for byte. */
     struct erofs_inode vi;
     vi.nid = 0;
     const int lrc = erofs_ilookup(EROFS_FX_HELLO_PATH, &vi);
@@ -363,13 +333,8 @@ static void ef_tc005(void)
 
 /* ---- TC-EROFS-006: nonexistent ⇒ BR_NULL / -ENOENT; br_stat type/size correct ---- */
 
-/*
- * ★ Deliberately does **not** reuse one `br_stat_t` variable across calls: in the previous form
- *   `br_stat(a, &st); br_stat(b, &st); ...; (st.size == 12)` the last call overwrote the earlier
- *   result — so the criterion "always compared the last file's size" (measured: deep.txt's
- *   5 was compared against hello.txt's 12). This helper wraps "call + take snapshot immediately",
- *   so each path gets its own attributes.
- */
+/* Snapshot immediately after br_stat: reusing one br_stat_t across calls made every criterion
+ * compare the last file's size (deep.txt's 5 against hello.txt's 12). */
 static int ef_stat_snapshot(const char *path, br_stat_t *out)
 {
     br_stat_t st;
@@ -384,17 +349,16 @@ static void ef_tc006(void)
 {
     br_stat_t sd, sf, ss, sk;
 
-    /* Public surface: nonexistent path ⇒ -ENOENT (checked via both br_open and br_stat) */
+/* Nonexistent path -> -ENOENT, checked via both br_open and br_stat. */
     br_file_t *nf = br_open("/assets/no-such-file", BR_O_RDONLY);
     const int  nst = ef_stat_snapshot("/assets/no-such-file", &sd);
 
-    /* Type/size: one independent snapshot per path */
     const int dird = ef_stat_snapshot("/assets/dir", &sd);
     const int fild = ef_stat_snapshot("/assets/" EROFS_FX_HELLO_PATH, &sf);
     const int subd = ef_stat_snapshot("/assets/dir/sub", &ss);
     const int deep = ef_stat_snapshot("/assets/" EROFS_FX_DEEP_PATH, &sk);
 
-    /* Internal surface: "no such name" must be distinct from "read failure" (upstream uses ERR_PTR, this file uses errno) */
+/* "No such name" differs from "read failure": upstream uses ERR_PTR, this file errno. */
     struct erofs_inode vi;
     vi.nid = 0;
     const int lrc = erofs_ilookup("dir/not-here.txt", &vi);
@@ -412,7 +376,7 @@ static void ef_tc006(void)
             "lookup nonexistent ⇒ BR_NULL (vfs gets -ENOENT); br_stat type and size correct for dirs/files");
 }
 
-/* ---- TC-EROFS-007: read-only enforcement ---- */
+/* ---- TC-EROFS-007: read-only enforcement (mutation calls return -EROFS, write nothing) ---- */
 static void ef_tc007(void)
 {
     br_file_t *w  = br_open("/assets/" EROFS_FX_HELLO_PATH, BR_O_WRONLY);
@@ -426,7 +390,7 @@ static void ef_tc007(void)
     const int  sl = br_symlink("target", "/assets/newlink");
     const int  lk = br_link("/assets/" EROFS_FX_HELLO_PATH, "/assets/hardlink.txt");
 
-    /* A directory can indeed be opened read-only (don't make "read-only" mean "cannot open") */
+/* A directory can be opened read-only ("read-only" must not mean "cannot open"). */
     const br_bool dirok = (df != BR_NULL) ? BR_TRUE : BR_FALSE;
     if (df != BR_NULL) {
         (void)br_file_close(df);
@@ -446,12 +410,11 @@ static void ef_tc007(void)
 /* ---- TC-EROFS-008: whole-file read across extents + size boundary (read == 0 after EOF) ---- */
 static void ef_tc008(void)
 {
-    /* raw.bin is a compressed 8192 B (2 blocks) file ⇒ a whole-file read must cross extents; a.bin is a
-     * 4096 B flat file ⇒ a whole-file read covers both "full block + block boundary" paths. */
+/* raw.bin (8192 B, 2 blocks) crosses extents; a.bin (4096 B flat) covers block boundaries. */
     const br_bool raw_ok  = ef_read_whole("/assets/" EROFS_FX_RAW_PATH, EROFS_FX_RAW_SIZE, 1u);
     const br_bool abin_ok = ef_read_whole("/assets/" EROFS_FX_ABIN_PATH, EROFS_FX_ABIN_SIZE, 2u);
 
-    /* size boundary: after lseek to EOF (and past EOF) read must return 0, **not** an error */
+/* Size boundary: after lseek to EOF and past EOF, read returns 0, not an error. */
     br_file_t *f = br_open("/assets/" EROFS_FX_LZ4_PATH, BR_O_RDONLY);
     br_bool eof_ok = BR_FALSE;
     br_bool past_ok = BR_FALSE;
@@ -476,9 +439,7 @@ static void ef_tc008(void)
             "raw.bin(8192)/a.bin(4096) whole-file byte for byte; read == 0 at SEEK_END and past EOF");
 }
 
-/* =====================================================================
- * Entry point
- * ===================================================================== */
+/* ---- entry point ---- */
 
 int uboot_erofs_selftest(void)
 {

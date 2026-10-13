@@ -1,35 +1,18 @@
 /*
- * brickOS prototype v0.2.0 — **self-test suite** for service/memleak
- * (service/memleak/src/memleak_selftest.c)
+ * Self-test suite for service/memleak: its own cases TC-DBG-040..043. All four exercise only the
+ * public surface (br_memleak_live / live_by_owner / owner / report / corruptions, plus core's heap
+ * observation contract in br_mem.h), so no *_internal.h is needed; the s_ml_pass/s_ml_fail and
+ * ml_report/ml_case_* helpers are case-private and static here.
  *
- * Design basis and rulings: `docs/decisions/0010-plugin-selftest.md` (self-test separated from
- * production code).
- * This file holds the cases (TC-DBG-040..043) **moved verbatim** out of `memleak.c`: case id,
- * assertions and log strings are unchanged word for word — the gate `tests/gates.toml` decides
- * red/green by `[DBGCONF] PASS/FAIL` and require_tags.
- *
- * ## Boundary (this plugin does **not** need a `*_internal.h`)
- *   All four cases exercise only the **public surface**: this plugin's `br_memleak_live` /
- *   `br_memleak_live_by_owner` / `br_memleak_owner` / `br_memleak_report` /
- *   `br_memleak_corruptions`, plus core's heap observation contract (`br_mem.h`). The
- *   `s_ml_pass/s_ml_fail/ml_report/ml_case_*` that used to share a file with the cases are
- *   **case-private**, so they moved here directly (static) and the production file no longer
- *   carries them — there are no production-private symbols to expose.
- *
- * ## Contract with the plugin manager
- *   Returns the **number of failures** (0 = all green); it logs its own lines (`[DBGCONF]
- *   PASS/FAIL` + this plugin's SUMMARY). **A failure does not halt** — the gate decides
- *   red/green (`[DBGCONF] FAIL` is in the forbid list of `tests/gates.toml`). The entry name
- *   `memleak_selftest` is derived from the generated code by `symbol_prefix` (see `.selftest`
- *   in plugin_desc.c); it is not this plugin's public API.
+ * Returns the failure count (0 = all green) and logs [DBGCONF] PASS/FAIL plus its SUMMARY;
+ * a failure does not halt. The entry name memleak_selftest is derived by the generated code from
+ * symbol_prefix; it is not this plugin's public API.
  */
 #include <br/core/br_log.h>
 #include <br/core/br_mem.h>
 #include <br/core/br_types.h>
 #include <br/debug/br_memleak.h>
 
-/* Entry prototype (declarations live in the generated code; repeated here only to satisfy the
- * prototype discipline for global functions). */
 int memleak_selftest(void);
 
 static br_u32 s_ml_pass;
@@ -46,12 +29,8 @@ static void ml_report(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/*
- * TC-DBG-040: a real leak is detectable.
- * "Dropping the pointer" on purpose means the criterion uses only core's observation
- * (br_heap_walk / report), not the return value; but the case still frees that address at the
- * end, leaving no real leak in the system (a case is a criterion, not a scene to wreck).
- */
+/* TC-DBG-040: a real leak is detectable. The pointer is deliberately dropped, so the criterion uses
+ * only core's observation; it is still freed at the end, leaving no real leak behind. */
 static void ml_case_040(void)
 {
     const br_u32     live0 = br_memleak_live();
@@ -62,8 +41,7 @@ static void ml_case_040(void)
     br_u32           mine1;
     br_u32           rep;
 
-    /* The owner tag must really be registered, else this case degenerates into counting
-     * unowned blocks */
+    /* The owner tag must really be registered, else this case counts unowned blocks */
     ml_report(br_memleak_owner() != BR_OWNER_NONE, "TC-DBG-040",
               "owner tag registered (br_memleak_owner != NONE)");
 
@@ -78,22 +56,16 @@ static void ml_case_040(void)
     ml_report(leaked != BR_NULL, "TC-DBG-040", "br_malloc(123) succeeded (pointer deliberately dropped)");
     ml_report(mine1 >= mine0 + 1u, "TC-DBG-040",
               "live blocks for this owner >= baseline+1 (br_memleak_live_by_owner)");
-    /* report's live is the printed figure and must match independent observation; the delta
-     * can only come from this owner */
+    /* report live is the printed figure; the delta can only come from this owner */
     ml_report((rep == live1) && ((live1 - live0) == (mine1 - mine0)), "TC-DBG-040",
               "report live matches observation and the delta has a single owner");
 
     br_free(leaked);   /* return the heap to a clean state */
 }
 
-/*
- * TC-DBG-041: a red-zone overflow is detectable.
- * Relies on core's block layout convention: user area p..p+size-1 with the red zone
- * immediately after ⇒ for a 64 B request the first overflow byte lands at p+64; the red zone
- * fill value is 0xA5 (see the block layout comment in core's mem.c).
- * The case restores that byte at the end — otherwise the heap would enter later cases with
- * "damage that cannot be repaired".
- */
+/* TC-DBG-041: a red-zone overflow is detectable. Core's layout puts the red zone immediately after
+ * the user area, so for a 64 B request the first overflow byte is p+64, filled with 0xA5. The case
+ * restores that byte, otherwise later cases would see unreparable damage. */
 static void ml_case_041(void)
 {
     void           *p = br_malloc(64u);
@@ -119,11 +91,8 @@ static void ml_case_041(void)
     br_free(p);
 }
 
-/*
- * TC-DBG-042: double free is detectable and does not corrupt the heap.
- * The second free must be intercepted by core's double-free guard (double_free counter), and
- * the block chain must stay consistent, still allowing one more normal alloc/free.
- */
+/* TC-DBG-042: double free is detectable and does not corrupt the heap. Core's guard must intercept
+ * the second free and keep the block chain consistent, allowing one more normal alloc/free. */
 static void ml_case_042(void)
 {
     void            *p = br_malloc(32u);
@@ -154,12 +123,9 @@ static void ml_case_042(void)
     ml_report(ok, "TC-DBG-042", "after the double free one more normal alloc/free still works");
 }
 
-/*
- * TC-DBG-043: accounting matches.
- * The delta criterion uses actual observation: the used delta for 10 × 100 B is >= 1000 (each
- * block also carries header/footer/red zone, so it is actually larger); after everything is
- * returned it must come back to the baseline **exactly** (not relaxed to <=).
- */
+/* TC-DBG-043: accounting matches. The used delta for 10 x 100 B is >= 1000 (each block also carries
+ * header/footer/red zone, so larger); after everything is returned it must come back to the
+ * baseline exactly, not relaxed to <=. */
 static void ml_case_043(void)
 {
     br_size_t u0 = 0u, total0 = 0u;
@@ -204,10 +170,7 @@ int memleak_selftest(void)
 
     br_log_info("[DBGCONF] info memleak selftest (TC-DBG-040..043)");
 
-    /* Idempotent: this suite carries its own init (owner-tag registration), so it holds under
-     * any call order — no longer relying on "some orchestrator runs all four inits first"
-     * (that orchestration was handed to plugin_manager per ADR-0010: plugin inits complete
-     * before the START phase, self-tests are driven uniformly after START). */
+    /* Idempotent: the suite carries its own owner-tag init, so it holds under any call order. */
     (void)br_memleak_init();
 
     ml_case_040();
@@ -215,8 +178,7 @@ int memleak_selftest(void)
     ml_case_042();
     ml_case_043();
 
-    /* plugin-owned summary line (the gate only recognizes the `[DBGCONF] SUMMARY ... fail=0`
-     * form) */
+    /* plugin-owned summary line (the gate only recognizes the `[DBGCONF] SUMMARY fail=0` form) */
     br_log_info("[DBGCONF] SUMMARY memleak pass=%u fail=%u total=%u",
                 s_ml_pass, s_ml_fail, s_ml_pass + s_ml_fail);
     return (int)s_ml_fail;

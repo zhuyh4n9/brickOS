@@ -1,26 +1,9 @@
 /*
- * brickOS prototype v0.2.0 — plugin-manager selftest suite (core-private; TC-PLUG-*)
- *
- * Moved verbatim from `core/src/plugin/plugin_mgr.c` (ADR-0010): the cases, case ids
- * (`TC-PLUG-001/002/003/002b`) and logs are unchanged —— the gate `tests/gates.toml`
- * judges red/green from `[PLGCONF] PASS/FAIL`, `[PLGCONF] SUMMARY` and require_tags.
- *
- * Why it moved out of the production file:
- *   - the production file keeps only the mechanism (segment scan/topology/phase
- *     driving) and no longer carries cases;
- *   - with selftest off, the whole `core/selftest/` directory is not compiled ⇒ test
- *     code does not enter the image (not merely does not run);
- *   - the entry no longer enters `br_plugin.h`: a test surface in the golden interface
- *     would make "change one case" an interface change.
- *
- * White-box access path: `../src/plugin/plugin_mgr_internal.h`. ★ It reads real state
- * and the real algorithm: the TC-PLUG-002b negative case runs the very `topo_sort()`
- * in plugin_mgr.c (not a copy), otherwise the negative case would only prove that a
- * copy reports a cycle. See that header for the exposed list and rationale.
- *
- * Entry contract (same as `br_plugin_manager_selftest` for plugin selftests): returns
- * the number of failed items (0 = all green), records without stopping —— red/green is
- * judged by the gate (ADR-0010 §2.4).
+ * Plugin-manager selftest suite (core-private; TC-PLUG-001/002/003/002b). The gate judges
+ * red/green from [PLGCONF] PASS/FAIL, [PLGCONF] SUMMARY and require_tags.
+ * White-box access via ../src/plugin/plugin_mgr_internal.h; TC-PLUG-002b runs the real
+ * topo_sort() from plugin_mgr.c, not a copy.
+ * Returns the number of failed items (0 = all green); never stops early.
  */
 #include <br/core/br_log.h>
 #include <br/core/br_plugin.h>
@@ -28,8 +11,6 @@
 
 #include "../src/plugin/plugin_mgr_internal.h"
 
-/* Entry prototype (declarations are centralized in `core_selftest.c`; restated here only
- * to satisfy the global-function prototype discipline). */
 int br_plugin_selftest(void);
 
 static br_u32 s_pc_pass;
@@ -47,10 +28,9 @@ static void pc_report(br_bool ok, const char *tag, const char *what)
 }
 
 /*
- * Negative-case fixture for TC-PLUG-002b: a 3-node cycle (a→b→c→a) and a 3-node DAG (c→b→a).
- * WORKAROUND(br-wa-test-001): this suite's `TC-PLUG-*` ids are self-assigned (6-01 has no
- * such group); the descriptive text is the actual criterion; per-item alignment with the
- * design table is in WORKAROUNDS.md under br-wa-test-001.
+ * Negative-case fixture for TC-PLUG-002b: a 3-node cycle (a->b->c->a) and a 3-node DAG (c->b->a).
+ * WORKAROUND(br-wa-test-001): the TC-PLUG-* ids are self-assigned; the descriptive text is the
+ * criterion (alignment with the design table is in WORKAROUNDS.md).
  */
 static br_bool cycle_negative_case(void)
 {
@@ -60,8 +40,7 @@ static br_bool cycle_negative_case(void)
     br_u16 cycle[BR_PLUGIN_MAX];
     br_u32 clen = 0u;
 
-    /* (a) the cycle must be detected, with the complete path reported: 3 nodes + closing
-     * entry = 4 items. */
+    /* (a) the cycle must be detected with the complete path: 3 nodes + closing entry = 4 items. */
     if (topo_sort(3u, cyc, 3u, order, cycle, &clen)) {
         return BR_FALSE;
     }
@@ -81,8 +60,7 @@ static br_bool cycle_negative_case(void)
         }
     }
 
-    /* (b) negative control: the same algorithm must order the acyclic graph as c→b→a
-     * (otherwise "always reports a cycle" would also be a false green). */
+    /* (b) negative control: the same algorithm must order the acyclic graph as c->b->a. */
     if (!topo_sort(3u, dag, 2u, order, cycle, &clen)) {
         return BR_FALSE;
     }
@@ -106,14 +84,14 @@ int br_plugin_selftest(void)
             total = br_plugin_gen_total;
             ok = ok && (count == total);
         } else {
-            ok = BR_FALSE;   /* generated count symbol absent = descriptors are not generated ⇒ explicit red */
+            ok = BR_FALSE;   /* generated count symbol absent = descriptors are not generated => explicit red */
         }
         br_log_info("[PLGCONF] descriptors=%u gen_total=%u", count, total);
         pc_report(ok, "TC-PLUG-001",
                   "segment non-empty and count == generated count (generated count symbol present)");
     }
 
-    /* ---- TC-PLUG-002: topological order satisfies every init edge (per-edge check, report the edge) ---- */
+    /* ---- TC-PLUG-002: topological order satisfies every init edge (per-edge check) ---- */
     {
         br_bool ok = s_sorted;
         const char *bad_from = BR_NULL;
@@ -121,7 +99,7 @@ int br_plugin_selftest(void)
         for (br_u32 e = 0u; e < s_edge_count && ok; e++) {
             const br_u16 f = s_edges[e].from;
             const br_u16 t = s_edges[e].to;
-            /* from depends on to ⇒ to must come earlier */
+            /* from depends on to => to must come earlier */
             if (!(s_pos[t] < s_pos[f])) {
                 ok = BR_FALSE;
                 bad_from = s_plugins[f]->name;
@@ -135,28 +113,9 @@ int br_plugin_selftest(void)
         pc_report(ok, "TC-PLUG-002", "topological order satisfies all init edges (per-edge check)");
     }
 
-    /* ---- TC-PLUG-003: phase monotonicity + order invariants (APP last / selftest after all starts) ----
-     *
-     * ★ The third cell of this case changed criterion after ADR-0010; the story is worth
-     *   keeping, or the next reader will think it was weakened:
-     *   The old criterion `s_app_start_last_ok && s_in_app_start` asserted "all non-APP
-     *   starts finished, AND this case is running inside APP's start" —— at that time
-     *   selftest was called by APP's start, so "I am running in APP's start" was the
-     *   self-witness of that call site.
-     *   Now selftest is driven by `br_plugin_manager_selftest()` after ALL starts have
-     *   returned (ADR-0010 §2.2), so `s_in_app_start` is always BR_FALSE ⇒ the old
-     *   criterion can structurally never hold.
-     *   The new criteria assert the same fact in another direction, and more strongly:
-     *     - `s_app_start_last_ok` still asserts the combination rule "APP last" was
-     *       honored in the START phase (a historical fact recorded at that time,
-     *       independent of when selftest runs);
-     *     - `s_in_app_start == BR_FALSE` asserts selftest does NOT run inside any
-     *       plugin's start —— exactly the new call site's contract (old asserted
-     *       "inside", new asserts "outside"; both are self-witnesses);
-     *     - `br_plugin_phase_reached() == BR_PHASE_APP` asserts the phase reached APP ⇒
-     *       the START phase really finished, rather than "selftest ran before it started".
-     *   Together = "all STARTs completed, and selftest happens after", matching the
-     *   ADR-0010 ruling. */
+    /* ---- TC-PLUG-003: phase monotonicity + order invariants (APP last / after all starts) ----
+     * selftest runs after every start returned, so s_in_app_start is always BR_FALSE; reaching
+     * BR_PHASE_APP self-witnesses that the START phase finished. */
     {
         br_bool ok = BR_TRUE;
         for (br_u32 e = 0u; e < s_edge_count; e++) {

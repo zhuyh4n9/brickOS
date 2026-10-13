@@ -1,11 +1,7 @@
-"""Presentation layer: render ``data`` into human-readable text; ``--json`` emits the same ``data`` + diagnostics (same source).
+"""Presentation layer: render ``data`` as text; ``--json`` serializes the same ``data``.
 
-**Presentation discipline** (contract §8 / BRV-D2 discipline 2): text output and ``--json``
-are **two serializations of the same ``data``**. So every renderer here reads only ``data`` and
-the write results (``extra``), and **re-decides nothing** -- verdicts and codes come from the native side.
-
-Diagnostic text format follows the first cut's ``_emit_diagnostics_text`` (severity label + code + location);
-under ``--json`` the diagnostics array is **stably sorted** by ``(code, file, span, target)`` (contract §3).
+Renderers read only ``data`` and the write results (``extra``) and re-decide nothing -- verdicts and
+codes come from core. Diagnostic text is one line per diagnostic (severity + code + location).
 """
 
 from __future__ import annotations
@@ -15,11 +11,8 @@ import json
 _SEVERITY_LABEL = {"error": "error", "warning": "warning", "info": "note"}
 
 
-# ------------------------------------------------------------------ diagnostics
-
-
 def sort_diagnostics(diagnostics: list[dict]) -> list[dict]:
-    """Stable sort by ``(code, file, span, target)`` (contract §3; snapshot precondition for V-9)."""
+    """Stable sort by ``(code, file, span, target)``; snapshot precondition for V-9."""
 
     def key(diag: dict) -> tuple[str, str, str, str]:
         return (
@@ -51,9 +44,6 @@ def emit_diagnostics_text(diagnostics: list[dict]) -> str:
     return "\n".join(lines)
 
 
-# ------------------------------------------------------------------ JSON
-
-
 def json_payload(
     *,
     command: str,
@@ -76,9 +66,6 @@ def json_payload(
 
 def emit_json(payload: dict) -> str:
     return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=False)
-
-
-# ------------------------------------------------------------------ helpers
 
 
 def _as_list(value: object) -> list:
@@ -124,7 +111,7 @@ def _table(headers: list[str], rows: list[list[object]]) -> list[str]:
 
 
 def _footer(extra: dict, lines: list[str]) -> list[str]:
-    """Unified write-results section (the same written/unchanged/skipped also go into ``--json``)."""
+    """Write-results section: written/unchanged/skipped counts (same facts go into ``--json``)."""
     written = _as_list(extra.get("written"))
     unchanged = _as_list(extra.get("unchanged"))
     skipped = _as_list(extra.get("skipped"))
@@ -144,16 +131,13 @@ def _section(title: str, lines: list[str]) -> list[str]:
     return []
 
 
-# ------------------------------------------------------------------ renderers
-
-
 def _render_plan(data: dict, extra: dict, title: str, title_failed: str) -> list[str]:
     artifacts = [a for a in _as_list(data.get("artifacts")) if isinstance(a, dict)]
     written = set(_as_list(extra.get("written")))
     unchanged = set(_as_list(extra.get("unchanged")))
     skipped = set(_as_list(extra.get("skipped")))
 
-    # On non-zero exit we must not claim "generated" -- title and JSON exit_code share one source (the same data)
+    # Non-zero exit must not claim "generated": title and JSON exit_code share one source.
     ok = bool(extra.get("ok", True))
     lines = [title if ok else title_failed]
     if not artifacts:
@@ -517,7 +501,7 @@ def _render_version(data: dict, extra: dict) -> list[str]:
 
 
 def _render_build(data: dict, extra: dict) -> list[str]:
-    """Human-readable presentation of `brickie build`: target facts / units / step counts / tools / outputs."""
+    """Human-readable ``brickie build``: target facts, units, step counts, outputs."""
     ok = bool(extra.get("ok", True))
     profile = _fmt(data.get("profile"))
     backend = _fmt(data.get("backend"))
@@ -603,7 +587,7 @@ def _render_test(data: dict, extra: dict) -> list[str]:
 
 
 def _render_size(data: dict, extra: dict) -> list[str]:
-    # The size table is printed to stdout directly by the executor (that is `size`'s real output) -- do not repeat it here.
+    # `size` prints its table to stdout from the executor; do not repeat it here.
     return []
 
 
@@ -616,10 +600,9 @@ def _render_run(data: dict, extra: dict) -> list[str]:
 
 
 def _render_generic(data: dict, extra: dict) -> list[str]:
-    """Fallback presentation for untyped ``data``: scalars line by line, compound structures as indented JSON.
+    """Fallback for untyped ``data``: scalars line by line, compound structures as indented JSON.
 
-    This keeps orchestration/presentation from raising even when a core command is not implemented yet;
-    commands whose field names are fixed by contract §5 use the dedicated renderers above.
+    Commands with no dedicated renderer land here, so presentation never raises.
     """
     lines = [f"{extra.get('title', 'result')}:"]
     if not data:
@@ -634,8 +617,6 @@ def _render_generic(data: dict, extra: dict) -> list[str]:
             lines.extend(f"    {line}" for line in block.splitlines())
     return _footer(extra, lines)
 
-
-# ------------------------------------------------------------------ dispatch
 
 _RENDERERS = {
     "check": _render_check,

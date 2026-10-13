@@ -1,37 +1,15 @@
 #!/usr/bin/env bash
-#
-# brickOS prototype — gate for iface/posix **matching POSIX** (ADR-0028)
-#
-# Why it is needed:
-#   `iface/posix` is the POSIX surface the APP sees (it re-exports the
-#   `runtime/posix` headers verbatim).
-#   Once these headers are **inconsistent** with real POSIX, the consequence is
-#   not "it fails to build" but something **worse**:
-#     - different type widths => the same code sees different layouts on the two sides (silent bad values);
-#     - different constants => the same flag bit means different things on the two sides;
-#     - a missing required name (e.g. STDIN_FILENO) => ported POSIX code fails to build.
-#   None of this can be found by "reading the headers once" — you must
-#   **compare against host POSIX item by item**.
-#
-# Criteria (four, all against host glibc):
-#   (1) **type widths**: `size_t/ssize_t/off_t/dev_t/blksize_t/...` match host sizeof one by one;
-#   (2) **constants**: values of constants the APP may compare or pass
-#       (`O_*`/`S_I*`/`DT_*`/`SEEK_*`/`FD_*`) match the host;
-#   (3) **function signatures**: every POSIX function declared in this repo must be
-#       **assignment-compatible** with the host function of the same name
-#       (method: include only host headers, cast our prototype to a function pointer
-#       type and assign the host function => a mismatch is a compile error);
-#   (4) **struct members**: the POSIX-required members of `struct stat` / `struct dirent`
-#       are **present** with the correct **type width**.
-#       * Do **not** compare field offsets: POSIX does not prescribe the member order of
-#         `struct stat` (that is implementation freedom); using glibc offsets as the
-#         criterion would mistake "glibc's ABI" for "a POSIX requirement".
-#
-# Whitelist: a few constants with **intentional deviations** (the reason must be
-# stated in the table below, otherwise it is red).
-#
-# Usage: bash tools/check-posix-conformance.sh
-# Exit code: 0 = all pass, 1 = deviations found, 2 = usage/environment error
+# brickOS prototype — gate for iface/posix matching POSIX (all criteria against host glibc):
+#   (1) type widths match host sizeof one by one; (2) O_*/S_I*/DT_*/SEEK_*/FD_* values match host;
+#   (3) every POSIX function declared here is assignment-compatible with the host function of the
+#       same name (host headers alone; our prototype cast to a function pointer and assigned);
+#   (4) POSIX-required members of struct stat / struct dirent are present with the right width --
+#       field offsets are not compared, since POSIX does not prescribe member order.
+# iface/posix is the surface the APP sees (it re-exports the runtime/posix headers verbatim); a
+# divergence does not fail the build but is worse: mismatched widths/constants mean the same code
+# sees different values on the two sides, and a missing required name breaks ported code.
+# Whitelisted constants carry their reason in the table below.
+# Usage: bash tools/check-posix-conformance.sh; exit 0 pass, 1 deviations, 2 environment error.
 set -uo pipefail
 
 cd "$(dirname "$0")/.." || exit 2
@@ -44,7 +22,7 @@ INC = ROOT/"runtime/posix/include"
 CORE_INC = ROOT/"core/include"
 PLAT_INC = ROOT/"platform/qemu-aarch64/include"
 
-# ---- whitelist of intentional deviations: name -> reason (must state "why it may differ") -----
+# ---- whitelist of intentional deviations: name -> reason ("why it may differ") ----
 ALLOW = {
     "FD_SETSIZE":
         "this repo's fd table bound is BR_FT_MAX=32 (fd 0..31), FD_SETSIZE=64 already covers **every valid fd**"
@@ -101,7 +79,7 @@ def cc(prog, incs, extra=()):
     r = run(argv)
     return r
 
-# ============================================================ (1) type widths
+# ---- (1) type widths ----
 prog = "#include <sys/types.h>\n#include <sys/stat.h>\n#include <unistd.h>\n#include <stdio.h>\nint main(void){\n"
 for t in TYPES:
     prog += f' printf("{t} %zu\\n", sizeof({t}));\n'
@@ -123,7 +101,7 @@ for t in TYPES:
     if o != h:
         fails.append(f"type {t}: this repo {o} B, POSIX {h} B")
 
-# ============================================================ (2) constants
+# ---- (2) constants ----
 names = list(CONSTS)
 prog = "#define _GNU_SOURCE\n#include <fcntl.h>\n#include <sys/stat.h>\n#include <dirent.h>\n" \
        "#include <unistd.h>\n#include <sys/select.h>\n#include <stdio.h>\nint main(void){\n"
@@ -169,7 +147,7 @@ for n in names:
         if n in ALLOW: continue
         fails.append(f"constant {n}: this repo {o}, POSIX {h}")
 
-# ============================================================ (3) function signatures
+# ---- (3) function signatures ----
 proto_re = re.compile(r"^\s*([A-Za-z_][\w \t\*]*?)\s+([a-z_]\w*)\s*\(([^;{]*)\)\s*;", re.M)
 checked = 0
 for hdr, host_inc in HDR_FOR_SIG.items():
@@ -192,7 +170,7 @@ for hdr, host_inc in HDR_FOR_SIG.items():
             elif "undeclared" in r.stderr:
                 fails.append(f"signature {hdr}:{name}: host has no such symbol (invented here?)")
 
-# ============================================================ (4) struct members
+# ---- (4) struct members ----
 for st, members in STRUCT_MEMBERS.items():
     prog = ("#define _GNU_SOURCE\n#include <sys/stat.h>\n#include <dirent.h>\n#include <stdio.h>\n"
             "int main(void){\n")
@@ -216,7 +194,7 @@ for st, members in STRUCT_MEMBERS.items():
         if o != h:
             fails.append(f"struct {st}.{mem}: this repo {o} B, POSIX {h} B")
 
-# ============================================================ summary
+# ---- summary ----
 if fails:
     print(f"FAIL: iface/posix does not match POSIX ({len(fails)} items):", file=sys.stderr)
     for f_ in fails:

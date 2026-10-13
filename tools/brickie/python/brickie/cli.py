@@ -1,33 +1,8 @@
 """brickie CLI (L5 front-end).
 
-## Division of labor (contract §8 / checklist V-18c)
-
-This module **only**: parses arguments (usage error ⇒ exit 2), calls
-``brickie-core``/``brickie-gen``, orchestrates (schema shape check → core → gen render →
-write → present), and aggregates exit codes. **All decisions and codes come from core** —
-no closure/version/taxonomy/privilege/hash rules live here.
-
-## Orchestration shape
-
-Every command is the same pipeline:
-
-    optional schema shape check (BRV-MF-0001 / exit code 2)
-      → brickie-core <command> (judgment + data + files)
-      → if data.artifacts: brickie-gen render (render content)
-      → write (idempotent; --check compares only ⇒ mismatch exits 1)
-      → present (text and --json share one source)
-
-## Command surface (29 leaves + 2 global flags, two families)
-
-**Composition family** (23 leaves): ``new`` / ``init`` / ``gen`` / ``dep {add,rm,tree,graph,why,index,closure}`` /
-``check`` / ``ver {show,bump}`` / ``iface {list,show,diff,status,publish,freeze,deprecate,
-undeprecate,unfreeze,refreeze}`` / ``--version [--deps]`` / ``--json``.
-
-**Build family** (6 leaves, ADR-0004): ``build`` / ``clean`` / ``run`` / ``size`` / ``disasm`` / ``test``.
-
-Commands checklist §5.4 explicitly excludes appear nowhere here (undelivered commands must
-not show up in ``--help``, §5.5 reverse acceptance); ``build``/``test``/``run`` are delivered
-by ADR-0004, so they left the forbidden-name list.
+Parses args (usage error ⇒ exit 2) and orchestrates core/gen; every decision and code comes
+from core. Pipeline: shape check (BRV-MF-0001 / exit 2) → core → gen render → write
+(idempotent; --check compares only ⇒ exit 1) → present; undelivered commands stay out of ``--help``.
 """
 
 from __future__ import annotations
@@ -42,7 +17,6 @@ from . import PROTOCOL, __version__
 from . import native, present, runner, schema, writer
 from .native import NativeError
 
-# argparse usage errors share the exit code 2 of BRV-D9
 _EXIT_OK = 0
 _EXIT_RED = 1        # validation red (cycle / conflict / version / taxonomy / privilege / --check mismatch)
 _EXIT_USAGE = 2      # usage or environment error (bad args / shape mismatch / missing path / missing native build)
@@ -77,16 +51,13 @@ class Result:
     extra: dict = field(default_factory=dict)
 
 
-# ------------------------------------------------------------------ parser
+# ---- parser ----
 
 
 def _add_common(parser: argparse.ArgumentParser, *, with_defaults: bool) -> None:
-    """``--json`` and ``--root`` are attached to the root, command groups and each leaf.
+    """``--json`` / ``--root`` on the root, groups and leaves (both spellings accepted).
 
-    Rationale: checklist §5.3 **X-8** (is ``--json`` a global flag or per-command) is not yet
-    decided — both spellings are accepted. Subcommands must use the ``SUPPRESS`` default,
-    otherwise "root got ``--json``, leaf writes back the False default" swallows the global flag.
-    """
+    Subcommands need ``SUPPRESS``, else the leaf's ``False`` default swallows the global flag."""
     if with_defaults:
         parser.add_argument("--json", action="store_true", default=False,
                             help="machine-readable output (JSON to stdout; diagnostics in the same envelope)")
@@ -100,7 +71,6 @@ def _add_common(parser: argparse.ArgumentParser, *, with_defaults: bool) -> None
 
 
 def _leaf(sub: argparse._SubParsersAction, name: str, help_: str, description: str | None = None):
-    """Add a leaf command parser carrying the common flags."""
     parser = sub.add_parser(name, help=help_, description=description or help_)
     _add_common(parser, with_defaults=False)
     return parser
@@ -120,7 +90,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub = parser.add_subparsers(dest="command", metavar="<command>")
 
-    # ---------------------------------------------------------- skeleton generation
     new = _leaf(sub, "new", "generate a plugin skeleton (§8.4)",
                 "Generate a plugin skeleton: brick.toml + impl/headers/tests/author notes + descriptor artifacts.")
     new.add_argument("plugin_type", metavar="<plugin_type>",
@@ -144,10 +113,6 @@ def build_parser() -> argparse.ArgumentParser:
     gen.add_argument("--check", action="store_true",
                      help="compare only, write nothing; mismatch with recomputation ⇒ exit code 1")
 
-    # ---------------------------------------------------------- build family (ADR-0004)
-    # One **explicit deviation** from the boundary discipline: v0.1's "no command may require
-    # cc/cargo/nm to be present" means **composition-time** commands (contract §9 R-13); the
-    # build family is precisely the one that requires the cross compiler to be present.
     build = _leaf(sub, "build", "build the image (declaration-surface driven; replaces make's composition part)",
                   "Build an aarch64 image: composition check → artifacts → compile/link → post-build gates.")
     build.add_argument("--profile", default=None, metavar="<profile>",
@@ -188,7 +153,6 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("--jobs", "-j", type=int, default=0, metavar="N")
     test.add_argument("--no-build", action="store_true", help="do not build first, run gates directly")
 
-    # ---------------------------------------------------------- dep family
     dep = sub.add_parser("dep", help="dependency management and analysis (§7.7)",
                          description="Dependency management and analysis: snippet / tree / graph / path / index / closure.")
     _add_common(dep, with_defaults=False)
@@ -222,7 +186,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     _leaf(dep_sub, "closure", "product closure + topological order + budget totals (§7.6)")
 
-    # ---------------------------------------------------------- check
     check = _leaf(sub, "check", "composition-time validation (§7.7)",
                   "Composition-time validation: dependency closure / interface / taxonomy / privilege and budget, incl. profile gates (§7.5).")
     check.add_argument("--deps", dest="scope_deps", action="store_true", help="check the dependency domain only")
@@ -232,7 +195,6 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--all", dest="scope_all", action="store_true", help="all four domains (default)")
     check.add_argument("--profile", default="dev", metavar="<profile>", help="dev (default) | release")
 
-    # ---------------------------------------------------------- ver family
     ver = sub.add_parser("ver", help="version management (§5 / §7.7)",
                          description="Version management: show the four-part version and COMPAT_GEN source / manual declaration advance.")
     _add_common(ver, with_defaults=False)
@@ -247,7 +209,6 @@ def build_parser() -> argparse.ArgumentParser:
     ver_bump.add_argument("--rule", required=True, metavar="<rule>",
                           help="major | minor | revise (COMPAT_GEN is not among them)")
 
-    # ---------------------------------------------------------- iface family
     iface = sub.add_parser("iface", help="interface publication and freeze state (§6.5)",
                            description="Interface units: inspect / change set / consistency / publish / freeze and unfreeze window.")
     _add_common(iface, with_defaults=False)
@@ -301,7 +262,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-# ------------------------------------------------------------------ common orchestration
+# ---- common orchestration ----
 
 
 def _enum(value: str, allowed: tuple[str, ...], flag: str) -> str:
@@ -312,7 +273,7 @@ def _enum(value: str, allowed: tuple[str, ...], flag: str) -> str:
 
 
 def _split_entry(raw: str) -> tuple[str, str | None]:
-    """``<provider>#<unit>[#<entry>]`` → ``(id, entry|None)`` (§6.5's ``<id>[#entry]``)."""
+    """``<provider>#<unit>[#<entry>]`` → ``(id, entry|None)``."""
     parts = raw.split("#")
     if len(parts) == 2 and all(parts):
         return f"{parts[0]}#{parts[1]}", None
@@ -343,7 +304,7 @@ def _call_core(command: str, root: Path, args: dict, context: dict | None = None
 
 
 def _shape_gate(root: Path, kinds: tuple[str, ...]) -> list[dict]:
-    """Optional single-record shape check (BRV-D2 / BRV-MF-0001)."""
+    """Optional single-record shape check (BRV-MF-0001)."""
     if not kinds:
         return []
     if not schema.any_schema_available():
@@ -359,7 +320,7 @@ def _has_error(diagnostics: list[dict]) -> bool:
 
 
 def _combine(*codes: int) -> int:
-    """Aggregate exit codes: 2 (usage/environment) > 1 (validation red) > 0 (BRV-D9)."""
+    """Aggregate exit codes: 2 (usage/environment) > 1 (validation red) > 0."""
     return max(codes) if codes else _EXIT_OK
 
 
@@ -381,7 +342,6 @@ def _kinds_of(artifacts: list[dict]) -> dict[str, str]:
 
 
 def _render(root: Path, artifacts: list[dict]) -> tuple[list[dict], list[dict], int]:
-    """Call ``brickie-gen render`` (§6) to render the plan into file contents."""
     if not artifacts:
         return [], [], _EXIT_OK
     response = native.render(artifacts, root=root)
@@ -416,12 +376,9 @@ def _check_mismatch_diagnostic(path: str, why: str) -> dict:
 
 
 def _orphan_pruned_diagnostics(pruned: list[str]) -> list[dict]:
-    """**Trace** of pruned stale artifacts (info: this is a fix, not a defect).
+    """Info diagnostics tracing pruned stale artifacts (a fix, not a defect).
 
-    Why report instead of deleting silently: the file names get swept into the image by
-    `[build].gen_sources` globs, and "on disk but not in the plan" is itself a second source
-    of truth worth seeing (leftovers of a renamed/deleted plugin).
-    """
+    Reported, not silent: ``[build].gen_sources`` globs would otherwise compile the leftovers."""
     return [
         {
             "code": None,
@@ -436,10 +393,8 @@ def _orphan_pruned_diagnostics(pruned: list[str]) -> list[dict]:
     ]
 
 
-#: Direct-transfer channel for the body of "machine files" such as ``plan-init``: contract §5.2
-#: gives the plan only (``template`` empty); core puts the body in ``data.<key>`` (see the
-#: "deviations from contract" table in rust/README). L5 only writes it to the planned path —
-#: the content still comes from core (§8 forbids L5 assembling machine-file content).
+#: Machine-file bodies: core hands the body over in ``data.<key>`` (contract §5.2 gives the plan
+#: only, ``template`` empty); L5 writes it to the planned path and never assembles content (§8).
 _CORE_CONTENT_KEYS = {"brickie.lock": "lock_content"}
 
 
@@ -448,11 +403,8 @@ def _collect_files(
 ) -> tuple[list[dict], list[dict], int, dict[str, str]]:
     """Turn core's plan into ``files`` ready to be written.
 
-    * artifacts with a non-empty ``template`` → hand to ``brickie-gen render`` (renders only, no judgment);
-    * artifacts without ``template`` (**machine files**) → accept only a body handed over by core
-      (``artifact.content`` or ``data.<_CORE_CONTENT_KEYS>``);
-    * neither ⇒ one info diagnostic (not swallowed silently, and L5 does not become a content producer).
-    """
+    Templated artifacts go to ``brickie-gen render``; template-less machine files take the body
+    from core (``artifact.content`` / ``data.<_CORE_CONTENT_KEYS>``), else one info diagnostic."""
     kinds = _kinds_of(artifacts)
     files: list[dict] = []
     diagnostics: list[dict] = []
@@ -547,7 +499,6 @@ def _writing(
 
 
 def _finish_plan(command: str, root: Path, response: dict, extra: dict) -> Result:
-    """Wrap-up for ``new`` / ``init``: core's plan data + gen render + write."""
     exit_code = response["exit_code"]
     data = response["data"]
     diagnostics = list(response["diagnostics"])
@@ -566,7 +517,7 @@ def _finish_plan(command: str, root: Path, response: dict, extra: dict) -> Resul
     return Result(command, exit_code, diagnostics, data, written, extra)
 
 
-# ------------------------------------------------------------------ command implementations
+# ---- command implementations ----
 
 
 def _cmd_new(ns: argparse.Namespace) -> Result:
@@ -581,8 +532,7 @@ def _cmd_new(ns: argparse.Namespace) -> Result:
     }
     extra = {"args": args}
 
-    # Two-phase (§4): first probe "which paths would be written" (rules live in core), scan
-    # existing files accordingly, then make the real request.
+    # Two-phase: probe which paths would be written (rules live in core), scan existing, re-request.
     probe = _call_core("plan-new", root, args)
     artifacts = _plan_artifacts(probe)
     paths = [a["path"] for a in artifacts]
@@ -648,9 +598,8 @@ def _cmd_gen(ns: argparse.Namespace) -> Result:
             extra["unchanged"] = outcome.unchanged
             extra["skipped"] = outcome.skipped_human
 
-    # Stale artifacts (old descriptors left in `build/gen/` after a plugin rename/delete): the
-    # other half of "write the new descriptor" — writing without deleting makes the next build
-    # compile the old descriptor into the image as a "ghost plugin".
+    # Stale descriptors (old plugin rename/delete) must be pruned too: leftovers under
+    # `build/gen/` would be compiled into the image as ghost plugins.
     if exit_code == _EXIT_OK:
         if check:
             orphans = writer.prune_orphan_descriptors(root, planned, check=True)
@@ -671,7 +620,7 @@ def _cmd_gen(ns: argparse.Namespace) -> Result:
 
 
 
-# ------------------------------------------------------------------ build family (ADR-0004)
+# ---- build family ----
 
 
 def _out(ns: argparse.Namespace):
@@ -705,10 +654,8 @@ def _judge_callback(root: Path):
 def _compose(root: Path, profile: str | None) -> tuple[list[dict], int, dict]:
     """Three composition phases: ``check`` → ``gen-plan`` → render and write artifacts.
 
-    This is the **first half** of ``brickie build`` (design ADR-0003 S3 criterion: "``brickie
-    build`` covers check + generation + compilation"). A non-zero exit code ⇒ the caller must
-    stop — an image compiled from an inconsistent declaration surface is meaningless.
-    """
+    First half of ``brickie build``. A non-zero exit code ⇒ the caller must stop: an image
+    compiled from an inconsistent declaration surface is meaningless."""
     diagnostics: list[dict] = []
     check_args: dict = {}
     if profile:
@@ -730,10 +677,7 @@ def _compose(root: Path, profile: str | None) -> tuple[list[dict], int, dict]:
             return diagnostics, gen_exit, plan["data"]
         outcome = writer.write_files(root, files, kinds=kinds)
         diagnostics += _human_skip_diagnostics(outcome.skipped_human)
-    # Stale artifacts (leftovers of a plugin rename/delete) must also be collected **on the build
-    # path**: the composition surface of the image is the output of `brickie build`, so writing
-    # without deleting ⇒ old descriptors get compiled in by the `build/gen/**` glob and become
-    # "ghost plugins" (observed: the same driver registered twice ⇒ panic at startup; see writer).
+    # Prune stale artifacts here too: `build/gen/**` glob would compile leftovers as ghost plugins.
     planned = {a["path"] for a in artifacts}
     diagnostics += _orphan_pruned_diagnostics(writer.prune_orphan_descriptors(root, planned))
     return diagnostics, _EXIT_OK, check["data"]
@@ -794,11 +738,9 @@ def _cmd_build(ns: argparse.Namespace) -> Result:
             root, steps, jobs=ns.jobs, judge=_judge_callback(root), out=_out(ns)
         )
 
-    # Post-build gates (short list; by default the ones declared in `[build].post`)
     post: list[str] = []
-    # `--tag` builds are **diagnostic builds** (backend comparison / duplicate artifacts): gate
-    # argv names the default output path (`build/obj/...`), which does not hold for tagged
-    # builds — so tagged builds skip the post-build gates.
+    # `--tag` builds are diagnostic builds (backend comparison / duplicate artifacts): the gate
+    # argv names the default output path, which does not hold for tagged builds.
     if ok and not ns.dry_run and not ns.emit_backends and not ns.no_post and not ns.tag:
         post = _post_gate_names(root)
         for name in post:
@@ -997,8 +939,7 @@ def _cmd_clean(ns: argparse.Namespace) -> Result:
     for rel in (response.get("data") or {}).get("paths") or []:
         target = (root / str(rel)).resolve()
         root_resolved = root.resolve()
-        # Guard: only delete relative paths inside root, and never root itself (paths come from
-        # the declaration surface, but a slip must still be ruled out).
+        # Guard: delete only paths inside root, never root itself (declaration-surface input).
         if target == root_resolved or root_resolved not in target.parents:
             diagnostics.append(_note(
                 f"refusing to delete a path outside root: {rel}",
@@ -1168,12 +1109,10 @@ def _dispatch(ns: argparse.Namespace) -> Result:
 
 
 def _cmd_version(ns: argparse.Namespace) -> int:
-    """``--version [--deps]`` (G-01): version and dependency fingerprint come from core's ``version``.
+    """``--version [--deps]`` (G-01): version/dependency fingerprint come from core's ``version``.
 
-    When core is absent, **degrade** to printing L5's own version (``--version`` must not stall
-    make/CI self-checks just because the native build is not ready yet); but when ``--deps``
-    cannot get a fingerprint, report it as an environment error (exit code 2).
-    """
+    Without core, degrade to L5's own version so ``--version`` never stalls make/CI self-checks;
+    ``--deps`` without a fingerprint is an environment error (exit 2)."""
     root = Path(".").resolve()
     try:
         response = _call_core("version", root, {})
@@ -1209,7 +1148,7 @@ def _cmd_version(ns: argparse.Namespace) -> int:
     return exit_code
 
 
-# ------------------------------------------------------------------ presentation/entry
+# ---- presentation/entry ----
 
 
 def _error_diagnostic(message: str, code: str | None = None, severity: str = "error") -> dict:
@@ -1276,9 +1215,7 @@ def main(argv: list[str] | None = None) -> int:
     except UsageError as exc:
         return _report_failure(ns, _command_path(ns), _error_diagnostic(str(exc)))
     except runner.StepError as exc:
-        # A step **could not start** (environment errors such as a missing executable or a tool
-        # that is too old). Uncaught, it would leak out as a Python traceback — and such text is
-        # a human-readable fix, not a stack.
+        # Step could not start (missing/too-old tool): report the message, not a traceback.
         return _report_failure(ns, _command_path(ns), _error_diagnostic(str(exc), exc.code))
     except NativeError as exc:
         return _report_failure(ns, _command_path(ns), _error_diagnostic(str(exc), exc.code))

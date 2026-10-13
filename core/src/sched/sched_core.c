@@ -1,37 +1,9 @@
 /*
- * brickOS prototype v0.2.0 — scheduler framework (core): thread state machine + timeout wakeup + idle + first schedule
- *
- * Design basis: `3-03-sched.md` (scheduler overview), `3-01-core-api-list.md` §2/§5.1/§14 (CA-1/CA-4),
- *           `3-02-int.md` §11.1–§11.3 (IRQ ↔ scheduler seam; the L2 critical-section idle recipe is at the end of §11.1),
- *           `1-01-architecture.md` §9 (boot sequence), `6-01-test.md` §3.1/§3.3.
- * Per-item decisions and design-gap rulings: `docs/decisions/0006-scheduler-framework.md` (this file implements it).
- *
- * ## Split
- *   core   : context-switch asm (`switch.S`) / TCB common header (`sched_internal.h`) / stack + trampoline /
- *            timeout wakeup framework / idle / **thread state machine** / conformance
- *   plugin : ready structure / `pick_next` / tick policy / preemption decision (`sched/coop` = FIFO + switch only at explicit points)
- *
- * ## Key invariants (ADR-0006 §1; each has a mechanical check)
- *   I1  `br_sched_register()` materializes the **caller's boot context** as the main thread
- *       (RUNNING, name "main"). Before register `br_task_self() == BR_NULL`, afterwards always == main.
- *       ⇒ `br_task_create/join` already work **before** `br_sched_run()` (APP's start() phase);
- *          `br_sched_run()` is only the entry to "enter idle / first schedule", not a prerequisite for the scheduler.
- *   I2  Only core writes `state`. Plugins only change "ready-structure membership": READY ⇄ queue;
- *       RUNNING ⇒ not queued; `pick_next` only dequeues, core sets RUNNING.
- *   I3  `br_sched_wake(t)` first writes `t->wait_status = 0`, and only requeues when `state == BLOCKED`
- *       (otherwise it writes only the handshake bit). The timeout scan touches only threads with `state == BLOCKED` that are due.
- *   I4  **Switches happen only at these explicit points**: yield / block / exit / first schedule, **plus** —
- *       after ADR-0011 — **preemption at the IRQ exit** (only when the scheduler set need_resched).
- *       COOP never sets it ⇒ for coop the old wording of I4 (no preemption, no stack switch at the IRQ exit) holds verbatim.
- *       The IRQ-exit switch point is at the C call boundary (`br_sched_switch_to`); the preempted thread's exception frame
- *       stays intact on its own stack — see the long comment in `resched_from_irq()`.
- *   I5  ICB handshake (ADR-0006 §3b, aligned with F3's sync.c): `wait_status` is the only handshake bit —
- *       the caller pre-sets -ETIMEDOUT before opening the window, wake sets 0, timeout sets -ETIMEDOUT;
- *       whoever writes first wins, both orders converge to the same result (see `br_sched_block_current`).
- *   I6  **bh is not a thread context** (ADR-0011): the bottom half runs on the IRQ-disabled exception exit; blocking/
- *       yielding/exiting inside it loses the exception frame's return path ⇒ all three paths are rejected at runtime
- *       (`br_sched_block_current` = -EPERM, `br_task_yield` = reject + trace,
- *        `br_task_exit` = panic).
+ * Scheduler framework (core): thread state machine, timeout wakeups, idle, first schedule.
+ * Only core writes `state`; plugins only change ready-queue membership. br_sched_wake() writes
+ * wait_status = 0 first and requeues only when BLOCKED (ICB handshake, wins a wake/timeout race).
+ * Switches happen at yield/block/exit/first schedule plus the IRQ exit when need_resched was set;
+ * bh is not a thread context (block = -EPERM, yield = reject + trace, exit = panic).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -46,13 +18,9 @@
 #include "sched_ctx.h"
 #include "sched_internal.h"
 
-/* =====================================================================
- * TCB pool (static; prototype rule "no dynamic allocation", ADR-0006 §2 ruling S-3)
- *
- * Slot = common header + plugin private tail. The plugin reports the total size in `ops.tcb_size`; the pool is
- * sized by the **compile-time bound** `BR_TCB_SLOT_BYTES` and register checks `tcb_size <= BR_TCB_SLOT_BYTES` --
- * exceeding it means the plugin and the core pool config disagree, so register fails loudly (no silent truncation).
- * ===================================================================== */
+/* ---- TCB pool (static; no dynamic allocation) ----
+ * Slot = common header + plugin tail; register fails loudly if ops.tcb_size > BR_TCB_SLOT_BYTES
+ * rather than truncating silently. */
 #define BR_TCB_SLOT_BYTES 256u
 
 typedef union br_tcb_slot {
@@ -68,30 +36,21 @@ _Static_assert(__builtin_offsetof(struct br_thread, ctx) == BR_THREAD_CTX_OFF,
 
 static br_tcb_slot_t        s_pool[BR_TASK_MAX];
 static br_thread_t         *s_all;        /* global TCB chain (walk/observe/timeout scan) */
-static br_thread_t         *s_current;    /* current thread (single core; TPIDR_EL1 is the v2/SMP landing spot) */
+static br_thread_t         *s_current;    /* current thread (single core) */
 static const br_sched_ops_t *s_ops;
 static br_thread_t         *s_joiner[BR_TASK_MAX];  /* target -> its joiner (one at a time) */
 
-/*
- * Preemption request bit (ADR-0011). Written by the scheduler plugin's tick policy (`br_sched_request_resched`,
- * inside the ISR); consumed at the IRQ exit by `resched_from_irq()`. **This is the only bit**
- * (`volatile` is for the "ISR writes / exit reads" pair; on a single core it needs no atomic instruction).
- */
+/* Preemption request bit: set by the plugin's tick policy (ISR), consumed at the IRQ exit.
+ * volatile covers the "ISR writes / exit reads" pair; single core needs no atomic instruction. */
 static volatile br_bool s_need_resched;
 
-/*
- * Host-side idle wait hook (weak symbol). The target has no such symbol: idle simply issues `wfi`
- * (3-02 §11.1 recipe: disable IRQs -> check nothing ready -> WFI -> enable IRQs).
- * The host has no real interrupt source and no WFI -- the test advances a fake clock and calls
- * `br_sched_on_tick()` here, making "timeout scan on periodic tick" testable on the host (see tests/host/sched_test.c).
- */
+/* Host-side idle wait hook (weak): target idle issues wfi; the host test advances a fake clock and
+ * calls br_sched_on_tick() here, making the tick timeout scan testable on the host. */
 #if !defined(__aarch64__)
 void br_sched_host_wait(void) __attribute__((weak));
 #endif
 
-/* =====================================================================
- * Small helpers
- * ===================================================================== */
+/* ---- small helpers ---- */
 
 br_size_t br_sched_tcb_size(void)
 {
@@ -103,13 +62,9 @@ void *br_thread_priv(br_thread_t *t)
     return (void *)((br_u8 *)t + sizeof(struct br_thread));
 }
 
-/* =====================================================================
- * Four wait-chain primitives (zero allocation: the node is `wait_next` in the TCB; sync primitives attach/detach waiters here)
- *
- * Why in core rather than in each sync object: the node layout belongs to the frozen TCB (`sched_internal.h`),
- * and `br_sched_block_current()`'s return path requires "unchain" and "handshake bit" to work together.
- * These four do not depend on scheduler state (usable with no READY thread), so the sync path is always available.
- * ===================================================================== */
+/* ---- wait-chain primitives (zero allocation: the node is wait_next in the TCB) ----
+ * They live in core because the node layout belongs to the frozen TCB and the block return path
+ * needs unchain + handshake bit together; they do not depend on scheduler state. */
 
 void br_waitq_push(void **head, br_thread_t *t)
 {
@@ -262,11 +217,10 @@ static void tcb_free(br_thread_t *t)
     br_irq_unlock(st);
 }
 
-/* =====================================================================
- * Wakeup / timeout (ICB handshake, I3/I5)
- * ===================================================================== */
+/* ---- wakeup / timeout (ICB handshake) ---- */
 
-/* Put t back into the ready structure (core writes state; the plugin only enqueues). Caller holds L2 or atomicity is not required. */
+/* Requeue t: core writes state, the plugin only enqueues. Caller holds L2, or atomicity is not
+ * required. */
 static void make_ready(br_thread_t *t)
 {
     t->state = BR_TASK_READY;
@@ -283,18 +237,15 @@ void br_sched_wake(br_thread_t *t)
 
     const br_irq_state_t st = br_irq_lock();
 
-    /*
-     * ICB step 3: write the handshake bit **first**. If t is still RUNNING (the caller is
-     * "after opening the window, before actually BLOCKED"), this is an "early wake inside the window" -- write the
-     * bit only, do not enqueue; `br_sched_block_current` sees 0 at its entry and returns without switching stacks.
-     */
+    /* ICB step 3: write the handshake bit first. If t is still RUNNING this is an early wake inside
+     * the window -- bit only, no enqueue; br_sched_block_current returns 0 without switching. */
     t->wait_status = 0;
 
     if (t->state == BR_TASK_BLOCKED) {
         t->wake_at = BR_TIMEOUT_INF;   /* stop tracking the deadline */
         make_ready(t);
     } else {
-        /* Already READY / RUNNING / ZOMBIE: hand over the handshake bit only (idempotent) */
+        /* Already READY / RUNNING / ZOMBIE: handshake bit only (idempotent). */
     }
 
     br_irq_unlock(st);
@@ -325,9 +276,7 @@ static void scan_timeouts(br_time_t now)
     }
 }
 
-/* =====================================================================
- * Switch: pick_next -> stack switch; nothing ready -> idle
- * ===================================================================== */
+/* ---- switch: pick_next -> stack switch; nothing ready -> idle ---- */
 
 static void idle_wait(void)
 {
@@ -336,13 +285,9 @@ static void idle_wait(void)
         return;
     }
 
-    /*
-     * 3-02 §11.1 recipe (verbatim): **disable IRQs -> check "no ready work" -> WFI -> enable IRQs**.
-     * The check and the WFI must not be interrupted: if an interrupt arrives after the check and before the WFI
-     * and wakes a thread, that WFI sleeps until the next interrupt (possibly a long time) -- the classic idle lost wakeup.
-     * WFI returns immediately when an interrupt is pending (even with PSTATE.I == 1), so disabling IRQs here does
-     * not stop it from being woken by an interrupt.
-     */
+    /* Disable IRQs -> check no ready work -> WFI -> enable IRQs. The check and the WFI must not be
+     * interrupted, or an interrupt landing between them sleeps until the next one (lost wakeup).
+     * WFI still returns immediately on a pending interrupt even with PSTATE.I == 1. */
     const br_irq_state_t st = br_irq_lock();
     if (ready_count_now() != 0u) {
         br_irq_unlock(st);
@@ -363,10 +308,8 @@ static void switch_next(void)
             continue;
         }
         if (to == s_current) {
-            /*
-             * The only runnable thread is self: a sleeper woken by timeout, or yield with no peer to give way to.
-             * Do not switch stacks (switching to self is meaningless), set state back to RUNNING and continue.
-             */
+            /* Only self is runnable (timeout wakeup, or yield with no peer): switching to self is
+             * meaningless, so set RUNNING and continue. */
             to->state = BR_TASK_RUNNING;
             return;
         }
@@ -379,21 +322,14 @@ static void switch_next(void)
     }
 }
 
-/* =====================================================================
- * Register point
- * ===================================================================== */
+/* ---- register point ---- */
 
 br_bool br_sched_registered(void)
 {
     return (s_ops != BR_NULL) ? BR_TRUE : BR_FALSE;
 }
 
-/*
- * **Read-only** view of the registry (`sched_internal.h`). Why it exists: the self-test suite must print the
- * evidence line "which scheduler got registered" (name/kind/tcb_size), and those fields live only here -- rather than
- * have the suite copy the plugin table (giving "what was registered" two sources of truth), open a read-only accessor.
- * Read-only: callers get no write path (changing the registration only goes through br_sched_register's "exactly once").
- */
+/* Read-only registry view for the selftest evidence line (name/kind/tcb_size); no write path. */
 const br_sched_ops_t *br_sched_ops_get(void)
 {
     return s_ops;
@@ -407,7 +343,7 @@ void br_sched_register(const br_sched_ops_t *ops)
     if (ops == BR_NULL) {
         br_panic("[sched] br_sched_register(): ops == NULL");
     }
-    /* Required slots (ADR-0006 §2 ruling S-1: per-field comments take precedence over the blanket "all non-null except idle") */
+    /* Required slots (per-field rules take precedence over "all non-null except idle"). */
     if (ops->name == BR_NULL || ops->thread_ready == BR_NULL ||
         ops->thread_block == BR_NULL || ops->pick_next == BR_NULL) {
         br_panic("[sched] br_sched_register(): name/thread_ready/thread_block/pick_next are required");
@@ -422,11 +358,8 @@ void br_sched_register(const br_sched_ops_t *ops)
 
     s_ops = ops;
 
-    /*
-     * I1: materialize the caller's boot context as the main thread.
-     * After this step `br_task_self()` always returns it -- so threads created in APP's start() phase
-     * and join work immediately (3-01 §9 boot sequence), without waiting for `br_sched_run()`.
-     */
+    /* Materialize the caller's boot context as the main thread: after this br_task_self() and
+     * br_task_create/join work before br_sched_run(). */
     br_thread_t *m = tcb_alloc();
     if (m == BR_NULL) {
         br_panic("[sched] br_sched_register(): TCB pool full, cannot create main");
@@ -452,7 +385,7 @@ BR_NORETURN void br_sched_run(void)
     }
 }
 
-/* Preemptive stack switch at the IRQ exit (defined at the end of this section; preconditions and safety argument at the definition). */
+/* Preemptive stack switch at the IRQ exit; preconditions and safety argument at the definition. */
 static void resched_from_irq(void);
 
 void br_sched_irq_epilogue(void)
@@ -461,17 +394,14 @@ void br_sched_irq_epilogue(void)
         return;
     }
 
-    /*
-     * Expiry scan (same recipe as on_tick): covers exits from "non-timer interrupts" so timeout wakeups do not depend
-     * on which particular IRQ woke the CPU out of idle.
-     * ★ Must run before preemption: a thread woken by timeout must be selectable by this same exit's pick_next.
-     */
+    /* Expiry scan, as on_tick: covers non-timer interrupts, so timeout wakeups do not depend on
+     * which IRQ woke the CPU. Must run before preemption, so a woken thread is selectable now. */
     scan_timeouts(br_clock_now());
 
     resched_from_irq();
 }
 
-/* ------------------------------------------------------------- preemption */
+/* ---- preemption ---- */
 
 void br_sched_request_resched(void)
 {
@@ -484,25 +414,11 @@ br_bool br_sched_resched_pending(void)
 }
 
 /*
- * Preemptive stack switch at the IRQ exit (ADR-0011; called by `br_sched_irq_epilogue`).
- *
- * Preconditions (guaranteed by the call site, not guessed): we are in an **exception context**, already eoi'd,
- * `irq_depth == 0` (INV-C just checked), `PSTATE.I == 1`.
- *
- * ★ Why this switch is safe (the one subtle point of the mechanism, must be pinned down):
- *   `from`'s context is saved by `br_sched_switch_to` as "callee-saved + sp" -- and sp points to
- *   **`br_irq_enter`'s stack frame** (the exception frame is below it). So the preempted thread stops "inside the IRQ-exit
- *   C code", and when it is selected again it returns from `br_sched_switch_to` and walks back through
- *   `resched_from_irq` -> `br_sched_irq_epilogue` -> `br_irq_enter` -> the asm stub's
- *   "restore context + ERET". ⇒ **its own ELR/SPSR values stay in the exception frame on its own stack**,
- *   no need to save them elsewhere on switch (on a single core those registers are global, but they are read only at
- *   the moment of "returning to its own stub").
- *   ⇒ Hence `switch.S` saving only callee-saved still suffices and vectors.S need not change -- the switch point is not in
- *   those asm lines at all (consistent with vectors.S header P-IRQ-ASM-2's "v2 obligation", which targets the other
- *   implementation that switches stacks in asm before ERET).
- *
- * ★ First entry of a new thread needs one more fix: here `PSTATE.I == 1` (still in exception handling) while the new
- *   thread's entry does not go through ERET ⇒ it must be explicitly corrected to "IRQs enabled". See `br_sched_thread_entry` (ruling P-1).
+ * Preemptive stack switch at the IRQ exit; call site guarantees exception context, already eoi'd,
+ * irq_depth == 0, PSTATE.I == 1. from is saved as callee-saved + sp, and sp points at
+ * br_irq_enter's frame (exception frame below), so the thread resumes inside the IRQ-exit C code
+ * with its own ELR/SPSR intact on its own stack. A new thread's first entry bypasses ERET, so
+ * br_sched_thread_entry corrects PSTATE.I.
  */
 static void resched_from_irq(void)
 {
@@ -513,15 +429,13 @@ static void resched_from_irq(void)
 
     br_thread_t *cur = s_current;
 
-    /* Preemption only makes sense while the current thread is still running (block/exit paths already changed state). */
+    /* Preempt only while the current thread is still running (block/exit already changed state). */
     if (s_ops == BR_NULL || cur == BR_NULL || cur->state != BR_TASK_RUNNING) {
         return;
     }
 
-    /*
-     * Put the preempted thread back into the ready structure (tail). **This is where round-robin semantics land**:
-     * timeslice exhausted ⇒ go to the tail for the next round; `state` is still written by core (I2).
-     */
+    /* Back to the ready-structure tail: this is where round-robin lands (exhausted timeslice goes
+     * to the next round); core still writes state. */
     cur->state = BR_TASK_READY;
     if (s_ops->thread_ready != BR_NULL) {
         (void)s_ops->thread_ready(cur);
@@ -530,8 +444,8 @@ static void resched_from_irq(void)
     br_thread_t *to = (s_ops->pick_next != BR_NULL) ? s_ops->pick_next() : BR_NULL;
 
     if (to == BR_NULL) {
-        /* Defensive (only reachable if the plugin is broken): cur was just queued but pick_next says nobody -- remove
-         * cur and keep running. Must not "do nothing": that would leave cur queued while RUNNING (violates I2). */
+        /* Defensive (broken plugin): cur was queued but pick_next says nobody -- remove cur and
+         * keep running, else it stays queued while RUNNING. */
         if (s_ops->thread_block != BR_NULL) {
             s_ops->thread_block(cur);
         }
@@ -540,7 +454,7 @@ static void resched_from_irq(void)
         return;
     }
     if (to == cur) {
-        /* Only self is runnable (pick_next already dequeued it): no stack switch, just continue (isomorphic to switch_next). */
+        /* Only self is runnable (already dequeued): no stack switch, continue as in switch_next. */
         cur->state = BR_TASK_RUNNING;
         br_trace_emit(BR_TRACE_SCHED_PREEMPT, 0u, 0u);
         return;
@@ -572,12 +486,8 @@ int br_sched_block_current(br_time_t abs_deadline)
     if (t == BR_NULL || s_ops == BR_NULL) {
         return BR_ERR(EINVAL);
     }
-    /*
-     * ★ bh ban (I6, ADR-0011): the bottom half runs on the IRQ-disabled exception exit and has **no** schedulable
-     *   context to fall back to -- blocking here means the exception frame never returns (and the ISR's eoi is already
-     *   done, presenting as "the system silently loses a line"). Rejected at runtime, returning -EPERM not -EINVAL:
-     *   the arguments are fine, the context is wrong (callers must be able to tell these two bugs apart).
-     */
+    /* bh ban: the bottom half runs on the IRQ-disabled exception exit with no schedulable context,
+     * so blocking loses the exception frame. -EPERM not -EINVAL: arguments fine, context wrong. */
     if (br_work_in_bh() != BR_FALSE) {
         br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 2u, 0u);
         return BR_ERR(EPERM);
@@ -588,18 +498,16 @@ int br_sched_block_current(br_time_t abs_deadline)
 
     const br_irq_state_t st = br_irq_lock();
 
-    /*
-     * ICB step 2 (ADR-0006 §3b): check the handshake bit at entry. The caller already set it to
-     * -ETIMEDOUT **before opening the window**; reading 0 here means `br_sched_wake()` came after the caller opened
-     * the window and before this function disabled IRQs -- return 0 directly, do not set BLOCKED, do not record a deadline, do not switch stacks.
-     * This eliminates the lost-wakeup window "after pushing onto the wait chain / before actually BLOCKED".
-     */
+    /* ICB step 2: the caller pre-set wait_status = -ETIMEDOUT before opening the window; 0 here
+     * means br_sched_wake() came after the window opened and before IRQs were disabled -- return 0
+     * without setting BLOCKED, recording a deadline or switching. */
     if (t->wait_status == 0) {
         br_irq_unlock(st);
         return 0;
     }
 
-    /* Deadline already passed (including the absolute form of relative 0) ⇒ finish as timeout immediately (INV-1), no stack switch, no sleeping until the next tick */
+    /* Deadline already passed (including relative 0): finish as timeout now, no stack switch and
+     * no sleeping until the next tick. */
     if (abs_deadline != BR_TIMEOUT_INF && abs_deadline <= br_clock_now()) {
         t->wait_status = BR_ERR(ETIMEDOUT);
         br_irq_unlock(st);
@@ -629,7 +537,7 @@ br_u32 br_sched_task_count(void)
     return n;
 }
 
-/* Pool observation for the internal contract (`sched_internal.h`): number of occupied slots (= live threads). */
+/* Pool observation for sched_internal.h: occupied slots (= live threads). */
 br_u32 br_thread_pool_used(void)
 {
     return br_sched_task_count();
@@ -640,24 +548,14 @@ br_u32 br_sched_ready_count(void)
     return ready_count_now();
 }
 
-/* =====================================================================
- * Thread face (state machine: NEW -> READY ⇄ RUNNING / BLOCKED / ZOMBIE)
- * ===================================================================== */
+/* ---- thread face: NEW -> READY <-> RUNNING / BLOCKED / ZOMBIE ---- */
 
 BR_NORETURN void br_sched_thread_entry(struct br_thread *t)
 {
     /*
-     * ★ Ruling P-1 (ADR-0011): a new thread's first entry must put the L2 state right.
-     *
-     * Problem: a preempt-class scheduler may pick a thread that "never ran" at the **IRQ exit**
-     * (`resched_from_irq` -> `br_sched_switch_to` -> trampoline). At that moment `PSTATE.I == 1`
-     * (we are still in exception handling) and the new thread enters **without ERET** ⇒ if ignored it runs on with
-     * IRQs disabled: the timer never fires again ⇒ preemption and timeouts both break (with no error reported).
-     *
-     * Handling: `irq_depth == 0` ⇒ the thread's proper state is "IRQs enabled", so explicitly enable them.
-     *   `irq_depth > 0` ⇒ **do not touch** (and this is not an opportunistic fix): it means someone gave up the CPU
-     *   inside an L2 critical section -- an existing ban (same root as INV-C) -- and enabling IRQs here would tear the critical
-     *   section open. Trace without changing state: honest failure beats silently enabling IRQs.
+     * A new thread's first entry may happen at the IRQ exit (preempt-class scheduler), where
+     * PSTATE.I == 1 and there is no ERET: enable IRQs when irq_depth == 0, else trace and leave
+     * them alone -- enabling inside an L2 critical section would tear it open.
      */
     if (br_irq_lock_depth() == 0u) {
         br_irq_cpu_enable();
@@ -704,11 +602,8 @@ int br_task_create(br_thread_t **out, const br_task_attr_t *attr,
     t->wait_status = BR_ERR(ETIMEDOUT);       /* ICB: set "not woken" before opening the window */
     t->wake_at    = BR_TIMEOUT_INF;
 
-    /*
-     * Initial context (matches switch.S's ctx layout verbatim):
-     *   x19 = TCB (the trampoline reads it)   x30 = trampoline   sp = stack top (16-byte aligned)
-     * x29 = 0: the fp chain starts at 0 (backtrace relies on it to stop).
-     */
+    /* Initial context (switch.S's ctx layout): x19 = TCB, x30 = trampoline, sp = stack top
+     * (16-byte aligned), x29 = 0 so the fp chain terminates for backtrace. */
     t->ctx[BR_CTX_X19_TCB] = (br_u64)(br_uintptr_t)t;
     t->ctx[BR_CTX_X29]     = 0u;
     t->ctx[BR_CTX_X30]     = (br_u64)(br_uintptr_t)br_sched_thread_trampoline;
@@ -762,18 +657,15 @@ BR_NORETURN void br_task_exit(int code)
 {
     br_thread_t *t = s_current;
 
-    /*
-     * ★ bh ban (I6, ADR-0011): ending a thread from the bottom half has no correct wind-down --
-     *   its exception frame is still on the stack, and "switching away" would make ERET never return. The design's
-     *   consistent stance is "honest failure beats silent degradation" ⇒ panic (rather than pretending the exit succeeded).
-     */
+    /* bh ban: ending a thread from the bottom half leaves its exception frame on the stack and ERET
+     * would never return, so panic rather than pretend the exit succeeded. */
     if (br_work_in_bh() != BR_FALSE) {
         br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 3u, 0u);
         br_panic("[sched] br_task_exit(): must not end a thread in the interrupt bottom half (bh) (ADR-0011 §4)");
     }
 
     if (t == BR_NULL || s_ops == BR_NULL) {
-        /* Not in a thread context: there is no "exit" to speak of -- stop honestly (no faking) */
+        /* Not in a thread context: stop honestly, there is no "exit" to speak of. */
         for (;;) {
             cpu_wait();
         }
@@ -788,7 +680,7 @@ BR_NORETURN void br_task_exit(int code)
         s_ops->thread_block(t);                     /* defensive removal (usually not queued) */
     }
 
-    /* Wake the joiner (ICB: even if it is still inside the RUNNING window, write the handshake bit only) */
+    /* Wake the joiner (ICB: bit only if it is still inside the RUNNING window). */
     if (i < BR_TASK_MAX && s_joiner[i] != BR_NULL) {
         br_sched_wake(s_joiner[i]);
     }
@@ -803,11 +695,8 @@ void br_task_yield(void)
     if (s_current == BR_NULL || s_ops == BR_NULL) {
         return;
     }
-    /*
-     * ★ bh ban (I6, ADR-0011): yielding the CPU in the bottom half == losing the exception exit's return path.
-     *   `br_task_yield` is void ⇒ it cannot return an error code, so it **refuses and traces** (rather than silently
-     *   treating it as a successful yield: the caller would think a switch happened when nothing did -- also a lie).
-     */
+    /* bh ban: yielding in the bottom half loses the exception exit path. void return, so refuse and
+     * trace rather than report a switch that did not happen. */
     if (br_work_in_bh() != BR_FALSE) {
         br_trace_emit(BR_TRACE_BH_CTX_VIOLATION, 4u, 0u);
         return;
@@ -847,10 +736,8 @@ int br_task_sleep_until(br_time_t abs_us)
 
     const int r = br_sched_block_current(abs_us);
 
-    /*
-     * Ruling G13b (ADR-0006 §2): sleep **expiry is a success path** ⇒ return 0;
-     * -ETIMEDOUT belongs only to APIs that "wait for an event and time out" (mutex/sem/cond/join, INV-1).
-     */
+    /* Sleep expiry is a success path => 0; -ETIMEDOUT belongs to APIs that wait for an event and
+     * time out (mutex/sem/cond/join). */
     return (r == BR_ERR(ETIMEDOUT)) ? 0 : r;
 }
 

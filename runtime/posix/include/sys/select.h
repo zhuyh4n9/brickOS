@@ -1,14 +1,8 @@
 /*
- * brickOS prototype v0.2.0 - select surface (sys/select.h; provided by the runtime/posix plugin)
- *
- * `select` is built on top of `poll` (equivalent semantics, one less implementation). `fd_set`
- * is a **fixed-size bitmap**: `FD_SETSIZE = 64` is twice as wide as the native fd table
- * (`BR_FT_MAX = 32`), so "managing beyond the table with select" cannot silently truncate -
- * out-of-range bits are judged invalid by `select` and return -EINVAL.
- *
- * `struct timeval` lives here (rather than sys/time.h): this generation has **no gettimeofday**
- * (no wall clock, P-1), so select is the only consumer of "a time value". When a wall clock is
- * added, this becomes an include (move timeval to sys/time.h).
+ * select is built on poll. fd_set is a fixed bitmap: FD_SETSIZE = 64 is twice the native fd
+ * table (BR_FT_MAX = 32), so out-of-range bits cannot silently truncate -- select judges them
+ * invalid and returns -EINVAL.
+ * struct timeval lives here because this generation has no gettimeofday.
  */
 #ifndef BR_POSIX_SYS_SELECT_H
 #define BR_POSIX_SYS_SELECT_H

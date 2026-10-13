@@ -1,29 +1,18 @@
-/* adapter/uboot-mmc — **interface type shell** for `<part.h>` (not a copy of u-boot's)
+/* adapter/uboot-mmc interface-type shell for `<part.h>` (not a copy of u-boot's).
  *
- * ============================== why a "shell" ==============================
- * Same rationale as `compat/blk.h`: upstream `include/part.h` lines 9-12 include
- * `<blk.h> <u-boot/uuid.h> <linux/errno.h> <linux/list.h>`, and it itself declares a **whole
- * family of partition-table parsers** (dos/gpt/iso/amiga/efi…). This file needs only three:
- *
- *   1. `LOG2()` — ★ inconspicuous but required: upstream `mmc_startup()` writes
- *      `bdesc->log2blksz = LOG2(bdesc->blksz)`, and the **only definition** of `LOG2` is
- *      `include/part.h` (not `linux/log2.h` — that has `ilog2`). Without it upstream fails to
- *      compile immediately. The definition below is **verbatim** from upstream;
- *   2. `struct disk_partition` — the partition parser's output type, part of the block layer's
- *      public interface. This file does not parse partitions, but the type must be present
- *      (`CONFIG_PARTITION_UUIDS`/`CONFIG_PARTITION_TYPE_GUID`/`CONFIG_DOS_PARTITION` are all
- *      undefined ⇒ only four fields remain, as with upstream);
- *   3. `part_init()` — called at the end of `mmc_startup()` when `!DM_MMC` (scans the partition
- *      table). This file does no software partitioning (v1 exposes the raw device), so the glue
- *      provides an **explicit empty implementation** with the reason stated (rather than
- *      quietly deleting that upstream line — that would be "modifying upstream").
+ * Upstream `include/part.h` pulls in a whole family of partition-table parsers; this file needs
+ * only: `LOG2()` (its only definition, used by `mmc_startup()` for `log2blksz`; verbatim below),
+ * `struct disk_partition` (the parser's output type; with the partition configs off only four
+ * fields remain, as upstream) and `part_init()` (called at the end of `mmc_startup()` when
+ * `!DM_MMC`; this file does no software partitioning -- v1 exposes the raw device -- so glue
+ * provides an explicit empty implementation rather than deleting the upstream call).
  */
 #ifndef BR_ADAPTER_UBOOT_MMC_SHIM_PART_H
 #define BR_ADAPTER_UBOOT_MMC_SHIM_PART_H
 
 #include "blk.h"
 
-/* ★ Verbatim from upstream `include/part.h` (it is where `LOG2` is defined, not `linux/log2.h`). */
+/* Verbatim from upstream `include/part.h`, the only definition of `LOG2` (not `linux/log2.h`). */
 #define LOG2(x) (((x & 0xaaaaaaaa) ? 1 : 0) + ((x & 0xcccccccc) ? 2 : 0) + \
                  ((x & 0xf0f0f0f0) ? 4 : 0) + ((x & 0xff00ff00) ? 8 : 0) + \
                  ((x & 0xffff0000) ? 16 : 0))
@@ -58,10 +47,7 @@ struct block_drvr {
     int (*select_hwpart)(int dev_num, int hwpart);
 };
 
-/*
- * One entry in a partition table. ★ The three `#if CONFIG_IS_ENABLED(...)` fields are **not
- * present** (all off in the matrix), so the layout matches upstream's "minimal config" form.
- */
+/* One partition table entry; the three `CONFIG_IS_ENABLED(...)` fields are off in the matrix. */
 struct disk_partition {
     lbaint_t start;                  /* # of first block in partition */
     lbaint_t size;                   /* number of blocks in partition */
@@ -72,12 +58,10 @@ struct disk_partition {
     u16      type_flags;             /* top 16 bits of GPT partition attributes */
 };
 
-/* Called at the end of `mmc_startup()` (`!DM_MMC`). This file does not parse partition tables ⇒ glue provides an empty implementation. */
+/* Called at the end of `mmc_startup()` (`!DM_MMC`); glue provides an empty implementation. */
 void part_init(struct blk_desc *desc);
 
-/* Block layer read/write shims (declared by upstream `include/blk.h`; this file's MMC path does
- * **not** go through them, but the interface must be present: consumers like `adapter/uboot-fat`
- * do use `blk_dread`/`blk_dwrite`). */
+/* Declared by upstream `include/blk.h`; this MMC path does not call them, but uboot-fat does. */
 unsigned long blk_dread(struct blk_desc *block_dev, lbaint_t start,
                         lbaint_t blkcnt, void *buffer);
 unsigned long blk_dwrite(struct blk_desc *block_dev, lbaint_t start,

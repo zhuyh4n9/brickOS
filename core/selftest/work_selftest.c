@@ -1,29 +1,11 @@
 /*
- * brickOS prototype v0.2.0 — **self-test suite** for deferred work (bottom half / workqueue) (core/selftest/)
- *
- * Design basis and per-item rulings: `docs/decisions/0011-round-robin-bh-workqueue.md`;
- * design sources: `3-01-core-api-list.md` §5 (deferred work = bottom half),
- *           `3-02-int.md` §11.1 (path one: ISR → deferred work)/§11.4.1 (semantics of disable under BH form)/
- *           §12.4 (execution timing and priority)/IR-10 (a failed submit must roll back).
- *
- * ## Why these cases live in core's self-test directory
- *   Same origin as `sched_selftest.c` (ADR-0010): cases are not a plugin's exported capability, so they
- *   should not enter `br_work.h`'s golden surface; and "disable self-test ⇒ the whole directory is not
- *   compiled" applies to the core side too.
- *
- * ## Case list (one-to-one with the host leg of `tests/host/work_test.c`)
- *   TC-WQ-001  bounded queue: filling DEPTH entries succeeds, entry DEPTH+1 ⇒ -EAGAIN (no silent drop)
- *   TC-WQ-002  FIFO: drain order == submit order; drain(max) strictly respects the budget
- *   TC-WQ-003  non-reentrant: calling drain again inside a work item ⇒ 0 (stack does not grow with queue length)
- *   TC-WQ-004  bh context: inside the body `br_work_in_bh()` is true and `br_irq_in_atomic()` is true,
- *              while `br_irq_in_isr()` is false (that is the definition of "bottom half")
- *   TC-WQ-005  bh prohibitions: blocking ⇒ -EPERM; yielding ⇒ rejected + BH_CTX_VIOLATION logged
- *   TC-WQ-006  statistics self-consistent (submitted/ran/pending/max_pending match the actions)
- *   TC-WQ-007  actually consumed at the **IRQ exit**: on target driven by `br_irq_enter`'s exit drain,
- *              here expressed as "submit + explicit drain", the decidable part of the same chain
- *
- * ## Return value
- *   `int` = **number of failures** (ADR-0010 §2.4). Any failure **does not halt**.
+ * Self-test suite for deferred work (bottom half / workqueue). Cases are not a plugin capability,
+ * so they stay out of br_work.h's golden surface; with selftest off this directory is not compiled.
+ * Cases: TC-WQ-001 bounded queue (-EAGAIN at DEPTH+1), TC-WQ-002 FIFO + drain(max) budget,
+ * TC-WQ-003 non-reentrant, TC-WQ-004 bh context (in_bh/in_atomic true, in_isr false),
+ * TC-WQ-005 blocking -EPERM / yield rejected + BH_CTX_VIOLATION, TC-WQ-006 statistics,
+ * TC-WQ-007 bounded consumption at IRQ exit.
+ * Returns the number of failures; a failure does not halt the run.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -33,12 +15,9 @@
 #include <br/core/br_types.h>
 #include <br/core/br_work.h>
 
-/* The TCB common header (ready/blocked/state fields) and "read-only registry observation" are core-private
- * surfaces (same origin as sched_selftest.c: cross-directory relative includes have precedent in this repo). */
+/* TCB common header + read-only registry observation (core-private, same as sched_selftest.c). */
 #include "../src/sched/sched_internal.h"
 
-/* Visible declarations of the entry are centralized in `core/selftest/core_selftest.c` (the sole aggregator);
- * declaring it again here satisfies the "every function has a prototype before use" discipline (-Wmissing-prototypes). */
 int br_work_selftest(void);
 
 static int s_wq_pass;
@@ -132,9 +111,8 @@ static void case_wq_001_bound(void)
     br_work_stats_get(&st);
     const br_u32 base_drop = st.dropped_full;
 
-    /* The queue may not be empty (leftovers from earlier cases) ⇒ first fill it up completely. */
+    /* Queue may not be empty (leftovers from earlier cases), so fill it up completely. */
     while (br_work_submit(wq_item_note, (void *)(br_uintptr_t)1u) == 0) {
-        /* fill until full */
     }
     full_rc = br_work_submit(wq_item_note, (void *)(br_uintptr_t)2u);
     br_work_stats_get(&st);
@@ -230,12 +208,9 @@ static void case_wq_003_006_context(void)
 
 static void case_wq_007_irq_exit(void)
 {
-    /*
-     * On target the IRQ-exit consumption chain is performed by `br_irq_enter`'s exit calling
-     * `br_work_drain(BR_WORK_BH_BUDGET)` (that path is covered by QEMU's TC-IRQ-015/017). Here we verify its
-     * **decidable preconditions** on the core side: the budget parameter itself is positive, and one drain
-     * consumes at most BUDGET entries — otherwise "the IRQ exit is bounded" is an empty statement.
-     */
+    /* On target, IRQ-exit consumption is br_irq_enter's exit calling br_work_drain(BUDGET)
+     * (covered by QEMU TC-IRQ-015/017). Decidable part checked here: BUDGET is positive and one
+     * drain consumes at most BUDGET entries. */
     s_wq_order_n = 0u;
 
     for (br_u32 i = 0u; i < (br_u32)BR_WORK_BH_BUDGET + 2u; i++) {

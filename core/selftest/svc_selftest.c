@@ -1,22 +1,8 @@
 /*
- * brickOS prototype v0.2.0 — service registry self-test suite (core common; TC-SVC-001..003)
- *
- * Moved **verbatim** from `core/src/svc/svc.c` (ADR-0010): cases and their logs are unchanged —
- * the gate `tests/gates.toml` judges red/green by `[SVCCONF] PASS/FAIL` and `[SVCCONF] SUMMARY`.
- *
- * Why moved out of the production file:
- *   - the production file keeps only mechanism (table/publish/lookup/observation), no longer
- *     carrying cases;
- *   - with self-test off the whole `core/selftest/` directory **does not compile** ⇒ test code
- *     does not enter the image (not merely does not run);
- *   - the entry point no longer enters `br_svc.h`: a test surface in the golden interface would
- *     make "change one case" an interface change.
- *
- * White-box access path: `../src/svc/svc_internal.h` (why it must be white-box, see that header).
- *
- * Entry convention (consistent with `br_plugin_manager_selftest` for plugin self-tests): return
- * the **number of failures** (0 = all green), only record and never stop — red/green is judged by
- * the gate (ADR-0010 §2.4).
+ * Service registry self-test suite: TC-SVC-001..003. The gate judges red/green by the
+ * [SVCCONF] PASS/FAIL and [SVCCONF] SUMMARY lines. White-box access via
+ * ../src/svc/svc_internal.h (see that header for why).
+ * Returns the number of failures (0 = all green); never stops early.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -25,7 +11,6 @@
 
 #include "../src/svc/svc_internal.h"
 
-/* Entry prototype (declaration surface centralized in `core_selftest.c`; repeated here only to satisfy the global-function prototype discipline). */
 int br_service_selftest(void);
 
 /* Names used by cases all carry the `selftest.` prefix (removed from the table afterwards). */
@@ -56,10 +41,10 @@ int br_service_selftest(void)
 
     br_log_info("[SVCCONF] service registry conformance (publish/lookup/error codes)");
 
-    /* Defensive cleanup: same-named entries left by a previous run (repeated case invocation should be idempotent). */
+    /* Defensive cleanup: same-named entries from a previous run (invocation is idempotent). */
     svc_remove(SVC_T_A);
 
-    /* ---- TC-SVC-001: after publish, lookup returns the same pointer (and name_at/count agree) ---- */
+    /* ---- TC-SVC-001: after publish, lookup returns the same pointer (count/name_at agree) ---- */
     {
         const br_u32 before = br_service_count();
         const int rp = br_service_publish(SVC_T_A, &ops_a);
@@ -83,7 +68,7 @@ int br_service_selftest(void)
         sc_report(ok, "TC-SVC-001", "publish -> lookup round trip: same pointer, count/name_at in sync, hit accounting");
     }
 
-    /* ---- TC-SVC-002: duplicate-name publish ⇒ -EEXIST, and the original pointer is not overwritten ---- */
+    /* ---- TC-SVC-002: duplicate-name publish => -EEXIST, original pointer not overwritten ---- */
     {
         const int rp2 = br_service_publish(SVC_T_A, &ops_b);
         const void *still = br_service_lookup(SVC_T_A);
@@ -91,7 +76,7 @@ int br_service_selftest(void)
                   "TC-SVC-002", "duplicate publish => -EEXIST and original ops not overwritten");
     }
 
-    /* ---- TC-SVC-003: unpublished name ⇒ BR_NULL; invalid arguments ⇒ -EINVAL ---- */
+    /* ---- TC-SVC-003: unpublished name => BR_NULL; null name/ops => -EINVAL ---- */
     {
         const void *miss = br_service_lookup(SVC_T_B);
         const int   e_name = br_service_publish(BR_NULL, &ops_b);
@@ -101,7 +86,7 @@ int br_service_selftest(void)
                   "TC-SVC-003", "lookup miss => NULL; empty name/empty ops => -EINVAL");
     }
 
-    /* ---- Wrap-up: remove the case entries (do not pollute later dump listings of the registry) ---- */
+    /* ---- Wrap-up: remove the case entries so later registry dumps stay clean ---- */
     svc_remove(SVC_T_A);
     svc_remove(SVC_T_B);
 

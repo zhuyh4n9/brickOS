@@ -1,18 +1,12 @@
-"""host platform triple — coordinates for tool output under ``build/host/<host-arch>/<host-os>/``.
-
-Layout (inspired by Android's ``out/host/...``)::
+"""host platform triple -- coordinates for tool output under ``build/host/<host-arch>/<host-os>/``::
 
     build/host/<host-arch>/<host-os>/bin/brickie-gen
     build/host/<host-arch>/<host-os>/lib/libbrickie-gen.a
 
-    host-arch: x86-64 / aarch64 / ...
-    host-os:   linux / darwin / win
+    host-arch: x86-64 / aarch64 / ...    host-os: linux / darwin / win
 
-**The single source of truth is** ``tools/host-detect.sh`` (consumed by make via ``mk/host.mk``).
-This module is the **Python mirror** of that mapping — the frontend must compute the
-same paths **without starting a shell** (installed layout / CI jobs with an empty ``PATH``). The two mappings are
-asserted to match by the "same rules" case in ``tests/run.sh`` and must not drift.
-
+Python mirror of ``tools/host-detect.sh`` (used by make via ``mk/host.mk``): the frontend computes
+the same paths without a shell; ``tests/run.sh`` asserts the mappings match and they must not drift.
 Overrides (same names as the script): ``BRICKIE_HOST_ARCH`` / ``BRICKIE_HOST_OS``.
 """
 
@@ -24,7 +18,6 @@ import sys
 from functools import lru_cache
 from pathlib import Path
 
-# One-to-one with the case branches in tools/host-detect.sh (changing one requires changing the other; tests guard this).
 _ARCH_CANONICAL = frozenset({"x86-64", "aarch64", "x86", "arm", "riscv64", "ppc64le", "s390x"})
 _ARCH_ALIASES = {
     "x86_64": "x86-64",
@@ -92,11 +85,8 @@ def host_bin_dir(repo_root: Path) -> Path:
 
 
 def prebuilts_bin_dir(repo_root: Path) -> Path:
-    """``<repo_root>/prebuilts/seed/brickie/<host-arch>/<host-os>/bin`` (bootstrap seed, committed).
-
-    **Two** sets of host artifacts exist alongside ``host_bin_dir()``: the former is "just built locally", the latter is
-    "committed with the source so a new checkout without a compiler can use it directly". Lookup order is in
-    ``native.generator_binary()``.
+    """``<repo_root>/prebuilts/seed/brickie/<host-arch>/<host-os>/bin`` (committed bootstrap seed;
+    its locally built counterpart is ``host_bin_dir()``; lookup order: ``native._find_tool()``).
     """
     arch, osname = host_triple()
     return Path(repo_root) / "prebuilts" / "seed" / "brickie" / arch / osname / "bin"

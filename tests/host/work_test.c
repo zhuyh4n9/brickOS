@@ -1,17 +1,8 @@
 /*
- * tests/host/work_test.c — host-side semantic gate for **deferred work (bottom half / workqueue)**
- *
- * Why run on the host: queue boundedness / FIFO / non-reentrancy / context flags / statistics are
- * **pure semantics** that the host can push to the limit in milliseconds (constructing a "queue
- * full" on the target would need an interrupt storm). The target side has another leg (QEMU's
- * `TC-IRQ-015/016/017`: per-line BH dispatch, suppression, no replay); together they are complete.
- *
- * ★ The three unshakeable properties verified (`br_work.h` W1/W2/W3):
- *   W1 bounded: the queue is a compile-time static ring; full ⇒ `-EAGAIN` (never silently dropped — IR-10)
- *   W2 ISR-safe: the submit path does not call back and takes no lock
- *   W3 non-reentrant: calling `br_work_drain` again inside a work item returns 0, stack depth does not grow with queue length
- *
- * Output protocol: [HOSTTEST] PASS|FAIL … SUMMARY; any failure ⇒ non-zero exit code.
+ * Host-side semantic gate for deferred work (bottom half / workqueue); the target has a separate
+ * leg (QEMU TC-IRQ-015/016/017). br_work.h W1/W2/W3: W1 bounded -- static ring, full => -EAGAIN,
+ * never silently dropped; W2 ISR-safe submit (no callback, no lock); W3 non-reentrant -- a nested
+ * br_work_drain returns 0 and stack depth does not grow with queue length.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -31,12 +22,10 @@
 
 #include "host_sched.h"
 
-/* TCB common header: when calling `br_sched_block_current` inside bh you must open the window per the ICB contract (see br_sched.h). */
+/* TCB common header: blocking inside bh must open the ICB window (see br_sched.h). */
 #include "sched_internal.h"
 
-/* =====================================================================
- * case framework
- * ===================================================================== */
+/* ---- case framework ---- */
 
 static int s_hpass;
 static int s_hfail;
@@ -55,9 +44,7 @@ static void host_check(br_bool ok, const char *tag, const char *what)
 #define HOST_STACK_BYTES  8192u
 static br_u8 s_stk[4][HOST_STACK_BYTES] BR_ALIGN(16);
 
-/* =====================================================================
- * work item bodies
- * ===================================================================== */
+/* ---- work item bodies ---- */
 
 static volatile br_u32 s_order[BR_WORKQ_DEPTH + 4u];
 static volatile br_u32 s_order_n;
@@ -94,12 +81,12 @@ static void item_context(void *arg)
     s_bh_flag_inside = (br_work_in_bh() != BR_FALSE) ? 1 : 0;
     s_nested_rc = (int)br_work_drain(4u);        /* W3: non-reentrant ⇒ 0 */
 
-    /* blocking inside bh ⇒ -EPERM (the arguments are fine, the context is wrong). */
+    /* Blocking inside bh => -EPERM (arguments are fine, the context is wrong). */
     br_thread_t *me = br_task_self();
     me->wait_status = BR_ERR(ETIMEDOUT);      /* open the window per the ICB contract */
     s_block_rc = br_sched_block_current(BR_TIMEOUT_INF);
 
-    /* yield inside bh ⇒ refused + trace record (not silently treated as "yield succeeded"). */
+    /* Yield inside bh => refused + trace record (not silently treated as success). */
     s_self_before = br_task_self();
     br_task_yield();
     s_self_after = br_task_self();
@@ -108,7 +95,6 @@ static void item_context(void *arg)
     note(0xE0u);
 }
 
-/* Drain the trace ring and count BH_CTX_VIOLATION (runtime trace of the bh ban). */
 static br_u32 drain_violation_count(void)
 {
     br_trace_evt_t ev[32];
@@ -125,8 +111,6 @@ static br_u32 drain_violation_count(void)
     return hits;
 }
 
-/* ---- cases ---- */
-
 static void case_bound_and_order(void)
 {
     br_work_stat_t st;
@@ -141,7 +125,7 @@ static void case_bound_and_order(void)
     s_order_n = 0u;
     s_ran = 0u;
 
-    /* W1: fill the queue — the DEPTH+1-th submit must be -EAGAIN */
+    /* W1: fill the queue; the DEPTH+1-th submit must be -EAGAIN */
     rc = 0;
     for (br_u32 i = 0u; i < (br_u32)BR_WORKQ_DEPTH; i++) {
         const int r = br_work_submit(item_note, (void *)(br_uintptr_t)(100u + i));
@@ -159,7 +143,7 @@ static void case_bound_and_order(void)
                "HOST-WQ-BOUND",
                "queue bounded: filling DEPTH entries succeeds, the DEPTH+1-th ⇒ -EAGAIN (no silent drop)");
 
-    /* FIFO: drain order must match submit order item by item (budget of 1 each time ⇒ also checks the budget is honored) */
+    /* FIFO: drain order must match submit order, with budget=1 each round */
     ran = 0u;
     for (br_u32 i = 0u; i < (br_u32)BR_WORKQ_DEPTH; i++) {
         const br_u32 k = br_work_drain(1u);
@@ -182,7 +166,7 @@ static void case_bound_and_order(void)
                "HOST-WQ-FIFO",
                "drain executes FIFO item by item (with budget=1 one per round), pending==0 once drained");
 
-    /* bad arguments and full capacity are two kinds of failure (counted separately, so a bug is not read as "budget too small") */
+    /* Bad arguments and full capacity are distinct failure kinds (counted separately). */
     const int bad = br_work_submit(BR_NULL, BR_NULL);
     br_work_stats_get(&st);
     host_check((bad == BR_ERR(EINVAL)) && (st.dropped_invalid == 1u),
@@ -246,9 +230,7 @@ static void case_budget(void)
                "drain(max) strictly honors the budget: the 2+4 items run, the rest stay queued for the next round (prescription for the IRQ exit)");
 }
 
-/* =====================================================================
- * supervisor thread
- * ===================================================================== */
+/* ---- supervisor thread ---- */
 
 static volatile int s_other_hits;
 
@@ -271,9 +253,8 @@ static void host_supervisor(void *arg)
     case_bh_context();
     case_budget();
 
-    /* Yield once: if "yield inside bh" really switched away, the opponent would run here —
-     * complementary to the HOST-WQ-NOYIELD check above (that one only looks at thread identity,
-     * this one at whether someone else really ran). */
+    /* Yield once: if "yield inside bh" had really switched away, the opponent would run here --
+     * complementary to HOST-WQ-NOYIELD, which only checks thread identity. */
     s_other_hits = 0;
     br_task_attr_t a = { .name = "other",
                          .stack = (void *)(s_stk[0] + HOST_STACK_BYTES),

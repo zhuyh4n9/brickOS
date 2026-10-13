@@ -1,34 +1,21 @@
-/* adapter/uboot-mmc — an **interface-type shim** for `<blk.h>` (not a copy of u-boot's)
+/* adapter/uboot-mmc interface-type shim for `<blk.h>` (not a copy of u-boot's).
  *
- * ============================== why a "shim" ==============================
- * The originals under upstream `drivers/mmc/` need `struct blk_desc`, `U_BOOT_LEGACY_BLK()`, `blk_dselect_hwpart()`
- * — those **block-layer interface types**. Why not vendor upstream `include/blk.h`:
+ * Upstream needs `struct blk_desc`, `U_BOOT_LEGACY_BLK()` and `blk_dselect_hwpart()` from it.
+ * u-boot's `include/blk.h` includes `<bouncebuf.h>` and `<efi.h>`, dragging in the whole bounce
+ * buffer and EFI families, so this file restates the minimal interface instead.
  *
- *   u-boot's `include/blk.h` lines 10-12 are
- *       #include <bouncebuf.h>
- *       #include <dm/uclass-id.h>
- *       #include <efi.h>
- *   ⇒ vendoring it drags in `<bouncebuf.h>` (the whole bounce buffer mechanism) and `<efi.h>`
- *   (the whole EFI boot services / `efi_guid_t` / `efi_status_t` family). This file needs only
- *   **one struct, one macro, two function prototypes** from it — exactly what ADR-0026 D-3 calls "a faithful but minimal
- *   interface type", handled the same way as `adapter/uboot-erofs/compat/part.h`.
+ * Faithful to upstream item by item:
+ *   - `lbaint_t` and `LBAF`/`LBAFU`: `CONFIG_SYS_64BIT_LBA` undefined => `ulong` (64-bit on LP64);
+ *   - `struct blk_desc` field order follows upstream's `!CONFIG_BLK` branch (three trailing legacy
+ *     callbacks + `priv`);
+ *   - `BLK_VEN_SIZE`/`BLK_PRD_SIZE`/`BLK_REV_SIZE`: values must match upstream, they are part of
+ *     the layout (`mmc_startup()` sprintf's into `vendor`);
+ *   - `U_BOOT_LEGACY_BLK()`: upstream places a `struct blk_driver` in a link section, here it is a
+ *     plain global object (no block-driver enumeration; glue holds the `struct mmc *`), so
+ *     `mmc_legacy.c`'s text still holds verbatim but nobody iterates it (`--gc-sections` drops
+ *     it). Known, deliberate deviation (see `ADAPTER-NOTES.md`).
  *
- * ★ What "faithful" means (aligned with upstream item by item, not invented):
- *   - derivation of `lbaint_t` and `LBAF`/`LBAFU` (`CONFIG_SYS_64BIT_LBA` undefined ⇒ `ulong`,
- *     which is 64-bit on LP64 — matching aarch64 u-boot defaults);
- *   - the **non-BLK field order** of `struct blk_desc`: `CONFIG_BLK` is deliberately undefined here, so upstream's
- *     struct takes the `#else` branch (three trailing legacy callbacks + `priv`), replicated field by field;
- *   - `BLK_VEN_SIZE`/`BLK_PRD_SIZE`/`BLK_REV_SIZE`: **values must match upstream** —
- *     `mmc_startup()` does `sprintf(bdesc->vendor, ...)`, and the buffer size is part of the layout;
- *   - `U_BOOT_LEGACY_BLK()`: upstream expands it to "place a `struct blk_driver` in the
- *     `.u_boot_list_2_blk_driver_2_<name>` section". This file has **no** such link-section enumeration (we do not
- *     enumerate block drivers; the glue holds a `struct mmc *` directly), so it is downgraded to a **plain global object**:
- *     the `U_BOOT_LEGACY_BLK(mmc) = { ... };` at the end of `mmc_legacy.c` therefore still holds verbatim,
- *     just nobody iterates it (`--gc-sections` drops it). This is a **known and deliberate behavior deviation**,
- *     registered in the "deviations" section of `ADAPTER-NOTES.md`.
- *
- * ★ `enum uclass_id` is not defined here: it is a zero-dependency upstream original (`third_party/.../dm/uclass-id.h`),
- *   so `compat/dm/uclass-id.h` forwards it directly.
+ * `enum uclass_id` is forwarded from the zero-dependency vendor original.
  */
 #ifndef BR_ADAPTER_UBOOT_MMC_SHIM_BLK_H
 #define BR_ADAPTER_UBOOT_MMC_SHIM_BLK_H
@@ -36,7 +23,6 @@
 #include "mmc_env.h"
 #include <dm/uclass-id.h>
 
-/* ---- logical block address type (derived as in upstream blk.h) ---- */
 #ifdef CONFIG_SYS_64BIT_LBA
 typedef uint64_t lbaint_t;
 #define LBAFlength "ll"
@@ -49,7 +35,7 @@ typedef ulong lbaint_t;          /* aarch64 LP64: ulong is 64-bit */
 
 #define DEFAULT_BLKSZ     512
 
-struct udevice;                  /* forward declaration: no DM here ⇒ exists as a type only */
+struct udevice;                  /* forward declaration: no DM here */
 
 #define BLK_VEN_SIZE      40
 #define BLK_PRD_SIZE      20
@@ -58,7 +44,7 @@ struct udevice;                  /* forward declaration: no DM here ⇒ exists a
 #define PART_FORMAT_PCAT  0x1
 #define PART_FORMAT_GPT   0x2
 
-/* same values as upstream (enum sig_type); no partition table detection here, but the struct field is required */
+/* same values as upstream (enum sig_type); the struct field is required even without detection */
 enum sig_type {
     SIG_TYPE_NONE,
     SIG_TYPE_MBR,
@@ -66,12 +52,9 @@ enum sig_type {
     SIG_TYPE_COUNT
 };
 
-/*
- * Block device descriptor. ★ This is the **only substantive interface** between this file and upstream: upstream `mmc.c`
- * fills `blksz`/`log2blksz`/`lba`/`vendor`/`product`/`revision`/`hwpart` into it, and reads
- * `devnum` from it to find the `struct mmc`; our glue also reads `lba` (capacity) and `blksz` from it.
- * Field order matches upstream `include/blk.h`'s `!CONFIG_BLK` shape one by one.
- */
+/* Block device descriptor, the substantive interface with upstream: `mmc.c` fills `blksz`/
+ * `log2blksz`/`lba`/`vendor`/`product`/`revision`/`hwpart` and reads `devnum`; glue reads `lba`
+ * (capacity) and `blksz`. Field order matches upstream's `!CONFIG_BLK` shape. */
 struct blk_desc {
     enum uclass_id  uclass_id;   /* type of the interface */
     int             devnum;      /* device number */
@@ -93,10 +76,8 @@ struct blk_desc {
     enum sig_type   sig_type;    /* Partition table signature type */
     union {
         uint32_t mbr_sig;        /* MBR integer signature */
-        char     guid_sig[16];   /* GPT GUID Signature (upstream is efi_guid_t; not parsed here,
-                                  * but **16 bytes are kept** so the layout does not drift) */
+        char     guid_sig[16];   /* GPT GUID sig (upstream efi_guid_t); 16 B keep the layout */
     };
-    /* ---- `!CONFIG_BLK` branch: legacy block callbacks ---- */
     unsigned long (*block_read)(struct blk_desc *block_dev, lbaint_t start,
                                 lbaint_t blkcnt, void *buffer);
     unsigned long (*block_write)(struct blk_desc *block_dev, lbaint_t start,
@@ -106,7 +87,7 @@ struct blk_desc {
     void *priv;                  /* driver private struct pointer */
 };
 
-/* block driver table shape when upstream `CONFIG_BLK` is disabled; see "U_BOOT_LEGACY_BLK" in the file header. */
+/* block driver table shape for upstream `!CONFIG_BLK` (see U_BOOT_LEGACY_BLK below) */
 struct blk_driver {
     const char *uclass_idname;
     enum uclass_id uclass_id;
@@ -116,16 +97,10 @@ struct blk_driver {
     int (*select_hwpart)(struct blk_desc *desc, int hwpart);
 };
 
-/*
- * ★ Behavior deviation (see the last part of the file header): upstream = register a `blk_driver` into a link section;
- *   this file = a plain global object. `mmc_legacy.c`'s text therefore still holds verbatim, but there is **no**
- *   "look up a block driver by uclass_id" mechanism — this file does not need it (the glue holds the instance itself).
- */
 #define U_BOOT_LEGACY_BLK(__name) \
     struct blk_driver __attribute__((unused)) uboot_mmc_legacy_blk_ ## __name
 
-/* Implemented by the glue (see glue/emmc_bdev.c): these two are hook points on upstream's mmc block-layer path.
- * `mmc_bread()` does `blk_dselect_hwpart(block_dev, block_dev->hwpart)` before every read. */
+/* Implemented by glue; `mmc_bread()` calls `blk_dselect_hwpart()` before every read. */
 int blk_dselect_hwpart(struct blk_desc *desc, int hwpart);
 int blk_select_hwpart_devnum(enum uclass_id uclass_id, int devnum, int hwpart);
 

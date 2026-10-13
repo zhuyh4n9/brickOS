@@ -1,28 +1,17 @@
 # brickie — brickOS composition-time toolchain
 
 > **`brickie check` is the "declaration-surface completeness checker"**: it guarantees the composition is **logically** self-consistent,
-> but **not** that the composition **compiles / runs correctly** (`brickie-v0.1.md` §2).
+> but **not** that the composition **compiles / runs correctly**. The design doc explicitly requires this sentence in the CLI help and README — to prevent v0.x users from over-trusting it.
 >
-> The design doc explicitly requires this sentence in the CLI help and README — to prevent v0.x users from over-trusting it.
+> Naming decision: this tool is `brickie`, not `br`; symbol prefixes `br_*` / `BR_*` / `.br_plugins` are **already-allocated identifiers that do not change with the tool name**.
 
-Design doc (**authoritative**, on the `brickOS-Design` branch; this branch has no `docs/`): read by section number
-`docs/2-toolchain/brickie/brickie-v0.1.md` (written below as `§x.y`).
-Progress and work items: `docs/2-toolchain/brickie/checklist.md`.
-Naming decision: `docs/decisions/0001-brickie-tool-naming.md` (**this tool is `brickie`, not `br`**;
-but symbol prefixes such as `br_*` / `BR_*` / `.br_plugins` are **already-allocated identifiers that do not change with the tool name**).
-
-**The single authority for the cross-language interface is this directory's [`docs/contract.md`](docs/contract.md)**: the three processes'
-JSON envelope, diagnostic model, file ownership, per-command `args` and `data`/`schema` field tables, and the implementation-time
-rulings **R-1…R-12** are all there. This file only describes **this repo's current state and division of labor**; the protocol itself is not copied
-here (a second copy of the truth is exactly what the contract exists to eliminate).
+**The single authority for the cross-language interface is this directory's [`docs/contract.md`](docs/contract.md)**: the three processes' JSON envelope, diagnostic model, file ownership, per-command `args` and `data`/`schema` field tables, and the implementation-time rulings **R-1…R-12** are all there. This file only describes **this repo's current state and division of labor**; the protocol itself is not copied here.
 
 ---
 
 ## 1. Current state (v0.1 command surface)
 
-**L5 (Python frontend) is fully delivered**: `python/brickie/` has a complete argparse command surface of **29 leaf commands + 2 global switches**,
-with orchestration / disk writes / presentation / shape validation / exit-code aggregation all implemented. By purpose it splits into
-**two families + 2 global switches** (the build family is the second family grown from ADR-0004):
+**L5 (Python frontend) is fully delivered**: `python/brickie/` has a complete argparse command surface of **29 leaf commands + 2 global switches**, with orchestration / disk writes / presentation / shape validation / exit-code aggregation all implemented. By purpose it splits into **two families + 2 global switches**:
 
 | Family | Commands | Purpose |
 |---|---|---|
@@ -32,12 +21,7 @@ with orchestration / disk writes / presentation / shape validation / exit-code a
 | **Build family (second family)** | `build [--profile\|--jobs\|--backend\|--tag\|--dry-run\|--force\|--emit-backends\|--no-post]` · `clean [--all]` · `run` · `size` · `disasm` · `test [<name>\|--list]` | Declaration-surface-driven build orchestration + execution + gates (build/clean/run/size/disasm/test; core also has `judge`, serving only internal L5 calls) |
 | **Global switches** | `--version [--deps]` · `--json` (also `--root DIR`) | Fingerprint / machine-readable output / root override |
 
-> **Scope of the v0.1 "boundary discipline" (ruling R-13, contract §9)**: `brickie-v0.1.md` §0 says
-> "no v0.1 command **may require cc/cargo/nm to be present**" — this sentence constrains only **composition-period** commands
-> (the three families scaffold / dependencies & validation / version & interface), i.e. the "declaration-surface completeness checker" half.
-> **The build family is an explicit second family**: it composes the image from the same declaration surface and drives the cross toolchain;
-> "requiring the toolchain to be present" is its **job**, not an exception clause to the discipline. CI composition-period jobs still have zero compilation dependencies
-> (`make tools` / `brickie check` do not touch the cross toolchain).
+> **Scope of the v0.1 "boundary discipline" (ruling R-13)**: "no v0.1 command **may require cc/cargo/nm to be present**" constrains only **composition-period** commands (scaffold / dependencies & validation / version & interface), i.e. the "declaration-surface completeness checker" half. **The build family is an explicit second family**: it composes the image and drives the cross toolchain; "requiring the toolchain to be present" is its **job**. CI composition-period jobs still have zero compilation dependencies (`make tools` / `brickie check` do not touch the cross toolchain).
 
 **Implementation status** (frontend = L5 argument parsing/orchestration/presentation; native side = the processes that actually decide):
 
@@ -52,20 +36,11 @@ with orchestration / disk writes / presentation / shape validation / exit-code a
 | `--version [--deps]` | ✅ | `core version` ✅ | When core is absent, `--version` degrades to printing the frontend version |
 | `build` / `clean` / `run` / `size` / `disasm` / `test` | ✅ | `core build/clean/run/size/disasm/test/judge` ✅ | **Second family** (ADR-0004 / design ADR-0003 S1–S4): declaration-surface-driven build + L5 executor (`runner.py`, concurrency/timeout/logging/progress); tool resolution / incremental / gate criteria all in core (rulings R-14/R-15/R-16) |
 
-> **Which side decides**: all **decisions** and BRV codes live in `rust/` (L0/L1); L5 only does argument parsing, orchestration,
-> disk writes, shape validation, presentation and exit-code aggregation (the V-18c static check catches overreach). The native side's domain self-check:
-> `brickie-core --selftest` — **485 cases** (after `make core`, run `build/host/<triple>/bin/brickie-core --selftest`),
-> it **does not need a Python interpreter** (V-18a). For end-to-end regression see `tests/run.sh`; the blueprint =
-> the V-1…V-19 matrix + build-family §V-B in `tests/ACCEPTANCE.md`.
+> **Which side decides**: all **decisions** and BRV codes live in `rust/` (L0/L1); L5 only does argument parsing, orchestration, disk writes, shape validation, presentation and exit-code aggregation (the V-18c static check catches overreach). The native side's domain self-check: `brickie-core --selftest` — **485 cases** (after `make core`, run `build/host/<triple>/bin/brickie-core --selftest`), it **does not need a Python interpreter** (V-18a). For end-to-end regression see `tests/run.sh`; the blueprint = the V-1…V-19 matrix + build-family §V-B in `tests/ACCEPTANCE.md`.
 
-**Explicitly not done** (design checklist §5.4; **none of these names** appear in `--help`; reverse acceptance will catch them):
-`api-dump` / `verify` / `iface check` / `dbg` / `pack`, plus the old names `add` / `show` / `env`.
+**Explicitly not done** (none of these names appear in `--help`; reverse acceptance will catch them): `api-dump` / `verify` / `iface check` / `dbg` / `pack`, plus the old names `add` / `show` / `env`. `build` / `test` / `run` were removed from the banned-name list when the second family delivered them, and reverse acceptance (`N-1`/`N-2`) was updated to the new list.
 
-> `build` / `test` / `run` were originally on §5.4's "explicitly not done" list — they are the second family
-> **delivered later** by ADR-0004 (design ADR-0003 S1–S4), so they were removed from the banned-name list; reverse acceptance (`N-1`/`N-2`)
-> has been updated to the new list.
-
-## 2. Directory structure (cf. §9.2)
+## 2. Directory structure
 
 ```
 tools/brickie/
@@ -84,8 +59,7 @@ tools/brickie/
 └── tests/                run.sh (end-to-end) + ACCEPTANCE.md (V-1…V-19 acceptance matrix + build-family §V-B)
 ```
 
-**Out-of-tree artifacts** (cf. Android's `out/host/...`; decided by the repo root's `mk/host.mk` + `tools/host-detect.sh`).
-The source tree holds only sources; everything built goes under the repo-level `build/`:
+**Out-of-tree artifacts** (cf. Android's `out/host/...`; decided by the repo root's `mk/host.mk` + `tools/host-detect.sh`). The source tree holds only sources; everything built goes under the repo-level `build/`:
 
 ```
 build/host/<host-arch>/<host-os>/bin/brickie       ← L5 entry ELF (embedded payload)
@@ -96,23 +70,17 @@ build/host/<host-arch>/<host-os>/bin/brickie       ← L5 entry ELF (embedded pa
                               …/share/brickie/payload.tar   ← payload embedded in brickie (for inspection)
 ```
 
-`<host-arch>` = `x86-64` / `aarch64` / …, `<host-os>` = `linux` / `darwin` / `win`.
-The frontend `native.py` locates the two native tools by the same convention (`BRICKIE_CORE` / `BRICKIE_GEN` /
-`BRICKIE_HOST_ARCH` / `BRICKIE_HOST_OS` can override), and does not depend on old locations inside the source tree.
+`<host-arch>` = `x86-64` / `aarch64` / …, `<host-os>` = `linux` / `darwin` / `win`. The frontend `native.py` locates the two native tools by the same convention (`BRICKIE_CORE` / `BRICKIE_GEN` / `BRICKIE_HOST_ARCH` / `BRICKIE_HOST_OS` can override), and does not depend on old locations inside the source tree.
 
-**Division of labor among the three executables** (contract §1): `brickie` (C++ launcher + embedded payload), `brickie-core`
-(Rust), `brickie-gen` (C++ renderer). The entry ELF is **single-file self-contained**: `freeze.py` packs
+**Division of labor among the three executables**: `brickie` (C++ launcher + embedded payload), `brickie-core` (Rust), `brickie-gen` (C++ renderer). The entry ELF is **single-file self-contained**: `freeze.py` packs
 
 - `python/brickie/**` (L5 frontend), `templates/**` (skeleton templates), `schema/**` (shape-gate input),
-- **native tools** (`cxx/Makefile`'s `PAYLOAD_EMBEDS`: `brickie-gen` always embedded, `brickie-core`
-  conditionally embedded when present),
+- **native tools** (`cxx/Makefile`'s `PAYLOAD_EMBEDS`: `brickie-gen` always embedded, `brickie-core` conditionally embedded when present),
 
-into an uncompressed ustar tar embedded as data; at runtime it unpacks to a temporary directory, uses the system `python3` to interpret the embedded
-code, and points `BRICKIE_GEN` / `BRICKIE_CORE` at the **unpacked** native tools. Therefore:
+into an uncompressed ustar tar embedded as data; at runtime it unpacks to a temporary directory, uses the system `python3` to interpret the embedded code, and points `BRICKIE_GEN` / `BRICKIE_CORE` at the **unpacked** native tools. Therefore:
 
 - The artifact is a real ELF (magic `\x7fELF`) and enters the seed together with the standalone copies `brickie-gen` / `brickie-core`;
-- **Copying only the single file `brickie`** is enough to run — no `PYTHONPATH`, no source tree,
-  no native tools in the same directory, no `g++`/`cargo`;
+- **Copying only the single file `brickie`** is enough to run — no `PYTHONPATH`, no source tree, no native tools in the same directory, no `g++`/`cargo`;
 - **Zero new third-party dependencies** (no PyInstaller/Nuitka); the payload is byte-for-byte reproducible.
 
 **Bootstrap seed** (published by `make prebuilt`; isomorphic to `build/host/**` but **committed to version control**):
@@ -123,10 +91,7 @@ prebuilts/seed/brickie/<host-arch>/<host-os>/bin/brickie        ← ★ single-f
                                            /brickie-core   ← L0/L1 core (redundant copy)
 ```
 
-This `brickie` is the one that "runs from a fresh checkout without `g++`/`cargo`", and is also the starting point for future brickie
-self-hosting of its own compilation. Dev-mode frontend lookup order (`native.py`'s `_find_tool`):
-`$BRICKIE_GEN`/`$BRICKIE_CORE` → `build/host/...` (just built locally) → `prebuilts/...` (seed)
-→ `PATH` (each tier has a `*/*` fallback). See [prebuilts/README.md](../../prebuilts/README.md).
+This `brickie` "runs from a fresh checkout without `g++`/`cargo`". Dev-mode frontend lookup order (`native.py`'s `_find_tool`): `$BRICKIE_GEN`/`$BRICKIE_CORE` → `build/host/...` (just built locally) → `prebuilts/...` (seed) → `PATH` (each tier has a `*/*` fallback). See [prebuilts/README.md](../../prebuilts/README.md).
 
 ## 3. Three-language division of labor and protocol pointers
 
@@ -144,16 +109,11 @@ self-hosting of its own compilation. Dev-mode frontend lookup order (`native.py`
   §6 `brickie-gen` commands · §7 declaration-surface schema (**§7.4 = `tests/gates.toml` shape**) ·
   §8 L5 boundary · §9 implementation-time rulings R-1…R-16.
 
-**Three disciplines most easily gotten wrong, called out separately**:
+**Three disciplines most easily gotten wrong**:
 
-1. **Write paths**: `brick.toml` / `product.toml` are **read-only inputs**, never rewritten; the machine writes only
-   `api/iface/**`, `brickie.lock`, `build/index/**`, `build/gen/**` (contract §4).
-2. **`dep add` / `dep rm` do not write to disk** (ruling **R-2**): design §7.7 says "write `brick.toml`", but
-   §9.1.1 rule 1 says never rewrite human-written files — the latter wins. The command only **prints** a directly pasteable TOML snippet
-   (`data.snippet`).
-3. **In the build family L5 only executes, never decides** (rulings **R-14/R-15/R-16**): which compiler to use, whether to rebuild,
-   whether the log counts as red or green, all come from core; `runner.py` only does "validate executable / concurrency / timeout / collect logs /
-   present progress". Even the code used for a compile failure is given by core with the step (`steps[i].fail_code`).
+1. **Write paths**: `brick.toml` / `product.toml` are **read-only inputs**, never rewritten; the machine writes only `api/iface/**`, `brickie.lock`, `build/index/**`, `build/gen/**`.
+2. **`dep add` / `dep rm` do not write to disk** (ruling **R-2**): design says "write `brick.toml`", but "never rewrite human-written files" wins. The command only **prints** a directly pasteable TOML snippet (`data.snippet`).
+3. **In the build family L5 only executes, never decides** (rulings **R-14/R-15/R-16**): which compiler to use, whether to rebuild, whether the log counts as red or green, all come from core; `runner.py` only does "validate executable / concurrency / timeout / collect logs / present progress". Even the code used for a compile failure is given by core with the step (`steps[i].fail_code`).
 
 ## 4. Build and test
 
@@ -168,7 +128,7 @@ make prebuilt        # publish the **three-piece** seed {brickie,brickie-gen,bri
 make prebuilt-check  # whether the three pieces lag behind the sources (does not touch disk)
 ```
 
-The tool's own build entry **builds only the tool**; the image is built by brickie (ADR-0004 / design ADR-0003 S1–S4):
+The image is built by brickie:
 
 ```sh
 build/host/<triple>/bin/brickie build            # image entry: composition-period check → gen → compile → link → [build].post
@@ -177,29 +137,10 @@ build/host/<triple>/bin/brickie test             # run all gates in tests/gates.
 build/host/<triple>/bin/brickie clean --all      # clean image-side derivatives (leaves build/host tools alone)
 ```
 
-- **cargo version (≥ 1.83)**: `rust/Cargo.lock` is **version 4**; an old distro cargo
-  (e.g. 1.75 on Ubuntu 24.04) cannot read it and only reports `lock file version 4 requires
-  -Znext-lockfile-bump`. `make core`'s selection order is "explicit `CARGO=…` → the workspace's own
-  `.toolchain` (`<repo>/.toolchain` or `<repo>/../.toolchain`) → PATH", and when too old it
-  **FAILs immediately** with a fix (instead of leaking cargo's vague raw error to the user).
-- **cargo out-of-tree**: `CARGO_HOME` / `CARGO_TARGET_DIR` default to
-  `prototype/build/{cargo-home,cargo-target}` (under managed environments `$HOME/.cargo` may be read-only),
-  both can be overridden by environment variable; Rust sources are in `rust/`, artifacts are copied to the host bin location.
-- **Core degrades, gates do not**: when Rust has not been built, `make` / `make cxx` / `make selftest`
-  **succeed as usual** (the payload temporarily excludes core; only a notice is printed); but `make prebuilt` treats `brickie-core`
-  as a **required piece** — missing core ⇒ FAIL (the bootstrap seed must have all three pieces); `prebuilt-check` also checks all three.
-- **Repo-root delegation**: `make tools` (builds only L5/L2), `make tools-core` (builds only the Rust core),
-  `make tools-test` (tool tests), `make brickie-check` / `brickie-check-release` /
-  `make brickie-compose` (validate / rebuild artifacts using the entry ELF).
-  **The image side is handed to brickie** (ADR-0004 / design ADR-0003 S1–S4): top-level `make` builds only the tool;
-  `make all` / `run` / `smoke` / `irq-test` / `mem-test` / `string-test` / `dbg-test` /
-  `check-string` / `size` / `disasm` / `clean-brickos` are all **thin delegations** (calling
-  `$(BRICKIE) build|run|test …|size|disasm|clean`); the real thing lives in `brickie build` and
-  `tests/gates.toml`. The image's source set / flags / rules **no longer** appear in the top-level Makefile —
-  they are determined by `product.toml [build]` + each plugin's `[build]` + the platform's `[build.target]`,
-  and the ② invariant in `make check-build` catches any regression.
-  Declaration surface red ⇒ **`make` stops at ⓪** (exit code 1) and the image is not built — this is the discipline itself, not an accident;
-  to build only the tool use `make tools` / `make tools-core`.
+- **cargo version (≥ 1.83)**: `rust/Cargo.lock` is **version 4**; an old distro cargo (e.g. 1.75 on Ubuntu 24.04) cannot read it and only reports `lock file version 4 requires -Znext-lockfile-bump`. `make core`'s selection order is "explicit `CARGO=…` → the workspace's own `.toolchain` (`<repo>/.toolchain` or `<repo>/../.toolchain`) → PATH", and when too old it **FAILs immediately** with a fix.
+- **cargo out-of-tree**: `CARGO_HOME` / `CARGO_TARGET_DIR` default to `prototype/build/{cargo-home,cargo-target}` (under managed environments `$HOME/.cargo` may be read-only), both can be overridden by environment variable; Rust sources are in `rust/`, artifacts are copied to the host bin location.
+- **Core degrades, gates do not**: when Rust has not been built, `make` / `make cxx` / `make selftest` **succeed as usual** (the payload temporarily excludes core; only a notice is printed); but `make prebuilt` treats `brickie-core` as a **required piece** — missing core ⇒ FAIL (the bootstrap seed must have all three pieces); `prebuilt-check` also checks all three.
+- **Repo-root delegation**: `make tools` (builds only L5/L2), `make tools-core` (builds only the Rust core), `make tools-test` (tool tests), `make brickie-check` / `brickie-check-release` / `make brickie-compose` (validate / rebuild artifacts using the entry ELF). **The image side is handed to brickie**: top-level `make` builds only the tool; `make all` / `run` / `smoke` / `irq-test` / `mem-test` / `string-test` / `dbg-test` / `check-string` / `size` / `disasm` / `clean-brickos` are all **thin delegations** (calling `$(BRICKIE) build|run|test …|size|disasm|clean`); the real thing lives in `brickie build` and `tests/gates.toml`. The image's source set / flags / rules **no longer** appear in the top-level Makefile — they are determined by `product.toml [build]` + each plugin's `[build]` + the platform's `[build.target]`, and the ② invariant in `make check-build` catches any regression. Declaration surface red ⇒ **`make` stops at ⓪** (exit code 1) and the image is not built; to build only the tool use `make tools` / `make tools-core`.
 
 Two usages:
 
@@ -214,8 +155,6 @@ BRICKIE_CORE=/path/to/brickie-core BRICKIE_GEN=/path/to/brickie-gen python3 -m b
 
 ## 5. Diagnostics and exit codes
 
-Exit codes inherit `2-02` BR-D7 / this document's BRV-D9:
-
 | Code | Meaning | v0.1 |
 |---|---|---|
 | 0 | Success | ✅ |
@@ -223,14 +162,9 @@ Exit codes inherit `2-02` BR-D7 / this document's BRV-D9:
 | 2 | Usage or environment error (invalid arguments / schema mismatch / path does not exist / template unavailable / native artifact missing or protocol mismatch / command not yet implemented / build family cannot find compiler or QEMU) | ✅ |
 | 3 | Compile or run failure | ✗ **still unused**: the build family folds "compile failure" into 1 (`BRV-BLD-0011`) and environment errors into 2 (`BRV-BLD-0005`) — consistent with BRV-D9's "three buckets", no fourth bucket added |
 
-**Severity does not determine the exit code**: `severity ∈ {error,warning,info}` only describes "how heavy this message is";
-the exit code is determined by "did the command complete". Two registered precedents: `BRV-TAX-0014` (the selected template is not delivered in v0.1)
-is `info`, but **not a single file was generated** ⇒ exit code 2; usage/environment errors (unknown `plugin_type`,
-missing `--subkind`, name-contract violation, schema shape mismatch…) carry a diagnostic but **`code: null`** — they are
-the "usage error" bucket, not declaration-surface diagnostics.
+**Severity does not determine the exit code**: `severity ∈ {error,warning,info}` only describes "how heavy this message is"; the exit code is determined by "did the command complete". Two registered precedents: `BRV-TAX-0014` (the selected template is not delivered in v0.1) is `info`, but **not a single file was generated** ⇒ exit code 2; usage/environment errors (unknown `plugin_type`, missing `--subkind`, name-contract violation, schema shape mismatch…) carry a diagnostic but **`code: null`**.
 
-A native tool's **process** exit code is always 0 (except `internal_error` and crashes): the business conclusion is only in the response's
-`exit_code` — so "tool failure" and "validation red" do not get conflated (contract §2).
+A native tool's **process** exit code is always 0 (except `internal_error` and crashes): the business conclusion is only in the response's `exit_code` — so "tool failure" and "validation red" do not get conflated.
 
 Diagnostics the delivered paths can emit (all codes taken from the design BRV-D8 **assigned code table**, none invented):
 
@@ -263,36 +197,22 @@ Diagnostics the delivered paths can emit (all codes taken from the design BRV-D8
 | D-14 | BRV-D8 **has no BUILD family** | opened `BRV-BLD-0001..0014` (see contract §3 for each), with no semantics invented beyond the shape | gate criteria / tool resolution / incremental all need distinguishable failure reasons; the code table awaits backporting (same direction as D-11) |
 | D-15 | §9.2 mixes the tool's own build entry (`cxx/ Makefile`) and image building in the repo-root Makefile's "two-stage" narrative | the top-level `Makefile` **builds only the tool**; the image targets are downgraded to **thin delegation aliases** (`make all|run|smoke|…` → `$(BRICKIE) build|run|test|…`), with the real thing in `brickie build` + `tests/gates.toml`; the source set / flags / rules are removed from the Makefile and pinned by the ② gate in `make check-build` | ADR-0003 S1+S4 (transfer of build ownership + the reduction period of Makefile retirement); the aliases are kept during migration so as not to disrupt existing CI/habits |
 
-> None of the above is "doing a bit extra on the side"; each is an unavoidable point of contact for the v0.1 command surface; each is visible to readers
-> in the artifact header or the contract, and is registered in the checklist; once the spec is decided, only the templates/engine change.
-
 ## 7. Change discipline
 
-- **Decisions belong only to L0/L1 (`rust/`), rendering only to L2 (`cxx/`), orchestration only to L5 (`python/`).**
-  Do not add business rules in Python, and do not add conditional decisions in the C++ renderer — this is a hard constraint of C9 and §9.1,
-  enforced by the "glue-layer purity check" and reverse acceptance cases.
+- **Decisions belong only to L0/L1 (`rust/`), rendering only to L2 (`cxx/`), orchestration only to L5 (`python/`).** Do not add business rules in Python, and do not add conditional decisions in the C++ renderer; the "glue-layer purity check" and reverse acceptance cases enforce this.
 - **Never hand-edit artifacts.** After changing `brick.toml`, rebuild (`brickie gen`); artifacts follow the same discipline as goldens.
-- **Templates are data.** To differentiate the four skeleton kinds, change `templates/`, do not add conditional syntax to the renderer —
-  §9.2 replaced a template language with "directories by `api_type`/`plugin_type`/`lang`".
-- **After changing `python/**`, `templates/**`, `schema/**` or a native tool, remember to republish the seed.**
-  They are all embedded into the entry ELF by `freeze.py` (`PAYLOAD_ROOTS = ("python","templates","schema")`),
-  so `make prebuilt` is not just "recompiling C++" — if the payload changes, `brickie` changes;
-  the "seed byte-for-byte identical" checks in `make prebuilt-check` and the end-to-end cases will catch an omission.
-- **The launcher does not touch business logic.** `cxx/launcher.cpp` only does "locate/unpack/set up environment/forward"; not one line of Python semantics
-  may be added; the code in the payload is still the same `python/brickie/` (same discipline as above).
+- **Templates are data.** To differentiate the four skeleton kinds, change `templates/`, do not add conditional syntax to the renderer — the template language is replaced by "directories by `api_type`/`plugin_type`/`lang`".
+- **After changing `python/**`, `templates/**`, `schema/**` or a native tool, remember to republish the seed.** They are all embedded into the entry ELF by `freeze.py` (`PAYLOAD_ROOTS = ("python","templates","schema")`), so `make prebuilt` is not just "recompiling C++" — if the payload changes, `brickie` changes; the "seed byte-for-byte identical" checks in `make prebuilt-check` and the end-to-end cases will catch an omission.
+- **The launcher does not touch business logic.** `cxx/launcher.cpp` only does "locate/unpack/set up environment/forward"; not one line of Python semantics may be added; the code in the payload is still the same `python/brickie/`.
 - **After a change first run `make selftest && make test`** (to verify together with the entry ELF, then run `make prebuilt`).
 
 ## 8. Authoritative description of the L5 (Python) frontend
 
-The module map of `python/brickie/`, per-command status, call sites into the two native tools, the schema shape validation
-allowed set, remaining TODOs and contract gaps (T-*, G-*) are **all in
-[`python/brickie/README.md`](python/brickie/README.md)** — this section keeps only a pointer, it does not copy the content.
-The current-state table in §1 of this file is a **cross-layer** overview; if the two conflict, code and `docs/contract.md` win.
+The module map of `python/brickie/`, per-command status, call sites into the two native tools, the schema shape validation allowed set, remaining TODOs and contract gaps (T-*, G-*) are **all in [`python/brickie/README.md`](python/brickie/README.md)** — this section keeps only a pointer. The current-state table in §1 of this file is a **cross-layer** overview; if the two conflict, code and `docs/contract.md` win.
 
 ## 9. "To be confirmed" list from doc-sync time (now all closed)
 
-> This section is the ledger left from when **doc sync and implementation ran in parallel**. It was closed item by item as the implementation landed; it is kept to
-> preserve the trace of "there used to be inconsistencies" (rather than quietly deleting it).
+> The ledger left from when doc sync and implementation ran in parallel; closed item by item as the implementation landed.
 
 | # | State at writing time | Closing result |
 |---|---|---|

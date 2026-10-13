@@ -1,45 +1,17 @@
 /*
- * brickOS prototype v0.1.0 — interrupt subsystem conformance cases (in-image)
- *
- * Design basis: `docs/6-test/6-01-test.md` §3.7 (TC-IRQ group, target-only) and
- * `docs/3-os-core/3-02-int.md` §17.1/§17.2 (case ↔ design point mapping).
- *
- * Why **in-image** rather than host cases:
- *   design 6-01 §3.7 already fixed "interrupt group = target-only"; and the Stage 1
- *   interrupt path (exception vector stub → ack → dispatch → ISR → eoi → ERET) does not
- *   exist on host at all.
- *   So this file compiles the cases into the image, driven by `qemu_aarch64_selftest()`
- *   (src/selftest.c) after **all starts** via the core self-test pass (ADR-0010; this file
- *   used to be called from the platform start),
- *   each case prints one line `[IRQCONF] PASS/FAIL <case id> <detail>`, ending with
- *   `[IRQCONF] SUMMARY pass=N fail=M` —— so red/green can be grepped by `make smoke` /
- *   `make irq-test`, not judged by eye.
- *
- * This file is a **platform plugin** (same layer as GICv3/binding table): it needs ISA-level
- * means (software trigger SGI, hardware readback) to build scenarios; the cases themselves
- * call only core native APIs.
- *
- * Coverage (aligned with 3-02 §17.1 "existing 7 cases" + §17.2 "suggested additions"):
- *   TC-IRQ-001 register(SGI)→enable→self-trigger; arg delivery; ack/eoi pairing (INV-H)
- *   TC-IRQ-002 duplicate register → -EBUSY (INV-A)
- *   TC-IRQ-003/013 trigger while disabled does not arrive; enable catches up (CAP_LATCH); idempotent enable
- *   TC-IRQ-004 lock nesting: inner unlock keeps IRQs off; st bit layout (IR-15)
- *   TC-IRQ-008 unbound hwirq → spurious_owned, no panic, no ISR
- *   TC-IRQ-010 extable hit: illegal access degrades to -EFAULT
- *   TC-IRQ-012/021 storm protection: self-retrigger in ISR (software livelock equivalent) ⇒ windowed criterion detects it
- *   TC-IRQ-014 priority quantization: saturate toward lower priority + descriptor keeps logical value + trace (IR-7)
- *   TC-IRQ-016 extra unlock caught by the underflow guard, IRQs still recover
- *   TC-IRQ-018 direct API on a domain member → -EINVAL, parent line not wrongly masked
- *   TC-IRQ-019 lowest-priority line can still be delivered (PMR init duty, §7.1)
- *   TC-IRQ-022 after an extable hit in_fault is reset (second fault still takes the fixup path)
- *   TC-IRQ-101 FAST cascaded domain: dispatch/per-child ack/orphan child masked
- *   TC-IRQ-102 SLOW cascaded domain: demux in **bh** (status register never read in ISR) ——
- *              ★ before ADR-0011 this asserted "SLOW explicitly rejected"; after bh landed it flipped to "usable and really in bh"
- *   TC-IRQ-015 **BH direct line** (binding table declares DISPATCH_BH): handler runs in bh context,
- *              same line masked during handling, counts/trace observable
- *   TC-IRQ-016 thread-only API called in bh ⇒ -EINVAL (runtime enforcement of atomic context)
- *   TC-IRQ-017 §11.4.1: disabled before dispatch ⇒ handler suppressed (work item still consumed), enable does not replay
- *   GIC-*      dialect facts: EOImode/PRIbits/SPI line count/binding table (platform data) check
+ * Interrupt subsystem conformance cases (in-image; the interrupt path does not exist on host).
+ * Driven by qemu_aarch64_selftest() after all starts. Each case prints one line
+ * `[IRQCONF] PASS/FAIL <case id> <detail>` and the run ends with `[IRQCONF] SUMMARY pass=N fail=M`,
+ * so red/green is greppable by make smoke / make irq-test. Cases need ISA means (SGI trigger,
+ * hardware readback); the case bodies call core APIs only. Coverage:
+ *   TC-IRQ-001 register/enable/self-trigger, arg delivery, ack/eoi pairing
+ *   TC-IRQ-002 duplicate register -> -EBUSY; TC-IRQ-003/013 masked trigger, enable catch-up
+ *   TC-IRQ-004 lock nesting; TC-IRQ-008 unbound hwirq -> spurious; TC-IRQ-010 extable -EFAULT
+ *   TC-IRQ-012/021 storm criterion; TC-IRQ-014 priority quantization; TC-IRQ-015 BH direct line
+ *   TC-IRQ-016 underflow guard; TC-IRQ-017 disabled before dispatch => suppressed, no replay
+ *   TC-IRQ-018 direct API on a domain member -> -EINVAL; TC-IRQ-019 lowest-priority delivered
+ *   TC-IRQ-022 in_fault reset after a fixup; TC-IRQ-101 FAST domain orphan child masked
+ *   TC-IRQ-102 SLOW domain demux in bh; GIC-* facts: EOImode/PRIbits/lines/binding table
  */
 #include <br/core/br_irq.h>
 #include <br/core/br_time.h>
@@ -47,30 +19,25 @@
 #include <br/core/br_fault.h>
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
-/* Bottom half (ADR-0011): BH cases must drive a drain explicitly and assert the handler really runs in bh context. */
+/* BH cases must drive a drain explicitly and assert the handler really runs in bh context. */
 #include <br/core/br_work.h>
 
 #include <br/platform/br_plat.h>
 #include <br/platform/br_gicv3.h>
 #include <br/board_irq.h>
 
-/* The domain window must fit one 32-bit pending word (v0.1 static bitmap pool sized for this) */
+/* The domain window must fit one 32-bit pending word. */
 _Static_assert(BR_IRQ_DOMAIN_WINDOW <= 32u, "domain window exceeds single-word bitmap capacity");
 
 /*
- * "Deterministic fault" address for the extable negative control: 0x42000000 lies inside the RAM
- * section (0x40000000, -m 128M) but outside the page-table RAM mapping window
- * (0x40000000 + 8 MiB = 0x40800000) ⇒ invalid page table entry ⇒ translation fault.
- * Why not an address like 0x1000 that "looks unmapped": QEMU virt implements the low range as
- * "unassigned/flash returning 0", which never faults (measured once, P-IRQ-16).
- * This literal equals BR_PLAT_CONF_UNMAPPED in br_mmu.h; irq_conf.c does not depend on the MMU
- * header, so it carries its own copy here with provenance (change both when moving window bounds).
+ * Deterministic fault address for the extable negative control: inside RAM (0x40000000, -m 128M)
+ * but outside the page-table RAM window (0x40000000 + 8 MiB) => translation fault. The low range
+ * never faults on QEMU virt (unassigned/flash reads 0). Equals BR_PLAT_CONF_UNMAPPED in br_mmu.h;
+ * change both together.
  */
 #define CONF_UNMAPPED_ADDR   0x42000000ul
 
-/* =====================================================================
- * Assertions and stats
- * ===================================================================== */
+/* ---- Assertions and stats ---- */
 static br_u32 s_pass;
 static br_u32 s_fail;
 
@@ -85,7 +52,7 @@ static void conf_report(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* Observe trace events (accumulate an id bitmap; drain the ring on each poll) */
+/* Trace id bitmap; the ring is drained on each poll. */
 static br_u32 s_trace_seen;
 
 static void conf_trace_poll(void)
@@ -108,7 +75,7 @@ static br_bool conf_trace_has(br_u32 id)
     return (s_trace_seen & (1u << id)) != 0u;
 }
 
-/* Bounded wait: IRQs are delivered normally meanwhile (criterion for "the ISR really ran", no fixed sleep) */
+/* Bounded wait; IRQs are delivered meanwhile (criterion for "the ISR really ran"). */
 static int conf_wait_count(volatile br_u32 *counter, br_u32 target, br_time_t timeout_us)
 {
     const br_time_t t0 = br_clock_now();
@@ -121,7 +88,7 @@ static int conf_wait_count(volatile br_u32 *counter, br_u32 target, br_time_t ti
     return 0;
 }
 
-/* Pure busy wait (no assert); IRQs are delivered normally — for the negative "must not deliver while masked" criterion */
+/* Busy wait; IRQs delivered normally -- negative "must not deliver while masked" criterion. */
 static void conf_idle_us(br_time_t us)
 {
     const br_time_t t0 = br_clock_now();
@@ -131,9 +98,7 @@ static void conf_idle_us(br_time_t us)
     }
 }
 
-/* =====================================================================
- * ISRs and test "fake devices" (FAST domain dialect)
- * ===================================================================== */
+/* ---- ISRs and test fake devices (FAST domain dialect) ---- */
 static volatile br_u32 s_test_isr_count;
 static volatile br_u32 s_test_isr_arg;
 
@@ -143,9 +108,8 @@ static void conf_test_isr(void *arg)
     s_test_isr_arg = (br_u32)(br_uintptr_t)arg;
 }
 
-/* Storm case: self-retrigger inside the ISR ⇒ software equivalent of a level livelock (3-02 §8.3).
- * Why it can be built this way: SGI is **edge** and the GIC latches pending —— writing
- * ICC_SGI1R before this Active is eoi'd makes the same line pending again immediately. */
+/* Storm case: self-retrigger inside the ISR, the software equivalent of a level livelock. SGI is
+ * edge and the GIC latches pending, so triggering before this Active is eoi'd re-pends it. */
 static volatile br_u32 s_storm_isr_count;
 static volatile br_u32 s_storm_left;
 
@@ -160,7 +124,7 @@ static void conf_storm_isr(void *arg)
     }
 }
 
-/* FAST domain "fake pin controller": state bitmap in RAM, so demux is purely in-ISR (§9.3) */
+/* FAST domain fake pin controller: state bitmap in RAM, demux purely in-ISR. */
 static volatile br_u32 s_fake_pending;
 static volatile br_u32 s_fake_masked;
 static volatile br_u32 s_fake_ack_count;
@@ -172,7 +136,7 @@ static void fake_pending(void *priv, br_u32 *bits, br_size_t nwords)
     for (br_size_t i = 0; i < nwords; i++) {
         bits[i] = 0u;
     }
-    /* Masked state does not appear in the pending snapshot (the dialect's own shadow) */
+    /* Masked state does not appear in the pending snapshot. */
     bits[0] = s_fake_pending & ~s_fake_masked;
 }
 
@@ -207,14 +171,8 @@ static const br_irq_domain_ops_t s_fake_ops = {
 
 static br_irq_domain_t *s_dom;
 
-/* =====================================================================
- * extable probe (3-02 §10.4)
- *
- * ★ The **only source** of the return value is the register the core writes into the exception
- *   frame per the entry's `reg`/`errno_val` (arm64 x0); the fixup label itself only branches and
- *   never fabricates an error code —— otherwise this case would not verify the design conclusion
- *   "entries must carry reg + errno_val" (§10.4 pitfall).
- * ===================================================================== */
+/* ---- extable probe: the return value comes only from the register core writes into the exception
+ * frame per the entry's reg/errno_val (arm64 x0); the fixup label never invents an error code. */
 static int conf_probe_read32(br_uintptr_t addr, br_u32 *out)
 {
     register br_u32       val __asm__("x1");
@@ -241,9 +199,7 @@ static int conf_probe_read32(br_uintptr_t addr, br_u32 *out)
     return ret;
 }
 
-/* =====================================================================
- * Cases
- * ===================================================================== */
+/* ---- Cases ---- */
 static void conf_gicv3_facts(void)
 {
     br_gicv3_info_t info;
@@ -273,18 +229,10 @@ static void conf_extable(void)
                 "extable positive control: legal address reads the true value");
 
     /*
-     * ★ How to produce a "deterministically recoverable memory fault" (P-IRQ-16; changed once
-     *   along with the memory mapping subsystem):
-     *   the old trick was an **unaligned access** with MMU off (all accesses as Device-nGnRnE
-     *   ⇒ Alignment fault, EC=0x25/DFSC=0x21). After the platform memory mapping subsystem
-     *   landed, MMU is on and SCTLR_EL1 A/SA/SA0 are explicitly cleared (see the MMU_SCTLR_A
-     *   comment in mmu.c: field numbers corrected per ARMv8) ⇒ an unaligned access to Normal
-     *   memory **no longer** faults (`-mstrict-align` thus degraded from a hard requirement to a
-     *   defensive knob, see the Makefile comment).
-     *   Now it uses a **truly unmapped address**: CONF_UNMAPPED_ADDR lies outside the page-table
-     *   RAM mapping window (0x40000000 + 8 MiB), its L1/L2 entry is invalid ⇒ **Translation
-     *   fault** (EC=0x25/DFSC=0x04..0x07 class), as deterministic as the old trick and likewise
-     *   fixed by extable.
+     * Deterministic memory fault: the old unaligned-access trick no longer faults (MMU on,
+     * SCTLR_EL1 A/SA/SA0 cleared, so -mstrict-align is only defensive now). CONF_UNMAPPED_ADDR is
+     * outside the page-table RAM window, its L1/L2 entry is invalid => translation fault
+     * (EC=0x25/DFSC=0x04..0x07 class), equally deterministic and likewise fixed by extable.
      */
     v = 0u;
     const int r2 = conf_probe_read32(CONF_UNMAPPED_ADDR, &v);
@@ -292,7 +240,7 @@ static void conf_extable(void)
     conf_report(r2 == BR_ERR(EFAULT), "TC-IRQ-010",
                 "extable hit: unmapped address (translation fault) degrades to -EFAULT, system survives");
 
-    /* Second fault: if in_fault were not reset, this one would be treated as a double fault (bare panic) */
+    /* Second fault: if in_fault were not reset, this would look like a double fault and panic. */
     v = 0u;
     const int r3 = conf_probe_read32(CONF_UNMAPPED_ADDR, &v);
     conf_report(r3 == BR_ERR(EFAULT), "TC-IRQ-022",
@@ -337,23 +285,17 @@ static void conf_duplicate_register(void)
 
 static void conf_priority_readback(void)
 {
-    /* Use a not-yet-registered line (PL011 UART0 = SPI 33) for a "quantize + hardware readback"
-     * cross-check. Requested logical prio = 0x01: GICv3 valid bits are **MSB aligned**
-     * (5 bits ⇒ step 8), so it must quantize toward **lower priority** to 0x08 —— a reversed
-     * direction would give 0x00 (silent privilege raise, forbidden by IR-7). */
+    /* PL011 UART0 (SPI 33) is not yet registered. Requested prio 0x01: valid bits are MSB aligned
+     * (5 bits => step 8), so it quantizes toward lower priority to 0x08 (0x00 would be a raise). */
     br_u32 hwirq = 0u;
     if (br_plat_irq_hwirq(BR_IRQ_UART0, &hwirq) != 0) {
         conf_report(BR_FALSE, "TC-IRQ-014", "failed to get UART0 hwirq (binding table entry missing)");
         return;
     }
 
-    /*
-     * ★ First handle "lowest realizable level is permanently masked by PMR" (P-IRQ-15):
-     *   with 5 priority bits PMR implements only the top 5 (writing 0xFF reads back 0xF8), and the
-     *   delivery test is `prio < PMR` ⇒ a line quantized to 0xF8 is **never delivered**; requesting
-     *   0xFF must be judged "not expressible" ⇒ `-ENOTSUP` (§4.2/§7.1), **not** silently lowered
-     *   to 0xF0 (that is a privilege raise, forbidden by IR-7).
-     */
+    /* The lowest realizable level is rejected: with 5 priority bits PMR implements only the top 5
+     * (0xFF reads back 0xF8) and delivery needs prio < PMR, so 0xF8 is never delivered => -ENOTSUP,
+     * not a silent lowering to 0xF0 (a privilege raise). */
     {
         const br_irq_attr_t too_low = { .prio = BR_IRQ_PRIO_LOWEST,
                                         .trigger = BR_IRQ_TRIG_DEFAULT, .flags = 0u };
@@ -397,7 +339,7 @@ static void conf_mask_depth(void)
     (void)br_gicv3_readback_enabled(hwirq, &en);
     conf_report(en == 0, "TC-IRQ-003", "after disable the hardware is masked (hardware written only on depth 0→1)");
 
-    /* Trigger while masked: hardware pending latches (CAP_LATCH=1), but the ISR must not **start** */
+    /* Trigger while masked: hardware pending latches (CAP_LATCH), but no handler may start. */
     (void)br_plat_irq_trigger(BR_IRQ_TEST_SGI);
     conf_idle_us(2000u);
     conf_report(s_test_isr_count == before, "TC-IRQ-003",
@@ -441,7 +383,7 @@ static void conf_unlock_underflow(void)
     const br_irq_state_t st = br_irq_lock();
 
     br_irq_unlock(st);   /* correct pairing */
-    br_irq_unlock(st);   /* ★ one extra: must be stopped by the underflow guard (else depth wraps ⇒ IRQs off forever) */
+    br_irq_unlock(st);   /* one extra: the underflow guard must stop it, else depth wraps */
 
     conf_report(conf_trace_has(BR_TRACE_IRQ_UNLOCK_UNDERFLOW), "TC-IRQ-016",
                 "the extra unlock is caught by the underflow guard and traced");
@@ -459,13 +401,8 @@ static void conf_spurious_unbound(void)
     const br_u32 owned_before = st.spurious_owned;
     const br_u32 isr_before   = s_test_isr_count;
 
-    /*
-     * INTID 3 is deliberately left **unbound**. But for the core to see "no owner", the line must
-     * first be **enabled** in hardware —— otherwise it never reaches the CPU (an unbound/unregistered
-     * line is disabled anyway, §6.2 "naturally safe before registration"). Here the conformance-only
-     * raw hook emulates "firmware left an enabled line that nobody claims", exactly the
-     * integration-time fault spurious_owned is meant to catch.
-     */
+    /* INTID 3 is deliberately unbound, but core only sees "no owner" once the line is enabled in
+     * hardware; the conformance-only raw hook emulates a firmware leftover that nobody claims. */
     conf_report(br_gicv3_raw_line_enable(BR_IRQ_TEST_SGI_UNBOUND, 1) == 0, "TC-IRQ-008",
                 "conformance hook: enable the ownerless line in hardware (emulate firmware leftover)");
     conf_report(br_gicv3_sgi_trigger(BR_IRQ_TEST_SGI_UNBOUND) == 0, "TC-IRQ-008",
@@ -484,14 +421,8 @@ static void conf_spurious_unbound(void)
 
 static void conf_storm(void)
 {
-    /* Lowest-priority registration: whether it can be delivered = whether the PMR init duty is met (§7.1 / TC-IRQ-019) */
-    /*
-     * ★ Use the "lowest **deliverable** level" 0xF0 (P-IRQ-15): with 5 priority bits PMR implements
-     *   only the top 5 (writing 0xFF reads back 0xF8), and the delivery test is `prio < PMR` ⇒ the
-     *   0xF8 level is always masked. TC-IRQ-019 verifies "init opens PMR for **all deliverable**
-     *   priorities", hence 0xF0; "0xFF is rejected" is covered by the -ENOTSUP assertion in
-     *   TC-IRQ-014.
-     */
+    /* Lowest deliverable level 0xF0: with 5 priority bits PMR implements only the top 5, so the
+     * 0xF8 level is always masked; 0xF0 verifies "PMR open for all realizable priorities". */
     const br_irq_attr_t attr = {
         .prio = 0xF0u, .trigger = BR_IRQ_TRIG_EDGE_RISE, .flags = 0u
     };
@@ -544,11 +475,8 @@ static void conf_storm(void)
 /* ------------------------------------------------------------------ bottom half (bh) */
 
 /*
- * Handler of the BH direct line. **The criterion lives in its body**: it must observe
- *   - `br_irq_in_isr() == 0`  —— really not in interrupt context (§12.1 shape definition);
- *   - `br_work_in_bh() != 0`  —— really in the bottom half (ADR-0011 context flag);
- *   - `br_irq_in_atomic() != 0` —— still the atomic context where thread-only APIs are banned.
- * If someone ever implements DISPATCH_BH as "just call it directly in the ISR", the first two go red.
+ * BH direct-line handler; the criterion is in the body: br_irq_in_isr()==0, br_work_in_bh()!=0 and
+ * br_irq_in_atomic()!=0. Implementing DISPATCH_BH as a direct ISR call makes the first two go red.
  */
 static volatile br_u32 s_bh_count;
 static volatile int    s_bh_saw_isr;
@@ -565,7 +493,7 @@ static void conf_bh_isr(void *arg)
     (void)arg;
 }
 
-/* Work item body for (a): call a thread-only API in **bh** ⇒ must be rejected (bh ≠ thread context). */
+/* Work item body: a thread-only API called in bh must be rejected (bh is not thread context). */
 static void conf_bh_disable_from_bh(void *arg)
 {
     (void)arg;
@@ -573,27 +501,12 @@ static void conf_bh_disable_from_bh(void *arg)
 }
 
 /*
- * §11.4.1: for a work item "queued but not yet started", if the line was disabled before dispatch
- * ⇒ **skip the handler**, the work item is still consumed from the queue (queue depth not held),
- * and after enable it is **not replayed**.
- *
- * ★ How to make this window **really appear** (not just in a comment) —— use the real mechanism of
- *   **exhausting this round's drain budget** (`BR_WORK_BH_BUDGET` exists for the production path)
- *   plus the **non-reentrant** property of `br_work_drain` (W3):
- *
- *     thread: submit(W1 = "trigger the line")  → queue [W1]
- *     thread: drain(max=1)                     → takes W1 and runs it (s_in_bh = true now)
- *       W1: trigger(line)                      → SGI delivered immediately (IRQs on in thread ctx)
- *         IRQ entry: ack → DISPATCH_BH → submit br_irq_bh_run (queued after W1)
- *                    exit drain(BUDGET) → **non-reentrant ⇒ returns 0, item stays queued**
- *       W1 returns
- *     thread: drain loops until ran == max(1)  ⇒ exits, the handler item **still undispatched**
- *     thread: br_irq_disable(line)             ← legal (thread context)
- *     thread: drain(8)                         → pops br_irq_bh_run
- *       bh: line depth > 0                     → **suppress branch hits**: handler not called, count +1
- *
- *   No state in this chain was made up "just for the test": budget exhaustion + thread-side disable
- *   both happen in production, and §11.4.1 asks exactly "what about the one already queued".
+ * A work item queued but not yet started is skipped if the line was disabled before dispatch; the
+ * item is still consumed and enable does not replay it. The window comes from the real mechanism:
+ * exhausting this round's drain budget (BR_WORK_BH_BUDGET) plus the non-reentrant br_work_drain.
+ * submit(W1 = trigger the line) -> drain(max=1) runs W1 -> the IRQ entry submits br_irq_bh_run
+ * (queued after W1) -> the re-entrant drain returns 0, item stays queued -> br_irq_disable(line)
+ * in thread context -> drain(8) pops it while depth > 0 => suppressed: no handler, count +1.
  */
 static void conf_bh_trigger(void *arg)
 {
@@ -605,7 +518,7 @@ static void conf_bh_disable_then_dispatch(void)
 {
     br_irq_stat_t st0, st1;
 
-    /* (a) thread-only API in bh ⇒ reject. Mechanical criterion that "bh ≠ thread context". */
+    /* (a) thread-only API in bh is rejected: bh is not thread context. */
     s_bh_count = 0u;
     s_bh_disable_rc = -12345;
 
@@ -625,10 +538,10 @@ static void conf_bh_disable_then_dispatch(void)
     s_bh_disable_rc = -12345;
 
     const int sub2 = br_work_submit(conf_bh_trigger, BR_NULL);
-    const br_u32 ran_a = br_work_drain(1u);    /* ★ budget 1: push the handler item past this round */
+    const br_u32 ran_a = br_work_drain(1u);    /* budget 1: push the handler item past this round */
 
-    const int dis = br_irq_disable(BR_IRQ_BH_LINE);   /* thread context ⇒ legal */
-    const br_u32 ran_b = br_work_drain(8u);           /* dispatch now ⇒ the line is already disabled */
+    const int dis = br_irq_disable(BR_IRQ_BH_LINE);   /* thread context, legal */
+    const br_u32 ran_b = br_work_drain(8u);           /* dispatch now: line already disabled */
 
     br_irq_stats_get(BR_IRQ_BH_LINE, &st1);
     br_log_info("[IRQCONF] info bh: submit(trigger)=%d ran_a=%u disable=%d ran_b=%u "
@@ -643,7 +556,7 @@ static void conf_bh_disable_then_dispatch(void)
     conf_report(conf_trace_has(BR_TRACE_IRQ_DISPATCH_SUPPRESSED), "TC-IRQ-017",
                 "suppression trace (TRACE_IRQ_DISPATCH_SUPPRESSED)");
 
-    /* (c) enable does not replay: after re-enabling, the suppressed work does **not** run by itself (§11.4.1). */
+    /* (c) enable does not replay: the suppressed work does not run by itself after re-enabling. */
     s_bh_count = 0u;
     (void)br_irq_enable(BR_IRQ_BH_LINE);
     const br_u32 ran3 = br_work_drain(8u);
@@ -653,7 +566,7 @@ static void conf_bh_disable_then_dispatch(void)
 
 static void conf_bh_direct_line(void)
 {
-    /* This line's DISPATCH_BH comes from the **binding table** (static declaration, §12.2) and must not be overridden by attr at register time. */
+    /* DISPATCH_BH comes from the binding table, not from attr at register time. */
     const br_irq_attr_t attr = {
         .prio = BR_IRQ_PRIO_DEFAULT, .trigger = BR_IRQ_TRIG_DEFAULT, .flags = 0u
     };
@@ -676,7 +589,7 @@ static void conf_bh_direct_line(void)
     const br_u32 before_defer = st.bh_deferred;
     (void)br_plat_irq_trigger(BR_IRQ_BH_LINE);
 
-    /* The IRQ exit (after eoi) pops and runs bh ⇒ what is awaited here is **that** execution. */
+    /* The IRQ exit (after eoi) pops and runs bh; that execution is what is awaited here. */
     conf_report(conf_wait_count(&s_bh_count, 1u, 20000u) == 0, "TC-IRQ-015",
                 "the BH line's ISR is deferred to the bottom half (not lost)");
     conf_report(s_bh_saw_isr == 0, "TC-IRQ-015",
@@ -692,7 +605,7 @@ static void conf_bh_direct_line(void)
     conf_report(conf_trace_has(BR_TRACE_IRQ_BH_DEFER), "TC-IRQ-015",
                 "deferral trace (TRACE_IRQ_BH_DEFER)");
 
-    /* Mask the same line during handling (§12.4): after demux/handler the line must be enabled again. */
+    /* The same line is masked during handling; after the handler it must be enabled again. */
     {
         br_u32 hw = 0u;
         int en = 0;
@@ -708,10 +621,8 @@ static void conf_bh_direct_line(void)
 /* ------------------------------------------------------------------ cascaded domains */
 
 /*
- * SLOW domain "fake PMIC": its status register may **only be read in bh** —— that is the entire
- * reason the SLOW domain exists (bus transactions, §9.4). To turn this into a **mechanical
- * criterion**, the dialect's `pending()` sets `s_slow_violation` and returns "no bits" when called in
- * ISR context; the case asserts demux really happens in bh.
+ * SLOW domain fake PMIC: its status register may only be read in bh (bus transactions), the whole
+ * reason the SLOW domain exists. pending() records a violation and returns no bits in ISR context.
  */
 static volatile br_u32 s_slow_pending_seen;   /* how many times read */
 static volatile int    s_slow_violation;      /* 1 = someone read status in ISR context */
@@ -727,7 +638,7 @@ static void slow_pending(void *priv, br_u32 *bits, br_size_t nwords)
         bits[i] = 0u;
     }
     if (br_irq_in_isr() != BR_FALSE) {
-        s_slow_violation = 1;      /* ★ this domain's status register must not be read in an ISR */
+        s_slow_violation = 1;      /* this domain's status register must not be read in an ISR */
         return;
     }
     s_slow_pending_seen++;
@@ -749,7 +660,7 @@ static const br_irq_domain_ops_t s_slow_ops = {
     .ack     = fake_ack,
 };
 
-/* Reset the fake dialect shadow state (used by the SLOW case itself; the domain pool is a core static object, the case clears only its own shadow) */
+/* Reset the fake dialect shadow state (the core domain pool is static and untouched here). */
 static void fake_reset(void)
 {
     s_fake_pending    = 0u;
@@ -767,7 +678,7 @@ static void conf_domain_slow(void)
     s_slow_child_in_bh  = -1;
     s_slow_pending      = 0u;
 
-    /* §9.4 / §1.1.1: the SLOW domain presupposes bh —— after ADR-0011 bh has landed, so it must be **usable**. */
+    /* SLOW presupposes bh; bh has landed, so the domain must be usable. */
     s_slow_dom = br_irq_domain_create("conf-slow", BR_IRQ_DOMAIN_SLOW, 4u,
                                       BR_IRQ_DOMAIN_F_SLOW, &s_slow_ops, BR_NULL);
     conf_report(s_slow_dom != BR_NULL, "TC-IRQ-102",
@@ -808,7 +719,7 @@ static void conf_domain_slow(void)
     conf_report(st1.bh_deferred > st0.bh_deferred, "TC-IRQ-102",
                 "the parent ISR only did 'one-shot + mask + submit' (count is CPU-local)");
 
-    /* The parent line must be enabled after bh (else the domain silently dies —— exactly what IR-10 guards). */
+    /* The parent line must be enabled after bh, else the domain silently dies. */
     {
         br_u32 hw = 0u;
         int en = 0;
@@ -845,7 +756,7 @@ static void conf_domain_fast(void)
     conf_report(br_irq_enable(BR_IRQ_DOMAIN_PARENT) == 0, "TC-IRQ-101",
                 "enable(parent line: it is a PIC direct line)");
 
-    /* Bitmap: children 0/2 owned, child 1 **ownerless** ⇒ demux must mask it (storm gate, §9.3) */
+    /* Children 0/2 owned, child 1 ownerless => demux must mask it (storm gate). */
     s_fake_masked    = 0u;
     s_fake_ack_count = 0u;
     s_child_count[0] = 0u;
@@ -908,9 +819,7 @@ static void conf_stats(void)
                 "UART0: after register depth==1 (masked) and the logical prio is kept");
 }
 
-/* =====================================================================
- * Entry (called by the platform's `qemu_aarch64_start()` in the START phase —— global IRQs are on then; see br_plat.h)
- * ===================================================================== */
+/* ---- Entry: START phase, global IRQs on ---- */
 int br_plat_irq_conformance(void)
 {
     s_pass = 0u;
@@ -920,10 +829,7 @@ int br_plat_irq_conformance(void)
 
     br_log_info("[IRQCONF] int framework conformance (Stage 1, GICv3, no scheduler)");
 
-    /* Enable IRQs globally: the last step of design §14.3 (after all plugin init).
-     * The manager already did it after LATE (see plugin_mgr.c); this is an **idempotent** backstop
-     * —— the cases themselves need the premise "IRQs really open" (only then is a software SGI
-     * received). */
+    /* Idempotent global IRQ enable (the manager already did it); a software SGI needs IRQs open. */
     br_irq_cpu_enable();
 
     conf_gicv3_facts();
@@ -936,9 +842,9 @@ int br_plat_irq_conformance(void)
     conf_unlock_underflow();
     conf_spurious_unbound();
     conf_storm();
-    conf_bh_direct_line();          /* ADR-0011: per-line BH dispatch + §11.4.1 suppress/no-replay */
+    conf_bh_direct_line();          /* per-line BH dispatch + suppress/no-replay */
     conf_domain_fast();
-    conf_domain_slow();             /* ADR-0011: SLOW domain demux goes through bh */
+    conf_domain_slow();             /* SLOW domain demux goes through bh */
     conf_domain_api_misuse();
     conf_stats();
 

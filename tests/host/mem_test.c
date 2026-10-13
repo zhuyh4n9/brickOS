@@ -1,17 +1,9 @@
 /*
- * tests/host/mem_test.c — host-side memory semantics cases (design 6-01, TC-MEM / TC-MM)
- *
- * Why the host: TLSF merge/split/fragmentation, page-bitmap run allocation and region-table
- * overlap checks are **algorithmic properties** that a host can exercise hundreds of thousands
- * of times in seconds (`make mem-test`, see the Makefile); on QEMU the same properties can only
- * be sampled by a few lucky cases. This file **does not use malloc**: a 2 MiB static buffer
- * emulates RAM, declares one IMAGE/HEAP/CONTIG/PAGE/DMA/RESERVED region each via
- * `br_mm_region_add()`, then hands over to `br_mem_init()` to claim the three pools.
- *
- * Output protocol (same shape as target-side [MEMCONF], easy for CI grep):
- *   [HOSTTEST] PASS|FAIL <tag> <desc>
- *   [HOSTTEST] SUMMARY pass=N fail=0 total=N
- * Any failure ⇒ non-zero exit code.
+ * Host-side memory semantics cases (TC-MEM / TC-MM). TLSF merge/split/fragmentation, page-bitmap
+ * run allocation and region-table overlap are algorithmic properties the host can exercise
+ * hundreds of thousands of times in seconds (`make mem-test`). No malloc: a 2 MiB static buffer
+ * emulates RAM, one IMAGE/HEAP/CONTIG/PAGE/DMA/RESERVED region each is declared via
+ * br_mm_region_add(), then br_mem_init() claims the three pools.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_mem.h>
@@ -22,9 +14,7 @@
 
 #include <stdio.h>
 
-/* =====================================================================
- * Test harness
- * ===================================================================== */
+/* ---- test harness ---- */
 
 static int s_pass;
 static int s_fail;
@@ -57,9 +47,7 @@ static br_bool str_is(const char *a, const char *b)
     return (*a == *b) ? BR_TRUE : BR_FALSE;
 }
 
-/* =====================================================================
- * Emulated RAM (static; no malloc)
- * ===================================================================== */
+/* ---- emulated RAM (static; no malloc) ---- */
 
 static br_u8 g_ram[2u * 1024u * 1024u] BR_ALIGN(4096);
 static br_u8 g_regspace[128u * 1024u] BR_ALIGN(4096);
@@ -77,9 +65,7 @@ static br_uintptr_t g_page_base;
 static br_uintptr_t g_dma_base;
 static br_uintptr_t g_resv_base;
 
-/* =====================================================================
- * br_mm_ops stub (records dispatch; checks core state machine/consistency only, no real page tables)
- * ===================================================================== */
+/* ---- br_mm_ops stub (records dispatch; no real page tables) ---- */
 
 static struct {
     br_u32       activate_calls;
@@ -152,9 +138,7 @@ static const br_mm_ops_t s_ops = {
     .cache_invalidate = stub_inv,
 };
 
-/* =====================================================================
- * Region declarations
- * ===================================================================== */
+/* ---- region declarations ---- */
 
 static int add_region(br_uintptr_t base, br_size_t size, br_u32 attrs)
 {
@@ -190,9 +174,7 @@ static int setup_regions(void)
     return rc;
 }
 
-/* =====================================================================
- * TC-MEM-001: malloc alignment >= BR_MALLOC_ALIGN
- * ===================================================================== */
+/* ---- TC-MEM-001: malloc alignment >= BR_MALLOC_ALIGN ---- */
 
 static void test_mem_001_align(void)
 {
@@ -236,9 +218,7 @@ static void test_mem_001_align(void)
           "TC-MEM-001", "all sizes allocate, 16-aligned, contents read/write");
 }
 
-/* =====================================================================
- * TC-MEM-007: br_heap_usage accounting (alloc delta >= request; full free returns to baseline)
- * ===================================================================== */
+/* ---- TC-MEM-007: br_heap_usage accounting (full free returns to baseline) ---- */
 
 static void test_mem_007_usage(void)
 {
@@ -267,9 +247,7 @@ static void test_mem_007_usage(void)
     CHECK(t1 == t0, "TC-MEM-007", "total unchanged by allocation");
 }
 
-/* =====================================================================
- * TC-MEM-003: calloc zeroing / overflow / realloc prefix + old block reclaim
- * ===================================================================== */
+/* ---- TC-MEM-003: calloc zeroing / overflow / realloc prefix + old block reclaim ---- */
 
 static void test_mem_003_calloc_realloc(void)
 {
@@ -278,7 +256,6 @@ static void test_mem_003_calloc_realloc(void)
     br_heap_stats_t st0;
     (void)br_heap_stats_get(&st0);
 
-    /* calloc zeroing */
     br_u8 *c = (br_u8 *)br_calloc(16u, 8u);
     br_u32 nz = 0u;
     if (c != NULL) {
@@ -291,7 +268,7 @@ static void test_mem_003_calloc_realloc(void)
     CHECK((c != NULL) && (nz == 0u), "TC-MEM-003", "calloc returns all zeros");
     br_free(c);
 
-    /* multiplication overflow ⇒ NULL + n_fail++ */
+    /* multiplication overflow => NULL + n_fail++ */
     br_heap_stats_t st_a;
     (void)br_heap_stats_get(&st_a);
     void *ov = br_calloc(~(br_size_t)0u, 2u);
@@ -302,7 +279,6 @@ static void test_mem_003_calloc_realloc(void)
     CHECK((ov == NULL) && (st_b.n_fail > st_a.n_fail), "TC-MEM-003",
           "calloc multiplication overflow intercepted and counted");
 
-    /* realloc keeps the prefix */
     br_size_t ub = 0u;
     br_size_t tb = 0u;
     (void)br_heap_usage(&ub, &tb);
@@ -346,9 +322,7 @@ static void test_mem_003_calloc_realloc(void)
     CHECK(u_end == ub, "TC-MEM-003", "back to baseline after freeing the whole realloc chain");
 }
 
-/* =====================================================================
- * TC-MEM-004: contig alignment / non-overlap / free-then-reuse
- * ===================================================================== */
+/* ---- TC-MEM-004: contig alignment / non-overlap / free-then-reuse ---- */
 
 static void test_mem_004_contig(void)
 {
@@ -377,7 +351,6 @@ static void test_mem_004_contig(void)
     CHECK(a_ok && b_ok, "TC-MEM-004", "both 4 KiB-granular allocations are 4096-aligned");
     CHECK(disjoint, "TC-MEM-004", "the two allocations do not overlap");
 
-    /* align not a power of 2 ⇒ -EINVAL */
     void *x = NULL;
     const int rbad = br_mem_alloc_contig(4096u, 3000u, &x);
     CHECK(rbad == BR_ERR(EINVAL), "TC-MEM-004", "align not a power of 2 ⇒ -EINVAL");
@@ -387,7 +360,7 @@ static void test_mem_004_contig(void)
     printf("[HOSTTEST]   realloc after freeing a: c=%p (a=%p) rc=%d\n", (void *)c, (void *)a, r3);
     CHECK((r3 == 0) && (c == a), "TC-MEM-004", "same run reusable after free");
 
-    /* size argument disagrees with the record: free by record (no pool corruption) */
+    /* size argument disagrees with the record: free by record, not by the passed size */
     br_mem_free_contig(b, 123u);
     br_mem_free_contig(c, 4096u);
 
@@ -398,9 +371,7 @@ static void test_mem_004_contig(void)
     br_mem_free_contig(d, 8192u);
 }
 
-/* =====================================================================
- * TC-MEM-005: page allocation contiguity + free reuse
- * ===================================================================== */
+/* ---- TC-MEM-005: page allocation contiguity + free reuse ---- */
 
 static void test_mem_005_page(void)
 {
@@ -441,9 +412,7 @@ static void test_mem_005_page(void)
     CHECK(ps.used == 0u, "TC-MEM-005", "page pool empty, used=0");
 }
 
-/* =====================================================================
- * TC-MEM-006: DMA dma_addr == vaddr(CA-6/INV-6)
- * ===================================================================== */
+/* ---- TC-MEM-006: DMA dma_addr == vaddr ---- */
 
 static void test_mem_006_dma(void)
 {
@@ -473,7 +442,7 @@ static void test_mem_006_dma(void)
     CHECK(nz == 0u, "TC-MEM-006", "BR_DMA_F_ZERO works");
     CHECK(br_dma_free(&b) == 0, "TC-MEM-006", "br_dma_free returns the buffer");
 
-    /* dma_addr differs from vaddr ⇒ reject (never return a wrong address) */
+    /* mismatched dma_addr => -EINVAL (never return a wrong address) */
     br_dma_buf_t c;
     (void)br_dma_alloc(4096u, 0u, &c);
     br_dma_buf_t bad = c;
@@ -484,9 +453,7 @@ static void test_mem_006_dma(void)
     CHECK(br_dma_free(&c) == 0, "TC-MEM-006", "original still returnable after rejection");
 }
 
-/* =====================================================================
- * Pool exhaustion ⇒ NULL and fail grows; used==0 after full free
- * ===================================================================== */
+/* ---- pool exhaustion => NULL and fail grows; used==0 after full free ---- */
 
 static void *s_page_arr[BR_PAGE_MAX_PAGES];
 
@@ -539,9 +506,7 @@ static void test_page_exhaust(void)
     CHECK(ps4.fail > fail_before, "TC-MEM-PAGE-EXHAUST", "double free ignored and counted");
 }
 
-/* =====================================================================
- * TC-LEAK-UNIT: red zone / double free / foreign pointer
- * ===================================================================== */
+/* ---- TC-LEAK-UNIT: red zone / double free / foreign pointer ---- */
 
 static br_u8 g_outside[64] BR_ALIGN(16);
 
@@ -552,7 +517,7 @@ static void test_leak_unit(void)
     br_heap_stats_t s0;
     (void)br_heap_stats_get(&s0);
 
-    /* ① write one byte past the user area: always lands in the red zone (min 8 B) */
+    /* 1) one byte past the user area lands in the red zone (min 8 B) */
     br_u8 *p = (br_u8 *)br_malloc(37u);
     p[37] = 0x00u;
     const br_u32 v1 = br_heap_check();
@@ -569,7 +534,7 @@ static void test_leak_unit(void)
     CHECK(v2 == 0u, "TC-LEAK-UNIT", "br_heap_check()==0 after restore");
     br_free(p);
 
-    /* ② double free */
+    /* 2) double free */
     void *q = br_malloc(64u);
     br_free(q);
     br_free(q);
@@ -581,7 +546,7 @@ static void test_leak_unit(void)
     CHECK(s2.double_free >= 1u, "TC-LEAK-UNIT", "double free intercepted and counted");
     CHECK(v3 == 0u, "TC-LEAK-UNIT", "heap still intact after double free");
 
-    /* ③ free a pointer not from this heap */
+    /* 3) free a pointer not from this heap */
     br_heap_stats_t s3;
     (void)br_heap_stats_get(&s3);
     br_free(g_outside);
@@ -589,7 +554,7 @@ static void test_leak_unit(void)
     (void)br_heap_stats_get(&s4);
     CHECK(s4.bad_free > s3.bad_free, "TC-LEAK-UNIT", "foreign pointer intercepted");
 
-    /* ④ unaligned pointer */
+    /* 4) unaligned pointer */
     void *r = br_malloc(32u);
     br_free((void *)((br_u8 *)r + 1u));
     br_heap_stats_t s5;
@@ -598,9 +563,7 @@ static void test_leak_unit(void)
     br_free(r);
 }
 
-/* =====================================================================
- * TC-MEM-TLSF: drive the TLSF singleton directly (br_tlsf_check / block_size)
- * ===================================================================== */
+/* ---- TC-MEM-TLSF: drive the TLSF singleton directly (br_tlsf_check / block_size) ---- */
 
 static void test_tlsf_direct(void)
 {
@@ -636,9 +599,7 @@ static void test_tlsf_direct(void)
     CHECK((v0 == 0u) && (v1 == 0u), "TC-MEM-TLSF", "tlsf_check reports 0 violations before and after");
 }
 
-/* =====================================================================
- * TC-MEM-WALK: live-block walk in ascending seq order
- * ===================================================================== */
+/* ---- TC-MEM-WALK: live-block walk in ascending seq order ---- */
 
 static struct {
     br_u32 seen;
@@ -681,9 +642,7 @@ static void test_walk(void)
     br_free(c);
 }
 
-/* =====================================================================
- * Owner tags (v1.x form of 5-01 §4)
- * ===================================================================== */
+/* ---- owner tags ---- */
 
 static void test_owner(void)
 {
@@ -698,7 +657,6 @@ static void test_owner(void)
     void *p = br_malloc(16u);
     const br_owner_t cur = br_heap_owner_get();
 
-    /* let the walk carry the owner out */
     s_walk.seen = 0u;
     s_walk.last_seq = 0u;
     s_walk.order_bad = 0u;
@@ -723,9 +681,7 @@ static void test_owner(void)
     CHECK(st.owner_count >= 1u, "TC-MEM-OWNER", "owner_count reflects registrations");
 }
 
-/* =====================================================================
- * TC-MEM-002: fragmentation stress (own LCG, 200k interleaved alloc/free/write/verify)
- * ===================================================================== */
+/* ---- TC-MEM-002: fragmentation stress (own LCG, 200k interleaved alloc/free/write/verify) ---- */
 
 #define STRESS_OPS    200000u
 #define STRESS_SLOTS  512u
@@ -801,7 +757,6 @@ static void test_mem_002_stress(void)
         }
     }
 
-    /* cleanup: free all remaining blocks */
     br_u32 left = 0u;
     for (br_u32 i = 0u; i < (br_u32)STRESS_SLOTS; i++) {
         if (s_slots[i].p != NULL) {
@@ -833,9 +788,7 @@ static void test_mem_002_stress(void)
           "final largest free block >= 80% of pool (fully merged)");
 }
 
-/* =====================================================================
- * TC-MM-001: region overlap/duplicate ⇒ -EEXIST; unaligned / size 0 ⇒ -EINVAL
- * ===================================================================== */
+/* ---- TC-MM-001: overlap/duplicate => -EEXIST; unaligned / size 0 => -EINVAL ---- */
 
 static void test_mm_001_region(void)
 {
@@ -868,9 +821,7 @@ static void test_mm_001_region(void)
     CHECK((hit != NULL) && (miss == NULL), "TC-MM-001", "region_find hit/miss");
 }
 
-/* =====================================================================
- * TC-MM-002: cache maintenance on non-CACHED regions = 0 (incl. inactive)
- * ===================================================================== */
+/* ---- TC-MM-002: cache maintenance on non-CACHED regions = 0 (incl. inactive) ---- */
 
 static void test_mm_002_cache(void)
 {
@@ -891,9 +842,7 @@ static void test_mm_002_cache(void)
     CHECK(s_ops_stats.flush_calls == before, "TC-MM-002", "non-CACHED dispatches no ops");
 }
 
-/* =====================================================================
- * TC-MM-003: map/unmap v1 = -ENOTSUP
- * ===================================================================== */
+/* ---- TC-MM-003: map/unmap v1 = -ENOTSUP ---- */
 
 static void test_mm_003_map(void)
 {
@@ -911,22 +860,19 @@ static void test_mm_003_map(void)
           "TC-MM-003", "v1 br_mm_map/unmap always -ENOTSUP");
 }
 
-/* =====================================================================
- * Activation state machine + TC-MM-EXTRA (undeclared address / full table) + rollback
- * ===================================================================== */
+/* ---- activation state machine + TC-MM-EXTRA (undeclared address / full table) + rollback ---- */
 
 static void test_mm_extra(void)
 {
     section("TC-MM-EXTRA", "undeclared address / full table / rollback");
 
-    /* set_attrs/query while inactive ⇒ -ENOTSUP */
+    /* set_attrs/query while inactive => -ENOTSUP */
     br_u32 attrs = 0u;
     const int pre1 = br_mm_set_attrs(g_heap_base, 4096u, BR_MM_RO);
     const int pre2 = br_mm_query(g_heap_base, 4096u, &attrs);
     CHECK((pre1 == BR_ERR(ENOTSUP)) && (pre2 == BR_ERR(ENOTSUP)),
           "TC-MM-EXTRA", "inactive set_attrs/query ⇒ -ENOTSUP");
 
-    /* register state machine */
     const int reg1 = br_mm_register(&s_ops);
     const int reg2 = br_mm_register(&s_ops);
     CHECK(reg1 == 0, "TC-MM-EXTRA", "first register succeeds");
@@ -942,12 +888,12 @@ static void test_mm_extra(void)
     CHECK(s_ops_stats.activate_count == br_mm_region_count(), "TC-MM-EXTRA",
           "activate receives a snapshot of the current region table");
 
-    /* undeclared address ⇒ -EINVAL (even when active) */
+    /* undeclared address => -EINVAL (even when active) */
     const int r_un = br_mm_cache_flush((void *)(br_uintptr_t)0x1000u, 4096u);
     printf("[HOSTTEST]   undeclared address flush=%d\n", r_un);
     CHECK(r_un == BR_ERR(EINVAL), "TC-MM-EXTRA", "undeclared address ⇒ -EINVAL");
 
-    /* active + CACHED ⇒ dispatch ops; non-CACHED ⇒ no dispatch */
+    /* active + CACHED => dispatch ops; non-CACHED => no dispatch */
     const br_u32 f0 = s_ops_stats.flush_calls;
     const int rc_cached = br_mm_cache_flush((void *)g_heap_base, 4096u);
     const br_u32 f1 = s_ops_stats.flush_calls;
@@ -959,14 +905,13 @@ static void test_mm_extra(void)
           "CACHED region dispatched via ops");
     CHECK((rc_nc == 0) && (f2 == f1), "TC-MM-EXTRA", "non-CACHED not dispatched");
 
-    /* set_attrs / query dispatch */
     attrs = 0u;
     const int rc_sa = br_mm_set_attrs(g_heap_base, 4096u, BR_MM_RO);
     const int rc_q  = br_mm_query(g_heap_base, 4096u, &attrs);
     CHECK((rc_sa == 0) && (rc_q == 0) && (attrs == BR_MM_CACHED), "TC-MM-EXTRA",
           "set_attrs/query dispatched via ops");
 
-    /* table insert fails ⇒ roll back the entry (no second source of truth) */
+    /* table insert fails => roll back the entry */
     const br_uintptr_t fail_at = (br_uintptr_t)(void *)g_regspace;
     s_ops_stats.fail_base = fail_at;
     const br_u32 count_before = br_mm_region_count();
@@ -978,7 +923,7 @@ static void test_mm_extra(void)
     CHECK((rc_fail == BR_ERR(EIO)) && (count_after == count_before),
           "TC-MM-EXTRA", "map_region failure rolls back the region entry");
 
-    /* table full ⇒ -ENOSPC (use a new area that overlaps no existing region) */
+    /* table full => -ENOSPC (new area overlapping no existing region) */
     br_u32 i = 0u;
     while ((br_mm_region_count() < (br_u32)BR_MM_MAX_REGIONS) && (i < 32u)) {
         const int rc = add_region((br_uintptr_t)(void *)g_regspace + (br_uintptr_t)(i * 4096u),
@@ -1000,9 +945,7 @@ static void test_mm_extra(void)
     CHECK(rc_full == BR_ERR(ENOSPC), "TC-MM-EXTRA", "table full ⇒ -ENOSPC");
 }
 
-/* =====================================================================
- * Pool geometry observation
- * ===================================================================== */
+/* ---- pool geometry observation ---- */
 
 static void test_layout(void)
 {
@@ -1022,9 +965,7 @@ static void test_layout(void)
     CHECK(br_mem_ready() == BR_TRUE, "TC-MEM-LAYOUT", "br_mem_ready() == TRUE");
 }
 
-/* =====================================================================
- * main
- * ===================================================================== */
+/* ---- main ---- */
 
 int main(void)
 {
@@ -1065,7 +1006,7 @@ int main(void)
     test_mm_003_map();
     test_mm_extra();
 
-    /* stress last: it empties the heap, easing verification of merge back to one free block */
+    /* stress last: it empties the heap, easing the merge check */
     test_mem_002_stress();
 
     printf("[HOSTTEST] SUMMARY pass=%d fail=%d total=%d\n",

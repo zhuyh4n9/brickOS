@@ -1,45 +1,18 @@
 /*
- * brickOS prototype v0.1.0 — TLSF heap (pure algorithm; caller provides the arena, this file **logs nothing**)
- *
- * Authoritative design: `docs/3-os-core/3-01-core-api-list.md` §6 (byte heap of the br-mem group)
- * + §14 CA-7 (contiguous memory is a separate pool, not on this heap) + `docs/3-os-core/3-04-memory.md`
- * §3 (heap boot timing: init point = core.init). This file implements only the "two-level segregated
- * fit" algorithm itself, with no region table and no red zones/accounting — those live in mem.c
- * (§6 implementation design); this file must be stress-testable standalone on the host.
- *
- * 1. Two-level segregation (TLSF)
- *   Level 1 has 32 classes (2^5) + level 2 subdivides each class by 32 (2^5); `fl_bitmap`/`sl_bitmap`
- *   use bit scans to locate the smallest usable class ⇒ alloc/free are O(1). Mapping rules (parameter
- *   dictionary in tlsf_internal.h):
- *     - block size ∈ [32, 63] : fl = 0, sl = size - 32 (1 B granularity)
- *     - block size ∈ [2^k, 2^(k+1)) : fl = k - 5, sl = (size >> (k-5)) - 32
- *   `mapping_search` rounds the request **up to the upper bound of its sl slot** before searching,
- *   otherwise the same slot could yield a block smaller than the request (the most common TLSF
- *   mapping off-by-one; see br_tlsf_check's "size consistency" validation).
- *
- * 2. Block layout
- *   Block header is 16 B: {size | FREE bit, prev_phys} (prev_phys = total bytes of the previous
- *   physical block, 0 for the first block). Split/immediate coalesce; free blocks are doubly linked.
- *
- * ★ Free links are stored at the **block tail** (link_of), not the block head — the only shape
- *   difference from textbook TLSF: the 16 B payload at the block head is used by upper-layer mem.c
- *   as the first half of a **frozen 32 B block header**, and `docs/5-debug/5-01-debug.md` §4's
- *   "double-free interception" requires the header to stay readable after free (magic/state check).
- *   If links lived at the block head, TLSF would write next/prev into the header on free and a
- *   second free could only see garbage, unable to distinguish "double free" from "wild pointer".
- *   Cost: min block = 16 (header) + 16 (links), same as the textbook, no extra cost.
- *
- * 3. Single instance
- *   The prototype has one heap only (§6: "v1 has only the global heap"); the control block is
- *   file-static and the interface takes no handle. This file takes no lock: v0.1 is single-core
- *   and the caller guarantees serialization (thread-only; §11's ISR whitelist excludes memory).
+ * TLSF heap (pure algorithm; the caller provides the arena; logs nothing). One static control
+ * block, one heap: no handle, no lock -- v0.1 is single-core and the caller serializes (thread
+ * context only; the ISR whitelist excludes memory). Bitmap bit scans give O(1) alloc/free;
+ * mapping_search rounds a request up to its sl slot's upper bound so the chosen block is >=
+ * the request. Header 16 B: {size | FREE bit, prev_phys}. Free links live at the block tail
+ * (link_of), so the header stays readable after free (mem.c's double-free check); min block =
+ * 16 (header) + 16 (links).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_types.h>
 
 #include "tlsf_internal.h"
 
-/* ---------------------------------------------------------------- block layout */
+/* ---- block layout ---- */
 
 typedef struct tlsf_hdr {
     br_size_t size;       /* total bytes (including this header) | FREE bit */
@@ -48,13 +21,12 @@ typedef struct tlsf_hdr {
 
 #define BR_TLSF_F_FREE   ((br_size_t)1u)
 
-/* Free-list node: valid only for **free blocks**, stored in the 16 B block tail. */
 typedef struct tlsf_link {
     tlsf_hdr_t *prev;
     tlsf_hdr_t *next;
 } tlsf_link_t;
 
-/* ---------------------------------------------------------------- control block */
+/* ---- control block ---- */
 
 static struct {
     br_u8       *arena;
@@ -65,10 +37,10 @@ static struct {
     br_size_t    used;        /* total footprint of allocated blocks (incl. headers) */
     br_size_t    free_bytes;  /* total footprint of free blocks (incl. headers); used + free == bytes */
     br_bool      init;
-    br_u32       bad_free;    /* wild pointers/double frees caught at TLSF level (for self-test reference only) */
+    br_u32       bad_free;    /* wild pointers/double frees caught here (self-test only) */
 } s_tlsf;
 
-/* ---------------------------------------------------------------- helpers */
+/* ---- helpers ---- */
 
 static br_size_t blk_size(const tlsf_hdr_t *b)
 {
@@ -132,12 +104,11 @@ static br_u32 log2_floor(br_size_t v)
     return k;
 }
 
-/* ---------------------------------------------------------------- mapping */
+/* ---- mapping ---- */
 
 static void mapping_insert(br_size_t size, br_u32 *fl, br_u32 *sl)
 {
     if (size < (br_size_t)(2u * BR_TLSF_MIN_BLOCK)) {
-        /* Small class: [32, 63] at 1-byte granularity. Sizes below the min block map to 0 (should not occur). */
         *fl = 0u;
         *sl = (size >= (br_size_t)BR_TLSF_MIN_BLOCK)
                   ? (br_u32)(size - (br_size_t)BR_TLSF_MIN_BLOCK) : 0u;
@@ -148,7 +119,6 @@ static void mapping_insert(br_size_t size, br_u32 *fl, br_u32 *sl)
     }
 }
 
-/* Mapping used for search: round the request up to the upper bound of its sl slot, ensuring the selected block >= request. */
 static void mapping_search(br_size_t size, br_u32 *fl, br_u32 *sl)
 {
     if (size >= (br_size_t)(2u * BR_TLSF_MIN_BLOCK)) {
@@ -163,7 +133,7 @@ static void mapping_search(br_size_t size, br_u32 *fl, br_u32 *sl)
     mapping_insert(size, fl, sl);
 }
 
-/* ---------------------------------------------------------------- free list */
+/* ---- free list ---- */
 
 static void fl_insert(tlsf_hdr_t *b)
 {
@@ -209,7 +179,7 @@ static void fl_remove(tlsf_hdr_t *b)
     lk->next = BR_NULL;
 }
 
-/* ---------------------------------------------------------------- public surface */
+/* ---- public surface ---- */
 
 br_size_t br_tlsf_overhead(void)
 {
@@ -224,7 +194,7 @@ int br_tlsf_init(void *arena, br_size_t bytes)
     if (((br_uintptr_t)arena & (br_uintptr_t)(BR_TLSF_ALIGN - 1u)) != 0u) {
         return BR_ERR(EINVAL);
     }
-    /* Level-1 index upper bound: fl = log2(size) - 5 must be < 32 ⇒ arena <= 2^36 (64 GiB). */
+    /* Level-1 index upper bound: fl = log2(size) - 5 must be < 32 => arena <= 2^36 (64 GiB). */
     if (bytes > ((br_size_t)1u << 36)) {
         return BR_ERR(EINVAL);
     }
@@ -245,7 +215,7 @@ int br_tlsf_init(void *arena, br_size_t bytes)
         }
     }
 
-    /* Whole arena as one free block. Links live at the block tail ⇒ must be at least MIN_BLOCK (checked above). */
+    /* Whole arena as one free block; links at the tail need >= MIN_BLOCK. */
     tlsf_hdr_t *b = (tlsf_hdr_t *)(void *)s_tlsf.arena;
     b->size      = s_tlsf.bytes | BR_TLSF_F_FREE;
     b->prev_phys = 0u;
@@ -295,7 +265,7 @@ void *br_tlsf_alloc(br_size_t n)
 
     const br_size_t bsz = blk_size(b);
     if (bsz >= (req + (br_size_t)BR_TLSF_MIN_BLOCK)) {
-        /* Split: [b, req) goes to the caller, [rest, bsz-req) returns to the free list. */
+        /* Split: [b, req) to the caller, [rest, bsz-req) back to the free list. */
         tlsf_hdr_t *rest = (tlsf_hdr_t *)(void *)((br_u8 *)b + req);
         rest->size      = bsz - req;
         rest->prev_phys = req;
@@ -339,7 +309,7 @@ void br_tlsf_free(void *p)
     s_tlsf.used       -= sz;
     s_tlsf.free_bytes += sz;
 
-    /* Coalesce with the previous physical block (prev_phys maintained by every split/coalesce, always equal to the previous block's total bytes). */
+    /* Coalesce with the previous physical block (prev_phys = previous block's total bytes). */
     if (b->prev_phys != 0u) {
         tlsf_hdr_t *prev = (tlsf_hdr_t *)(void *)((br_u8 *)b - b->prev_phys);
         if ((blk_in_arena(prev) == BR_TRUE) && (blk_is_free(prev) == BR_TRUE) &&
@@ -349,13 +319,12 @@ void br_tlsf_free(void *p)
         }
     }
 
-    /* Total size of the merged region (invariant: used + free == bytes is maintained by the sz adds/subs). */
+    /* merged = size of the merged region (used + free == bytes is maintained above). */
     br_size_t merged = blk_size(b);
     if (b != blk_from_user(p)) {
         merged = blk_size(b) + sz;   /* b = prev, sz is the clean size of the just-freed block */
     }
 
-    /* Coalesce with the next physical block. */
     tlsf_hdr_t *next = (tlsf_hdr_t *)(void *)((br_u8 *)b + merged);
     if ((pos_in_arena((br_u8 *)next) == BR_TRUE) && (blk_is_free(next) == BR_TRUE)) {
         fl_remove(next);
@@ -417,12 +386,9 @@ br_size_t br_tlsf_max_free(void)
 }
 
 /*
- * Whole-heap self-check (the heap side of TC-DBG-041; returns violation count, 0 = clean). Checked:
- *   ① physical chain: size consistency (prev_phys alignment), min block, 16-byte alignment, arena bounds;
- *   ② no two adjacent free blocks;
- *   ③ free-list integrity: back links, nodes really inside the arena, size matches its class, no cycles;
- *   ④ bitmap vs lists: bit set with empty list / list non-empty with bit clear are both violations;
- *   ⑤ accounting consistency: used + free == bytes.
+ * Whole-heap self-check (heap side of TC-DBG-041): returns the violation count, 0 = clean.
+ * Checks the physical chain, adjacent free blocks, free-list integrity, bitmap-vs-list
+ * agreement (class membership, back links, cycles), and used + free == bytes.
  */
 br_u32 br_tlsf_check(void)
 {
@@ -433,7 +399,6 @@ br_u32 br_tlsf_check(void)
     br_u32 v = 0u;
     const br_u8 *end = s_tlsf.arena + s_tlsf.bytes;
 
-    /* ①/② physical chain. */
     tlsf_hdr_t *b      = (tlsf_hdr_t *)(void *)s_tlsf.arena;
     br_size_t   prev   = 0u;
     br_bool     pfree  = BR_FALSE;
@@ -460,7 +425,7 @@ br_u32 br_tlsf_check(void)
             if (pfree == BR_TRUE) {
                 v++;   /* adjacent double free: coalescing missed one */
             }
-            /* ② must be in the class it belongs to */
+            /* must be in the class it belongs to */
             br_u32 fl;
             br_u32 sl;
             mapping_insert(sz, &fl, &sl);
@@ -487,7 +452,7 @@ br_u32 br_tlsf_check(void)
         v++;
     }
 
-    /* ③/④ free lists and bitmaps. */
+    /* Free lists and bitmaps. */
     for (br_u32 fl = 0u; fl < BR_TLSF_FL_COUNT; fl++) {
         for (br_u32 sl = 0u; sl < BR_TLSF_SL_COUNT; sl++) {
             const br_bool has = (s_tlsf.blocks[fl][sl] != BR_NULL) ? BR_TRUE : BR_FALSE;
@@ -531,7 +496,7 @@ br_u32 br_tlsf_check(void)
         }
     }
 
-    /* ⑤ accounting consistency (metadata self-consistency, not structural corruption, but still "two truths disagree"). */
+    /* Accounting: two internal truths disagree. */
     if ((s_tlsf.used + s_tlsf.free_bytes) != s_tlsf.bytes) {
         v++;
     }

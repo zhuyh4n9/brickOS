@@ -1,11 +1,7 @@
 /*
- * brickOS prototype v0.2.0 — syscall surface (unistd.h; provided by the runtime/posix plugin)
- *
- * Coverage = the **TR-A + TR-B** fd/file/directory/process families from
- * `11-02-svc-posix-subset.md`. Explicitly **not** here (subset honesty duty, see TR-C/TR-D there):
- *   `fork`/`exec*`/`wait*` (single address space, `1-01` §2.1), signal family (no signal model),
- *   `gettimeofday/time` (no wall-clock source, P-1), `exit/_exit` (no process-exit semantics, Q-5),
- *   `mmap/mprotect` (vfs is always -ENOTSUP, P-7), `chroot/pipe/mknod` (no counterpart mechanism).
+ * fd/file/directory/process surfaces. Not provided: fork/exec/wait (single address space),
+ * signals, wall clock (gettimeofday/time), exit/_exit, mmap/mprotect (always -ENOTSUP),
+ * chroot/pipe/mknod.
  */
 #ifndef BR_POSIX_UNISTD_H
 #define BR_POSIX_UNISTD_H
@@ -13,7 +9,6 @@
 #include <sys/types.h>
 #include <sys/uio.h>
 
-/* ---- file I/O ---- */
 ssize_t read (int fd, void *buf, size_t n);
 ssize_t write(int fd, const void *buf, size_t n);
 ssize_t pread (int fd, void *buf, size_t n, off_t off);
@@ -28,7 +23,6 @@ int     ftruncate(int fd, off_t len);
 int     truncate(const char *path, off_t len);
 int     isatty(int fd);
 
-/* ---- name space ---- */
 int unlink(const char *path);
 int rmdir (const char *path);
 int link  (const char *old_path, const char *new_path);
@@ -36,14 +30,11 @@ int symlink(const char *target, const char *linkpath);
 ssize_t readlink(const char *path, char *buf, size_t cap);
 int rename(const char *old_path, const char *new_path);
 
-/* ---- working directory (target of relative paths; cwd is a POSIX concept owned by this service,
- * vfs knows only absolute paths)---- */
+/* cwd is a POSIX concept owned by this service; vfs knows only absolute paths. */
 int   chdir (const char *path);
 char *getcwd(char *buf, size_t size);
 
-/* ---- permissions (this generation = existence check + always allow; see ADR-0014)---- */
-/* POSIX-required standard descriptor numbers. Here fd 0/1/2 are bound to the console by
- * runtime/posix initialization (see that plugin's start hook). */
+/* fd 0/1/2 are bound to the console by runtime/posix initialization. */
 #define STDIN_FILENO   0
 #define STDOUT_FILENO  1
 #define STDERR_FILENO  2
@@ -52,13 +43,14 @@ char *getcwd(char *buf, size_t size);
 #define X_OK  1
 #define W_OK  2
 #define R_OK  4
+/* Existence check only; always allows this generation. */
 int access(const char *path, int mode);
 
-/* ---- time (see time.h on "no wall clock")---- */
+/* No wall clock; see time.h. */
 unsigned int sleep(unsigned int seconds);
 int          usleep(useconds_t usec);
 
-/* ---- process identity (single APP: constants)---- */
+/* Single APP: constants. */
 pid_t getpid(void);
 pid_t getppid(void);
 uid_t getuid(void);

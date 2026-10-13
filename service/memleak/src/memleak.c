@@ -1,54 +1,27 @@
 /*
- * service/memleak — leak / heap corruption reporting service (implementation)
+ * Leak / heap corruption reporting implementation. Implements the intersection of the cheap v1.x
+ * substitute (core's red zones / poisoning / double-free counters) and the v2 arena, which
+ * only reaches ownership tags: no budget cap, no enforced ownership, no OOM policy.
+ * WORKAROUND(br-wa-debug-001) registers that gap and its repayment action (v2 arena).
  *
- * Design source: `docs/5-debug/5-01-debug.md` §4 "ASan / memleak policy (layered, honest engineering)":
- *   - the cheap v1.x substitute = TLSF red zones (malloc header/footer guard) + freelist poisoning +
- *     stack canary;
- *   - the v2.0 target memleak = per-plugin arena accounting (allocation carries plugin ownership;
- *     on shutdown/dump produce a per-plugin leak report).
- *   This file implements the **intersection** of those two lines: core's cheap mechanism is already in
- *   place (violation counters come from core), while the v2 arena is only carried as far as an
- *   "ownership tag" in this prototype (see `br/core/br_mem.h` §③ accounting contract).
+ * Read-only: consumes only core's heap observation contract (br_heap_stats_get / br_heap_walk /
+ * br_heap_check / br_heap_usage / br_heap_owner_*) and allocates nothing on the report path.
  *
- * ★ Honest statement (consistent with the `br_memleak.h` header, ADR-0003):
- *   An ownership tag ≠ a v2 arena — no budget cap, no enforced ownership, no OOM policy.
- *   This plugin can answer "which blocks were not returned / who tagged them / where they were
- *   allocated", but not "some plugin is over budget".
- *   WORKAROUND(br-wa-debug-001) registers exactly that gap and its repayment action (v2 arena).
+ * Static budget: ownership aggregation uses a fixed 16-slot array; once full, further owners merge
+ * into one "(other)" overflow slot (counted as one owner). Detail rows are not cached: each owner
+ * re-walks br_heap_walk and prints at most BR_MEMLEAK_MAX_ROWS_PER_OWNER rows -- trading time for
+ * static RAM, since a 4 KiB plugin budget cannot hold 16 owners x 8 details.
  *
- * ★ Read-only boundary (ADR-0003 §2.6):
- *   This plugin **only consumes** core's heap observation contract — `br_heap_stats_get` /
- *   `br_heap_walk` / `br_heap_check` / `br_heap_usage` / `br_heap_owner_*`; it builds no pool, changes
- *   no heap, and allocates nothing on the report path. The consumer is a plugin ⇒ the observation
- *   surface must live in core's public header, not hidden inside core (same treatment as
- *   `br_irq_stats_get` in 3-02 §17.4).
- *
- * ★ Static budget (constraint of 5-01 §3: "the capture path uses only static buffers, touching no heap
- *   or scheduler"):
- *   Ownership aggregation uses a **fixed 16-slot** static array; once full, further owners merge into
- *   one `"(other)"` overflow slot (the summary's owners count includes that slot as one owner).
- *   Detail rows are **not cached during the report**: each owner re-walks `br_heap_walk` to keep a
- *   zero-row buffer (printing at most BR_MEMLEAK_MAX_ROWS_PER_OWNER rows each time). This is the
- *   ruling "trade time for static RAM" — the report is a debug path and a heap walk is not cheap, but
- *   a 4 KiB plugin budget cannot hold a block table of 16 owners × 8 details.
- *
- * Threading discipline: everything is **thread-only** (it prints and walks the heap).
+ * Threading: thread-only throughout (prints and walks the heap).
  */
 #include <br/debug/br_memleak.h>
 
 #include <br/core/br_log.h>
 
-/* =====================================================================
- * Ownership tag (consumer side of the ③ accounting contract)
- * ===================================================================== */
-
 /*
- * This plugin's own ownership tag. v0.1 has no runtime plugin manager (br-wa-boot-001), so
- * `br_memleak_init()` is not guaranteed to have been called; we use lazy registration ("register on
- * first need + cache on success"), which both satisfies init semantics (idempotent) and lets
- * self-test/report work in combinations that never init explicitly.
- * A failed registration (heap not ready / tag table full) is not cached; the next call retries —
- * core's register is idempotent for duplicate names.
+ * This plugin's own ownership tag. br_memleak_init() is not guaranteed to have run, so registration
+ * is lazy (register on first need, cache on success), which is also idempotent. Failed registration
+ * (heap not ready / tag table full) is not cached; the next call retries.
  */
 static br_owner_t s_owner      = BR_OWNER_NONE;
 static br_bool    s_owner_done = BR_FALSE;
@@ -69,22 +42,13 @@ br_owner_t br_memleak_owner(void)
     return ml_ensure_owner();
 }
 
-/*
- * Stance of 5-01 §4: only the ownership tag (base accounting) is registered here.
- * ★ The header also mentions "trace event names", but memleak's brick.toml does **not** declare a
- *   `service/trace` dependency edge ⇒ do not create an undeclared call edge here (that is exactly
- *   what the single-source-of-truth declaration surface must stop). Event names wait until that
- *   dependency edge is declared, see "to be re-imported" in the README.
- */
+/* Only the ownership tag is registered. memleak's brick.toml declares no service/trace dependency
+ * edge, so no trace event names here (that would create an undeclared call edge). */
 int br_memleak_init(void)
 {
     (void)ml_ensure_owner();
     return 0;
 }
-
-/* =====================================================================
- * Live block observation (three consumers of br_heap_walk)
- * ===================================================================== */
 
 static int ml_count_cb(void *ctx, const br_heap_block_t *blk)
 {
@@ -97,7 +61,7 @@ br_u32 br_memleak_live(void)
 {
     br_u32 n = 0u;
 
-    /* Heap not ready ⇒ br_heap_walk returns -ENODEV; semantically "no live blocks" */
+    /* Heap not ready (br_heap_walk -ENODEV) means no live blocks */
     if (br_heap_walk(ml_count_cb, &n) < 0) {
         return 0u;
     }
@@ -129,25 +93,17 @@ br_u32 br_memleak_live_by_owner(br_owner_t owner)
     return c.live;
 }
 
-/*
- * ★ This is the **current state**, not a cumulative total. The violations of 5-01 §4
- *   (red zone/magic/poisoning) live in core's block headers and free list, and every
- *   `br_heap_check()` call rescans the whole heap ⇒ "how many violations remain right now".
- *   Cumulative figures (redzone_hits / canary_hits / double_free) live in `br_heap_stats_t` and are
- *   taken separately, outside `br_memleak_report()`'s summary; this function deliberately does not
- *   add the two, so that "a corruption that was repaired" is not recorded as red forever — case
- *   TC-DBG-041 depends on this semantics (after restoring a red zone it must return to 0).
- */
+/* Current violation count, not cumulative: every br_heap_check() rescans the whole heap, so this is
+ * "how many violations remain right now". Cumulative counters live in br_heap_stats_t and are
+ * reported separately; the two are deliberately not added, so a repaired corruption returns to 0
+ * (TC-DBG-041 depends on this). */
 br_u32 br_memleak_corruptions(void)
 {
     return br_heap_check();
 }
 
-/* =====================================================================
- * Report: owner aggregation (static bound + "(other)" overflow slot)
- * ===================================================================== */
-
-#define ML_OWNER_SLOTS   16u   /* per-owner bound: static buffer discipline of 5-01 §3 */
+/* Per-owner bound (static buffer discipline). */
+#define ML_OWNER_SLOTS   16u
 #define ML_OTHER_NAME    "(other)"
 
 typedef struct {
@@ -183,8 +139,7 @@ static void ml_reset(void)
     s_sum_bytes   = 0u;
 }
 
-/* Find an owner in the slot table; not registered ⇒ -1 (no distinction between "overflow" and
- * "never seen" — both merge into "(other)") */
+/* Not registered => -1; "overflow" and "never seen" both merge into "(other)". */
 static int ml_slot_find(br_owner_t owner)
 {
     for (br_u32 i = 0u; i < s_slot_count; i++) {
@@ -195,7 +150,7 @@ static int ml_slot_find(br_owner_t owner)
     return -1;
 }
 
-/* Take (creating if needed) an owner slot; table full ⇒ BR_NULL (caller merges into "(other)") */
+/* Take (creating if needed) an owner slot; table full => BR_NULL (caller merges into "(other)") */
 static ml_slot_t *ml_slot_take(br_owner_t owner)
 {
     const int idx = ml_slot_find(owner);
@@ -234,7 +189,7 @@ static int ml_aggr_cb(void *ctx, const br_heap_block_t *blk)
     return 0;
 }
 
-/* summary's owners figure: number of owners with live blocks (including the "(other)" pseudo-owner) */
+/* summary's owners figure: owners with live blocks, including the "(other)" pseudo-owner */
 static br_u32 ml_owner_total(void)
 {
     br_u32 n = 0u;
@@ -285,7 +240,7 @@ br_u32 br_memleak_report(void)
     br_u32          owners;
     br_u32          corrupt;
 
-    /* First gate: if the heap is not ready leave one line only, do not pretend there is accounting */
+    /* First gate: heap not ready => one line only, do not pretend there is accounting */
     if (br_heap_stats_get(&st) != 0) {
         br_log_info("[LEAK] heap not ready");
         return 0u;
@@ -333,32 +288,24 @@ br_u32 br_memleak_report(void)
     return s_sum_live;
 }
 
-/* =====================================================================
- * Plugin lifecycle hooks (name = symbol_prefix(short) + phase; referenced by the generated
- * `build/gen/service/memleak/plugin_desc.c`; design 1-01 §9 / 3-05 §2)
- * Self-declared prototypes satisfy -Wmissing-prototypes (hook names are derived by the generator,
- * not in the public header or [[export]]).
- * ===================================================================== */
+/* Plugin lifecycle hooks referenced by the generated plugin_desc.c. Self-declared prototypes
+ * -Wmissing-prototypes (hook names come from the generator, not the public header). */
 int memleak_early_init(void);
 int memleak_init(void);
 int memleak_start(void);
 
-/* EARLY phase: no action (no heap/threads/interrupt disabling — although this plugin "watches the
- * heap", the heap is not claimed yet at this point). */
+/* EARLY phase: no action; the heap is not claimed yet at this point. */
 int memleak_early_init(void)
 {
     return 0;
 }
 
-/* LATE phase (Service category ⇒ ② completion point): forward to the existing init. */
 int memleak_init(void)
 {
     return br_memleak_init();
 }
 
-/* START phase: this service has nothing to do after "interrupts available / threads creatable". */
 int memleak_start(void)
 {
     return 0;
 }
-

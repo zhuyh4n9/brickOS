@@ -1,39 +1,13 @@
 #!/usr/bin/env bash
-# brickOS — dev environment setup (**source this file**)
-#
-#   source setup.sh                # configure PATH + environment variables
-#   source setup.sh --quiet        # quiet (only speak on errors)
-#   source setup.sh --with-make    # also put prebuilts make first on PATH (shadows host make)
-#   source setup.sh --unset        # undo, restore the pre-source state
-#   bash   setup.sh --print        # no sourcing; just print an eval-able snippet (for CI)
-#
-# ## Why sourcing is required
-# A child process cannot change the parent shell's environment — `./setup.sh` could only "pretend
-# to succeed". When executed directly, this script refuses outright and shows the correct form
-# instead of silently doing nothing.
-#
-# ## What is configured (every item has a real consumer; no idle variables)
-#
-#   PATH                     <- see "PATH prepend order" below
-#   BRICKOS_ROOT             = this repo root
-#   BRICKOS_HOST_TRIPLE      = <host-arch>/<host-os> (from tools/host-detect.sh, single source of truth)
-#   BRICKIE_REPO_ROOT        -> read by tools/brickie/python/brickie/native.py
-#   BRICKIE_TOOL_ROOT        -> read by tools/brickie/python/brickie/native.py
-#   CROSS_COMPILE            -> read by the top-level Makefile (cross compiler prefix)
-#
-# ## PATH prepend order (left = higher priority, matching the brickie front-end lookup order)
-#
-#   build/host/<triple>/bin             locally built brickie / brickie-gen (**ahead of the seed**)
-#   prebuilts/seed/brickie/<triple>/bin bootstrap seed (fallback when there is no build/)
-#   prebuilts/toolchain/<arm...>/bin    cross toolchain aarch64-none-elf-* (version-locked)
-#   prebuilts/toolchain/ninja/bin       build backend ninja (BR-D4 option B)
-#   prebuilts/toolchain/make/bin        **only with --with-make** — it shadows host make, so not added by default
-#
-# BRICKIE_GEN is deliberately **not set**: its meaning is "pin the generator", and setting it would
-# override the "locally built first" lookup rule (native.py's order). Export it yourself to pin.
-#
-# ## Idempotence
-# Repeated sourcing is safe: every run first drops all **repo-owned** PATH entries, then re-prepends.
+# brickOS dev environment setup — source this file (a child process cannot change the parent
+# shell's environment; direct execution is refused).
+#   source setup.sh [--quiet] [--with-make] [--unset]   |   bash setup.sh --print (eval-able, CI)
+# Sets PATH, BRICKOS_ROOT, BRICKOS_HOST_TRIPLE, BRICKIE_REPO_ROOT, BRICKIE_TOOL_ROOT,
+# CROSS_COMPILE. BRICKIE_GEN stays unset: setting it would override native.py's "locally built
+# first" lookup order; export it yourself to pin.
+# PATH prepend order (highest first): build/host/<triple>/bin, the bootstrap seed
+# prebuilts/seed/brickie/<triple>/bin, the version-locked cross toolchain, ninja; make only with
+# --with-make (it shadows host make). Idempotent: every run drops repo-owned PATH entries first.
 
 # ------------------------------------------------------------------ arguments
 _brickos_mode="apply"
@@ -74,12 +48,10 @@ _brickos_banner() { [ "$_brickos_quiet" = "1" ] || echo "$@"; }
 _brickos_warn()   { echo "setup.sh: $*" >&2; }
 
 # ------------------------------------------------------------------ variable list
-# Variables we manage (their values are saved on apply and restored on unset)
 _brickos_vars="BRICKOS_ROOT BRICKOS_HOST_TRIPLE BRICKIE_REPO_ROOT BRICKIE_TOOL_ROOT CROSS_COMPILE"
 
 # ------------------------------------------------------------------ --unset
 if [ "$_brickos_mode" = "unset" ]; then
-    # Drop the PATH entries owned by this repo
     _brickos_newpath=""
     _brickos_oldifs="$IFS"; IFS=:
     for _brickos_p in $PATH; do
@@ -109,7 +81,7 @@ if [ "$_brickos_mode" = "unset" ]; then
 fi
 
 # ------------------------------------------------------------------ host triple
-# Single source of truth = tools/host-detect.sh (same origin as mk/host.mk / check-build.sh / the test cases).
+# tools/host-detect.sh is the single source of truth for the host triple.
 _brickos_triple_raw="$("$_brickos_root/tools/host-detect.sh" 2>/dev/null)"
 _brickos_arch="$(printf '%s' "$_brickos_triple_raw" | cut -d' ' -f1)"
 _brickos_os="$(printf '%s' "$_brickos_triple_raw" | cut -d' ' -f2)"
@@ -120,7 +92,7 @@ fi
 _brickos_triple="$_brickos_arch/$_brickos_os"
 
 # ------------------------------------------------------------------ toolchain paths
-# Path truth = the lock file (exported by fetch-prebuilt.py --print-env), **not recomputed in shell**.
+# Path truth is the lock file (fetch-prebuilt.py --print-env), never recomputed here.
 _brickos_cross=""
 _brickos_make_dir=""
 _brickos_bin_dirs=""
@@ -134,13 +106,13 @@ else
     _brickos_warn "python3 not found — cannot resolve toolchain paths from the lock file (brickie itself needs python3 too)"
 fi
 
-# Assemble the directories to prepend (left -> right = priority high to low)
+# Assemble the directories to prepend, left = highest priority.
 _brickos_prepend="$_brickos_root/build/host/$_brickos_triple/bin"
 _brickos_prepend="$_brickos_prepend:$_brickos_root/prebuilts/seed/brickie/$_brickos_triple/bin"
 [ "$_brickos_with_make" = "1" ] && [ -n "$_brickos_make_dir" ] && \
     _brickos_prepend="$_brickos_prepend:$_brickos_root/$_brickos_make_dir"
 for _brickos_d in $_brickos_bin_dirs; do
-    # Skip the make directory by default (it shadows host make); only --with-make takes it
+    # Skip make by default (it shadows host make); only --with-make takes it
     if [ "$_brickos_d" = "$_brickos_make_dir" ] && [ "$_brickos_with_make" != "1" ]; then
         continue
     fi
@@ -148,7 +120,7 @@ for _brickos_d in $_brickos_bin_dirs; do
 done
 unset _brickos_d
 
-# Missing-directory notice (notice only, never blocking — a nonexistent dir on PATH is harmless)
+# Missing-directory notice only; a nonexistent dir on PATH is harmless.
 _brickos_missing=""
 for _brickos_d in $(printf '%s' "$_brickos_prepend" | tr ':' ' '); do
     [ -d "$_brickos_d" ] || _brickos_missing="$_brickos_missing $_brickos_d"
@@ -172,7 +144,6 @@ if [ "$_brickos_mode" = "print" ]; then
 fi
 
 # ------------------------------------------------------------------ apply
-# First drop old repo entries (idempotence), then prepend the whole set
 _brickos_newpath=""
 _brickos_oldifs="$IFS"; IFS=:
 for _brickos_p in $PATH; do
@@ -184,7 +155,7 @@ done
 IFS="$_brickos_oldifs"
 export PATH="$_brickos_prepend${_brickos_newpath:+:$_brickos_newpath}"
 
-# Save original values (first time only; avoid a second source storing "our" values as the original)
+# Save originals once, so a second source does not store our values as the original.
 for _brickos_v in $_brickos_vars; do
     _brickos_saved="_BRICKOS_SAVED_$_brickos_v"
     [ -n "${!_brickos_saved+x}" ] || eval "_BRICKOS_SAVED_$_brickos_v=\"\${$_brickos_v-}\""
@@ -219,7 +190,7 @@ fi
 [ "$_brickos_with_make" = "1" ] && [ -n "$_brickos_make_dir" ] && \
     _brickos_banner "  note: prebuilts make is first on PATH and will shadow host make"
 
-# Clean up temporary variables, leaving only the exported ones (avoid polluting the caller's shell namespace)
+# Leave only the exported variables (do not pollute the caller's namespace).
 unset _brickos_mode _brickos_quiet _brickos_with_make _brickos_root _brickos_triple
 unset _brickos_arch _brickos_os _brickos_triple_raw _brickos_cross _brickos_make_dir
 unset _brickos_bin_dirs _brickos_prepend _brickos_missing _brickos_newpath _brickos_oldifs

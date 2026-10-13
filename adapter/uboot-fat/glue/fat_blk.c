@@ -1,54 +1,32 @@
 /*
- * adapter/uboot-fat — block-layer shim + volume table + BPB observation + the few environment
- * functions we implement (project code)
+ * adapter/uboot-fat - block-layer shim, volume table, BPB observation, and the environment
+ * functions this plugin must implement. Layering and ownership are described in fat_glue.h.
  *
- * ============================== where this file sits in the layering ==============================
- * Upstream `fs/fat/fat_write.c` (which includes `fat.c`) is **one compilation unit**; all its demands
- * on the environment are satisfied in `compat/fat_env.h`; this file adds the three things that must
- * have a concrete entity on the environment side:
- *   1 `blk_dread/blk_dwrite`: the landing of upstream `disk_read/disk_write` — wired to
- *      `br_bdev_ops_t.read/write`, with chunking by device geometry (max_rw) + out-of-range rejection;
- *   2 volume table and binding: upstream's "current device" is `static struct blk_desc *cur_dev`; this
- *      file turns it into a "current volume" (`s_cur_vol`), and the bind action goes through **upstream's
- *      own** `fat_set_blk_dev()` (whole device as one partition => `start = 0`, `size = n_sectors`) —
- *      so not a single upstream line changes;
- *   3 small utilities declared in the environment header but **implementable only by this plugin**:
- *      `uboot_fat_strdup`/`uboot_fat_sprintf`/`uboot_fat_rand`, plus the truncation public API assembly
- *      `uboot_fat_truncate`.
+ * blk_dread/blk_dwrite land on br_bdev_ops_t.read/write, chunked by geometry.max_rw with
+ * out-of-range rejected; the volume table turns upstream's static cur_dev into s_cur_vol and
+ * binds through upstream's own fat_set_blk_dev() (whole device = one partition), so no upstream
+ * line changes.
  *
- * ============================== why glue also parses the BPB ==============================
- * Upstream's `get_fs_info()`/`determine_legacy_fat_bits()` are **static** (private to the single
- * compilation unit) with no external observation point. But this plugin's mount criteria (TC-FAT-001 +
- * mount geometry checks) must answer "is this volume FAT12/16/32, do the cluster counts fall in the
- * defined ranges, is the data area inside the volume". So glue uses the vendored `include/fat.h`
- * `struct boot_sector` (**still the single source of truth** for layout) to parse **read-only** once —
- * it only feeds criteria and logs and **takes no part in any I/O decision** (all I/O is upstream's, and
- * upstream re-parses the BPB on every API call). This is "observation", not "a second implementation":
- *   - the decision algorithm is the same shape as upstream `determine_legacy_fat_bits` (compared line by
- *     line); the provenance is noted in the function header;
- *   - if the observation disagrees with upstream, the symptom is a **red mount-time criterion** (not
- *     "wrong reads/writes"), because reads and writes do not trust it.
- * ==========================================================================
+ * Glue parses the BPB (read-only, from the vendored boot_sector) because upstream's
+ * get_fs_info()/determine_legacy_fat_bits() are static with no observation point; it feeds
+ * criteria and logs only, takes no part in any I/O decision, and a disagreement shows up as a
+ * red mount criterion, never a bad read.
  */
 #include "fat_glue.h"
 
-/* On-disk structures (boot_sector/dir_entry/MAX_LFN_SLOT/...): compat's `<fat.h>` forwarding shell
- * => content comes from the vendor `include/fat.h`; we copy not one field. */
+/* On-disk structures (boot_sector/dir_entry/MAX_LFN_SLOT/...); compat's <fat.h> forwards to the
+ * vendor include/fat.h, so we copy not one field. */
 #include <fat.h>
 
-/* ==================================================================== volume table and current volume
- *
- * Upstream is "global current device + current partition" (`cur_dev`/`cur_part_info`). This file keeps
- * the **same shape**: a "current volume" pointer plus the `struct blk_desc`/`disk_partition` built from
- * it. Mounting is a one-shot single-threaded action of this plugin (start phase), and selftest runs on
- * the same thread => no locking (the same v1 static assumption as cdev/bdev; the real concurrency gap
- * is registered in WORKAROUNDS.md as br-wa-boot-002).
- */
+/* ---- volume table and current volume ----
+ * Same shape as upstream's global cur_dev/cur_part_info: a current-volume pointer plus the
+ * struct blk_desc/disk_partition built from it. Mounting and selftest are single-threaded, so
+ * no locking (the v1 assumption shared with cdev/bdev; the gap is br-wa-boot-002). */
 
 static uboot_fat_vol_t  s_vols[UB_FAT_VOL_MAX];
 static uboot_fat_vol_t *s_cur_vol;
 
-/* "whole device is one partition" descriptor + partition entry (refreshed from volume geometry per bind) */
+/* "whole device is one partition" descriptor + partition entry (refreshed per bind) */
 static struct blk_desc       s_desc;
 static struct disk_partition s_part;
 
@@ -60,24 +38,18 @@ uboot_fat_vol_t *uboot_fat_vol_get(br_u32 id)
     return &s_vols[id];
 }
 
-/*
- * Volume sector number -> device lba. Whole device as one partition (start = 0) => **identity**, but
- * this layer is kept so that "partition offset" stays explicitly visible in the code (upstream writes
- * `cur_part_info.start + block`).
- */
+/* Volume sector -> device lba. Identity while the whole device is one partition (start = 0), but
+ * kept so the partition offset stays visible (upstream writes cur_part_info.start + block). */
 static br_u64 uboot_fat_lba_of(br_u32 block)
 {
     return ((br_u64)s_part.start) + (br_u64)block;
 }
 
-/* ==================================================================== block layer (shim)
- *
- * Upstream criterion: success = number of sectors transferred (== requested), failure < 0. This file
- * adds two things here:
- *   1 chunk by `geometry.max_rw` (a single I/O never exceeds the bdev limit; upstream has no such rule);
- *   2 out-of-range rejection (whole volume is one partition => the legal lba range is [start, start + size)).
- * Any chunk failing returns a negative errno => upstream's `ret != nr_blocks` criterion still holds.
- */
+/* ---- block layer (shim) ----
+ * Upstream criterion: success = sectors transferred (== requested), failure < 0. Added here:
+ * chunking by geometry.max_rw (upstream has no such rule) and out-of-range rejection (the whole
+ * volume is one partition, so [start, start + size) is legal). A failing chunk returns -errno,
+ * so upstream's `ret != nr_blocks` test still holds. */
 static unsigned long uboot_fat_blk_rw(lbaint_t start, lbaint_t blkcnt, void *buf, int write)
 {
     uboot_fat_vol_t *vol = s_cur_vol;
@@ -124,9 +96,8 @@ static unsigned long uboot_fat_blk_rw(lbaint_t start, lbaint_t blkcnt, void *buf
         } else {
             rc = vol->ops->read(vol->priv, lba, p, (br_size_t)n);
         }
-        /* bdev contract: success = number of sectors transferred (**short reads allowed**). A short one
-         * is treated as a device error — upstream decides via `ret != nr_blocks`; this file collapses
-         * that at the chunking level. */
+        /* bdev contract: success = sectors transferred; a short transfer counts as a device error
+         * here (upstream decides via `ret != nr_blocks`). */
         if (rc != (int)n) {
             br_log_error("uboot-fat: %s lba %llu n=%u rc=%d",
                          (write != 0) ? "write" : "read", (unsigned long long)lba, n, rc);
@@ -141,7 +112,7 @@ static unsigned long uboot_fat_blk_rw(lbaint_t start, lbaint_t blkcnt, void *buf
 
 unsigned long blk_dread(struct blk_desc *desc, lbaint_t start, lbaint_t blkcnt, void *buf)
 {
-    (void)desc;                     /* this file has only one "current volume"; the descriptor is just shape */
+    (void)desc;                     /* one "current volume" only; the descriptor is just shape */
     return uboot_fat_blk_rw(start, blkcnt, buf, 0);
 }
 
@@ -151,15 +122,9 @@ unsigned long blk_dwrite(struct blk_desc *desc, lbaint_t start, lbaint_t blkcnt,
     return uboot_fat_blk_rw(start, blkcnt, (void *)(br_uintptr_t)buf, 1);
 }
 
-/* ==================================================================== BPB observation */
-
-/*
- * FAT type detection. **Same shape as upstream `fs/fat/fat.c`'s `determine_legacy_fat_bits()`**
- * (upstream's is static: based on the Linux `fat_fill_super()` algorithm; reimplementing it line by line
- * here is what lets the **mount criteria** obtain the type — see "why glue also parses the BPB" in the
- * file header).
- * The 32-bit branch additionally follows upstream `read_bootsectandvi()`: `fat_length == 0 && fat32_length != 0`.
- */
+/* FAT type detection, same shape as upstream's static determine_legacy_fat_bits() (the Linux
+ * fat_fill_super() algorithm). The FAT32 branch follows read_bootsectandvi(): fat_length == 0
+ * && fat32_length != 0. Returns 0 for a malformed BPB so the mount criteria refuse it. */
 static int uboot_fat_detect_bits(const boot_sector *bs)
 {
     const u32 fat_start = bs->reserved;              /* already FAT2CPU'd by the caller */
@@ -187,8 +152,7 @@ static int uboot_fat_detect_bits(const boot_sector *bs)
     return (total_clusters > UB_FAT_MAX_FAT12) ? 16 : 12;
 }
 
-/* Read the boot sector (sector 0) and fill observation values from the vendored `boot_sector` fields.
- * Returns 0 / negative errno. */
+/* Read sector 0 and fill the observation fields from the vendored boot_sector; 0 / -errno. */
 static int uboot_fat_vol_probe(uboot_fat_vol_t *vol)
 {
     unsigned char sec[UB_FAT_SECTOR_SIZE];
@@ -210,10 +174,9 @@ static int uboot_fat_vol_probe(uboot_fat_vol_t *vol)
     memset(&bs, 0, sizeof(bs));
     memcpy(&bs, sec, sizeof(bs));
 
-    /* Same as upstream `read_bootsectandvi()`: the struct holds **raw on-disk bytes**, so __u16/__u32
-     * fields need a FAT2CPU pass (identity on little-endian targets, see compat/fat_env.h's #error);
-     * __u8[2] fields (sector size / dir entries / sector count) are read as LE, using
-     * get_unaligned_le16 as upstream does. */
+    /* As upstream read_bootsectandvi(): the struct holds raw on-disk bytes, so __u16/__u32 fields
+     * need a FAT2CPU pass (identity on LE, see compat/fat_env.h) and the __u8[2] fields (sector
+     * size / dir entries / sector count) are read with get_unaligned_le16. */
     bs.reserved    = FAT2CPU16(bs.reserved);
     bs.fat_length  = FAT2CPU16(bs.fat_length);
     bs.total_sect  = FAT2CPU32(bs.total_sect);
@@ -265,26 +228,18 @@ static int uboot_fat_vol_probe(uboot_fat_vol_t *vol)
         /* upstream: data_begin = rootdir_sect - clust_size*2 (clusters start at 2) */
         vol->data_begin = vol->rootdir_sect - (vol->clust_size * 2u);
     } else {
-        /* the non-FAT32 root directory is not on a cluster chain, so it may land in a "negative cluster"
-         * (upstream's comment says so explicitly) */
+        /* Non-FAT32 root dir is not on a cluster chain, so it can be a "negative cluster". */
         vol->data_begin = vol->rootdir_sect + vol->rootdir_size -
                           (vol->clust_size * 2u);
     }
     return 0;
 }
 
-/* ==================================================================== volume bind (where fat_set_blk_dev lives) */
-
-/*
- * Upstream `fat_set_blk_dev(dev_desc, info)`: records the current device + verifies the boot sector
- * magic 0x55AA and the filesystem signature. This file's `uboot_fat_vol_bind(vol)`:
- *   1 fetch bdev geometry and verify (512 B sectors + non-zero sector count);
- *   2 fill the shim's `struct blk_desc`/`disk_partition` from the geometry (whole device as one partition);
- *   3 call **upstream's own** `fat_set_blk_dev()` — boot-sector verification at mount time belongs to
- *     upstream (we do not change its criteria);
- *   4 read the BPB again to fill observation values (for criteria/logs, see the file header).
- * Returns 0 or a negative errno; on failure no half-bound state remains.
- */
+/* ---- volume bind (where fat_set_blk_dev lives) ----
+ * Fetch bdev geometry and check it (512 B sectors, non-zero sector count), fill the shim's struct
+ * blk_desc/disk_partition (whole device = one partition), call upstream's own fat_set_blk_dev()
+ * -- boot-sector magic and signature stay upstream's criteria -- then re-read the BPB for the
+ * observation values. Returns 0 or -errno; failure leaves no half-bound state. */
 int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
 {
     int rc;
@@ -293,21 +248,18 @@ int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
         return BR_ERR(EINVAL);
     }
     if (vol->bound == BR_TRUE) {
-        /* Already bound: just make it the current volume (equivalent to upstream fat_set_blk_dev's
-         * "switch device" semantics).
-         * * Key to multi-volume mounting: upstream only knows the "current volume" (fat.c's static
-         *   cur_dev), so glue must bind once at **every entry**, otherwise it would read this volume
-         *   with the previous volume's FAT parameters. */
+        /* Already bound: make it current again. Upstream knows only the current volume (fat.c's
+         * static cur_dev), so every entry must re-bind, or this volume would be read with the
+         * previous volume's FAT parameters. */
         s_cur_vol = vol;
         s_desc.lba     = (lbaint_t)vol->geom.n_sectors;
         s_desc.blksz   = (unsigned long)vol->geom.sector_size;
         s_part.start   = 0u;
         s_part.size    = (lbaint_t)vol->geom.n_sectors;
         s_part.blksz   = (ulong)vol->geom.sector_size;
-        /* * Even if already bound, **still** run upstream's `fat_set_blk_dev()`: it refreshes upstream's
-         *   two statics (`cur_dev`/`cur_part_info`, this file being their only consumer) and re-verifies
-         *   the boot sector magic — the cost is one 512 B read per entry, in exchange for not silently
-         *   swallowing "the volume was swapped / media changed". Failure => no half-bound state. */
+        /* Re-run fat_set_blk_dev() even when bound: it refreshes upstream's cur_dev/cur_part_info
+         * (their only consumer) and re-verifies the boot sector magic, so swapped media is not
+         * swallowed. One 512 B read per entry; failure leaves no half-bound state. */
         if (fat_set_blk_dev(&s_desc, &s_part) != 0) {
             br_log_error("uboot-fat: %s: rebind failed (invalid boot sector)", vol->dev);
             s_cur_vol = BR_NULL;
@@ -334,7 +286,7 @@ int uboot_fat_vol_bind(uboot_fat_vol_t *vol)
         return BR_ERR(EINVAL);
     }
 
-    /* whole device as one partition: start = 0, size = device sector count (same shape as u-boot's part 0 with no partition table) */
+    /* whole device as one partition: start = 0, size = device sector count */
     memset(&s_desc, 0, sizeof(s_desc));
     memset(&s_part, 0, sizeof(s_part));
     s_desc.uclass_id = 0;
@@ -369,19 +321,9 @@ void uboot_fat_vol_unbind(void)
     s_cur_vol = BR_NULL;
 }
 
-/*
- * (source device, mount point) -> volume id  — **claim a volume slot**.
- *
- * * ADR-0030: the correspondence is no longer hard-coded in the plugin's table, but given by the **APP's
- *   mount plan**: the APP calls `mount("emmc0", "/fat12", "fat", 0, NULL)`, making (emmc0, /fat12) a pair.
- *   Claiming the same (dev, mnt) twice => reuse the same slot (idempotent; also blocks "mounting the same
- *   volume twice"); out of slots => -ENOSPC (this file's upper bound on concurrently mounted volumes =
- *   UB_FAT_VOL_MAX).
- *
- * * This change eliminates a **two-sources-of-truth** spot: "mount point <-> device" used to be written
- *   both in the plugin's table and in the manifest's [[mount]]; changing one did not error, it only
- *   silently mounted the wrong device (that debt is settled by ADR-0030).
- */
+/* (source device, mount point) -> volume id: claim a slot. The pair comes from the APP's mount
+ * plan, not a plugin table; claiming the same (dev, mnt) twice reuses the slot (also blocking a
+ * double mount), and no free slot is -ENOSPC, bounded by UB_FAT_VOL_MAX. */
 int uboot_fat_vol_claim(const char *dev, const char *mnt, br_u32 *id)
 {
     if ((dev == BR_NULL) || (mnt == BR_NULL) || (id == BR_NULL)) {
@@ -408,7 +350,7 @@ int uboot_fat_vol_claim(const char *dev, const char *mnt, br_u32 *id)
     return BR_ERR(ENOSPC);
 }
 
-/* Factual observation of a volume (for mount criteria + selftest TC-FAT-001): read-only, changes no state. */
+/* Volume observation for the mount criteria and TC-FAT-001; read-only, changes no state. */
 int uboot_fat_vol_info(br_u32 id, uboot_fat_vol_info_t *out)
 {
     uboot_fat_vol_t *v = uboot_fat_vol_get(id);
@@ -429,13 +371,10 @@ int uboot_fat_vol_info(br_u32 id, uboot_fat_vol_info_t *out)
     return 0;
 }
 
-/* ==================================================================== the environment functions we implement */
+/* ---- environment functions we implement ---- */
 
-/*
- * `strdup` (the upstream write path uses it to copy paths; no libc). Bound see compat/fat_env.h: this
- * plugin's VFS surface limits paths to `UB_FAT_PATH_MAX`. Too long / out of memory both return NULL —
- * upstream's call sites answer NULL with `-ENOMEM` (each checked), so the failure surface matches libc.
- */
+/* strdup for upstream's write path (no libc), bounded by UB_FAT_PATH_MAX (compat/fat_env.h).
+ * Too long and out of memory both return NULL, which upstream's call sites turn into -ENOMEM. */
 char *uboot_fat_strdup(const char *s)
 {
     br_size_t n;
@@ -457,14 +396,9 @@ char *uboot_fat_strdup(const char *s)
     return p;
 }
 
-/*
- * Bounded `sprintf` (no libc; every conversion specifier at upstream's four call sites is covered:
- * `%.*s` / `%.3s` / `%d` / `%02X` / `%%`). Digits are generated in reverse order, overflow discarded;
- * returns "number of chars that should have been written" (sprintf convention), always NUL-terminated.
- * * Why not `__builtin_sprintf`: bare metal has none, and core's `br_log_write` only outputs without
- *   writing back into the buffer => a tiny formatter must live here (the same trade-off as
- *   adapter/uboot-erofs's criterion surface).
- */
+/* Bounded sprintf (no libc), covering every specifier at upstream's four call sites (%.*s, %.3s,
+ * %d, %02X, %%). Digits are generated in reverse, overflow discarded. Returns the sprintf
+ * convention and always NUL-terminates (bare metal has no __builtin_sprintf). */
 int uboot_fat_sprintf(char *dst, const char *fmt, ...)
 {
     br_size_t n = 0u;
@@ -543,7 +477,7 @@ int uboot_fat_sprintf(char *dst, const char *fmt, ...)
                 }
                 n++;
             }
-            /* generate in reverse, then emit forward after padding to width (only '0'/space fill) */
+            /* generate in reverse, then emit forward after padding to width ('0'/space fill) */
             {
                 unsigned long long v = (as_signed && ((long long)uv < 0))
                                      ? (~uv + 1ull) : uv;
@@ -576,8 +510,7 @@ int uboot_fat_sprintf(char *dst, const char *fmt, ...)
             n++;
             i++;
         } else {
-            /* unknown conversion specifier: emit it as-is (do not swallow silently, lest "a log/name lost
-             * a piece" become a weird symptom) */
+            /* Unknown specifier: emit it as-is rather than silently dropping part of a log/name. */
             if ((n + 1u) < UB_FAT_SPRINTF_MAX) {
                 dst[n] = '%';
             }
@@ -596,14 +529,8 @@ int uboot_fat_sprintf(char *dst, const char *fmt, ...)
     return (int)n;
 }
 
-/*
- * `rand()` (upstream `set_name()` uses it to pick the search start for the "~N" short-name suffix).
- * u-boot's `rand()` has no corresponding vendored original (see NOTICE), and **determinism** is an
- * advantage here: the candidate space is inherently "try 1 upward until no conflict", so the start does
- * not affect the contract of "which name is found" (only the search order), yet it makes the same
- * on-disk state give the same result => selftest is reproducible. The LCG constants come from Numerical
- * Recipes (implementation-independent; only good dispersion is needed).
- */
+/* rand() for upstream set_name() (search start of the "~N" short-name suffix). Determinism keeps
+ * the selftest reproducible; only the search order changes. LCG from Numerical Recipes. */
 static unsigned int s_rand_state = 0x12345678u;
 
 int uboot_fat_rand(void)
@@ -612,29 +539,15 @@ int uboot_fat_rand(void)
     return (int)(s_rand_state >> 1);
 }
 
-/* ==================================================================== truncate (upstream public API only) */
+/* ---- truncate (upstream public API only) ---- */
 
 /*
- * Truncate/extend to `newsize`. Upstream has **no** truncate entry, but its own public write semantics
- * can be assembled into three cases (each checked against the upstream source; see the measured
- * conclusions in ADR-0026 §5):
- *
- *   1 **shrink**: `file_fat_write_at(path, newsize, NULL, 0, &act)` — upstream first sets the directory
- *      entry size to `pos + size` (= newsize), then `set_contents()` takes the "truncate the rest"
- *      branch: `clear_fatent()` returns the tail cluster chain and marks the last cluster EOC.
- *      `get_set_cluster(size == 0)` returns immediately => **the NULL buffer is never dereferenced**
- *      (this is the whole reason "passing NULL is safe").
- *   2 **to zero**: the same call (`newsize == 0`) takes upstream's dedicated `filesize == 0` branch:
- *      clear the whole cluster chain + set the first cluster to 0 + size = 0.
- *   3 **grow**: upstream has no "hole extension" semantics (`set_contents`'s `assert(!pos)`/
- *      `assert(pos == cur_pos)` are dead code, and its cluster-walking path reports "something wrong"
- *      when "pos falls beyond the end of the chain") => extension can only **write zero bytes
- *      explicitly**: append `newsize - cur` zeros from the current length (chunked, 512 B each).
- *      What TC-FAT-008 requires is exactly "the new region reads back as 0" (not leftovers of a previous
- *      file), so this implementation is synonymous with the criterion — we did **not** relax the
- *      criterion, we merely wrote the "grow" branch in a form upstream actually accepts.
- *
- * Return value: 0 / negative errno.
+ * Truncate/extend to `newsize`, built from upstream public write semantics (upstream has no
+ * truncate entry). shrink/to zero: file_fat_write_at(path, newsize, NULL, 0, &act) sets the dirent
+ * size and takes the "truncate the rest" or filesize == 0 branch; get_set_cluster(size == 0)
+ * returns immediately, so the NULL buffer is never dereferenced. grow: append newsize - cur
+ * explicit zero bytes, 512 B at a time (no hole extension upstream) -- TC-FAT-008 requires the new
+ * region to read back as 0, not a previous file's leftovers. Returns 0 / -errno.
  */
 int uboot_fat_truncate(const char *path, br_u64 newsize)
 {

@@ -1,15 +1,11 @@
-//! Version model (§5) and range semantics (§7.4).
-//!
-//! Segments: `COMPAT_GEN . MAJOR . MINOR . REVISE` (all four are non-negative integers).
-//! - Storage/compare: no `v` prefix (`"0.1.0.0"`); **display** adds the prefix (`v0.1.0.0`).
-//! - `COMPAT_GEN` and `MAJOR` are orthogonal; dependencies require an **exact match** on `COMPAT_GEN`,
-//!   and `range` **compares only `MAJOR.MINOR.REVISE`** (fixed 3 segments, missing segments zero-filled on the right, 4 segments illegal).
-//! - `^` / `~` are **expanded once at parse time** into explicit intervals (§7.4 equivalent interval form).
-//! - Comparing across `COMPAT_GEN` is meaningless (§5.5): lexicographic order applies only within one generation.
+//! Version model: `COMPAT_GEN.MAJOR.MINOR.REVISE`, all non-negative integers.
+//! Storage/compare omit the `v` prefix; display adds it (`v0.1.0.0`). Dependencies require an
+//! exact `COMPAT_GEN` match; `range` compares only `MAJOR.MINOR.REVISE` (3 segments, missing ones
+//! zero-filled on the right, 4 illegal), and `^`/`~` expand once at parse time into explicit
+//! intervals. Order is meaningful only within one generation.
 
 use std::fmt;
 
-/// Four-segment version.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct Version {
     pub compat_gen: u64,
@@ -34,17 +30,14 @@ impl Version {
         }
     }
 
-    /// The `MAJOR.MINOR.REVISE` triple.
     pub fn triple(&self) -> Triple {
         Triple(self.major, self.minor, self.revise)
     }
 
-    /// Lexicographic order within the same generation (cross-generation comparison is meaningless, see §5.5).
     pub fn cmp_same_gen(&self, other: &Version) -> std::cmp::Ordering {
         self.triple().cmp(&other.triple())
     }
 
-    /// Display form with the `v` prefix.
     pub fn display_v(&self) -> String {
         format!("v{}", self)
     }
@@ -93,7 +86,6 @@ impl fmt::Display for Triple {
     }
 }
 
-/// Parse a four-segment version string. **Must be exactly 4 segments**; missing/extra/non-numeric ⇒ `BRV-VER-0005`.
 pub fn parse_version(s: &str) -> Result<Version, VerErr> {
     let s = s.trim();
     let parts: Vec<&str> = s.split('.').collect();
@@ -112,7 +104,6 @@ pub fn parse_version(s: &str) -> Result<Version, VerErr> {
     Ok(Version::new(n[0], n[1], n[2], n[3]))
 }
 
-/// Parse one `M[.m[.r]]` segment of a `range`: missing segments are zero-filled on the right; 4 segments ⇒ `BRV-VER-0006`.
 fn parse_triple(s: &str) -> Result<Triple, VerErr> {
     let parts: Vec<&str> = s.split('.').collect();
     match parts.len() {
@@ -138,7 +129,6 @@ fn parse_triple(s: &str) -> Result<Triple, VerErr> {
     }
 }
 
-/// Range comparison operator.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum RangeOp {
     Eq,
@@ -339,41 +329,25 @@ fn stronger_upper(cur: Option<(Triple, bool)>, cand: (Triple, bool)) -> Option<(
     }
 }
 
-/// `compat_gen` **exact match** (§5.5: cross-generation comparison is meaningless).
 pub fn compat_gen_matches(required: u64, actual: u64) -> bool {
     required == actual
 }
 
-// ------------------------------------------------------------------ §5.2 advance table
-
-/// Event enum of the §5.2 "event → segment" advance table.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Event {
-    /// Modify/delete an existing `frozen` entry (unfreeze → refreeze): `COMPAT_GEN+1`, `MINOR→0`, `REVISE→0`.
     CompatGenBump,
-    /// Add an entry (append-only): `MINOR+1`, `REVISE→0`, `COMPAT_GEN` unchanged.
     Added,
-    /// Append an enum member / fill a reserved slot: same as above.
     Extended,
-    /// Governance status transition (`experimental→frozen` etc.): `MINOR+1`.
     StatusTransfer,
-    /// Change all existing `experimental` entries: `MINOR+1`.
     ChangeAllExperimental,
-    /// Delete existing `experimental`-only entries: `MINOR+1`.
     RemoveExperimental,
-    /// Empty unfreeze (no frozen entry changed/deleted): all four segments unchanged.
     EmptyUnfreeze,
-    /// Major product release: `MAJOR+1`, `MINOR→0`, `REVISE→0`, `COMPAT_GEN` unchanged.
     MajorProduct,
-    /// Minor feature (surface unchanged): `MINOR+1`, `REVISE→0`.
     MinorFeature,
-    /// Bug fix / docs (surface unchanged): `REVISE+1`.
     ReviseFix,
-    /// Surface completely unchanged (redundant rerun): no-op.
     NoChange,
 }
 
-/// Compute the new version per the §5.2 advance table.
 pub fn advance(v: Version, e: Event) -> Version {
     match e {
         Event::CompatGenBump => Version::new(v.compat_gen + 1, v.major, 0, 0),
@@ -387,8 +361,7 @@ pub fn advance(v: Version, e: Event) -> Version {
     }
 }
 
-/// Monotonic non-regression (§5.2): `compat_gen` must not decrease; within a generation `(M,m,r)` must not decrease.
-/// Across generations there is no "newer/older" ⇒ compare `compat_gen` only.
+/// Monotonic: `compat_gen` must not decrease; within a generation `(M,m,r)` must not either.
 pub fn check_no_regress(old: Version, new: Version) -> Result<(), VerErr> {
     if new.compat_gen > old.compat_gen {
         return Ok(());

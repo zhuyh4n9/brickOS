@@ -1,29 +1,9 @@
 /*
- * brickOS prototype v0.1.0 — memory-mapping subsystem conformance cases (in-image conformance)
- *
- * Design basis:
- *   - `docs/6-test/6-01-test.md` §3.5 (TC-MEM-* memory group) / §3.6 (TC-MM-* MMU group);
- *   - `docs/3-os-core/3-04-memory.md` §1 (v1 policy = identity mapping + attribute isolation);
- *   - `docs/3-os-core/3-01-core-api-list.md` §6/§7 (three pools + region table + cache maintenance).
- *
- * Why **in-image** rather than host cases:
- *   6-01 §3.6 already marks the MMU group target-only — "identity mapping", "real protection
- *   page" and "translation fault" simply do not exist on the host (the host side verifies
- *   algorithmic properties only, see `make mem-test`). This file compiles the cases into the
- *   image; `br_plat_mem_conformance()` runs them at startup and prints one line per item
- *   `[MEMCONF] PASS/FAIL <tag> <text>`, ending with `[MEMCONF] SUMMARY pass=N fail=0 total=N`
- *   — so red/green is decided by grepping `make smoke` / `make dbg-test`, not by eye.
- *
- * Coverage:
- *   MM-ACTIVE  the MMU is really on (br_mm_active() + SCTLR_EL1.M hardware read-back)
- *   MM-IDENT   sample 8 addresses: mapped + page-table PA == VA frame (the sole identity-mapping criterion)
- *   MM-POOLS   four pools match the region table / page count math / non-overlapping / all inside the 8 MiB window
- *   MM-REGION  region table non-empty, kinds recognizable, find hit and miss
- *   MM-RO      **real protection**: a write probe on an RO page must take a permission fault
- *   MM-NXDESC  the NX bit is readable back via query (we do not really jump there, see that case's comment)
- *   MM-UNMAP   an unmapped address outside the window => translation fault, recoverable
- *   TC-MEM-001..007  minimal assertions for the three pools + DMA + accounting (6-01 §3.5 projected onto target)
- *   TC-MM-001..003   region_add error codes / DEVICE-region cache_flush / map-unmap unimplemented
+ * Memory-mapping conformance cases (in-image: the MMU group is target-only - identity mapping,
+ * protection pages and translation faults do not exist on the host).
+ * br_plat_mem_conformance() runs them at startup, printing "[MEMCONF] PASS/FAIL <tag> <text>" per
+ * item and a final "[MEMCONF] SUMMARY pass=N fail=0 total=N" line, so red/green is decided by grep.
+ * Coverage: MM-ACTIVE/IDENT/POOLS/REGION/RO/NXDESC/DEVBLK/UNMAP, TC-MEM-001..007, TC-MM-001..003.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -32,12 +12,9 @@
 #include <br/core/br_mm.h>
 
 #include <br/platform/br_mmu.h>
-#include <br/platform/br_plat.h>   /* prototype of the br_plat_mem_conformance entry point (single source of truth) */
+#include <br/platform/br_plat.h>
 
-/* =====================================================================
- * Assertions and counters (same shape as irq_conf.c: the failure count is the return
- * value, used by the Makefile to decide red/green)
- * ===================================================================== */
+/* ---- assertions and counters (failure count is the return value) ---- */
 static br_u32 s_pass;
 static br_u32 s_fail;
 
@@ -52,15 +29,9 @@ static void conf_report(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* =====================================================================
- * extable probe (3-02 §10.4; same shape as conf_probe_read32 in irq_conf.c)
- *
- * The **sole source** of the return value is the register (x0) that core writes into the
- * exception frame from the table entry's `reg`/`errno_val`; the success path sets
- * `mov %w[ret], wzr` itself. The fixup label must not create an error code — otherwise this
- * probe could not verify the design conclusion "a table entry must carry reg + errno_val"
- * (§10.4 pitfall).
- * ===================================================================== */
+/* extable probe. The return value comes solely from x0, written by core from the table entry's
+ * reg/errno_val; the success path sets it to zero itself. The fixup label must not create an error
+ * code, so the probe can verify "a table entry carries reg + errno_val". */
 static int conf_probe_read32(br_uintptr_t addr, br_u32 *out)
 {
     register br_u32       val __asm__("x1");
@@ -87,9 +58,8 @@ static int conf_probe_read32(br_uintptr_t addr, br_u32 *out)
     return ret;
 }
 
-/* Write probe: MM-RO must verify exactly "a write on a read-only page takes a permission
- * fault" — a read probe cannot. The only difference from the read probe is that the faulting
- * instruction is `str`; the rest (table entry reg=0 / errno=-14 / fixup label) is copied. */
+/* Write probe: MM-RO must see a write on a read-only page take a permission fault, which a read
+ * probe cannot. Same table-entry shape as the read probe (reg=0, errno=-14, fixup label). */
 static int conf_probe_write32(br_uintptr_t addr, br_u32 val)
 {
     register br_s32       ret __asm__("x0");
@@ -114,9 +84,7 @@ static int conf_probe_write32(br_uintptr_t addr, br_u32 val)
     return ret;
 }
 
-/* =====================================================================
- * small helpers
- * ===================================================================== */
+/* ---- small helpers ---- */
 static const br_mm_region_t *conf_region_of_kind(br_u32 kind)
 {
     const br_u32 n = br_mm_region_count();
@@ -136,17 +104,13 @@ static br_bool conf_kind_known(br_u32 kind)
     return (kind >= BR_MM_KIND_IMAGE && kind <= BR_MM_KIND_RESERVED) ? BR_TRUE : BR_FALSE;
 }
 
-/* Build region attrs: kind must go through the BR_MM_WITH_KIND shift; a direct
- * `| BR_MM_KIND_x` would write the value 8 into the attribute low nibble (that bit is not
- * part of the kind field) — the classic misuse of this header. */
+/* Kind must go through BR_MM_WITH_KIND: a direct `| BR_MM_KIND_x` sets 8 in the low nibble. */
 static br_u32 conf_attrs_kind(br_u32 attrs, br_u32 kind)
 {
     return BR_MM_WITH_KIND(attrs, kind);
 }
 
-/* =====================================================================
- * MM-ACTIVE / MM-IDENT
- * ===================================================================== */
+/* ---- MM-ACTIVE / MM-IDENT ---- */
 static br_u32 s_marker = 0x1D3E7u;      /* in-image variable (one MM-IDENT sample point) */
 
 static void conf_mm_active(void)
@@ -181,8 +145,7 @@ static void conf_mm_ident(void)
         return;
     }
 
-    /* 8 sample points: in-image variable / stack local / heap pool ends / page pool ends /
-     * contig pool start / reserved region start */
+    /* 8 sample points: image var / stack local / heap ends / page ends / contig / reserved */
     addrs[0] = (br_uintptr_t)&s_marker;
     addrs[1] = (br_uintptr_t)&stack_local;
     addrs[2] = lay.heap.base;
@@ -213,9 +176,7 @@ static void conf_mm_ident(void)
                 "8 sampled addresses (image/stack/heap ends/page pool ends/contig/reserved): mapped and page-table PA == VA frame");
 }
 
-/* =====================================================================
- * MM-POOLS
- * ===================================================================== */
+/* ---- MM-POOLS ---- */
 static void conf_mm_pools(void)
 {
     br_mem_layout_t lay;
@@ -236,8 +197,8 @@ static void conf_mm_pools(void)
     pools[2] = &lay.page;
     pools[3] = &lay.dma;
 
-    /* (a) each pool's base/size matches the region table entry by entry: pools come from
-     * "claiming a region", there must not be a second geometry */
+    /* Each pool's base/size matches the region table entry by entry: pools come from claiming a
+     * region, so there must not be a second geometry. */
     for (br_u32 i = 0u; i < 4u; i++) {
         const br_mm_region_t *r = conf_region_of_kind(kinds[i]);
 
@@ -277,14 +238,11 @@ static void conf_mm_pools(void)
     }
     conf_report(overlap == 0u, "MM-POOLS", "all four pools are pairwise non-overlapping");
 
-    /* (d) all inside the 8 MiB page-table window (outside is unmapped => the first
-     * allocation would fault once a pool goes out of range) */
+    /* (d) all inside the 8 MiB page-table window, else the first allocation would fault */
     conf_report(outside == 0u, "MM-POOLS", "all four pools fall inside the 8 MiB RAM mapping window");
 }
 
-/* =====================================================================
- * MM-REGION
- * ===================================================================== */
+/* ---- MM-REGION ---- */
 static void conf_mm_region(void)
 {
     const br_u32 n = br_mm_region_count();
@@ -317,9 +275,7 @@ static void conf_mm_region(void)
                 "MM-REGION", "undeclared address (0x42000000, outside the window) => region_find == NULL");
 }
 
-/* =====================================================================
- * MM-RO / MM-NXDESC / MM-UNMAP (real protection and recoverable faults)
- * ===================================================================== */
+/* ---- MM-RO / MM-NXDESC / MM-UNMAP (real protection and recoverable faults) ---- */
 static void conf_mm_ro(void)
 {
     const br_mm_region_t *res = conf_region_of_kind(BR_MM_KIND_RESERVED);
@@ -341,13 +297,13 @@ static void conf_mm_ro(void)
     conf_report(rs == 0 && rq == 0 && (attrs & BR_MM_RO) != 0u, "MM-RO",
                 "set_attrs(RO) succeeds and query reads BR_MM_RO back from the **page table**");
 
-    /* Real protection: the write probe must hit the fixup (permission fault, EC=0x25/DFSC=0x0F class) */
+    /* Real protection: the write probe must hit the fixup (permission fault). */
     const int wr = conf_probe_write32(page, 0xDEADBEEFu);
     conf_report(wr == BR_ERR(EFAULT), "MM-RO",
                 "write on a read-only page takes permission fault => extable fixes up to -EFAULT (real protection, not a shadow)");
 
-    /* Cleanup: attributes are revocable; after setting back to RW writes must work — otherwise
-     * "protection" would be indistinguishable from "brick" */
+    /* Attrs are revocable: after setting back to RW, writes must work - otherwise "protection"
+     * would be indistinguishable from "brick". */
     const int rs2 = br_mm_set_attrs(page, BR_PAGE_SIZE,
                                     conf_attrs_kind(BR_MM_CACHED, BR_MM_KIND_RESERVED));
     const int wr2 = conf_probe_write32(page, 0x5A5A5A5Au);
@@ -380,12 +336,9 @@ static void conf_mm_nxdesc(void)
                 "after set_attrs(NX), query reads back BR_MM_NX (PXN|UXN both set)");
 
     /*
-     * We deliberately do **not** really jump to this page to fetch instructions:
-     * execute-on-NX goes through instruction abort (EC=0x20/0x21), while core's extable
-     * covers only data abort (3-02 §10.4 / the EC decision in irq_fault.c) => jumping there
-     * would necessarily hit a fatal panic rather than "degrade to an error code". NX
-     * end-to-end verification stops at "the descriptor bit takes effect"; that is this
-     * prototype's capability boundary, not a missed test.
+     * Deliberately no real jump to this page: execute-on-NX takes an instruction abort, while
+     * core's extable covers only data abort, so it would be a fatal panic. NX verification stops at
+     * "the descriptor bit takes effect"; that is this prototype's capability boundary.
      */
     const int rs2 = br_mm_set_attrs(page, BR_PAGE_SIZE,
                                     conf_attrs_kind(BR_MM_CACHED, BR_MM_KIND_RESERVED));
@@ -393,22 +346,17 @@ static void conf_mm_nxdesc(void)
 }
 
 /*
- * set_attrs boundary on a Device 2 MiB block (the page tables cannot express sub-block
- * attributes at 2 MiB granularity).
- * This ruling is worth an explicit case: if the boundary were "conveniently relaxed" to
- * "takes effect per 2 MiB", a call that only wants to protect 4 KiB would turn the whole
- * peripheral window read-only — the symptom shows up on the next ISR register access, far
- * from the root cause.
+ * set_attrs boundary on a Device 2 MiB block: if sub-block requests were "conveniently relaxed" to
+ * per-2 MiB, protecting 4 KiB would turn the whole peripheral window read-only, and the symptom
+ * would show up on the next ISR register access, far from the root cause.
  */
 static void conf_mm_devblk(void)
 {
-    /* (1) sub-block range (the PL011 frame is only 4 KiB, inside one 2 MiB block) => explicit -ENOTSUP */
+    /* (1) sub-block range (PL011 frame is 4 KiB, inside one 2 MiB block) => -ENOTSUP */
     const int r_sub = br_mm_set_attrs(0x09000000ul, BR_PAGE_SIZE, BR_MM_DEVICE | BR_MM_RO);
 
-    /* (2) a whole-block-aligned range can be changed as a block. Pick a device window that
-     *    **nobody is using** (0x0E000000: on QEMU virt that is neither GIC/GICR nor
-     *    UART/virtio), so we do not turn a live register frame read-only — that would become
-     *    a permission fault in the next ISR. */
+    /* (2) a whole-block-aligned range can be changed as a block. 0x0E000000 is unused on QEMU virt
+     *    (neither GIC/GICR nor UART/virtio), so no live register frame is made read-only. */
     const br_uintptr_t blk = 0x0E000000ul;
     br_u32 attrs = 0u;
     const int r_w = br_mm_set_attrs(blk, 0x200000ul, BR_MM_DEVICE | BR_MM_RO);
@@ -432,8 +380,7 @@ static void conf_mm_unmap(void)
     br_uintptr_t pa = 0u;
     br_u32       v  = 0u;
 
-    /* First confirm it is really unmapped (translation fails), then that "accessing it"
-     * takes a recoverable fault */
+    /* Confirm it is really unmapped first, then that accessing it takes a recoverable fault. */
     const int rt = br_plat_mmu_translate((br_uintptr_t)BR_PLAT_CONF_UNMAPPED, &pa);
     br_log_info("[MEMCONF] info unmap probe va=0x%lx translate=%d", (br_u64)BR_PLAT_CONF_UNMAPPED, rt);
     conf_report(rt == BR_ERR(EFAULT), "MM-UNMAP",
@@ -443,15 +390,13 @@ static void conf_mm_unmap(void)
     conf_report(r1 == BR_ERR(EFAULT), "MM-UNMAP",
                 "read of an unmapped address => translation fault fixed up by extable to -EFAULT, system survives");
 
-    /* Second time: if in_fault were not reset, this one would be treated as a double fault (bare panic) */
+    /* Second time: if in_fault were not reset, this would be a double fault (bare panic) */
     const int r2 = conf_probe_read32((br_uintptr_t)BR_PLAT_CONF_UNMAPPED, &v);
     conf_report(r2 == BR_ERR(EFAULT), "MM-UNMAP",
                 "reading again is still -EFAULT (in_fault was reset => faults are recoverable)");
 }
 
-/* =====================================================================
- * TC-MEM-001..007 (minimal assertions of 6-01 §3.5 on target)
- * ===================================================================== */
+/* ---- TC-MEM-001..007 ---- */
 static void conf_tc_mem_001(void)
 {
     void *p = br_malloc(37u);
@@ -475,9 +420,7 @@ static void conf_tc_mem_002(void)
     br_size_t sz[CONF_BLOCKS];
     br_u32    bad = 0u;
 
-    /* Explicit zeroing: makes "sz[i] is still a definite 0 when allocation fails" hold, and
-     * frees the later verification loop from relying on "the compiler can see that blk[i]
-     * and sz[i] are assigned together in the same iteration" */
+    /* Explicit zeroing keeps sz[i] a definite 0 when an allocation fails. */
     for (br_u32 i = 0u; i < (br_u32)CONF_BLOCKS; i++) {
         blk[i] = BR_NULL;
         sz[i]  = 0u;
@@ -497,8 +440,7 @@ static void conf_tc_mem_002(void)
         }
     }
 
-    /* Free every other block (even indices) interleaved with verification of the surviving
-     * blocks — that is the shape of "fragmentation pressure" */
+    /* Free even-index blocks and verify the survivors: fragmentation pressure. */
     for (br_u32 i = 0u; i < (br_u32)CONF_BLOCKS; i += 2u) {
         if (blk[i] == BR_NULL) {
             continue;
@@ -539,7 +481,7 @@ static void conf_tc_mem_002(void)
     conf_report(frag_ok, "TC-MEM-002",
                 "largest free block >= 50% of the pool (TLSF bounded fragmentation, 6-01 §3.5)");
 
-    /* Cleanup: free the other half, no leak */
+    /* Cleanup: free the other half, no leak. */
     for (br_u32 i = 1u; i < (br_u32)CONF_BLOCKS; i += 2u) {
         if (blk[i] != BR_NULL) {
             br_free(blk[i]);
@@ -611,8 +553,7 @@ static void conf_tc_mem_005(void)
 
     br_mem_layout_t lay;
     if (ok && br_mem_layout(&lay) == 0) {
-        /* "Contiguous" in this prototype = one allocation's address range lies entirely
-         * inside the page pool and is page-adjacent */
+        /* "Contiguous" here = the range lies entirely inside the page pool, page-adjacent. */
         ok = ((br_uintptr_t)p >= lay.page.base)
              && (((br_uintptr_t)p + (n * BR_PAGE_SIZE)) <= (lay.page.base + lay.page.size));
     }
@@ -670,16 +611,14 @@ static void conf_tc_mem_007(void)
     conf_report(u2 == u0 && t2 == t0, "TC-MEM-007", "after free, used/total return to baseline (accounting changes match)");
 }
 
-/* =====================================================================
- * TC-MM-001..003 (6-01 §3.6)
- * ===================================================================== */
+/* ---- TC-MM-001..003 ---- */
 static void conf_tc_mm_001(void)
 {
     const br_mm_region_t *img = conf_region_of_kind(BR_MM_KIND_IMAGE);
 
     int r_dup = BR_ERR(EINVAL);
     if (img != BR_NULL) {
-        r_dup = br_mm_region_add(img);      /* same base/size reused: already in the table => -EEXIST */
+        r_dup = br_mm_region_add(img);      /* reused base/size: already in the table => -EEXIST */
     }
     conf_report(img != BR_NULL && r_dup == BR_ERR(EEXIST), "TC-MM-001",
                 "re-adding an existing region (same base/size) => -EEXIST");
@@ -697,10 +636,9 @@ static void conf_tc_mm_001(void)
 static void conf_tc_mm_002(void)
 {
     /*
-     * PL011 UART0 = declared MMIO (Device, non-CACHED). Cache maintenance on a non-cached
-     * region **must be a silent no-op**: really doing `dc cvac` on a device register address
-     * is architecturally unpredictable. core short-circuits per region attribute (see the
-     * semantics in br_mm.h), so what is judged here is "core really short-circuited".
+     * PL011 UART0 is declared Device/non-CACHED; cache maintenance on a non-cached region must be
+     * a silent no-op (dc cvac on a device register address is architecturally unpredictable). core
+     * short-circuits per region attribute, so this judges that core really short-circuited.
      */
     const int rc = br_mm_cache_flush((void *)(br_uintptr_t)0x09000000ul, 64u);
 
@@ -725,9 +663,7 @@ static void conf_tc_mm_003(void)
                 "br_mm_unmap() in v1 => -ENOTSUP (signature-first verification of main-doc risk R4)");
 }
 
-/* =====================================================================
- * Entry point (called by the platform's `qemu_aarch64_start()` in the START phase; see br_plat.h)
- * ===================================================================== */
+/* ---- entry point (called by qemu_aarch64_start() in the START phase) ---- */
 int br_plat_mem_conformance(void)
 {
     s_pass = 0u;

@@ -1,18 +1,6 @@
 /*
- * tests/host/host_sched.c — host-side scheduler test harness (implementation; see host_sched.h)
- *
- * Symbols referenced by core on target that the host must supply itself:
- *   br_clock_now / br_deadline_from_now / br_irq_lock / br_irq_unlock /
- *   br_irq_lock_depth / br_irq_in_isr / br_irq_in_atomic / br_irq_cpu_enable /
- *   br_log_write / br_panic / br_sched_switch_to / br_sched_thread_trampoline
- * plus one host-only idle hook `br_sched_host_wait()` (a weak symbol in sched_core.c):
- * the host has no real interrupt source, so it advances the fake clock and delivers one
- * `br_sched_on_tick()` while core is idle, making "timeout scan on periodic tick"
- * testable on the host.
- *
- * The ucontext slots and the "context already materialized" marker are identical to
- * before (see comments in the file): the TCB pool reuses addresses, and caching
- * ucontext by pointer would attach a new thread to the previous tenant's stale context.
+ * Host-side scheduler test harness: the target symbols the host must define itself (clock, IRQ
+ * lock, log/panic, switch layer) plus the host-only idle hook br_sched_host_wait().
  */
 #include "host_sched.h"
 
@@ -24,8 +12,7 @@
 #include <br/core/br_time.h>
 #include <br/core/br_work.h>
 
-/* TCB common header and switch-layer internal prototypes (core-private surface; the host
- * is "the second leg of the same semantics", included as tests/host/sched_test.c did). */
+/* TCB common header and switch-layer internals (core-private surface). */
 #include "sched_internal.h"
 
 #include <stdarg.h>
@@ -34,16 +21,15 @@
 #include <string.h>
 #include <ucontext.h>
 
-/* =====================================================================
- * fake clock + idle hook
- * ===================================================================== */
+/* ---- fake clock + idle hook ---- */
 
 static br_time_t s_fake_now;
 static br_u32    s_idle_calls;
 
-/* Auto tick source (see host_sched.h): off by default ⇒ existing cases' clock semantics are unchanged. */
-#define HOST_CLOCK_STEP_US 50u       /* "real time" advanced per clock read (must be well under 1 ms: TC-TIME-002's criterion is "two reads < 1 ms") */
-#define HOST_TICK_US       100000u   /* the host case's own virtual tick; decoupled from product [kernel].hz (the criterion counts ticks) */
+/* Clock step per read: must stay well under 1 ms (TC-TIME-002: two reads < 1 ms). */
+#define HOST_CLOCK_STEP_US 50u
+/* Host case's own virtual tick, decoupled from product [kernel].hz (ticks are counted). */
+#define HOST_TICK_US       100000u
 
 static br_bool   s_auto_tick;
 static br_time_t s_since_tick;
@@ -64,11 +50,8 @@ void host_sched_auto_tick(br_bool on)
 br_time_t br_clock_now(void)
 {
     /*
-     * ★ Auto tick (off by default): see the long comment in host_sched.h. All three
-     *   conditions are required —— the switch is on, we are not already delivering
-     *   (re-entrancy guard), and we are NOT in an L2 critical section (= interrupts
-     *   masked on target). Inside L2 time still advances but no tick is delivered: the
-     *   accumulated amount is repaid as one tick on the first clock read after release.
+     * Auto tick requires: switch on, not already delivering, depth 0 (L2). Inside L2 time still
+     * advances, and the accumulated amount is repaid as one tick after release.
      */
     if ((s_auto_tick != BR_FALSE) && (s_in_clock == 0)) {
         s_in_clock = 1;
@@ -94,7 +77,7 @@ br_time_t br_deadline_from_now(br_time_t rel_us)
     return s_fake_now + rel_us;
 }
 
-/* Called by core when entering idle (weak symbol in sched_core.c): advance 100 us and deliver one tick. */
+/* Called by core on idle entry (weak symbol in sched_core.c): advance 100 us and tick once. */
 void br_sched_host_wait(void);
 void br_sched_host_wait(void)
 {
@@ -103,16 +86,10 @@ void br_sched_host_wait(void)
     br_sched_on_tick(s_fake_now);
 }
 
-/* =====================================================================
- * L2 interrupt lock (host stand-in)
- *
- * The host has no maskable interrupts; but scheduling only switches stacks at explicit
- * points or at IRQ exit, so "no preemption inside an L2 critical section" is expressible
- * on the host via depth as well. depth must be real: ADR-0011 ruling P-1 (fix the
- * interrupt shape by depth when a new thread first enters) and bh's
- * `br_irq_in_atomic()` both read it —— returning a fake 0 would make those two criteria
- * vacuously true.
- * ===================================================================== */
+/*
+ * L2 interrupt lock (host stand-in). Depth must be real: br_irq_in_atomic() and the new-thread
+ * interrupt-shape fix-up read it, so a fake 0 would make those criteria vacuously true.
+ */
 
 static br_u32 s_irq_depth;
 
@@ -121,7 +98,7 @@ br_irq_state_t br_irq_lock(void)
     br_irq_state_t st = (br_irq_state_t)(s_irq_depth << BR_IRQ_ST_DEPTH_SHIFT);
 
     if (s_irq_depth != 0u) {
-        st |= BR_IRQ_ST_I_MASK;          /* already masked ⇒ "I bit before entry = 1" */
+        st |= BR_IRQ_ST_I_MASK;          /* already masked => "I bit before entry = 1" */
     }
     s_irq_depth++;
     return st;
@@ -141,7 +118,7 @@ br_u32 br_irq_lock_depth(void)
     return s_irq_depth;
 }
 
-/* The host has no ISR (tests are single-threaded and cooperative) ⇒ always false. bh is answered by work_core.c's real value. */
+/* Host has no ISR (single-threaded, cooperative) => always false; bh is set in work_core.c. */
 br_bool br_irq_in_isr(void)
 {
     return BR_FALSE;
@@ -152,14 +129,12 @@ br_bool br_irq_in_atomic(void)
     return (br_work_in_bh() != BR_FALSE) ? BR_TRUE : BR_FALSE;
 }
 
-/* Called by `br_sched_thread_entry` when a new thread first enters (on target = release PSTATE.I). The host has no interrupts. */
+/* Called by `br_sched_thread_entry` when a new thread first enters (target: release PSTATE.I). */
 void br_irq_cpu_enable(void)
 {
 }
 
-/* =====================================================================
- * log / panic stubs
- * ===================================================================== */
+/* ---- log / panic stubs ---- */
 
 static const char *s_watch;
 static br_u32      s_watch_hits;
@@ -202,22 +177,17 @@ BR_NORETURN void br_panic(const char *fmt, ...)
     exit(3);
 }
 
-/* =====================================================================
- * host switch layer (ucontext)
- * ===================================================================== */
+/* ---- host switch layer (ucontext) ---- */
 
 #define HOST_SLOT_MAX 32u
 
 /*
- * The TCB pool REUSES addresses: after a thread is joined and reclaimed, the next create
- * very likely gets the same `struct br_thread *`. If the host cached ucontext by pointer,
- * it would attach the "new thread" to the previous tenant's stale context (manifesting as
- * random wandering/hangs). So we borrow a ctx[] slot core does NOT use on the host path
- * (x20) as an "already materialized" marker: a new/reused TCB has 0 there (create zeroes
- * the whole slot), and after materializing once we write the magic ⇒ on reuse it is
- * correctly rebuilt.
+ * The TCB pool reuses addresses, so caching ucontext by pointer would attach a new thread to the
+ * previous tenant's stale context. Instead a ctx[] slot core does not use on the host path (x20)
+ * carries an "already materialized" marker; create zeroes it, materialization writes it.
  */
-#define HOST_CTX_READY_MAGIC ((br_u64)0x484F5354u)   /* "HOST" */
+/* Magic in the borrowed ctx[] slot: "HOST". */
+#define HOST_CTX_READY_MAGIC ((br_u64)0x484F5354u)
 
 typedef struct host_slot {
     br_thread_t *t;
@@ -248,7 +218,7 @@ static host_slot_t *slot_of(br_thread_t *t)
     return free_slot;
 }
 
-/* Entry of a new thread on ucontext. core already set current to this thread before switching stacks, so it can fetch itself here. */
+/* Entry of a new thread on ucontext; core already set current to this thread. */
 static void host_thread_tramp(void)
 {
     br_sched_thread_entry(br_task_self());
@@ -259,11 +229,7 @@ void br_sched_switch_to(br_thread_t *from, br_thread_t *to)
     host_slot_t *sf = slot_of(from);
     host_slot_t *st = slot_of(to);
 
-    /*
-     * First-entry conditions: this TCB has a stack (excluding main —— its context is saved
-     * by the first swapcontext), and the "already materialized" marker has not been written.
-     * For a reused TCB the marker is 0 ⇒ rebuild.
-     */
+    /* First entry only (stack set, marker unset); a reused TCB has 0 there, so it is rebuilt. */
     if ((to->stack_top != BR_NULL) && (to->ctx[1] != HOST_CTX_READY_MAGIC)) {
         getcontext(&st->uc);
         st->uc.uc_stack.ss_sp   = (void *)((br_u8 *)to->stack_top - to->stack_size);
@@ -276,16 +242,14 @@ void br_sched_switch_to(br_thread_t *from, br_thread_t *to)
     (void)swapcontext(&sf->uc, &st->uc);
 }
 
-/* The host needs no real trampoline (the entry is host_thread_tramp); provided only for linking. */
+/* Provided only for linking; the host entry is host_thread_tramp. */
 void br_sched_thread_trampoline(void)
 {
     fputs("[HOSTPANIC] host br_sched_thread_trampoline must not be called\n", stderr);
     abort();
 }
 
-/* =====================================================================
- * entry
- * ===================================================================== */
+/* ---- entry ---- */
 
 #define HOST_SUP_STACK_BYTES 16384u
 static br_u8 s_sup_stack[HOST_SUP_STACK_BYTES] BR_ALIGN(16);

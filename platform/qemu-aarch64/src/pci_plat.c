@@ -1,14 +1,9 @@
 /*
- * brickOS prototype v0.2.0 - QEMU virt (aarch64) PCIe platform data (implementation)
- *
- * See the ruling notes in `include/br/platform/br_plat_pci.h` and ADR-0021 D-2.
- *
- * Values from (QEMU v10.2.1, `hw/arm/virt.c` memmap + local `-M virt,dumpdtb` evidence):
- *   VIRT_PCIE_ECAM(low, highmem=off) = 0x3f000000 + 0x01000000
- *   VIRT_PCIE_MMIO                   = 0x10000000 + 0x2eff0000
- *   bus-range(highmem=off measured)  = 0..0x0f
- *   a15irqmap[VIRT_PCIE] = 3  => INTx A..D = SPI 3..6 = INTID 35..38
- */#include <br/board_irq.h>
+ * QEMU virt (aarch64) PCIe platform data: ECAM/MMIO windows, bus range, INTx A virq.
+ * Values measured from QEMU v10.2.1 `-M virt,dumpdtb` with highmem=off.
+ * a15irqmap[VIRT_PCIE] = 3 => INTx A..D = SPI 3..6 = INTID 35..38.
+ */
+#include <br/board_irq.h>
 #include <br/core/br_error.h>
 #include <br/platform/br_plat_pci.h>
 

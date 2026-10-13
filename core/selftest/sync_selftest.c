@@ -1,40 +1,10 @@
 /*
- * brickOS prototype v0.2.0 — **selftest suite** for sync primitives + time (core/selftest/)
- *
- * Design basis and per-item rulings: `docs/decisions/0010-plugin-selftest.md`.
- * Case definitions: `6-01-test.md` §3.2/§3.3 (`TC-SYNC-001..009` / `TC-TIME-001..003`);
- * implementation basis `3-01` §7, `3-02` §11.3, `docs/decisions/0007-sync-primitives.md`.
- *
- * ## Why these cases moved out of `sync.c`
- *   They are **tests** but used to live in the same .c as the production implementation — so
- *   "turn off selftests" could not turn them off, and readers of the production implementation had
- *   to hunt for decision logic among a thousand lines of mechanism. After moving here:
- *     - `core/src/sync/sync.c` keeps only mechanism (mutex/sem/cond/spinlock);
- *     - with selftests off, the whole `core/selftest/` directory is not compiled ⇒ the case code
- *       **never enters the image** (a mechanical fact, not "compiled but not run"; see
- *       selftest_sources in product.toml and build.rs);
- *     - readers of the cases and readers of the implementation no longer interfere (the suite's
- *       explanation of "white-box forging a non-owner" should not be mixed with production
- *       semantics either).
- *   The code was **moved**, not rewritten: criteria/logs/order are byte-for-byte unchanged (see
- *   the log contract below).
- *
- * ## Fixture ownership
- *   The static fixtures (`s_m`/`s_sem`/`s_cv`/`s_sp`/two thread stacks/shared counters) are used
- *   **only by this suite** (confirmed by grepping `core/`/`tests/` across the tree), so the whole
- *   group moved here with the cases — the production side does not own them, so no new
- *   `sync_internal.h` boundary is needed.
- *   The only cross-boundary dependency is `struct br_thread` from `sched_internal.h` (white-box
- *   forging of an "external owner") and `br_waitq_len()` (checking "no ghost waiters").
- *
- * ## Log contract (gates match **verbatim** ⇒ changing a word changes the criterion)
- *   `[SYNCCONF] PASS/FAIL/SKIP <tag> <desc>` … `[SYNCCONF] SUMMARY pass=%u fail=%u total=%u`
- *   The require/forbid/require_tags of `tests/gates.toml` and `docs/decisions/0007` §gates all
- *   anchor on these two lines (including the SKIP line when "scheduler not registered").
- *
- * ## Return value
- *   `int` = **number of failed items** (ADR-0010 §2.4: the suite only aggregates, it does not
- *   judge). Any failure **does not halt** the system.
+ * Self-test suite for sync primitives + time (TC-SYNC-001..009, TC-TIME-001..003). Cases are not a
+ * plugin capability and stay out of the golden headers; with selftest off core/selftest/ is not
+ * compiled. The static fixtures (s_m/s_sem/s_cv/s_sp/stacks) are used only by this suite.
+ * Cross-boundary: struct br_thread + br_waitq_len() from sched_internal.h (forge a non-owner,
+ * check for ghost waiters). Log contract, matched verbatim by tests/gates.toml:
+ * [SYNCCONF] PASS/FAIL/SKIP <tag> <desc> ... SUMMARY pass=%u fail=%u total=%u. Returns fail count.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -44,19 +14,13 @@
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
-/* The TCB layout and the four wait-chain primitives are a core-internal contract: this suite needs
- * to "white-box forge a non-owner" and use `br_waitq_len()` to check for ghost nodes. Cross-directory
- * relative includes have precedent in this repo (sync.c originally did the same). */
+/* TCB layout + wait-chain primitives (core-internal): needed to white-box forge a non-owner and
+ * to use br_waitq_len() for ghost-node checks. */
 #include "../src/sched/sched_internal.h"
 
-/* The entry's visible declaration is centralized in `core/selftest/core_selftest.c` (the only
- * aggregator); declaring it again here satisfies this file's discipline of "every function has a
- * prototype before use" (-Wmissing-prototypes). */
 int br_sync_selftest(void);
 
-/* =====================================================================
- * Conformance cases (TC-SYNC-001..009 / TC-TIME-001..003; 6-01 §3.2/§3.3)
- * ===================================================================== */
+/* ---- Conformance cases (TC-SYNC-001..009 / TC-TIME-001..003) ---- */
 
 #define CONF_ITER        400u
 #define CONF_STACK_BYTES 4096u
@@ -75,7 +39,7 @@ static volatile br_u32 s_overlap;
 static volatile br_u32 s_count;
 static int s_wrc[4];
 
-/* "Fake holder" when there is no thread context (white-box: only to create the "non-owner" case, see ADR-0007 §3). */
+/* Fake holder for the no-thread-context path (white-box: only to create the non-owner case). */
 static struct br_thread s_foreign_owner;
 
 static void conf_line(const char *tag, br_bool ok, const char *desc,
@@ -119,10 +83,8 @@ static br_bool conf_join(br_thread_t *t, int *code)
     return (br_task_join(t, code) == 0) ? BR_TRUE : BR_FALSE;
 }
 
-/* ---------------------------------------------------------------- workers  * WORKAROUND(br-wa-test-001): this suite's `TC-SYNC-*`/`TC-TIME-*` ids and the
- * table in `6-01` §3.2/§3.3 are **not yet aligned one by one** (meaning has drifted; this note is
- * accurate); the alignment action is tracked in WORKAROUNDS.md.
- */
+/* ---- workers (WORKAROUND(br-wa-test-001): the TC-SYNC-* / TC-TIME-* ids are not yet aligned
+ * one-by-one with the 6-01 table; that alignment is tracked in WORKAROUNDS.md) ---- */
 
 static void conf_mutex_worker(void *arg)
 {
@@ -133,7 +95,7 @@ static void conf_mutex_worker(void *arg)
             return;
         }
         if (s_inside != 0u) {
-            s_overlap++;                 /* both threads in the critical section ⇒ mutual exclusion broken */
+            s_overlap++;                 /* both threads in the critical section => mutual exclusion broken */
         }
         s_inside = 1u;
         s_count++;
@@ -148,7 +110,7 @@ static void conf_mutex_worker(void *arg)
 static void conf_eperm_worker(void *arg)
 {
     (void)arg;
-    s_wrc[1] = br_mutex_unlock(&s_m);    /* main holds the lock ⇒ non-owner */
+    s_wrc[1] = br_mutex_unlock(&s_m);    /* main holds the lock => non-owner */
 }
 
 static void conf_timeout_worker(void *arg)
@@ -172,7 +134,7 @@ static void conf_cond_worker(void *arg)
         return;
     }
     const int rc = br_cond_wait(&s_cv, &s_m, BR_TIMEOUT_INF);
-    /* on return it must still hold m */
+    /* on return the mutex must still be held */
     if (!(br_mutex_owner(&s_m) == br_task_self() && br_mutex_is_locked(&s_m) == BR_TRUE)) {
         *out = -2;
     } else {
@@ -222,10 +184,10 @@ static void conf_sync_002(br_u32 *pass, br_u32 *fail)
 {
     (void)br_mutex_init(&s_m);
 
-    const int r1 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* free ⇒ 0 */
-    const int r2 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* locked ⇒ -ETIMEDOUT (6-01 TC-SYNC-002) */
+    const int r1 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* free => 0 */
+    const int r2 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* locked => -ETIMEDOUT (6-01 TC-SYNC-002) */
     const int r3 = br_mutex_unlock(&s_m);
-    const int r4 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* free again ⇒ 0 */
+    const int r4 = br_mutex_lock_to(&s_m, BR_TIMEOUT_ZERO);   /* free again => 0 */
     const int r5 = br_mutex_unlock(&s_m);
 
     const br_bool ok = (r1 == BR_OK) && (r2 == BR_ERR(ETIMEDOUT)) && (r3 == BR_OK)
@@ -249,7 +211,7 @@ static void conf_sync_003(br_u32 *pass, br_u32 *fail, br_bool sched)
         const int rr = br_mutex_unlock(&s_m);
         ok = (j == BR_TRUE) && (s_wrc[1] == BR_ERR(EPERM)) && (rr == BR_OK);
     } else {
-        /* no second thread ⇒ white-box forge "lock held by another thread", same owner check. */
+        /* no second thread, so white-box forge "lock held by another thread" (same owner check). */
         s_m.locked = 1u;
         s_m.owner  = &s_foreign_owner;
         const int rr = br_mutex_unlock(&s_m);
@@ -306,7 +268,7 @@ static void conf_sync_005(br_u32 *pass, br_u32 *fail, br_bool sched)
 
     const int a = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* count 2 -> 1 */
     const int b = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* count 1 -> 0 */
-    const int c = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* empty ⇒ -ETIMEDOUT */
+    const int c = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* empty => -ETIMEDOUT */
     const int g = br_sem_give(&s_sem);                    /* count -> 1 */
     const int d = br_sem_take(&s_sem, BR_TIMEOUT_ZERO);   /* count -> 0 */
 
@@ -345,13 +307,9 @@ static void conf_sync_006(br_u32 *pass, br_u32 *fail, br_bool sched)
     br_thread_t *t = conf_spawn(conf_sem_worker, &s_wrc[3], s_stack_a);
     conf_wait_for_waiters(&s_sem.waiters, 1u);
 
-    /*
-     * Simulate ISR context: `br_irq_lock()` disables interrupts — that is exactly the context an
-     * ISR runs in (IRQs already masked), and an ISR is **not allowed** any call that yields the
-     * CPU. So "call br_sem_give() inside an IRQ-disabled critical section" has exactly the same
-     * observable constraints as "call it in an ISR": only counter/link/wake-bit changes, no switch.
-     * (Actually raising a timer ISR would prove the same thing while binding the case to a platform.)
-     */
+    /* Simulate ISR context with br_irq_lock(): IRQs off is exactly the context an ISR runs in, and
+     * an ISR may not call anything that yields the CPU. So "give inside an IRQ-disabled section"
+     * has the same observable constraints: counter/link/wake-bit changes only, no switch. */
     const br_irq_state_t ist = br_irq_lock();
     const int give_rc = br_sem_give(&s_sem);
     br_irq_unlock(ist);
@@ -369,12 +327,12 @@ static void conf_sync_007(br_u32 *pass, br_u32 *fail, br_bool sched)
     (void)br_cond_init(&s_cv);
     (void)br_mutex_init(&s_m);
 
-    /* (a) signal with no waiters ⇒ no-op and **no count** */
+    /* (a) signal with no waiters => no-op and no count */
     const int s0 = br_cond_signal(&s_cv);
     const br_u32 w0 = br_cond_waiters(&s_cv);
 
-    /* Mechanical criterion for "no count": the following wait(ZERO) must still time out (if signal
-     * had accounted for it, it would return 0 immediately) */
+    /* Mechanical criterion for "no count": the following wait(ZERO) must still time out (an
+     * accounted-for signal would return it immediately). */
     (void)br_mutex_lock(&s_m);
     const int z = br_cond_wait(&s_cv, &s_m, BR_TIMEOUT_ZERO);
     const br_bool held_z = (br_mutex_owner(&s_m) == br_task_self())
@@ -393,7 +351,7 @@ static void conf_sync_007(br_u32 *pass, br_u32 *fail, br_bool sched)
         return;
     }
 
-    /* (b) signal → wait pairing */
+    /* (b) signal -> wait pairing */
     s_wrc[2] = 123;
     br_thread_t *t = conf_spawn(conf_cond_worker, &s_wrc[2], s_stack_a);
     conf_wait_for_waiters(&s_cv.waiters, 1u);
@@ -462,7 +420,7 @@ static void conf_sync_009(br_u32 *pass, br_u32 *fail)
     br_spinlock_unlock(&s_sp, got);
     const br_bool unlocked = (br_spinlock_is_locked(&s_sp) == BR_FALSE);
 
-    /* nesting: take a spinlock inside an outer irq_lock; after returning, IRQ state matches entry */
+    /* nesting: take a spinlock inside an outer irq_lock; afterwards the IRQ state matches entry */
     const br_irq_state_t outer = br_irq_lock();
     const br_irq_state_t inner = br_spinlock_lock(&s_sp);
     br_spinlock_unlock(&s_sp, inner);
@@ -470,7 +428,7 @@ static void conf_sync_009(br_u32 *pass, br_u32 *fail)
     const br_irq_state_t after = br_irq_lock();
     br_irq_unlock(after);
 
-    /* trylock: busy ⇒ -EBUSY, leaves *saved untouched and holds no lock */
+    /* trylock: busy => -EBUSY, leaves *saved untouched and holds no lock */
     const br_irq_state_t held = br_spinlock_lock(&s_sp);
     br_irq_state_t saved = 0xDEADBEEFu;
     const int tb = br_spinlock_trylock(&s_sp, &saved);
@@ -481,7 +439,7 @@ static void conf_sync_009(br_u32 *pass, br_u32 *fail)
         br_spinlock_unlock(&s_sp, saved);
     }
 
-    /* ---- magic check: uninitialized/corrupted must give -EINVAL, never silently "not locked" ---- */
+    /* ---- magic check: uninitialized/corrupted must give -EINVAL, never a silent pass ---- */
     br_mutex_t zm;
     br_sem_t   zs;
     br_cond_t  zc;
@@ -514,7 +472,7 @@ static void conf_time_001(br_u32 *pass, br_u32 *fail, br_bool sched)
         return;
     }
 
-    /* monotonically non-decreasing (the original wording of 6-01 TC-TIME-001) */
+    /* monotonically non-decreasing */
     br_bool mono = BR_TRUE;
     br_time_t prev = br_clock_now();
     for (br_u32 i = 0u; i < 1000u; i++) {
@@ -526,12 +484,12 @@ static void conf_time_001(br_u32 *pass, br_u32 *fail, br_bool sched)
         prev = now;
     }
 
-    /* sleep does not wake early (measured; tick = 1/HZ, default 5 ms ⇒ a 1000 us request lands about one tick late) */
+    /* sleep does not wake early: at the 5 ms default tick, a 1000 us request lands ~1 tick late */
     const br_time_t t0 = br_clock_now();
     const int rc = br_task_sleep(1000u);
     const br_time_t dt = br_clock_now() - t0;
 
-    /* Print "requested vs measured" explicitly: the lateness set by the platform tick granularity is an observable fact, not a guess. */
+    /* Print requested vs measured: lateness from the tick granularity is an observable fact. */
     br_log_info("[SYNCCONF] MEASURE TC-TIME-001 request=1000us measured=%lu us (tick granularity)",
                 (br_u64)dt);
 
@@ -553,17 +511,17 @@ static void conf_time_002(br_u32 *pass, br_u32 *fail)
 
 static void conf_time_003(br_u32 *pass, br_u32 *fail)
 {
-    /* Ruling G13: relative sleep has no "infinite" semantics — that would mean never returning */
+    /* br_task_sleep() has no "infinite" semantics: that would mean never returning. */
     const int rc = br_task_sleep(BR_TIMEOUT_INF);
 
-    /* deadline saturates instead of wrapping (original wording of TC-TIME-003) */
+    /* deadline saturates instead of wrapping */
     const br_time_t now = br_clock_now();
     const br_time_t d_inf = br_deadline_from_now(BR_TIMEOUT_INF);
     const br_time_t d_near = br_deadline_from_now(BR_TIMEOUT_INF - 1u);
     const br_time_t d_zero = br_deadline_from_now(0u);
     const br_time_t d_edge = br_deadline_from_now(BR_TIMEOUT_INF - now); /* exactly now + rel == INF */
 
-    /* true overflow: now + rel exceeds UINT64_MAX ⇒ must saturate to BR_TIMEOUT_INF, not wrap into the past */
+    /* overflow: now + rel > UINT64_MAX => saturate to BR_TIMEOUT_INF, not wrap to the past */
     br_bool sat = BR_TRUE;
     if (now > 0u) {
         sat = (br_deadline_from_now((BR_TIMEOUT_INF - now) + 1u) == BR_TIMEOUT_INF)
@@ -619,6 +577,5 @@ int br_sync_selftest(void)
     br_log_info("[SYNCCONF] SUMMARY pass=%u fail=%u total=%u",
                 (br_u32)pass, (br_u32)fail, (br_u32)(pass + fail));
 
-    /* Return the **failure count**: the aggregator sums them, red/green is decided by the gate (ADR-0010 §2.4). */
     return (int)fail;
 }

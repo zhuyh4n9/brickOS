@@ -1,37 +1,18 @@
 /*
- * service/trace — trace observation service (implementation)
+ * Trace observation implementation. The 16 B event ring and the ISR emit point live in core
+ * (br/core/br_trace.h br_trace_emit); this plugin is the only consumer: drain, decode id->name,
+ * count, render lines.
  *
- * Design source: `docs/5-debug/5-01-debug.md`
- *   §1 trace plugin: fixed 16B events + static ring buffer + **zero strings on the hot path**
- *      ("the id→name map is exported with plugin metadata and decoded offline");
- *   §1 "drain routes: console dump on panic / bridge live stream / host tool decode"
- *      — this plugin is the consuming side of "dump";
- *   §1 the API section leaves event macros and id assignment to the manifest; this implementation
- *      uses a 32-slot hash table for **dynamic ids** (the declaration face is frozen, see
- *      include/br/debug/br_trace_svc.h).
- * Ownership ruling (ADR-0003): the 16B event **ring and ISR emit point live in core**
- *   (`br/core/br_trace.h` `br_trace_emit`); this plugin is its only consumer: drain, decode
- *   id→name, count, render lines. Reasons in the brick.toml header comment.
+ * Name table: a slot stores only the caller-supplied pointer, never a copy, so the contract is
+ * "tag lifetime = image" (callers pass literals or static arrays); a stack/heap temporary would
+ * dangle and nothing enforces the premise in this prototype. Identity is pointer equality (the same
+ * literal in one translation unit is merged, so repeated markers are idempotent); equal content
+ * behind another pointer is undecidable => -ENOSPC. An address collision is not an error:
+ * probe linearly forward from hash % SLOTS for an empty slot (wrapping, at most the whole table);
+ * failing on the first collision would let registration order decide who can register.
  *
- * ★ Name-table premise and risk (the declaration face says `const char *`, faithfully realized
- *   here): a slot **stores only the caller-supplied pointer, never copies the string** — the
- *   contract is "tag lifetime = image" (callers normally pass string literals or static arrays).
- *   If a caller passes a stack/heap temporary buffer the pointer dangles; this prototype has no
- *   plugin manager to enforce the premise, so call discipline carries it.
- *   Identity test uses **pointer equality**: the same literal in one translation unit is merged
- *   (-fmerge-constants), so repeated markers from the same tag site are idempotent; "same content
- *   but different pointer" means the caller gave two different buffers, identity is undecidable
- *   (and the lifetime premise above is broken) ⇒ -ENOSPC.
- *   **An address collision is not an error**: probe **linearly forward** from `hash % SLOTS` for
- *   an empty slot (wrapping, at most the whole table). Why not "collision is an error": failing on
- *   the first collision in a 32-slot table would let **who registers first** decide whether others
- *   can register — another plugin's marker could push this plugin's selftest slot out by hash and
- *   make the case fail innocently (tests depending on hash slots are a design smell). Linear
- *   probing degrades to at most 32 steps only on collision; addressing stays hash O(1), fully
- *   acceptable for a 32-slot table. See README "key rulings".
- *
- * ISR safety: every function in this file is **thread-only** (drain advances the consumer
- *   cursor). ISR/fault paths may only call core's `br_trace_emit` directly.
+ * ISR safety: every function in this file is thread-only (drain advances the consumer cursor);
+ * ISR/fault paths may only call core's br_trace_emit.
  */
 #include <br/debug/br_trace_svc.h>
 
@@ -40,14 +21,10 @@
 #include <br/core/br_time.h>
 #include <br/core/br_trace.h>
 
-#include "trace_internal.h"    /* internal view for self-test (see that header; not used on the production path) */
+#include "trace_internal.h"
 
-/* =====================================================================
- * Constants and internal state
- * ===================================================================== */
-
-/* FNV-1a 32-bit: pairs with "zero strings on the hot path" in 5-01 §1 — the event carries only a
- * 32-bit hash; names stay in this table for online rendering or offline decode with metadata. */
+/* FNV-1a 32-bit: an event carries only a 32-bit hash; names stay in this table for online rendering
+ * or offline decode with metadata. */
 #define TRC_FNV_OFFSET   2166136261u
 #define TRC_FNV_PRIME    16777619u
 
@@ -76,10 +53,6 @@ static br_trace_evt_t s_batch[TRC_DRAIN_BATCH];
 static const char TRC_NAME_REPORT[] = "trace.report";
 static const char TRC_NAME_RESET[]  = "trace.reset";
 
-/* =====================================================================
- * Small helpers (no libc)
- * ===================================================================== */
-
 /* FNV-1a 32-bit; byte-wise, so cast to br_u8 first (avoids char signedness affecting the result) */
 static br_u32 trc_fnv1a32(const char *s)
 {
@@ -106,23 +79,12 @@ static br_bool trc_streq(const char *a, const char *b)
     return (*a == *b);   /* equal only if both stopped at '\0' */
 }
 
-/* =====================================================================
- * Name registration / decode
- * ===================================================================== */
-
 /*
- * Acquire a slot: probe **linearly forward** from `hash % SLOTS` (wrapping, at most SLOTS steps).
- *   - empty slot ⇒ claim it (store only the pointer, no string copy) and return the slot index;
- *   - hit the same pointer ⇒ idempotent, return the existing slot;
- *   - hit **same content but different pointer** ⇒ -ENOSPC (the caller gave two different buffers,
- *     identity is undecidable, and the "tag lifetime = image" premise is broken);
- *   - no empty slot after scanning the whole table ⇒ -ENOSPC.
- * ★ Why not "collision ⇒ -ENOSPC": failing on the first collision in a 32-slot table would let
- *   **who registers first** decide whether others can register — another plugin's marker could
- *   push this plugin's selftest slot out by hash and make the case fail innocently (tests
- *   depending on hash slots are a design smell). Linear probing degrades to at most 32 steps only
- *   on collision; addressing stays hash O(1), fully acceptable for a 32-slot table.
- * Returns the slot index (0..SLOTS-1) or a negative errno.
+ * Acquire a slot: probe linearly forward from hash % SLOTS (wrapping, at most SLOTS steps). Empty
+ * slot => claim it (pointer only); same pointer => idempotent; same content but a different
+ * pointer => -ENOSPC, identity is undecidable; no empty slot after a full scan => -ENOSPC.
+ * A collision is not an error: failing on the first one would let registration order decide who can
+ * register. Returns the slot index (0..SLOTS-1) or a negative errno.
  */
 static int trc_acquire_slot(const char *name)
 {
@@ -187,10 +149,6 @@ const char *br_trace_svc_name(br_u32 id)
     return br_trace_name(id);   /* fall back to core's fixed event name table (unknown ⇒ "?") */
 }
 
-/* =====================================================================
- * Consumption counts
- * ===================================================================== */
-
 static void trc_seen_add(br_u32 id)
 {
     for (br_u32 i = 0u; i < s_seen_n; i++) {
@@ -218,15 +176,10 @@ br_u32 br_trace_svc_seen(br_u32 id)
     return 0u;
 }
 
-/* =====================================================================
- * Drain + render
- * ===================================================================== */
-
 br_u32 br_trace_svc_report(br_u32 max_events)
 {
-    /* max_events == 0 = "unlimited", but a hard bound is required, else a single call may never
-     * converge while ISRs keep refilling during consumption — bound by ring capacity (repeated
-     * calls drain it fully). */
+    /* max_events == 0 means unlimited, but a hard bound is needed: ISRs may keep refilling while we
+     * consume, so bound by ring capacity and let repeated calls drain it fully. */
     const br_u32 limit = (max_events == 0u) ? (br_u32)BR_TRACE_RING_SIZE : max_events;
     br_u32 taken = 0u;
 
@@ -265,9 +218,7 @@ br_u32 br_trace_svc_summary(void)
     br_log_info("[TRACE] total=%u drained=%u overrun=%u ids=%u live=%u",
                 total, s_drained, overrun, s_seen_n, live);
 
-    /* "Other" bucket: the remainder that can no longer keep id granularity once the per-id count
-     * table (64 entries) is full, shown here so summary's drained does not look inconsistent with
-     * the per-id counts. */
+    /* Remainder folded into "other" once the per-id table is full, keeping summary consistent */
     if (s_other > 0u) {
         br_log_info("[TRACE] other=%u (per-id count table full at %u entries, remainder folded into this bucket)",
                     s_other, TRC_SEEN_SLOTS);
@@ -285,36 +236,23 @@ void br_trace_svc_reset(void)
     s_seen_n  = 0u;
     s_other   = 0u;
     s_drained = 0u;
-    /* ★ does not touch core ring cursors, nor clear the dynamic name table (registration is image-level, unrelated to counts) */
+    /* Does not touch the core ring cursors or the name table (registration is image-level). */
 }
 
 int br_trace_svc_init(void)
 {
     br_trace_svc_reset();
 
-    /* This plugin's two own event names. The start slot comes from the hash (trace.report→26,
-     * trace.reset→31); the actual landing spot comes from linear probing. v0.1 only registers the
-     * names and emits no events with these ids (traces still go through marker/core fixed
-     * events), so offline decoding can recognize them.
-     * Note: with linear probing, another plugin's collision no longer pushes selftest's slot 2
-     * out — -ENOSPC appears only when all 32 slots are occupied (contract change, see the
-     * trc_acquire_slot comment). */
+    /* Register this plugin's two own names; v0.1 emits no events with these ids, the entries exist
+     * for offline decode. With linear probing -ENOSPC appears only when all slots are occupied. */
     (void)br_trace_svc_register(TRC_NAME_REPORT);
     (void)br_trace_svc_register(TRC_NAME_RESET);
 
     return 0;
 }
 
-/* =====================================================================
- * Internal view for self-test
- *
- * See `src/trace_internal.h`: these two exist **only** for `trace_selftest.c` — the cases must
- * re-check the "collision premise" and "decoded name byte-for-byte equal", which the public API
- * cannot express. ★ Always **forward** to the production implementation, never copy logic: the
- * case must run the real algorithm, or it verifies a copy.
- * Prototypes are in that header (-Wmissing-prototypes); the entry names are not this plugin's
- * external API.
- * ===================================================================== */
+/* Accessors for trace_selftest.c only: the cases re-check the collision premise and decoded name
+ * through the real algorithm, which the public API cannot express. They forward to production. */
 
 br_u32 br_trace_internal_slot_of(const char *name)
 {
@@ -327,34 +265,24 @@ br_bool br_trace_internal_streq(const char *a, const char *b)
 }
 
 
-/* =====================================================================
- * Plugin lifecycle hooks (name = symbol_prefix(short) + phase; referenced by the generated
- * `build/gen/service/trace/plugin_desc.c`; design 1-01 §9 / 3-05 §2)
- *
- * Self-declared prototypes satisfy -Wmissing-prototypes: hook names are derived by the
- * **generator** (not this plugin's external API), so they are not written into
- * `include/br/debug/br_trace_svc.h` nor into brick.toml [[export]] (that would change the
- * interface hash).
- * ===================================================================== */
+/* Plugin lifecycle hooks referenced by the generated plugin_desc.c. Self-declared prototypes
+ * -Wmissing-prototypes; the hook names come from the generator, not the public header. */
 int trace_early_init(void);
 int trace_init(void);
 int trace_start(void);
 
-/* EARLY phase: no action (no heap/threads/IRQ-off; nothing to register here). */
+/* EARLY phase: no action (nothing to register here). */
 int trace_early_init(void)
 {
     return 0;
 }
 
-/* LATE phase (Service category ⇒ completion point ②): forward to the existing init. */
 int trace_init(void)
 {
     return br_trace_svc_init();
 }
 
-/* START phase: this service has nothing to do after "IRQs available / threads creatable". */
 int trace_start(void)
 {
     return 0;
 }
-

@@ -1,58 +1,37 @@
 /*
- * brickOS prototype v0.1.0 — exception frame layout and entry-stub contract (aarch64)
- *
- * Design basis: `docs/3-os-core/3-02-int.md` §5.2 (IRQ flow: the asm entry stub saves
- * caller-saved registers → calls `br_irq_enter(frame)`), §10.2 (vector slotting and mask-bit
- * handling), §14.2 (exception frame ownership).
- *
- * ⚠ In the design this header belongs to the **shared ISA library** (companion header for the
- *   exception vector entry assembly; "core does not enter its fields"). The prototype has no
- *   separate ISA library layer yet (WORKAROUND(br-wa-isa-001)), and **core's fault path must be
- *   able to rewrite the interrupted context** (extable fixup: change ELR + write general
- *   registers, 3-02 §10.4/§10.5), so frame layout must have **one single source of truth**
- *   shared by core and the asm stub — putting it in core removes two error-prone layouts in a
- *   single-layer prototype; this header moves when the ISA library is extracted.
- *
- * What the frame holds and why only this much (note in 3-02 §5.2):
- *   v1 ISRs always return to the interrupted context (no context switch) ⇒ the frame only needs
- *   caller-saved (x0–x30) and the exception status registers; callee-saved registers are saved
- *   by the called C function per AAPCS64.
- *   **If v2 switches stacks on IRQ exit this premise changes** (§11.2) — then either the frame
- *   must also hold callee-saved registers, or it must be stated that the switch happens only
- *   after the C return, when the frame is dead.
+ * aarch64 exception frame layout and entry-stub contract. No separate ISA library layer yet
+ * (WORKAROUND(br-wa-isa-001)), so this is the single source of truth shared by the asm stub and
+ * core, which rewrites the interrupted context on extable fixup. v1 ISRs always
+ * return to the interrupted context, so the frame holds only caller-saved x0-x30 and the status
+ * registers; callee-saved registers are saved by the C callee per AAPCS64.
  */
 #ifndef BR_CORE_BR_EXC_H
 #define BR_CORE_BR_EXC_H
 
-/* br_types.h is C-only (typedef/static asserts) ⇒ assembly must not pull it in (as would
- * report "unknown mnemonic typedef"). The offset macros below are pure literals; assembly
- * needs no types. */
+/* br_types.h is C-only (typedefs/static asserts); assembly must not pull it in. */
 #ifndef __ASSEMBLER__
 #include <br/core/br_types.h>
 #endif
 
 /* ---- In-frame offsets (single source of truth for the asm stub and the C struct) ----
- * ★ This header is `#include`d directly by `vectors.S` (the Makefile's ASFLAGS carry
- *   `-Icore/include`, and GCC defines `__ASSEMBLER__` for `.S`) ⇒ **these offset macros must
- *   stay pure literals usable by the assembler**: do not write expressions with C casts.
- *   The C-only parts (typedefs/static asserts/expression forms of x offsets) are inside
- *   `#ifndef __ASSEMBLER__`. */
+ * vectors.S includes this header directly, so these macros must stay pure literals usable by
+ * the assembler: no C-cast expressions. C-only parts live under #ifndef __ASSEMBLER__. */
 #define BR_EXC_SP_OFF       0x0F8u               /* SP at exception time (backtrace needs it) */
 #define BR_EXC_ELR_OFF      0x100u
 #define BR_EXC_SPSR_OFF     0x108u
 #define BR_EXC_ESR_OFF      0x110u
 #define BR_EXC_FAR_OFF      0x118u
-#define BR_EXC_DAIF_OFF     0x120u               /* DAIF on entry (for §6.4 DAIF restore policy) */
+#define BR_EXC_DAIF_OFF     0x120u               /* DAIF on entry (DAIF restore policy) */
 #define BR_EXC_VECTOR_OFF   0x128u               /* vector slot index 0..15 (diagnosis) */
 #define BR_EXC_PAD_OFF      0x130u
-#define BR_EXC_SIZE         0x140u               /* 320 B = 16 × 20: **16-byte alignment is an AAPCS64 hard requirement** */
+#define BR_EXC_SIZE         0x140u               /* 320 B = 16 x 20; AAPCS64 16-byte alignment */
 
 #define BR_EXC_XCOUNT       31u
 
-/* Offset of x0..x30: `8*n` (literals in assembly, this expression macro in C) */
+/* Offset of x0..x30: `8*n` (literal in assembly, expression macro in C) */
 #define BR_EXC_X_OFF(n)     (8u * (br_u32)(n))
 
-/* aarch64 DAIF bits (position in PSTATE; **different** from br_irq_state_t's layout, see br_irq.h) */
+/* aarch64 DAIF bits (position in PSTATE; layout differs from br_irq_state_t, see br_irq.h) */
 #define BR_DAIF_D           0x200u   /* [9] debug */
 #define BR_DAIF_A           0x100u   /* [8] SError */
 #define BR_DAIF_I           0x080u   /* [7] IRQ */

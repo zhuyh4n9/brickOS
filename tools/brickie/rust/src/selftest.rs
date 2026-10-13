@@ -1,10 +1,8 @@
 //! `brickie-core --selftest`: domain self-test without Python (V-18a).
 //!
-//! Covers: version matrix line by line / range expansion and intersection / name contract and
-//! subkind derivation / phase derivation / privilege orthogonality table / dependency direction
-//! prohibitions / export invariants / TOML model loading both ways / the four `plan-new` classes
-//! / machine-file determinism.
-//! Output: all green ⇒ `ok <n> cases`; any failure ⇒ per-case FAIL details, exit code 1.
+//! Covers the version/range/name/phase/privilege/dependency/export rules, TOML model loading,
+//! planning and emission, plus the check/iface/build command families.
+//! All green => `ok <n> cases`; any failure => per-case FAIL lines, exit code 1.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -83,8 +81,6 @@ impl Harness {
     }
 }
 
-// ------------------------------------------------------------------ helpers
-
 fn args(v: Value) -> Map<String, Value> {
     v.as_object().cloned().unwrap_or_default()
 }
@@ -108,8 +104,6 @@ fn write(root: &Path, rel: &str, content: &str) {
     }
     fs::write(p, content).expect("write file");
 }
-
-// ------------------------------------------------------------------ domains
 
 fn version_matrix(h: &mut Harness) {
     let v = Version::new(0, 1, 2, 3);
@@ -285,7 +279,6 @@ fn phase_cases(h: &mut Harness) {
     h.eq(rules::derive_phase("app", None, true), "app", "app ⇒ app");
     h.eq(rules::derive_phase("ability", Some("service"), false), "early", "no init hook ⇒ early");
 
-    // allowed set per the parent agent's clarification
     h.check(rules::phase_reason("interface", None, "late").is_none(), "interface+late ok");
     h.check(rules::phase_reason("interface", None, "core").is_some(), "interface+core ⇒ wrong");
     h.check(rules::phase_reason("ability", Some("service"), "late").is_none(), "service+late ok");
@@ -317,7 +310,6 @@ fn privilege_cases(h: &mut Harness) {
     h.check(rules::memory_combo_legal("unmap", "region", "heap"), "unmap×region×heap");
     h.check(!rules::memory_combo_legal("nope", "page", "heap"), "unknown op is illegal");
 
-    // positive: ability P2 + pool lifecycle
     let ok_mem = vec![rules::MemoryEntry {
         granularity: "pool".into(),
         ops: vec!["alloc".into(), "free".into()],
@@ -337,7 +329,6 @@ fn privilege_cases(h: &mut Harness) {
         "positive: ability P2 + pool lifecycle has no diagnostics",
     );
 
-    // negative 1: ability P2 declares map/page/mmio ⇒ PRIV-0001 (row minimum = P4)
     let bad_mem = vec![rules::MemoryEntry {
         granularity: "page".into(),
         ops: vec!["map".into()],
@@ -358,7 +349,6 @@ fn privilege_cases(h: &mut Harness) {
         "negative 1: ability declares map ⇒ BRV-PRIV-0001",
     );
 
-    // negative 2: app declares P1 ⇒ PRIV-0001
     let app_input = rules::PrivInput {
         plugin_type: "app",
         subkind: None,
@@ -374,7 +364,6 @@ fn privilege_cases(h: &mut Harness) {
         "negative 2: app declares P1/resource ⇒ BRV-PRIV-0001",
     );
 
-    // negative 3: alloc × pool × heap ⇒ PRIV-0002 (illegal combination)
     let illegal = vec![rules::MemoryEntry {
         granularity: "pool".into(),
         ops: vec!["alloc".into()],
@@ -428,7 +417,6 @@ fn dep_direction_cases(h: &mut Harness) {
         "pure consumer (app) is outside the api_type prohibitions",
     );
 
-    // allow_edges only exempts plugin_type direction, not hard api_type prohibitions
     let edges = vec![("platform/soc".to_string(), "ability/helper".to_string())];
     h.check(
         rules::dep_edge_violation(
@@ -454,7 +442,7 @@ fn dep_direction_cases(h: &mut Harness) {
 }
 
 fn export_invariant_cases(h: &mut Harness) {
-    // invariant 1: api_iface ≠ api_type
+    // invariant 1: api_iface must equal api_type
     let v = vec![rules::ExportView {
         api_iface: "runtime_adapter",
         form: "api",
@@ -467,14 +455,14 @@ fn export_invariant_cases(h: &mut Harness) {
             .any(|(_, c, _)| *c == "BRV-TAX-0016"),
         "invariant 1 ⇒ BRV-TAX-0016",
     );
-    // invariant 2: third_party exposes a native surface
+    // invariant 2: third_party may not expose a native surface
     h.check(
         rules::check_export_invariants("third_party", &v)
             .iter()
             .any(|(_, c, _)| *c == "BRV-TAX-0017"),
         "invariant 2 ⇒ BRV-TAX-0017",
     );
-    // invariant 3: skin lacks reexport_of
+    // invariant 3: a skin must declare reexport_of
     let skin = vec![rules::ExportView {
         api_iface: "native",
         form: "skin",
@@ -487,7 +475,6 @@ fn export_invariant_cases(h: &mut Harness) {
             .any(|(_, c, _)| *c == "BRV-TAX-0018"),
         "invariant 3 ⇒ BRV-TAX-0018",
     );
-    // invariant 3 positive: multiple providers + equal classification shape
     let rr: Vec<String> = vec![
         "service/crypto#crypto".into(),
         "service/keyring#keyring".into(),
@@ -502,7 +489,7 @@ fn export_invariant_cases(h: &mut Harness) {
         rules::check_export_invariants("native", &skin_ok).is_empty(),
         "invariant 3 positive (multiple providers)",
     );
-    // invariant 4: non-skin declares reexport_of
+    // invariant 4: only a skin may declare reexport_of
     let bad4 = vec![rules::ExportView {
         api_iface: "native",
         form: "api",
@@ -520,7 +507,6 @@ fn export_invariant_cases(h: &mut Harness) {
 }
 
 fn model_cases(h: &mut Harness) {
-    // ---- positive ----
     let root = tmpdir("model-ok");
     write(
         &root,
@@ -590,7 +576,6 @@ device_names = ["hsm0"]
     h.check(!tree.has_product, "no product.toml ⇒ has_product = false");
     h.check(!tree.product_level_constraints_apply(), "R-1: no product ⇒ skip product-level constraints");
 
-    // ---- R-6: platform's [[res]] is capacity ----
     let root_cap = tmpdir("model-cap");
     write(
         &root_cap,
@@ -615,7 +600,6 @@ used_kib = 16
     h.eq(tree_cap.diags.len(), 0, "valid platform has no diagnostics");
     h.eq(tree_cap.platform_capacity(), (512, 16), "R-6: platform [[res]] is the platform capacity");
 
-    // ---- negative: missing name ⇒ MF-0001 + exit 2 ----
     let root2 = tmpdir("model-noname");
     write(
         &root2,
@@ -634,7 +618,6 @@ version = "0.1.0.0"
     h.has_code(&tree2.diags, "BRV-MF-0001", "missing required name ⇒ BRV-MF-0001");
     h.exit_is(&tree2.diags, 2, "shape error ⇒ exit code 2");
 
-    // ---- negative: 3-segment version string ⇒ VER-0005 ----
     let root3 = tmpdir("model-ver");
     write(
         &root3,
@@ -654,7 +637,6 @@ version = "0.1.0"
     h.has_code(&tree3.diags, "BRV-VER-0005", "3-segment version string ⇒ BRV-VER-0005");
     h.exit_is(&tree3.diags, 2, "bad version string shape ⇒ exit code 2");
 
-    // ---- negative: 4-segment range ⇒ VER-0006 ----
     let root4 = tmpdir("model-range");
     write(
         &root4,
@@ -676,7 +658,6 @@ core = ">=1.2.3.4"
     h.has_code(&tree4.diags, "BRV-VER-0006", "4-segment range ⇒ BRV-VER-0006");
     h.exit_is(&tree4.diags, 2, "bad range shape ⇒ exit code 2");
 
-    // ---- negative: phase incompatible with plugin_type ⇒ MF-0001 ----
     let root5 = tmpdir("model-phase");
     write(
         &root5,
@@ -695,7 +676,6 @@ version = "0.1.0.0"
     let tree5 = model::load_tree(&root5);
     h.has_code(&tree5.diags, "BRV-MF-0001", "service declares core ⇒ MF-0001");
 
-    // ---- negative: derived subkind conflicts with explicit ⇒ TAX-0015 (exit 1) ----
     let root6 = tmpdir("model-subkind");
     write(
         &root6,
@@ -715,7 +695,6 @@ version = "0.1.0.0"
     h.has_code(&tree6.diags, "BRV-TAX-0015", "subkind conflict ⇒ BRV-TAX-0015");
     h.exit_is(&tree6.diags, 1, "TAX-0015 is a validation error ⇒ exit code 1");
 
-    // ---- negative: duplicate name ⇒ MF-0001 ----
     let root7 = tmpdir("model-dup");
     write(
         &root7,
@@ -748,7 +727,6 @@ version = "0.1.0.0"
     let tree7 = model::load_tree(&root7);
     h.has_code(&tree7.diags, "BRV-MF-0001", "duplicate plugin name ⇒ BRV-MF-0001");
 
-    // ---- negative: invalid TOML ⇒ environment error (no code) + exit code 2 ----
     let root8 = tmpdir("model-toml");
     write(&root8, "e/brick.toml", "schema = = 1\n");
     let tree8 = model::load_tree(&root8);
@@ -758,7 +736,6 @@ version = "0.1.0.0"
     );
     h.exit_is(&tree8.diags, 2, "invalid TOML ⇒ exit code 2");
 
-    // ---- scan skips build/ and .git/ ----
     let root9 = tmpdir("model-skip");
     write(
         &root9,
@@ -769,7 +746,6 @@ version = "0.1.0.0"
     let tree9 = model::load_tree(&root9);
     h.eq(tree9.plugins.len(), 0, "scan skips build/ and dot-directories");
 
-    // ---- schema alignment: `[compat]` present but missing `core` ⇒ MF-0001 ----
     let root10 = tmpdir("model-compat");
     write(
         &root10,
@@ -790,7 +766,6 @@ api_rev = 1
     let tree10 = model::load_tree(&root10);
     h.has_code(&tree10.diags, "BRV-MF-0001", "`[compat]` missing core ⇒ MF-0001");
 
-    // ---- schema alignment: `[[export]]` missing `freeze_state` ⇒ MF-0001 ----
     let root11 = tmpdir("model-export");
     write(
         &root11,
@@ -816,7 +791,6 @@ status     = "experimental"
     let tree11 = model::load_tree(&root11);
     h.has_code(&tree11.diags, "BRV-MF-0001", "export missing freeze_state ⇒ MF-0001");
 
-    // ---- schema alignment: `[privileged]` lacks level but declares memory ⇒ PRIV-0001 ----
     let root12 = tmpdir("model-priv");
     write(
         &root12,
@@ -876,7 +850,6 @@ status = "experimental"
         h.eq(s.entries.len(), 1, "snapshot entry count");
     }
 
-    // not published ⇒ empty table, not an error
     let empty = tmpdir("snap-empty");
     let mut d2 = Diags::new();
     h.eq(model::load_snapshots(&empty, &mut d2).len(), 0, "no api/iface ⇒ empty (unpublished)");
@@ -884,7 +857,6 @@ status = "experimental"
     let mut d3 = Diags::new();
     h.check(model::load_lock(&empty, &mut d3).is_none(), "no brickie.lock ⇒ None");
 
-    // lock round-trip (shape = schema/lock.schema.json)
     let lock = model::Lock {
         schema: 1,
         profile: "dev".into(),
@@ -927,7 +899,6 @@ status = "experimental"
         h.eq(crate::emit::render_lock(&l), text1, "lock round-trip is byte-identical");
     }
 
-    // reverse dependency index
     let idx = model::DependentsIndex {
         schema: 1,
         dependents: {
@@ -949,7 +920,7 @@ status = "experimental"
 }
 
 fn plan_cases(h: &mut Harness) {
-    // ---- four classes × native × c ----
+    // four plan classes x native x c
     let cases = [
         ("app", "app/hsm", "app", "native/app/c/brick.toml.tmpl"),
         ("interface", "iface/posix", "late", "native/interface/c/brick.toml.tmpl"),
@@ -996,7 +967,6 @@ fn plan_cases(h: &mut Harness) {
         );
     }
 
-    // ability bare name + explicit subkind
     let a = args(json!({
         "plugin_type": "ability", "name": "sched-coop", "api_type": "native",
         "lang": "c", "subkind": "scheduler",
@@ -1006,14 +976,12 @@ fn plan_cases(h: &mut Harness) {
     h.check(d.items().iter().any(|x| x.code.as_deref() == Some("BRV-TAX-0013")), "bare name ⇒ TAX-0013 warning");
     h.eq(arts.len(), 6, "bare-name ability artifact count");
 
-    // ability bare name missing subkind ⇒ MF-0001 exit 2
     let a = args(json!({"plugin_type": "ability", "name": "sched-coop", "api_type": "native", "lang": "c"}));
     let (d, arts) = plan::plan_new(&a, &Map::new());
     h.has_code(&d, "BRV-MF-0001", "ability bare name missing subkind ⇒ MF-0001");
     h.exit_is(&d, 2, "missing subkind ⇒ exit code 2");
     h.eq(arts.len(), 0, "shape error ⇒ no artifacts produced");
 
-    // subkind conflict ⇒ TAX-0015 exit 1
     let a = args(json!({
         "plugin_type": "ability", "name": "service/crypto", "api_type": "native",
         "lang": "c", "subkind": "fs",
@@ -1022,7 +990,6 @@ fn plan_cases(h: &mut Harness) {
     h.has_code(&d, "BRV-TAX-0015", "subkind conflict ⇒ TAX-0015");
     h.exit_is(&d, 1, "TAX-0015 ⇒ exit code 1");
 
-    // runtime_adapter template not delivered ⇒ TAX-0014 (info) but exit 2 (G-1)
     let a = args(json!({
         "plugin_type": "ability", "name": "service/crypto", "api_type": "runtime_adapter", "lang": "c",
     }));
@@ -1031,12 +998,10 @@ fn plan_cases(h: &mut Harness) {
     h.exit_is(&d, 2, "template not delivered ⇒ command incomplete, exit code 2 (G-1)");
     h.eq(arts.len(), 0, "template not delivered ⇒ no artifacts produced");
 
-    // name contract ⇒ MF-0001 exit 2
     let a = args(json!({"plugin_type": "app", "name": "App/Hsm", "api_type": "native", "lang": "c"}));
     let (d, _) = plan::plan_new(&a, &Map::new());
     h.has_code(&d, "BRV-MF-0001", "name contract violation ⇒ MF-0001");
 
-    // human-written file already exists ⇒ BRV-GEN-0002 exit 1 (second phase of the two-phase scheme)
     let a = args(json!({"plugin_type": "app", "name": "app/hsm", "api_type": "native", "lang": "c"}));
     let c = ctx(json!({"existing": [{"path": "app/hsm/brick.toml", "first_line": "# human-written"}]}));
     let (d, arts) = plan::plan_new(&a, &c);
@@ -1044,7 +1009,6 @@ fn plan_cases(h: &mut Harness) {
     h.exit_is(&d, 1, "BRV-GEN-0002 ⇒ exit code 1");
     h.eq(arts.len(), 0, "conflict ⇒ empty plan");
 
-    // generated-artifact conflict: not ours + no force ⇒ error; with force ⇒ override
     let c = ctx(json!({"existing": [{"path": "build/gen/app/hsm/plugin_desc.c", "first_line": "int x;"}]}));
     let a = args(json!({"plugin_type": "app", "name": "app/hsm", "api_type": "native", "lang": "c"}));
     let (d, _) = plan::plan_new(&a, &c);
@@ -1054,13 +1018,11 @@ fn plan_cases(h: &mut Harness) {
     h.exit_is(&d2, 0, "--force overrides generated-artifact conflict");
     h.eq(arts2.len(), 6, "still 6 planned artifacts after --force");
 
-    // generated artifact is already ours ⇒ normal rebuild (no force needed)
     let c = ctx(json!({"existing": [{"path": "build/gen/app/hsm/plugin_desc.c", "first_line": "/* brickie:generated */"}]}));
     let (d3, arts3) = plan::plan_new(&a, &c);
     h.exit_is(&d3, 0, "already a generated artifact ⇒ normal rebuild");
     h.eq(arts3.len(), 6, "generated-artifact rebuild plan count");
 
-    // ---- plan-init ----
     let a = args(json!({"name": "hsm"}));
     let (d, arts, lock) = plan::plan_init(&a, &Map::new());
     h.exit_is(&d, 0, "plan-init exit code 0");
@@ -1083,7 +1045,6 @@ fn plan_cases(h: &mut Harness) {
         "plan-init carries lock text",
     );
 
-    // ---- gen-plan (empty tree ⇒ empty plan) ----
     let empty = tmpdir("gen-plan");
     let (d, arts) = plan::gen_plan(&empty, &Map::new());
     h.exit_is(&d, 0, "gen-plan empty tree exit code 0");
@@ -1109,15 +1070,6 @@ fn emit_cases(h: &mut Harness) {
     let parsed: Result<toml::Value, _> = text.parse();
     h.check(parsed.is_ok(), "emitted TOML can be re-parsed");
 }
-
-// ------------------------------------------------------------------ entry
-
-// ================================================================== agent-B: added self-tests
-//
-// Covers: closure / cycle path (V-3) / phase monotonicity without false positives (V-8) /
-// version advance table (V-4) / three append-vs-modify classes (V-15) / hash input completeness
-// (V-17) / publish idempotence (V-5) / empty-unfreeze refreeze (V-16) / dev vs release (V-14) /
-// budget delta (V-7) / IRQ exclusivity (V-19④) / PRIV-0001 (V-19①②) / requires_iface outside the closure (V-10).
 
 use crate::check;
 use crate::iface;
@@ -1222,8 +1174,6 @@ fn platform_toml(name: &str, phase: &str, extra: &str) -> String {
     )
 }
 
-// ------------------------------------------------------------------ V-3 cycle path
-
 fn cycle_cases(h: &mut Harness) {
     let root = tmpdir("cycle");
     write(&root, "p-one/brick.toml", &ability_toml("p-one", "service", "late", "[[dep]]\nname = \"p-two\"\nrange = \">=0.1.0\"\nkind = \"init\"\n"));
@@ -1262,7 +1212,6 @@ fn cycle_cases(h: &mut Harness) {
         "V-3: with a cycle topo_order still covers every node",
     );
 
-    // runtime/type cycles only report info
     let root2 = tmpdir("cycle-rt");
     write(&root2, "r-one/brick.toml", &ability_toml("r-one", "service", "late", "[[dep]]\nname = \"r-two\"\nrange = \">=0.1.0\"\nkind = \"runtime\"\n"));
     write(&root2, "r-two/brick.toml", &ability_toml("r-two", "service", "late", "[[dep]]\nname = \"r-one\"\nrange = \">=0.1.0\"\nkind = \"runtime\"\n"));
@@ -1283,10 +1232,7 @@ fn cycle_cases(h: &mut Harness) {
     );
 }
 
-// ------------------------------------------------------------------ V-8 phase
-
 fn phase_check_cases(h: &mut Harness) {
-    // negative: A(core, io) init-> B(late, service)
     let bad = tmpdir("phase-bad2");
     write(&bad, "phase-a/brick.toml", &ability_toml("phase-a", "io", "core", "[[dep]]\nname = \"phase-b\"\nrange = \">=0.1.0\"\nkind = \"init\"\n"));
     write(&bad, "phase-b/brick.toml", &ability_toml("phase-b", "service", "late", ""));
@@ -1298,14 +1244,12 @@ fn phase_check_cases(h: &mut Harness) {
         "V-8(R1): message names both sides",
     );
 
-    // positive (no false positive): sched-coop(core) → platform/qemu-aarch64(core)
     let ok = tmpdir("phase-ok2");
     write(&ok, "sched-coop/brick.toml", &ability_toml("sched-coop", "scheduler", "core", "[[dep]]\nname = \"platform/qemu-aarch64\"\nrange = \">=0.1.0\"\nkind = \"init\"\nphase = \"core\"\n"));
     write(&ok, "platform/qemu-aarch64/brick.toml", &platform_toml("platform/qemu-aarch64", "core", ""));
     let resp = check::run(&mk_req("check", &ok, json!({"profile": "dev"})));
     h.eq(resp.exit_code, 0, "V-8: sched-coop→platform is no false positive ⇒ exit code 0");
     h.check(!has_code(&resp, "BRV-DEP-0009"), "V-8: does not report BRV-DEP-0009");
-    // init topological order: provider (platform) before consumer (sched-coop)
     let sol_ok = solver::solve(&model::load_tree(&ok), "dev", false);
     h.eq(
         sol_ok.closure.topo_order.clone(),
@@ -1313,14 +1257,12 @@ fn phase_check_cases(h: &mut Harness) {
         "§7.2: topo_order is the init order (provider first)",
     );
 
-    // R2: assertion earlier than the provider's own phase ⇒ DEP-0010
     let r2 = tmpdir("phase-r2");
     write(&r2, "phase-c/brick.toml", &ability_toml("phase-c", "io", "core", "[[dep]]\nname = \"phase-d\"\nrange = \">=0.1.0\"\nkind = \"init\"\nphase = \"early\"\n"));
     write(&r2, "phase-d/brick.toml", &ability_toml("phase-d", "io", "core", ""));
     let resp = check::run(&mk_req("check", &r2, json!({"profile": "dev"})));
     h.check(has_code(&resp, "BRV-DEP-0010"), "V-8(R2): assertion conflicts with provider's own phase ⇒ BRV-DEP-0010");
 
-    // R2 positive: assertion later than the provider ⇒ no report
     let r2ok = tmpdir("phase-r2ok");
     write(&r2ok, "phase-e/brick.toml", &ability_toml("phase-e", "service", "late", "[[dep]]\nname = \"phase-f\"\nrange = \">=0.1.0\"\nkind = \"init\"\nphase = \"late\"\n"));
     write(&r2ok, "phase-f/brick.toml", &ability_toml("phase-f", "io", "core", ""));
@@ -1329,10 +1271,7 @@ fn phase_check_cases(h: &mut Harness) {
     h.check(!has_code(&resp, "BRV-DEP-0009"), "V-8(R1): core ≤ late is legal");
 }
 
-// ------------------------------------------------------------------ V-7 version / budget
-
 fn version_solver_cases(h: &mut Harness) {
-    // out-of-range range ⇒ VER-0002
     let root = tmpdir("ver-range");
     write(&root, "ver-a/brick.toml", &ability_toml("ver-a", "service", "late", "[[dep]]\nname = \"ver-b\"\nrange = \">=2.0.0\"\nkind = \"runtime\"\n"));
     write(&root, "ver-b/brick.toml", &ability_toml("ver-b", "service", "late", ""));
@@ -1340,7 +1279,6 @@ fn version_solver_cases(h: &mut Harness) {
     h.eq(resp.exit_code, 1, "V-7: out-of-range range ⇒ exit code 1");
     h.check(has_code(&resp, "BRV-VER-0002"), "V-7: out-of-range range ⇒ BRV-VER-0002");
 
-    // mutually exclusive ranges ⇒ DEP-0011 (single-version policy)
     let root = tmpdir("ver-conflict2");
     write(&root, "ver-c/brick.toml", &ability_toml("ver-c", "service", "late", "[[dep]]\nname = \"ver-d\"\nrange = \">=2.0.0\"\nkind = \"runtime\"\n"));
     write(&root, "ver-d/brick.toml", &ability_toml("ver-d", "service", "late", ""));
@@ -1348,7 +1286,6 @@ fn version_solver_cases(h: &mut Harness) {
     let resp = check::run(&mk_req("check", &root, json!({"profile": "dev"})));
     h.check(has_code(&resp, "BRV-DEP-0011"), "V-7: mutually exclusive ranges ⇒ BRV-DEP-0011 (single-version policy)");
 
-    // missing dependency ⇒ MF-0001
     let miss = tmpdir("ver-miss");
     write(&miss, "ver-f/brick.toml", &ability_toml("ver-f", "service", "late", "[[dep]]\nname = \"no/such\"\nrange = \">=0.1.0\"\nkind = \"init\"\n"));
     let resp = check::run(&mk_req("check", &miss, json!({"profile": "dev"})));
@@ -1358,7 +1295,6 @@ fn version_solver_cases(h: &mut Harness) {
         "V-7: missing message names the dependency",
     );
 
-    // budget overrun ⇒ delta (V-19③)
     let bud = tmpdir("budget2");
     write(&bud, "platform/soc/brick.toml", &platform_toml("platform/soc", "core", "[[res]]\nkind = \"ram\"\nused_kib = 64\n"));
     write(&bud, "service/mem/brick.toml", &ability_toml("service/mem", "service", "late", "[[res]]\nkind = \"ram\"\nused_kib = 200\n"));
@@ -1376,23 +1312,18 @@ fn version_solver_cases(h: &mut Harness) {
     h.j(&resp.data["summary"]["closure"]["ram_kib"], json!(200), "S-14: platform [[res]] is capacity, not part of the consumer Σ");
 }
 
-// ------------------------------------------------------------------ V-12 cross-file / V-14 profile
-
 fn iface_crossfile_cases(h: &mut Harness) {
-    // skin points at a nonexistent unit ⇒ TAX-0018
     let root = tmpdir("skin-miss");
     write(&root, "iface/skin/brick.toml", "schema = 1\n[plugin]\nname = \"iface/skin\"\nplugin_type = \"interface\"\napi_type = \"native\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n[[export]]\napi_iface = \"native\"\nform = \"skin\"\nname = \"skin\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\nreexport_of = [\"service/nope#u\"]\n");
     let resp = check::run(&mk_req("check", &root, json!({"profile": "dev"})));
     h.check(has_code(&resp, "BRV-TAX-0018"), "V-12: skin points at a nonexistent unit ⇒ BRV-TAX-0018");
 
-    // skin classification mismatch ⇒ TAX-0018
     let root2 = tmpdir("skin-cls");
     write(&root2, "service/back/brick.toml", &ability_toml("service/back", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
     write(&root2, "iface/skin/brick.toml", "schema = 1\n[plugin]\nname = \"iface/skin\"\nplugin_type = \"interface\"\napi_type = \"runtime_adapter\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n[[export]]\napi_iface = \"runtime_adapter\"\nform = \"skin\"\nname = \"skin\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\nreexport_of = [\"service/back#u\"]\n");
     let resp = check::run(&mk_req("check", &root2, json!({"profile": "dev"})));
     h.check(has_code(&resp, "BRV-TAX-0018"), "V-12: skin classification mismatch ⇒ BRV-TAX-0018");
 
-    // unit name collision + symbol family collision
     let root3 = tmpdir("collide");
     write(&root3, "service/one/brick.toml", &ability_toml("service/one", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"dup\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\nsymbols = [\"symA\"]\n"));
     write(&root3, "service/two/brick.toml", &ability_toml("service/two", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"dup\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
@@ -1402,7 +1333,6 @@ fn iface_crossfile_cases(h: &mut Harness) {
         "§2 item 4: unit-level collision ⇒ reported",
     );
 
-    // V-14: same input, profile dev green / release red
     let root4 = tmpdir("profile14");
     write(&root4, "service/prov/brick.toml", &ability_toml("service/prov", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
     write(&root4, "service/cons/brick.toml", &ability_toml("service/cons", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"c\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n[[dep]]\nname = \"service/prov\"\nrange = \">=0.1.0\"\nkind = \"runtime\"\n[[compat.requires_iface]]\nid = \"service/prov#u\"\napi_iface = \"native\"\ncompat_gen = 0\nrange = \">=1.0.0\"\nmode = \"decl\"\n"));
@@ -1419,7 +1349,6 @@ fn iface_crossfile_cases(h: &mut Harness) {
         "V-14: under release VER-0004 is error",
     );
 
-    // V-10②: add/remove requires_iface, closure JSON stays byte-identical
     let with_iface = solver::run(&mk_req("closure", &root4, json!({"profile": "dev"})));
     let root5 = tmpdir("profile-noiface");
     write(&root5, "service/prov/brick.toml", &ability_toml("service/prov", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
@@ -1431,20 +1360,16 @@ fn iface_crossfile_cases(h: &mut Harness) {
         "V-10②: requires_iface does not affect closure data",
     );
 
-    // V-10③: iface show reports info only for requires_iface
     let show = iface::run(&mk_req("iface-show", &root4, json!({"id": "service/cons#c"})));
     h.check(
         has_code_sev(&show, "BRV-MF-0001", "info"),
         "V-10③: iface show reports info only for requires_iface",
     );
 
-    // V-11: iface show carries not_abi / truth / hash_scope
     h.j(&show.data["not_abi"], json!(true), "V-11①: not_abi=true");
     h.j(&show.data["truth"], json!("decl"), "V-11①: truth=decl");
     h.j(&show.data["hash_scope"], json!("decl"), "V-11①: hash_scope=decl");
 }
-
-// ------------------------------------------------------------------ V-19 privilege exclusivity / scheduling
 
 fn priv_and_sched_cases(h: &mut Harness) {
     let root = tmpdir("res-conflict2");
@@ -1458,7 +1383,6 @@ fn priv_and_sched_cases(h: &mut Harness) {
     );
     h.check(msg_of(&resp, "BRV-MF-0001").contains("irq `32`"), "V-19④: names the resource");
 
-    // V-19①②: PRIV rules (already reported at load time, check does not repeat)
     let privroot = tmpdir("priv19");
     write(&privroot, "service/p/brick.toml", &ability_toml("service/p", "service", "late", "[privileged]\nlevel = \"P2\"\n[[privileged.memory]]\ngranularity = \"page\"\nops = [\"map\"]\nregions = [\"mmio\"]\n"));
     let resp = check::run(&mk_req("check", &privroot, json!({"profile": "dev"})));
@@ -1467,7 +1391,6 @@ fn priv_and_sched_cases(h: &mut Harness) {
         !has_code(&resp, "BRV-PRIV-0002"),
         "§3.4: page×map×mmio is a legal combination (only the level is too low ⇒ PRIV-0001 only)",
     );
-    // genuinely illegal combination: map with granularity=pool ⇒ PRIV-0002
     let bad2 = tmpdir("priv19b2");
     write(&bad2, "service/pp/brick.toml", &ability_toml("service/pp", "service", "late", "[privileged]\nlevel = \"P4\"\n[[privileged.memory]]\ngranularity = \"pool\"\nops = [\"map\"]\nregions = [\"page\"]\n"));
     let resp2 = check::run(&mk_req("check", &bad2, json!({"profile": "dev"})));
@@ -1481,13 +1404,11 @@ fn priv_and_sched_cases(h: &mut Harness) {
         "V-19①: at least one PRIV-0001",
     );
 
-    // pool lifecycle is legal (P2)
     let pool = tmpdir("priv-pool");
     write(&pool, "service/q/brick.toml", &ability_toml("service/q", "service", "late", "[privileged]\nlevel = \"P2\"\n[[privileged.memory]]\ngranularity = \"pool\"\nops = [\"alloc\", \"free\"]\nregions = [\"contig\", \"page\"]\n"));
     let resp = check::run(&mk_req("check", &pool, json!({"profile": "dev"})));
     h.eq(resp.exit_code, 0, "V-19①: P2 pool lifecycle is legal ⇒ exit code 0");
 
-    // scheduling: TT_SAFE missing [sched.tt] ⇒ error
     let ttr = tmpdir("sched-tt");
     write(&ttr, "service/t/brick.toml", &ability_toml("service/t", "service", "late", ""));
     let p = ttr.join("service/t/brick.toml");
@@ -1499,7 +1420,6 @@ fn priv_and_sched_cases(h: &mut Harness) {
         "§2 item 3: TT_SAFE missing [sched.tt] ⇒ error",
     );
 
-    // COOP_ONLY × sched-preempt ⇒ error; × sched-coop ⇒ green
     let coopbad = tmpdir("sched-coopbad");
     write(&coopbad, "sched-preempt/brick.toml", &ability_toml("sched-preempt", "scheduler", "core", ""));
     write(&coopbad, "service/c/brick.toml", &ability_toml("service/c", "service", "late", ""));
@@ -1523,10 +1443,7 @@ fn priv_and_sched_cases(h: &mut Harness) {
     h.eq(resp.exit_code, 0, "§2 item 3: COOP_ONLY×coop ⇒ green (ruling R-5 name inference)");
 }
 
-// ------------------------------------------------------------------ V-4 advance table
-
 fn advance_plan_cases(h: &mut Harness) {
-    // version::advance line by line (version_matrix already covers most; here plan_version combinations)
     let hard = vec![iface::Change {
         kind: "CHANGED",
         name: "f".into(),
@@ -1555,38 +1472,30 @@ fn advance_plan_cases(h: &mut Harness) {
     }];
     h.check(removed_frozen[0].is_hard(), "V-15: REMOVED/frozen ⇒ unfreeze required");
 
-    // (a) change frozen ⇒ compat_gen+1 only, major unchanged, minor/revise zeroed
     let a = version::advance(Version::new(0, 1, 4, 7), version::Event::CompatGenBump);
     h.eq(a, Version::new(1, 1, 0, 0), "V-4(a): change frozen ⇒ compat_gen+1, minor/revise→0");
     h.eq(a.major, 1, "V-4(a): major unchanged");
-    // (c) major ⇒ MAJOR+1 only, compat_gen unchanged
     let c = version::advance(Version::new(3, 1, 4, 7), version::Event::MajorProduct);
     h.eq(c, Version::new(3, 2, 0, 0), "V-4(c): major ⇒ MAJOR+1 only, compat_gen unchanged");
     h.eq(c.compat_gen, 3, "V-4(c): compat_gen and major are independent");
-    // (b) added ⇒ compat_gen unchanged, minor+1
     let b = version::advance(Version::new(2, 5, 1, 9), version::Event::Added);
     h.eq(b, Version::new(2, 5, 2, 0), "V-4(b): added ⇒ compat_gen unchanged, MINOR+1");
-    // (d) minor
     h.eq(
         version::advance(Version::new(0, 1, 2, 3), version::Event::MinorFeature),
         Version::new(0, 1, 3, 0),
         "V-4(d): minor feature ⇒ MINOR+1",
     );
-    // (e) revise
     h.eq(
         version::advance(Version::new(0, 1, 2, 3), version::Event::ReviseFix),
         Version::new(0, 1, 2, 4),
         "V-4(e): bug fix ⇒ REVISE+1",
     );
-    // (f) empty unfreeze ⇒ all four segments unchanged
     h.eq(
         version::advance(Version::new(2, 3, 4, 5), version::Event::EmptyUnfreeze),
         Version::new(2, 3, 4, 5),
         "V-4(f): empty unfreeze ⇒ all four segments unchanged",
     );
 }
-
-// ------------------------------------------------------------------ V-15 append vs modify + IFACE-IR
 
 fn iface_ir_cases(h: &mut Harness) {
     let mk = |kind: &str, name: &str, sig: Option<&str>, layout: Option<&str>, value: Option<&str>, ops: Vec<&str>| iface::Entry {
@@ -1599,7 +1508,6 @@ fn iface_ir_cases(h: &mut Harness) {
         status: "frozen".into(),
     };
 
-    // V-15: three append vs modify classes
     let e1 = mk("enum", "color", None, None, Some("RED,GREEN"), vec![]);
     let e2 = mk("enum", "color", None, None, Some("RED,GREEN,BLUE"), vec![]);
     let e3 = mk("enum", "color", None, None, Some("GREEN,RED,BLUE"), vec![]);
@@ -1618,7 +1526,6 @@ fn iface_ir_cases(h: &mut Harness) {
     let m2 = mk("macro", "M", None, None, Some("4096"), vec![]);
     h.eq(iface::classify_modify(&m1, &m2), "CHANGED", "V-15: macro value change ⇒ CHANGED");
 
-    // V-17: hash input completeness
     let base = vec![
         mk("macro", "BR_MAX", None, None, Some("16"), vec![]),
         mk("service", "svc", None, None, None, vec!["open"]),
@@ -1701,7 +1608,6 @@ fn iface_ir_cases(h: &mut Harness) {
         "§6.2 rule 4: no substring replacement",
     );
 
-    // change_set kinds
     let old = iface::Surface {
         id: "p#u".into(),
         entries: vec![
@@ -1724,8 +1630,6 @@ fn iface_ir_cases(h: &mut Harness) {
     h.check(kinds.contains(&"REMOVED"), "V-15: change_set contains REMOVED");
     h.check(kinds.contains(&"EXTENDED"), "V-15: change_set contains EXTENDED (enum end)");
 }
-
-// ------------------------------------------------------------------ V-5 publish idempotence + V-11
 
 const PUB_UNIT: &str = "service/pub/brick.toml";
 fn pub_toml(macro_value: &str) -> String {
@@ -1778,7 +1682,6 @@ fn publish_cases(h: &mut Harness) {
     h.j(&r2.data["noop"], json!(true), "V-5: data.noop = true");
     h.j(&r2.data["version"], json!("0.1.0.0"), "V-5: no-op does not advance segments");
 
-    // two runs are byte-identical (fresh tree + same input)
     let root_b = tmpdir("publish-b");
     write(&root_b, PUB_UNIT, &pub_toml("16"));
     let rb = iface::run(&mk_req("iface-publish", &root_b, json!({"id": "service/pub#u"})));
@@ -1788,7 +1691,6 @@ fn publish_cases(h: &mut Harness) {
         "§4: two publishes of the same input are byte-identical",
     );
 
-    // V-17 + V-5: after changing BR_MAX status is inconsistent, consistent after publish
     let st0 = iface::run(&mk_req("iface-status", &root, json!({"id": "service/pub#u", "check": true})));
     h.j(&st0.data["consistent"], json!(true), "V-5: after publish status --check is consistent");
     h.eq(st0.exit_code, 0, "V-5: status --check exit code 0");
@@ -1808,8 +1710,6 @@ fn publish_cases(h: &mut Harness) {
     h.j(&st2.data["consistent"], json!(true), "V-5: after republishing status is consistent");
 }
 
-// ------------------------------------------------------------------ V-16 unfreeze window
-
 fn freeze_window_cases(h: &mut Harness) {
     let root = tmpdir("unfreeze");
     let toml_frozen = "schema = 1\n[plugin]\nname = \"service/w\"\nplugin_type = \"ability\"\napi_type = \"native\"\n\
@@ -1824,11 +1724,9 @@ fn freeze_window_cases(h: &mut Harness) {
     apply_files(&root, &r0);
     let ver0 = r0.data["to"].clone();
 
-    // no note ⇒ error
     let r1 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "service/w#u"})));
     h.eq(r1.exit_code, 1, "V-16: unfreeze without --note ⇒ error");
 
-    // frozen ⇒ unfreezing
     let r2 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "service/w#u", "note": "NOTE.md"})));
     h.eq(r2.exit_code, 0, "V-16: unfreeze succeeds");
     h.j(&r2.data["freeze_state"], json!("unfreezing"), "V-16: enters the unfreeze window");
@@ -1836,14 +1734,12 @@ fn freeze_window_cases(h: &mut Harness) {
     h.check(snap_text.contains("baseline_hash"), "ruling R-7: baseline recorded in the snapshot");
     apply_files(&root, &r2);
 
-    // release inside the window ⇒ IFACE-0009
     let rel = check::run(&mk_req("check", &root, json!({"profile": "release"})));
     h.eq(rel.exit_code, 1, "V-16: release inside the window ⇒ exit code 1");
     h.check(has_code(&rel, "BRV-IFACE-0009"), "V-16: release inside the window ⇒ BRV-IFACE-0009");
     let dev = check::run(&mk_req("check", &root, json!({"profile": "dev"})));
     h.eq(dev.exit_code, 0, "V-16: dev inside the window ⇒ exit code 0");
 
-    // empty unfreeze refreeze ⇒ all four segments unchanged
     let r3 = iface::run(&mk_req("iface-refreeze", &root, json!({"id": "service/w#u"})));
     h.eq(r3.exit_code, 0, "V-16: refreeze succeeds");
     h.j(&r3.data["empty_unfreeze"], json!(true), "V-16: detected as an empty unfreeze");
@@ -1852,7 +1748,6 @@ fn freeze_window_cases(h: &mut Harness) {
     h.j(&r3.data["compat_gen_changed"], json!(false), "V-16: empty unfreeze does not bump COMPAT_GEN");
     apply_files(&root, &r3);
 
-    // unfreeze again → change a frozen struct → refreeze ⇒ compat_gen+1
     let r4 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "service/w#u", "note": "NOTE.md"})));
     apply_files(&root, &r4);
     write(&root, "service/w/brick.toml", &toml_frozen.replace("struct { u32 a; }", "struct { u32 a; u32 b; }"));
@@ -1868,12 +1763,10 @@ fn freeze_window_cases(h: &mut Harness) {
         "V-4(a): change set contains CHANGED",
     );
     apply_files(&root, &r5);
-    // not frozen cannot unfreeze (just refrozen back to frozen ⇒ can unfreeze; here only "entering the window")
     let r6 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "service/w#u", "note": "NOTE.md"})));
     h.eq(r6.exit_code, 0, "unfreeze requires frozen (just refrozen back to frozen)");
     apply_files(&root, &r6);
 
-    // S-19: record a hard change inside the window via `publish --note` ⇒ bump once; the later refreeze only closes the window.
     write(
         &root,
         "service/w/brick.toml",
@@ -1896,10 +1789,7 @@ fn freeze_window_cases(h: &mut Harness) {
     h.j(&p2.data["compat_gen"], cg1, "S-19: COMPAT_GEN is not bumped twice");
 }
 
-// ------------------------------------------------------------------ other gate hooks
-
 fn gate_cases(h: &mut Harness) {
-    // REMOVED (still frozen) ⇒ error (§6.3)
     let root = tmpdir("removed-gate");
     let toml_gone = "schema = 1\n[plugin]\nname = \"service/g\"\nplugin_type = \"ability\"\napi_type = \"native\"\n\
         subkind = \"service\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n\
@@ -1924,7 +1814,6 @@ fn gate_cases(h: &mut Harness) {
         "§6.3: message says REMOVED must be deprecated first",
     );
 
-    // iface freeze entry filtering: the proposal contains only the named entry
     let f = iface::run(&mk_req(
         "iface-freeze",
         &root,
@@ -1938,8 +1827,6 @@ fn gate_cases(h: &mut Harness) {
         "iface freeze: proposal contains only the named entry",
     );
 }
-
-// ------------------------------------------------------------------ dep commands
 
 fn dep_command_cases(h: &mut Harness) {
     let root = tmpdir("depcmds");
@@ -1988,7 +1875,6 @@ fn dep_command_cases(h: &mut Harness) {
     let content = idx.files[0]["content"].as_str().unwrap_or("");
     h.check(content.contains("\"schema\": 1"), "dep index: JSON contains schema");
     h.j(&idx.data["dependents"]["service/provider"][0]["from"], json!("service/consumer"), "dep index: reverse edge");
-    // idempotent
     let idx2 = solver::run(&mk_req("dep-index", &root, json!({})));
     h.eq(
         idx.files[0]["content"].clone(),
@@ -1996,8 +1882,6 @@ fn dep_command_cases(h: &mut Harness) {
         "dep index: byte-for-byte reproducible",
     );
 }
-
-// ------------------------------------------------------------------ version commands
 
 fn ver_command_cases(h: &mut Harness) {
     let root = tmpdir("vercmds");
@@ -2034,19 +1918,16 @@ fn ver_command_cases(h: &mut Harness) {
     let bad = iface::run(&mk_req("ver-bump", &root, json!({"id": "service/v#u", "rule": "compat_gen"})));
     h.eq(bad.exit_code, 2, "ver bump: compat_gen is not a rule ⇒ usage error 2");
 
-    // multi-export plugin addressed by plugin name ⇒ usage error
     let root2 = tmpdir("vermulti");
     write(&root2, "service/m/brick.toml", &ability_toml("service/m", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"a\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"b\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
     let amb = iface::run(&mk_req("ver-show", &root2, json!({"id": "service/m"})));
     h.eq(amb.exit_code, 2, "R-3: plugin name with multiple exports ⇒ usage error 2");
 
-    // iface list / show
     let list = iface::run(&mk_req("iface-list", &root, json!({})));
     h.j(&list.data["count"], json!(1), "iface list: count");
     h.j(&list.data["units"][0]["id"], json!("service/v#u"), "iface list: unit id");
     h.j(&list.data["units"][0]["published"], json!(true), "iface list: published");
 
-    // iface freeze: proposal only, no snapshot / no bump
     let f0 = iface::run(&mk_req("iface-freeze", &root, json!({"id": "service/v#u"})));
     h.eq(f0.exit_code, 1, "A-26: freeze without --note ⇒ error");
     write(&root, "NOTE.md", "note\n");
@@ -2083,7 +1964,6 @@ pub fn run() -> i32 {
     snapshot_and_lock_cases(&mut h);
     plan_cases(&mut h);
     emit_cases(&mut h);
-    // agent-B: domain cases for the three command families
     cycle_cases(&mut h);
     phase_check_cases(&mut h);
     version_solver_cases(&mut h);
@@ -2114,10 +1994,7 @@ pub fn run() -> i32 {
     }
 }
 
-// ================================================================== build family (ADR-0004)
-
-/// Minimal request (with context).
-/// Whether `Diags` contains a code (unlike the Response `has_code`: planning commands return Diags).
+/// Whether `Diags` contains a code (unlike the Response `has_code`: planning returns Diags).
 fn diags_code(d: &Diags, code: &str) -> bool {
     d.items().iter().any(|x| x.code.as_deref() == Some(code))
 }
@@ -2128,10 +2005,9 @@ fn mk_req_ctx(command: &str, root: &Path, args: Value, context: Value) -> Reques
     r
 }
 
-/// A minimal buildable synthetic tree: product.toml + platform (with [build.target]) + ability + app.
-///
-/// Real source files are written too (so globs match) -- the "plan" is **really** computed from the
-/// declaration surface, not mocked. Tool resolution is off via `context.path = ""`, so any machine replays it.
+/// Synthetic buildable tree: product.toml + platform (with [build.target]) + ability + app, plus
+/// source files so globs match; the plan is computed from the declaration surface, not mocked. Tool
+/// resolution is off via `context.path = ""`, so any machine replays it.
 fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
     write(root, "core/src/core.c", "int core_fn(void){return 0;}\n");
     write(root, "platform/fake/src/plat.c", "int plat_fn(void){return 0;}\n");
@@ -2173,7 +2049,6 @@ const TARGET_OK: &str = "[build.target]\narch = \"aarch64\"\ncross = \"aarch64-l
      cpu = \"cortex-a53\"\nmemory = \"128M\"\nextra = [\"-nographic\"]\n";
 
 fn build_cases(h: &mut Harness) {
-    // ---- pure functions: glob ----
     h.check(build::selftest_glob("*.c", "a.c"), "glob_match: *.c matches a.c");
     h.check(!build::selftest_glob("*.c", "a.h"), "glob_match: *.c does not match a.h");
     h.check(build::selftest_glob("a?c", "abc"), "glob_match: a?c matches abc");
@@ -2183,7 +2058,6 @@ fn build_cases(h: &mut Harness) {
     );
     h.check(!build::selftest_glob("*_test.c", "test_mem.c"), "glob_match: different prefix does not match");
 
-    // ---- pure functions: regex subset ----
     h.check(
         build::selftest_regex("pass=[0-9]* fail=0 ", "x pass=35 fail=0 y"),
         "regex: [0-9]* matches",
@@ -2225,7 +2099,6 @@ fn build_cases(h: &mut Harness) {
         "regex: every form used in gates.toml is inside the subset",
     );
 
-    // ---- plan: normal tree ----
     let root = tmpdir("build-ok");
     write_build_tree(&root, "", TARGET_OK);
     let req = mk_req_ctx(
@@ -2301,7 +2174,6 @@ fn build_cases(h: &mut Harness) {
         "build: plan fingerprint is sha256:...",
     );
 
-    // ---- plan: missing [build] ----
     let root2 = tmpdir("build-nobuild");
     write_build_tree(&root2, "", TARGET_OK);
     write(
@@ -2313,13 +2185,11 @@ fn build_cases(h: &mut Harness) {
     h.check(diags_code(&d2, build::CODE_NO_BUILD), "build: missing [build] ⇒ BRV-BLD-0001");
     h.exit_is(&d2, 2, "build: missing [build] is a shape error (exit code 2)");
 
-    // ---- plan: missing [build.target] ----
     let root3 = tmpdir("build-notarget");
     write_build_tree(&root3, "", "");
     let (d3, _) = build::selftest_plan(&root3, &mk_req_ctx("build", &root3, json!({}), json!({"path": ""})));
     h.check(diags_code(&d3, build::CODE_NO_TARGET), "build: no [build.target] ⇒ BRV-BLD-0003");
 
-    // ---- plan: both platforms declare target ----
     let root4 = tmpdir("build-ambiguous");
     write_build_tree(&root4, "", TARGET_OK);
     write(
@@ -2335,7 +2205,6 @@ fn build_cases(h: &mut Harness) {
         "build: two [build.target] ⇒ BRV-BLD-0004 (source of truth unclear)",
     );
 
-    // ---- plan: literal source path does not exist ----
     let root5 = tmpdir("build-missing-src");
     write_build_tree(&root5, "", TARGET_OK);
     write(
@@ -2351,24 +2220,20 @@ fn build_cases(h: &mut Harness) {
         "build: literal source path does not exist ⇒ BRV-BLD-0007",
     );
 
-    // ---- `**` glob + `gen_sources` closure filtering (hit before: a non-closure plugin's
-    //      descriptor got compiled into the image while its .c did not ⇒ undefined symbol at link) ----
+    // gen_sources: `**` must be closure-filtered; a stale/non-closure descriptor would link twice.
     let root8 = tmpdir("build-gen-src");
     write_build_tree(
         &root8,
         "gen_sources = [\"build/gen/**/plugin_desc.c\", \"generated/hand.c\"]\n",
         TARGET_OK,
     );
-    // in-closure plugin (app/m) artifacts + a plugin **outside the closure** (service/out)
     write(&root8, "build/gen/app/m/plugin_desc.c", "int app_desc;\n");
     write(&root8, "build/gen/service/out/plugin_desc.c", "int out_desc;\n");
-    // **stale leftover**: an old descriptor left on disk after a plugin rename/delete (no `third_party/uboot-mmc` in the tree)
     write(
         &root8,
         "build/gen/third_party/uboot-mmc/plugin_desc.c",
         "int ghost_desc;\n",
     );
-    // a path **outside** `build/gen/`: ownership is unknown so it must stay (hand-written artifacts are not the tool's call)
     write(&root8, "generated/hand.c", "int hand;\n");
     write(
         &root8,
@@ -2425,7 +2290,6 @@ fn build_cases(h: &mut Harness) {
         "gen_sources: a path outside `build/gen/` is kept even when ownership is unknown",
     );
 
-    // ---- gates: declaration surface and criteria ----
     let root6 = tmpdir("build-gates");
     write_build_tree(&root6, "", TARGET_OK);
     write(
@@ -2446,7 +2310,6 @@ fn build_cases(h: &mut Harness) {
     h.j(&list.data["scripts"], json!(["s1"]), "gates: script gate name list");
     h.j(&list.data["build_post"], json!(["s1"]), "gates: [build].post made it into the data");
 
-    // criterion: all green
     let good = "banner\nPASS TC-X-001 ok\npass=3 fail=0 \n";
     let r_good = build::run(&mk_req_ctx(
         "judge",
@@ -2461,7 +2324,6 @@ fn build_cases(h: &mut Harness) {
         "judge: failed count is 0",
     );
 
-    // criterion: missing require + forbid hit + missing case tag
     let bad = "banner only\n[PANIC] boom\n";
     let r_bad = build::run(&mk_req_ctx(
         "judge",
@@ -2485,7 +2347,6 @@ fn build_cases(h: &mut Harness) {
         "judge: failure diagnostics all carry BRV-BLD-0009",
     );
 
-    // criterion: unknown gate name
     let r_unknown = build::run(&mk_req_ctx(
         "judge",
         &root6,
@@ -2498,7 +2359,6 @@ fn build_cases(h: &mut Harness) {
     );
     h.check(r_unknown.exit_code == 2, "judge: unknown gate ⇒ usage error (exit code 2)");
 
-    // criterion: regex outside the subset ⇒ shape error (no silent non-match)
     let root7 = tmpdir("build-badregex");
     write_build_tree(&root7, "", TARGET_OK);
     write(
@@ -2513,7 +2373,6 @@ fn build_cases(h: &mut Harness) {
     );
     h.check(bad_re.exit_code == 2, "gates: regex outside the subset is a shape error (exit code 2)");
 
-    // ---- backend files (generated): all key lines must be present ----
     let (d8, data8) = build::selftest_plan(&root, &mk_req_ctx("build", &root, json!({}), json!({"path": ""})));
     h.exit_is(&d8, 0, "build: backend-render tree has no diagnostics");
     let mk = build::selftest_render_backend(&root, &req, "make");

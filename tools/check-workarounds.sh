@@ -1,14 +1,7 @@
 #!/usr/bin/env bash
-#
-# brickOS prototype v0.1.0 - WORKAROUND registry consistency check
-#
-# Why this script:
-#   A WORKAROUND is **debt**, and debt's worst case is "forgotten, and nobody knows it is owed".
-#   This script binds the two records together - the `WORKAROUND(<id>)` markers in the sources
-#   and the registry table in WORKAROUNDS.md. If either side gains or loses an entry, it is red.
-#
-# Usage: bash tools/check-workarounds.sh   (or make check-workarounds)
-# Exit code: 0 = consistent, 1 = inconsistent, 2 = usage/environment error
+# brickOS prototype — WORKAROUND registry consistency check: source WORKAROUND markers and the
+# registry table in WORKAROUNDS.md record the same debt, so a missing entry on either side is red.
+# Usage: bash tools/check-workarounds.sh (or make check-workarounds); exit 0 ok, 1 mismatch.
 
 set -uo pipefail
 
@@ -21,8 +14,8 @@ if [ ! -f "$REGISTRY" ]; then
     exit 2
 fi
 
-# Markers in the sources: WORKAROUND(<id>) - id looks like br-wa-xxx-000
-# Scan the whole tree but exclude build artifacts / VCS metadata / the checker itself / the registry.
+# Source markers WORKAROUND(<id>) (build/, .git/, tools/ and the registry excluded) vs. registry
+# table rows `| br-wa-xxx-000 |`.
 mapfile -t src_ids < <(
     grep -rhoE \
         --exclude-dir=build --exclude-dir=.git --exclude-dir=tools \
@@ -32,7 +25,6 @@ mapfile -t src_ids < <(
         | sort -u
 )
 
-# ids in the registry: table rows starting with `| br-wa-xxx-000 |`
 mapfile -t reg_ids < <(
     grep -oE '^\|[[:space:]]*br-wa-[a-z0-9-]+' "$REGISTRY" \
         | sed -E 's/^\|[[:space:]]*//' \
@@ -41,7 +33,7 @@ mapfile -t reg_ids < <(
 
 status=0
 
-# 1) marker in the sources but not registered
+# 1) source marker without a registry entry;  2) registry entry without a source marker
 for id in ${src_ids[@]+"${src_ids[@]}"}; do
     if ! printf '%s\n' ${reg_ids[@]+"${reg_ids[@]}"} | grep -qx "$id"; then
         echo "FAIL: source marks $id, but $REGISTRY has no such entry"
@@ -49,7 +41,6 @@ for id in ${src_ids[@]+"${src_ids[@]}"}; do
     fi
 done
 
-# 2) registered but no marker in the sources
 for id in ${reg_ids[@]+"${reg_ids[@]}"}; do
     if ! printf '%s\n' ${src_ids[@]+"${src_ids[@]}"} | grep -qx "$id"; then
         echo "FAIL: $REGISTRY registers $id, but the sources have no matching marker"

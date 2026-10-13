@@ -1,11 +1,7 @@
 # `brickie` Python Frontend (L5) — Module Map and Command Status
 
-> This file documents the **L5 (Python3 frontend)**: module layout, command status, call
-> sites into `brickie-core` / `brickie-gen`, zero-dependency notes, remaining TODOs and contract gaps.
-> Process-boundary contract: [`docs/contract.md`](../../docs/contract.md); design authority:
-> `Design/docs/2-toolchain/brickie/brickie-v0.1.md`; command-surface baseline:
-> `Design/docs/2-toolchain/brickie/checklist.md` §5.1.
-> Whole-tool overview (C++/Rust/build) in [`../../README.md`](../../README.md).
+> This file documents the **L5 (Python3 frontend)**: module layout, command status, call sites into `brickie-core` / `brickie-gen`, zero-dependency notes, remaining TODOs and contract gaps.
+> Process-boundary contract: [`docs/contract.md`](../../docs/contract.md); whole-tool overview (C++/Rust/build) in [`../../README.md`](../../README.md).
 
 ---
 
@@ -26,10 +22,7 @@ python/brickie/
 > `PAYLOAD_ROOTS` collects it directly into the entry ELF payload, see §4.3.
 ```
 
-**Hard rule** (contract §8 / V-18c): this package has **no business rules**. Closure, version
-ranges, topology, cycles, phase monotonicity, taxonomy, privileges, budgets, four-segment
-version advancement, IFACE-IR canonicalization and hashing, and any "machine file" content
-assembly all live in `brickie-core`. Permitted here: arg parsing / locate binaries / spawn subprocesses / read-write files / JSON serialization / **single-record shape** validation per schema.
+**Hard rule**: this package has **no business rules**. Closure, version ranges, topology, cycles, phase monotonicity, taxonomy, privileges, budgets, four-segment version advancement, IFACE-IR canonicalization and hashing, and any "machine file" content assembly all live in `brickie-core`. Permitted here: arg parsing / locate binaries / spawn subprocesses / read-write files / JSON serialization / **single-record shape** validation per schema.
 
 ### Orchestration Pipeline (same for every command)
 
@@ -46,9 +39,7 @@ exit code summary: 2 (usage/env) > 1 (validation red) > 0
 
 ## 2. Call Sites into `brickie-core` / `brickie-gen`
 
-Unified envelope (contract §2): one JSON line in on **stdin**, one JSON line out on **stdout**.
-Process exit code is always 0; the business exit code is in the response's `exit_code`; non-zero
-or protocol mismatch ⇒ `NativeError` (L5 exit code 2, protocol mismatch carries code `BRV-PROTO-0001`).
+Unified envelope: one JSON line in on **stdin**, one JSON line out on **stdout**. Process exit code is always 0; the business exit code is in the response's `exit_code`; non-zero or protocol mismatch ⇒ `NativeError` (L5 exit code 2, protocol mismatch carries code `BRV-PROTO-0001`).
 
 ### 2.1 Binary Lookup Order (`native._find_tool`)
 
@@ -87,8 +78,7 @@ or protocol mismatch ⇒ `NativeError` (L5 exit code 2, protocol mismatch carrie
 | `iface refreeze <id> [--note]` | `iface-refreeze` | `id,note?` | snapshot (may bump COMPAT_GEN) |
 | `--version [--deps]` | `version` | — | `{version,protocol,languages[],deps[]}` |
 
-`--check` appears in three places with two semantics: **`gen --check`** is a byte-for-byte compare
-by L5 (no write); **`iface status|publish --check`** passes through to core (core recomputes), L5 only skips writes.
+`--check` appears in three places with two semantics: **`gen --check`** is a byte-for-byte compare by L5 (no write); **`iface status|publish --check`** passes through to core (core recomputes), L5 only skips writes.
 
 ### 2.3 Two-Phase `new` / `init`
 
@@ -99,32 +89,25 @@ by L5 (no write); **`iface status|publish --check`** passes through to core (cor
 3. call `plan-new` again with `context.existing` (this run's diagnostics/exit code are authoritative);
 4. `brickie-gen render` → write to disk.
 
-`init` has the same shape (`plan-init`); contract §5.2 gives no `context` for `plan-init`, so we
-add it under the same discipline as `new` (extra fields ignored, but core then also has input for "never overwrite existing hand-written files").
+`init` has the same shape (`plan-init`); contract gives no `context` for `plan-init`, so we add it under the same discipline as `new` (extra fields ignored, but core then also has input for "never overwrite existing hand-written files").
 
-`gen render` args per contract §6: `args = {templates_root, artifacts:[{path,template,vars}]}`;
-the request top level also carries a legacy first-cut `templates_root` (for implementations not yet migrated to the new contract).
+`gen render` args: `args = {templates_root, artifacts:[{path,template,vars}]}`; the request top level also carries a legacy first-cut `templates_root`.
 
 ### 2.4 core Passes "Machine File" Body Directly (lock)
 
-`plan-init`'s plan includes `brickie.lock`, but it is **`kind = "machine"` and `template = ""`** —
-machine file bodies belong to core (contract §4); L5 must not assemble them. The current core
-implementation puts the body in `data.lock_content`, so `cli._collect_files` uses a path→key map
-(`_CORE_CONTENT_KEYS = {"brickie.lock": "lock_content"}`) to place that body at the planned path:
+`plan-init`'s plan includes `brickie.lock`, but it is **`kind = "machine"` and `template = ""`** — machine file bodies belong to core; L5 must not assemble them. The current core implementation puts the body in `data.lock_content`, so `cli._collect_files` uses a path→key map (`_CORE_CONTENT_KEYS = {"brickie.lock": "lock_content"}`) to place that body at the planned path:
 
 * artifacts with a non-empty `template` → `brickie-gen render`;
 * artifacts without `template` → only `artifact.content` or `data.<mapped key>` **direct body** accepted;
 * neither present ⇒ one **info** diagnostic (never silently swallowed, and L5 never becomes a content producer).
 
-This mapping is the channel recorded in the rust-side README "deviations from contract" (contract §5.2 only mentions the "plan");
-once core is finalized, if it uses templates or writes into `files`, just delete this mapping (single-point switch).
+Once core is finalized, if it uses templates or writes into `files`, just delete this mapping (single-point switch).
 
 ---
 
 ## 3. Command Status
 
-**Delivered (full frontend)**: 23 leaf commands + 2 global switches, all visible in `--help` and
-exercising orchestration/write/presentation/exit codes. `checklist` §5.1 C-01…C-23 and G-01/G-02 land item by item on the **L5 side**.
+**Delivered (full frontend)**: 23 leaf commands + 2 global switches, all visible in `--help` and exercising orchestration/write/presentation/exit codes; `checklist` §5.1 C-01…C-23 and G-01/G-02 land item by item on the **L5 side**.
 
 | Group | Command | L5 frontend | Native side depended on |
 |---|---|---|---|
@@ -142,33 +125,26 @@ exercising orchestration/write/presentation/exit codes. `checklist` §5.1 C-01�
 | Interface | `iface freeze/deprecate/undeprecate/unfreeze/refreeze` | ✅ | same-named core commands |
 | Global | `--version [--deps]` / `--json` / `--root` | ✅ | `core version` (`--version` degrades when core absent) |
 
-**Explicitly not done** (checklist §5.4; none appear in `--help`): `build` / `test` / `run` /
-`api-dump` / `verify` / `iface check` / `dbg` / `pack` / `add` / `show` / `env`.
+**Explicitly not done** (none appear in `--help`): `build` / `test` / `run` / `api-dump` / `verify` / `iface check` / `dbg` / `pack` / `add` / `show` / `env`.
 
-**Exit codes** (BRV-D9): `0` success / `1` validation red (including `gen --check` mismatch) / `2` usage or environment error
-(invalid args, schema shape mismatch, missing `--root`, missing native binaries or protocol mismatch).
+**Exit codes**: `0` success / `1` validation red (including `gen --check` mismatch) / `2` usage or environment error (invalid args, schema shape mismatch, missing `--root`, missing native binaries or protocol mismatch).
 
 ---
 
-## 4. schema Shape Validation (BRV-D2)
+## 4. schema Shape Validation
 
 ### 4.1 Allowed Subset and Zero Dependencies
 
-`schema.py` **ships a minimal JSON-Schema subset**, standard library only (**no `jsonschema`**, honoring §9.3's
-"zero third-party dependencies" rule). Supported keywords (no more than needed, see module docstring):
+`schema.py` **ships a minimal JSON-Schema subset**, standard library only (**no `jsonschema`**, honoring the "zero third-party dependencies" rule). Supported keywords:
 
 ```
 type / properties / required / items / enum / oneOf /
 additionalProperties / minimum / pattern
 ```
 
-This is a **smaller allowed subset** — not a "complete JSON-Schema implementation", and **not meant** to become one: it only needs to
-cover the four files under `schema/`. To support `$ref`/`if-then`/`format` later, register it in
-contract §9 first rather than quietly widening L5's decision surface.
+This is a **smaller allowed subset** — not a "complete JSON-Schema implementation", and **not meant** to become one: it only needs to cover the four files under `schema/`. To support `$ref`/`if-then`/`format` later, register it in contract §9 first rather than quietly widening L5's decision surface.
 
-**Deliberately not in schema**: version-string segment count (VER-0005), `range` semantics (VER-0006),
-`api_iface == api_type` (TAX-0016), `compat_gen` required (VER-0003), closure and phases.
-These are **cross-field/cross-file invariants** reported by core; putting them in schema would mask core codes as MF-0001.
+**Deliberately not in schema**: version-string segment count (VER-0005), `range` semantics (VER-0006), `api_iface == api_type` (TAX-0016), `compat_gen` required (VER-0003), closure and phases. These are **cross-field/cross-file invariants** reported by core; putting them in schema would mask core codes as MF-0001.
 
 ### 4.2 Record Types and Files
 
@@ -179,20 +155,13 @@ These are **cross-field/cross-file invariants** reported by core; putting them i
 | `lock` | `<root>/brickie.lock` | **Not fixed** | try TOML then fall back to JSON (lenient) |
 | `index` | `build/index/dependents.json` | JSON | `json` |
 
-Shape failure ⇒ diagnostic `BRV-MF-0001` (error), exit code **2**; parse failure (TOML/JSON syntax) same code.
-span uses TOML path (e.g. `export[0].entries[2].sig`), `file` relative to `root` (contract §3).
+Shape failure ⇒ diagnostic `BRV-MF-0001` (error), exit code **2**; parse failure (TOML/JSON syntax) same code. span uses TOML path (e.g. `export[0].entries[2].sig`), `file` relative to `root`.
 
-**Actual per-command gate scope**: `plugin` + `product`. `lock` / `index` are **core-produced machine
-files** whose field sets are not fixed in v0.1 (`W-17` "does lock include freeze generation" undecided); gating too early would misjudge core
-output as a shape error ⇒ these two schemas are exposed only to this module and tests via `schema.load_schema()` /
-`schema.validate_record()` / `schema.check_declaration()`.
-Once core is finalized, add `("lock","index")` to `cli._shape_gate`'s `kinds` (single switch).
+**Actual per-command gate scope**: `plugin` + `product`. `lock` / `index` are **core-produced machine files** whose field sets are not fixed in v0.1 (`W-17` "does lock include freeze generation" undecided); gating too early would misjudge core output as a shape error ⇒ these two schemas are exposed only to this module and tests via `schema.load_schema()` / `schema.validate_record()` / `schema.check_declaration()`. Once core is finalized, add `("lock","index")` to `cli._shape_gate`'s `kinds` (single switch).
 
 ### 4.3 schema Location (the payload carries the canonical copy)
 
-`freeze.py`'s `PAYLOAD_ROOTS = ("python", "templates", "schema")` — `schema/**` travels with the
-entry ELF payload and unpacks to `<tool_root>/schema/`. So the single-file form's shape gate no longer needs the
-source tree; the old "in-package symlink mirror" (`python/brickie/schema/`) is deleted, no need to maintain two copies.
+`freeze.py`'s `PAYLOAD_ROOTS = ("python", "templates", "schema")` — `schema/**` travels with the entry ELF payload and unpacks to `<tool_root>/schema/`. So the single-file form's shape gate no longer needs the source tree; the old "in-package symlink mirror" (`python/brickie/schema/`) is deleted.
 
 `schema.schema_search_roots()` still searches four tiers (first hit wins):
 
@@ -203,24 +172,16 @@ source tree; the old "in-package symlink mirror" (`python/brickie/schema/`) is d
 
 If none of the four is found, **degrade to skipping shape validation** with one info diagnostic (no false kill, no silence).
 
-> Note: `schema.py`'s docstring and the list above still describe tier 2 as "in-package mirror (only
-> this copy enters the entry ELF payload)", which no longer matches reality — the directory is gone; it is only a
-> harmless early fallback and code behavior is unaffected. Changing `schema.py` is out of scope for this doc sync; recorded here to close later.
+> `schema.py`'s docstring and the list above still describe tier 2 as "in-package mirror"; the directory is gone, so it is only a harmless early fallback and code behavior is unaffected. Changing `schema.py` is out of scope for this doc sync; recorded here to close later.
 
 ---
 
 ## 5. Presentation Discipline
 
-* Text and `--json` are two serializations of the **same `data`** (contract §8 / BRV-D2 discipline 2);
-  the `--json` envelope is `{protocol,status,command,exit_code,diagnostics,data,written}`
-  (`files` contents are transport detail, not in JSON output; write results shown via `written`).
-* Diagnostics under `--json` are **stably sorted** by `(code, file, span, target)` (contract §3);
-  text diagnostics go to stderr, data to stdout.
-* The artifact list for `new` / `init` / `gen` comes from `data.artifacts`; each artifact's status
-  (written / up to date / skipped) is the same write result.
-* Commands whose `data` shape is not fixed by contract (`ver bump` / `iface publish` / `iface freeze` family)
-  use a **lenient renderer**: known fields printed line by line, unknown composite structures as indented JSON — no rework after integration,
-  and no exceptions from missing fields.
+* Text and `--json` are two serializations of the **same `data`**; the `--json` envelope is `{protocol,status,command,exit_code,diagnostics,data,written}` (`files` contents are transport detail, not in JSON output; write results shown via `written`).
+* Diagnostics under `--json` are **stably sorted** by `(code, file, span, target)`; text diagnostics go to stderr, data to stdout.
+* The artifact list for `new` / `init` / `gen` comes from `data.artifacts`; each artifact's status (written / up to date / skipped) is the same write result.
+* Commands whose `data` shape is not fixed by contract (`ver bump` / `iface publish` / `iface freeze` family) use a **lenient renderer**: known fields printed line by line, unknown composite structures as indented JSON — no rework after integration, and no exceptions from missing fields.
 
 ---
 
@@ -246,20 +207,11 @@ If none of the four is found, **degrade to skipping shape validation** with one 
 
 ### 7.1 Stubs (reproduce the full L5 command surface end to end)
 
-Before `brickie-core` is ready, two **temporary stubs** (fixed JSON replies only, **not committed**) verify L5:
-point `$BRICKIE_CORE` / `$BRICKIE_GEN` at the stub scripts, then run commands one by one. Stubs cover:
-6 artifacts for four skeleton types, byte-idempotent repeated `gen`, `gen --check` consistent/inconsistent states,
-`check` 0/1 states, shape mismatch (exit 2), protocol mismatch (`BRV-PROTO-0001`), missing native binaries,
-`--json` global/per-command equivalence and snapshot stability, stable diagnostic ordering, `--help` negative acceptance, `init` writes,
-orchestration and presentation of `dep *` / `ver *` / `iface *`. At delivery this suite was **129 items all green**.
+Before `brickie-core` is ready, two **temporary stubs** (fixed JSON replies only, **not committed**) verify L5: point `$BRICKIE_CORE` / `$BRICKIE_GEN` at the stub scripts, then run commands one by one. Stubs cover: 6 artifacts for four skeleton types, byte-idempotent repeated `gen`, `gen --check` consistent/inconsistent states, `check` 0/1 states, shape mismatch (exit 2), protocol mismatch (`BRV-PROTO-0001`), missing native binaries, `--json` global/per-command equivalence and snapshot stability, stable diagnostic ordering, `--help` negative acceptance, `init` writes, orchestration and presentation of `dep *` / `ver *` / `iface *`. At delivery this suite was **129 items all green**.
 
 ### 7.2 Real Native Binaries (`build/host/<triple>/bin/{brickie-core,brickie-gen}`)
 
-At delivery one integration pass was run with real core/gen, **34 items all green**: `new` for four types × `c` (6 artifacts each,
-descriptor first-line marker), repeated `new` conflict red (`BRV-GEN-0002`), `--force` only on generated dirs,
-real core output passing the L5 shape gate, `gen` idempotence and `--check`, `init` writing 8 files (incl. `brickie.lock`),
-`dep add/rm` not writing, `--version --deps` fingerprint, `--json` equivalence and envelope shape. After the full core
-command surface landed, end-to-end regression moved to `tools/brickie/tests/run.sh` (see V-1…V-19 matrix in `tests/ACCEPTANCE.md`).
+At delivery one integration pass was run with real core/gen, **34 items all green**: `new` for four types × `c` (6 artifacts each, descriptor first-line marker), repeated `new` conflict red (`BRV-GEN-0002`), `--force` only on generated dirs, real core output passing the L5 shape gate, `gen` idempotence and `--check`, `init` writing 8 files (incl. `brickie.lock`), `dep add/rm` not writing, `--version --deps` fingerprint, `--json` equivalence and envelope shape. After the full core command surface landed, end-to-end regression moved to `tools/brickie/tests/run.sh` (see V-1…V-19 matrix in `tests/ACCEPTANCE.md`).
 
 ## 8. Running Locally
 

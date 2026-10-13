@@ -1,22 +1,12 @@
 #!/usr/bin/env bash
-#
-# brickOS prototype — the **self-recursion** gate for compiler support routines (core/src/string.c)
-#
-# Why this gate is worth having: in `core/src/string.c`, the pair of fixed-8 `__builtin_memcpy`
-#   calls was once lowered by GCC into a libcall to **memcpy itself** ⇒ infinite recursion ⇒ the
-#   stack grew without bound, punched through the 64 KiB boot stack, and exception frames landed
-#   in the .bss page tables ⇒ the symptom was "translation fault at boot, with the original fault
-#   context lost". Such bugs "compile fine and even run fine on the host" (the host links libc);
-#   **only the disassembly shows them** -- hence a mechanical criterion: none of the four routines
-#   may contain a `bl` to itself. (The criterion bans self-recursion only, not legitimate calls
-#   like memmove→memcpy.)
-#
-# Usage: bash tools/check-string.sh [<obj>] [<objdump>]
-#   default <obj>     = build/obj/core/src/string.o
-#                     (convention = product.toml [build].obj_dir + source-relative path + `.o`,
-#                      same shape as brickie's `<obj_dir>/<src>.o`; a missing file ⇒ red)
-#   default <objdump> = aarch64-linux-gnu-objdump → versioned variants → objdump
-# Exit code: 0 = consistent, 1 = self-recursion present, 2 = usage/environment error
+# brickOS prototype — self-recursion gate for compiler support routines (core/src/string.c).
+# A `bl` to itself means a libcall lowered to the routine itself: unbounded recursion, a blown
+# boot stack and lost fault context. Host builds hide it (libc), so check the disassembly: no
+# memcpy/memmove/memset/memcmp self-call (legitimate calls like memmove->memcpy are allowed).
+# Usage: bash tools/check-string.sh [<obj>] [<objdump>]; <obj> defaults to
+#   build/obj/core/src/string.o (product.toml [build].obj_dir + source path + .o; absent => red);
+#   <objdump> defaults to cross objdump -> versioned variants -> objdump.
+#   Exit 0 consistent, 1 self-recursion present, 2 usage/environment error.
 
 set -uo pipefail
 

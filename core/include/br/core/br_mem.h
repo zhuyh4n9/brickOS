@@ -1,80 +1,50 @@
 /*
- * brickOS prototype v0.1.0 — memory (mem) contract: TLSF heap / contig pool / page pool / DMA
- *
- * Authoritative design: `docs/3-os-core/3-01-core-api-list.md` §6 (br-mem group,
- * **11 functions**)
- *   + CA-7 (contiguous memory = separate contig pool, not through TLSF) / CA-8
- *     (page allocator = static bitmap + first fit)
- *   + `docs/3-os-core/3-04-memory.md` (three pools carved from the platform region
- *     table; "heap boot timing: init point = core.init" [3-04 §3])
- *   + `docs/5-debug/5-01-debug.md` §4 (redzone/poison/canary = cheap v1.x substitute;
- *     per-plugin arena accounting = v2, this prototype approximates it with an
- *     "owner label").
- *
- * Where the three pools come from: **core does not own RAM, it only claims
- * regions** (3-01 §6, verbatim: "the platform region table carves RAM into heap /
- * contig pool / page pool, ratio = manifest budget"). So the input to
- * `br_mem_init()` is the region table in `br_mm.h`: claim by
- * `BR_MM_KIND_HEAP/CONTIG/PAGE/DMA`, build one pool each.
- *
- * The three kinds of content in this header (CA-5 accounting must be explicit, see
- * ADR-0003):
- *   (1) **the 11 design-mandated functions** (native surface, names/signatures
- *       verbatim with 3-01 §6): malloc family 4 + contig 2 + page 2 + dma 2 +
- *       heap_usage 1;
- *   (2) **observation contract** (consumed by the memleak plugin; the consumer is a
- *       plugin ⇒ it cannot hide inside core — same shape as 3-02 §17.4's treatment
- *       of `br_irq_stats_get`): stats / walk / check / pool layout;
- *   (3) **accounting contract** (the v1.x deliverable form of 5-01 §4 "per-plugin
- *       arena accounting"): owner label registration + current owner switching.
+ * Memory (mem) contract: TLSF heap, contig pool, page pool and DMA. Core does not own RAM, it
+ * claims regions: br_mem_init() takes the region table from br_mm.h by kind
+ * (BR_MM_KIND_HEAP/CONTIG/PAGE/DMA) and builds one pool each. Contents: the 11 design-mandated
+ * functions, the observation contract (consumed by plugins), and the owner-label accounting.
  */
 #ifndef BR_CORE_BR_MEM_H
 #define BR_CORE_BR_MEM_H
 
 #include <br/core/br_types.h>
 
-/* ---------------------------------------------------------------- constants */
-/* **Minimum alignment** of blocks returned by the heap. Design 3-01 §6 gives no
- * value; rationale for choosing 16 B (ADR-0003): AAPCS64 requires SP 16-aligned ⇒
- * the natural alignment upper bound for structs/stack objects is 16; TLSF natively
- * aligning to 4/8 would create the trap that "a malloc'd buffer cannot hold an
- * __attribute__((aligned(16))) object". Case TC-MEM-001 asserts `>= BR_MALLOC_ALIGN`. */
+/* ---- constants ---- */
+/* Minimum alignment of heap blocks: 16 B so a malloc'd buffer can hold any AAPCS64-natural
+ * object (TC-MEM-001 asserts >= BR_MALLOC_ALIGN). */
 #define BR_MALLOC_ALIGN   16u
 
-/* Page granularity (design 3-01 §6: **platform compile-time constant**). This
- * prototype fixes 4 KiB (of CA-8's 4K/16K/64K, 4K is the most common on QEMU virt +
- * aarch64, and page pool/page table/L3 descriptor granularity agree). The platform
- * must carve pools at this granularity in the br_mm.h region table. */
+/* Page granularity, fixed to 4 KiB on this prototype (of CA-8's 4K/16K/64K it is the most common
+ * on QEMU virt aarch64, and pool/page-table/L3 descriptor granularities agree). */
 #define BR_PAGE_SIZE      4096u
 
-/* br_page_alloc attrs (3-01 §6 `BR_PAGE_F_*`; append-only) */
+/* br_page_alloc attrs (append-only) */
 #define BR_PAGE_F_ZERO    0x0001u   /* allocated pages must be all zero */
 #define BR_PAGE_F_CONTIG  0x0002u   /* must be physically contiguous — always true in this pool (v1 identity mapping), setting it is not an error */
 
-/* br_dma_alloc attrs (3-01 §6 `BR_DMA_F_*`; append-only) */
+/* br_dma_alloc attrs (append-only) */
 #define BR_DMA_F_ZERO     0x0001u   /* buffer all zero */
 #define BR_DMA_F_ALIGN4K  0x0002u   /* 4 KiB aligned */
 #define BR_DMA_F_CACHED   0x0004u   /* cacheable (default non-cached = conservative choice for device-side coherency) */
 
-/* ---------------------------------------------------------------- (1) native surface */
+/* ---- (1) native surface ---- */
 /* ---- byte heap (TLSF) ---- */
 void *br_malloc (br_size_t n);
 void *br_calloc (br_size_t n, br_size_t size);
 void *br_realloc(void *p, br_size_t n);     /* runtime/posix `realloc` forwards here directly (ADR-0014) */
 void  br_free   (void *p);
 
-/* ---- physically contiguous memory (CA-7): separate contig pool, not through the TLSF heap ---- */
+/* ---- physically contiguous memory (CA-7): separate contig pool, not the TLSF heap ---- */
 int  br_mem_alloc_contig(br_size_t size, br_size_t align, void **out);
 void br_mem_free_contig (void *ptr, br_size_t size);
-   /* for DMA engines without scatter-gather, large v2 relocation copies;
-      large fixed blocks like framebuffers are statically reserved in the region
-      table, not allocated at runtime */
+   /* For DMA engines without scatter-gather and large v2 relocation copies; large fixed
+      blocks (framebuffers) are reserved in the region table, not runtime-allocated. */
 
-/* ---- page allocator (CA-8): page granularity, static bitmap + first fit over contiguous runs ---- */
+/* ---- page allocator (CA-8): static bitmap + first fit of contiguous runs ---- */
 void *br_page_alloc(br_size_t n_pages, br_u32 attrs);
 void  br_page_free (void *vaddr, br_size_t n_pages);
 
-/* ---- DMA (built on contig: guarantees physical contiguity) ---- */
+/* ---- DMA (built on contig: physical contiguity guaranteed) ---- */
 typedef struct {
     void         *vaddr;
     br_uintptr_t  dma_addr;     /* v1 identity: dma_addr == vaddr (CA-6/INV-6) */
@@ -84,20 +54,15 @@ typedef struct {
 int br_dma_alloc(br_size_t n, br_u32 attrs, br_dma_buf_t *out);
 int br_dma_free (const br_dma_buf_t *b);
 
-/* arena accounting/bridge reporting (design 3-01 §6; TC-MEM-007 enforces "alloc/free deltas match") */
+/* Arena accounting/bridge reporting (TC-MEM-007 enforces "alloc/free deltas match"). */
 int br_heap_usage(br_size_t *used, br_size_t *total);
 
-/* ---------------------------------------------------------------- initialization */
+/* ---- initialization ---- */
 /*
- * Scan the region table, claim the three pools + DMA pool by kind, build the TLSF
- * control block and page bitmap.
- * Ownership (3-04 §3): **init point = core.init**, called by core's entry
- * `br_core_main()` "after platform plugin init, before br_mm_activate()" (boot chain
- * stage (3), ADR-0008): platform only declares the region table (which memory is
- * what), claiming and allocating belong to core.
- * Errors: `-EINVAL` (bad region granularity/alignment) / `-ENODEV` (a required pool
- * is missing) / `-ENOMEM` (pool too small).
- * Idempotent: a second call returns the first result, pools are not rebuilt.
+ * Scan the region table and claim the pools by kind, then build the TLSF control block and page
+ * bitmap. Called by br_core_main() after platform plugin init and before br_mm_activate(); the
+ * platform only declares the table. Errors: -EINVAL (bad granularity/alignment), -ENODEV (pool
+ * missing), -ENOMEM (pool too small). Idempotent: a second call returns the first result.
  */
 int  br_mem_init (void);
 br_bool br_mem_ready(void);
@@ -115,8 +80,8 @@ typedef struct {
 
 int br_mem_layout(br_mem_layout_t *out);          /* not ready ⇒ -ENODEV */
 
-/* ---------------------------------------------------------------- (2) observation contract */
-/* Heap stats (observation surface; `br_heap_usage` is its projection onto the native surface) */
+/* ---- (2) observation contract ---- */
+/* Heap stats (observation; br_heap_usage is its projection onto the native surface) */
 typedef struct {
     br_size_t total;            /* total bytes of the heap pool (usable area, excluding TLSF metadata) */
     br_size_t used;             /* currently allocated to users + per-block header/footer/redzone */
@@ -149,7 +114,8 @@ typedef struct {
 typedef int (*br_heap_walk_fn)(void *ctx, const br_heap_block_t *blk);
 int   br_heap_walk(br_heap_walk_fn fn, void *ctx);   /* returns blocks visited; -ENODEV if not ready */
 
-/* Whole-heap self-check: verify each block's header magic/redzone/free-list poisoning; returns **violation count** (0 = clean, TC-DBG-041) */
+/* Whole-heap self-check: verify each block's header magic/redzone/free-list poisoning; returns
+ * the violation count (0 = clean, TC-DBG-041) */
 br_u32 br_heap_check(void);
 
 /* Page pool stats (observation) */
@@ -163,14 +129,9 @@ typedef struct {
 
 int br_page_stats(br_page_stats_t *out);
 
-/* ---------------------------------------------------------------- (3) accounting contract */
-/*
- * Owner label = the **cheap v1.x form** of 5-01 §4 "per-plugin arena accounting":
- * on allocation the "current owner" is recorded in the block header, and the leak
- * report accounts by owner. Real arenas (budget caps + mandatory ownership + OOM
- * policy) belong to v2.
- * Default owner = BR_OWNER_NONE (0); while unregistered, current is always 0.
- */
+/* ---- (3) accounting contract ---- */
+/* Owner label = the cheap v1.x form of "per-plugin arena accounting": the current owner is
+ * recorded in the block header and the leak report accounts by owner. Default BR_OWNER_NONE (0). */
 typedef br_u16 br_owner_t;
 #define BR_OWNER_NONE   0u
 

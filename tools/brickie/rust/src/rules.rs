@@ -1,14 +1,7 @@
-//! Taxonomy, name contract, phase, privilege and dependency-direction rules (§3 / §7.2 / §7.3 / §8.3 / §8.4).
-//!
-//! This module is a **pure rule table** (no IO, no diagnostic-set state), reused by model.rs
-//! and check.rs (agent-B). All "rules" live here; do not scatter decisions into L5.
-//!
-//! Encoding discipline: use only codes allocated by BRV-D8; for unallocated-code defects use
-//! `BRV-MF-0001` per ruling R-9 and register the gap in `rust/README.md`.
+//! Taxonomy, name contract, phase, privilege and dependency-direction rules. Pure rule table reused
+//! by model.rs and check.rs; unallocated-code defects use `BRV-MF-0001` (ruling R-9).
 
 use crate::diag::{Diag, Severity};
-
-// ------------------------------------------------------------------ enum universe
 
 pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "platform"];
 pub const API_TYPES: &[&str] = &["native", "runtime_adapter", "third_party"];
@@ -29,7 +22,6 @@ pub const FREEZE_STATES: &[&str] = &["unfrozen", "frozen", "unfreezing"];
 pub const ENTRY_STATUSES: &[&str] = &["experimental", "frozen", "deprecated"];
 pub const RES_KINDS: &[&str] = &["ram", "stack"];
 
-/// Template dimensions delivered in v0.1 (criterion for `BRV-TAX-0014`, §8.4).
 pub const TEMPLATE_API_TYPES: &[&str] = &["native"];
 pub const TEMPLATE_LANGS: &[&str] = &["c"];
 
@@ -41,8 +33,6 @@ pub fn in_list(list: &[&str], v: &str) -> bool {
 pub fn list_of(list: &[&str]) -> String {
     list.join(" | ")
 }
-
-// ------------------------------------------------------------------ name contract (§8.3)
 
 fn is_alnum_lower(c: u8) -> bool {
     c.is_ascii_lowercase() || c.is_ascii_digit()
@@ -86,7 +76,6 @@ pub fn name_namespace(name: &str) -> &str {
     }
 }
 
-/// Name short (after the last `/`).
 pub fn name_short(name: &str) -> &str {
     match name.rfind('/') {
         Some(p) => &name[p + 1..],
@@ -94,27 +83,24 @@ pub fn name_short(name: &str) -> &str {
     }
 }
 
-/// Whether the name uses the recommended `<namespace>/<short>` form (§8.3 ①).
+/// Whether the name uses the recommended `<namespace>/<short>` form.
 pub fn is_recommended_form(name: &str) -> bool {
     let ns = name_namespace(name);
     !ns.is_empty() && in_list(NAMESPACES, ns)
 }
 
-/// namespace → `plugin_type` (§8.3 ①).
 pub fn namespace_plugin_type(ns: &str) -> Option<&'static str> {
     match ns {
         "app" => Some("app"),
         "iface" => Some("interface"),
         "platform" => Some("platform"),
         "sched" | "framework" | "io" | "fs" | "service" => Some("ability"),
-        // `runtime` (ADR-0015): POSIX runtime, a "whole-runtime" plugin class. plugin_type is still
-        // `ability` (it is an ability plugin); it differs from `service` in **size and role**, not taxonomy.
+        // `runtime` is an ability plugin; it differs from `service` in size and role, not taxonomy.
         "runtime" => Some("ability"),
         _ => None,
     }
 }
 
-/// namespace → `subkind` (§8.3 ①; ability family only).
 pub fn namespace_subkind(ns: &str) -> Option<&'static str> {
     match ns {
         "sched" => Some("scheduler"),
@@ -122,14 +108,13 @@ pub fn namespace_subkind(ns: &str) -> Option<&'static str> {
         "io" => Some("io"),
         "fs" => Some("fs"),
         "service" => Some("service"),
-        // `runtime/posix` subkind is still `service`: phase derivation (ability + service ⇒ LATE)
-        // and D18's "POSIX runtime **service**" positioning both rely on it. See ADR-0015 §2.2.
+        // `runtime/posix` is `service`, so phase derivation (ability + service ⇒ LATE) holds.
         "runtime" => Some("service"),
         _ => None,
     }
 }
 
-/// Derive `subkind` from the name namespace (§8.4). Bare name / non-ability namespace ⇒ `None`.
+/// Derive `subkind` from the name namespace. Bare name / non-ability namespace ⇒ `None`.
 pub fn derive_subkind(name: &str) -> Option<&'static str> {
     let ns = name_namespace(name);
     if ns.is_empty() {
@@ -137,8 +122,6 @@ pub fn derive_subkind(name: &str) -> Option<&'static str> {
     }
     namespace_subkind(ns)
 }
-
-// ------------------------------------------------------------------ phase (§7.2 + parent agent clarification)
 
 /// Phase rank: `EARLY=0 < CORE=1 < LATE=2 < APP=3`.
 pub fn phase_rank(phase: &str) -> Option<u8> {
@@ -151,18 +134,12 @@ pub fn phase_rank(phase: &str) -> Option<u8> {
     }
 }
 
-/// "service-like" ⇒ completion point ② is LATE: `plugin_type = interface`
-/// or `plugin_type = ability` with `subkind = service`.
+/// "service-like" (interface, or ability with `subkind = service`) completes LATE.
 pub fn is_service_like(plugin_type: &str, subkind: Option<&str>) -> bool {
     plugin_type == "interface" || (plugin_type == "ability" && subkind == Some("service"))
 }
 
-/// Derive `[plugin].phase` (completion point ②).
-///
-/// - No `init` hook ⇒ `early` (special case where ② coincides with ①).
-/// - service-like (interface / ability.service) ⇒ `late`.
-/// - `app` ⇒ `app`.
-/// - Otherwise (platform / other ability subkinds) ⇒ `core`.
+/// Derive `[plugin].phase`: no `init` ⇒ `early`; service-like ⇒ `late`; app ⇒ `app`; else `core`.
 pub fn derive_phase(plugin_type: &str, subkind: Option<&str>, has_init: bool) -> &'static str {
     if !has_init {
         return "early";
@@ -176,15 +153,9 @@ pub fn derive_phase(plugin_type: &str, subkind: Option<&str>, has_init: bool) ->
     }
 }
 
-/// Whether `phase` is legal for the given `plugin_type`/`subkind`. `None` = legal.
-///
-/// Allowed sets (**parent agent 2026 clarification**):
-/// - `interface` or `ability.service` ⇒ `{early, late}` (`core` ⇒ error).
-/// - `platform` / `ability` (other subkinds) ⇒ `{early, core}`.
-/// - `app` ⇒ `{early, core, app}` (M0's `app/hello` has no `init`, only a `start`
-///   main loop, so `phase = "app"` must pass).
-///
-/// `early` is always legal = "this plugin has no `init` hook".
+/// Whether `phase` is legal for `plugin_type`/`subkind`; `None` = legal. Allowed: interface
+/// or ability.service ⇒ {early, late}; platform / other ability subkinds ⇒ {early, core}; app ⇒
+/// {early, core, app}. `early` is always legal (no `init` hook).
 pub fn phase_reason(plugin_type: &str, subkind: Option<&str>, phase: &str) -> Option<String> {
     if !in_list(PHASES, phase) {
         return Some(format!(
@@ -213,9 +184,6 @@ pub fn phase_reason(plugin_type: &str, subkind: Option<&str>, phase: &str) -> Op
     ))
 }
 
-// ------------------------------------------------------------------ privilege (§3.4)
-
-/// Level → rank (`P0`=0 … `P4`=4).
 pub fn level_rank(level: &str) -> Option<u8> {
     PRIV_LEVELS
         .iter()
@@ -227,7 +195,7 @@ pub fn level_name(rank: u8) -> &'static str {
     PRIV_LEVELS[(rank as usize).min(4)]
 }
 
-/// Highest privilege level allowed for `plugin_type`/`subkind` (§3.2 + §3.4).
+/// Highest privilege level allowed for `plugin_type`/`subkind`.
 pub fn max_privilege_level(plugin_type: &str, subkind: Option<&str>) -> &'static str {
     match plugin_type {
         "app" | "interface" => "P0",
@@ -243,7 +211,7 @@ pub fn max_privilege_level(plugin_type: &str, subkind: Option<&str>) -> &'static
     }
 }
 
-/// Minimum level required by a memory op (§3.4 orthogonal table).
+/// Minimum level required by a memory op.
 pub fn min_level_for_memory_op(op: &str) -> Option<u8> {
     match op {
         "alloc" | "free" | "flush" | "invalidate" => Some(2), // P2
@@ -252,16 +220,14 @@ pub fn min_level_for_memory_op(op: &str) -> Option<u8> {
     }
 }
 
-/// Whether an `(ops × granularity × region)` combination is legal (§3.4 orthogonal table).
-///
-/// Illegal ⇒ `BRV-PRIV-0002`; legal but required level exceeds declared level ⇒ `BRV-PRIV-0001`.
+/// Whether an `(ops × granularity × region)` combination is legal (illegal ⇒ `BRV-PRIV-0002`;
+/// legal but level too low ⇒ `BRV-PRIV-0001`).
 pub fn memory_combo_legal(op: &str, granularity: &str, region: &str) -> bool {
     if !in_list(GRANULARITIES, granularity) || !in_list(REGIONS, region) {
         return false;
     }
     match op {
-        // alloc/free: pool lifetime (pool) only for the two dedicated pools contig/page;
-        // other granularities allow heap (byte/page/region only)/contig/page/dma.
+        // alloc/free: pool only for the contig/page pools, otherwise heap/contig/page/dma.
         "alloc" | "free" => {
             if granularity == "pool" {
                 matches!(region, "contig" | "page")
@@ -273,7 +239,6 @@ pub fn memory_combo_legal(op: &str, granularity: &str, region: &str) -> bool {
         "map" | "protect" | "unmap" => {
             matches!(granularity, "page" | "region") && matches!(region, "mmio" | "reserved" | "heap")
         }
-        // flush/invalidate: cache maintenance.
         "flush" | "invalidate" => {
             matches!(granularity, "byte" | "page" | "region")
                 && matches!(region, "dma" | "heap" | "contig")
@@ -282,7 +247,6 @@ pub fn memory_combo_legal(op: &str, granularity: &str, region: &str) -> bool {
     }
 }
 
-/// One `[[privileged.memory]]` declaration (input shape decoupled from model).
 #[derive(Clone, Debug, Default)]
 pub struct MemoryEntry {
     pub granularity: String,
@@ -290,7 +254,6 @@ pub struct MemoryEntry {
     pub regions: Vec<String>,
 }
 
-/// Input for privilege-declaration checking (decoupled from model).
 #[derive(Clone, Debug, Default)]
 pub struct PrivInput<'a> {
     pub plugin_type: &'a str,
@@ -304,7 +267,7 @@ pub struct PrivInput<'a> {
     pub has_resources: bool,
 }
 
-/// Privilege-declaration check (§3.4 / §10 V-19). Returns diagnostics (codes fixed to `BRV-PRIV-0001/0002`).
+/// Privilege-declaration check; diagnostics use `BRV-PRIV-0001`/`BRV-PRIV-0002`.
 pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
     let mut out = Vec::new();
     if input.level.is_none() && input.memory.is_empty() && !input.has_resources {
@@ -342,7 +305,6 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
         }
     };
 
-    // ① The declared level must not exceed the maximum allowed by plugin_type.
     let cap_name = max_privilege_level(input.plugin_type, input.subkind);
     let cap = level_rank(cap_name).unwrap_or(0);
     if declared > cap {
@@ -379,7 +341,6 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
         );
     }
 
-    // ③ Per memory entry: combination legality + minimum level.
     for (mi, m) in input.memory.iter().enumerate() {
         if m.ops.is_empty() {
             out.push(
@@ -452,44 +413,36 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
     out
 }
 
-// ------------------------------------------------------------------ dependency direction (§7.3)
-
-/// `plugin_type` direction table (§7.3): whether consumer → provider is permitted.
-///
-/// The `—` (platform → platform) entry is treated as "not applicable/not permitted": `platform`
-/// is exactly one per image, so self-dependency is impossible under single-version-per-generation.
+/// `plugin_type` direction table: whether consumer → provider is permitted. The platform → platform
+/// entry is not permitted (`platform` is exactly one per image, so self-dependency is impossible).
 pub fn dep_direction_ok(consumer_pt: &str, provider_pt: &str, provider_is_third_party: bool) -> bool {
     match consumer_pt {
-        // platform: all ✗ (platform is the lowest SoC level and depends on no plugin)
+        // platform: nothing allowed (lowest SoC level, depends on no plugin)
         "platform" => false,
-        // ability: platform ✅ / ability ✅ (one-way) / third_party ✅ / interface ✗
+        // ability: platform, ability (one-way) and third_party allowed / interface forbidden
         "ability" => {
             provider_is_third_party
                 || matches!(provider_pt, "platform" | "ability")
         }
-        // interface: platform/ability/interface ✅ (re-export only) / third_party ✗
+        // interface: platform/ability/interface allowed (re-export only) / third_party forbidden
         "interface" => {
             !provider_is_third_party && matches!(provider_pt, "platform" | "ability" | "interface")
         }
-        // app: interface only ✅ (must not call native ability / platform directly);
-        // **exception**: ability with `api_type = third_party` (e.g. `service/sqlite`) —
-        // the app row in §7.3 says "must not call **native** directly", while §10 V-12② requires
-        // `app → service/sqlite` to pass (see rust/README §10 S-13).
+        // app: interface only; exception: ability with `api_type = third_party`.
         "app" => provider_pt == "interface" || provider_is_third_party,
         _ => false,
     }
 }
 
-/// `api_type` prohibitions (§3.1; **only for providers with a surface** — `app`/`interface` are pure consumers).
-///
-/// Returns the rule explanation on violation; `None` when legal.
+/// `api_type` prohibitions, for providers with a surface only (app/interface are pure consumers);
+/// returns the reason on violation, `None` when legal.
 pub fn api_type_edge_reason(
     consumer_pt: &str,
     consumer_api: &str,
     provider_api: &str,
     kind: &str,
 ) -> Option<String> {
-    // Pure consumers (app/interface) are exempt from api_type prohibitions (§3.1 narrowed scope).
+    // Pure consumers (app/interface) are exempt from api_type prohibitions.
     if !matches!(consumer_pt, "ability" | "platform") {
         return None;
     }
@@ -512,12 +465,8 @@ pub fn api_type_edge_reason(
 }
 
 /// Full dependency-edge decision (direction table + api_type prohibitions + `allow_edges` whitelist).
-///
-/// `allow_edges` is the `(consumer, provider)` list from `product.toml [lint].allow_edges`;
-/// it exempts **only** the `plugin_type` direction table (framework special case), **not** the hard `api_type` prohibitions.
-///
-/// `Some(message)` = violation. Callers report code `BRV-MF-0001` per ruling R-9
-/// (BRV-D8 allocated no code for dependency-direction prohibitions; gap registered in README).
+/// `Some(message)` = violation, reported as `BRV-MF-0001` (ruling R-9). `allow_edges` (from
+/// `product.toml [lint].allow_edges`) exempts the direction table only, not api_type rules.
 pub fn dep_edge_violation(
     consumer_name: &str,
     consumer_pt: &str,
@@ -542,8 +491,6 @@ pub fn dep_edge_violation(
     api_type_edge_reason(consumer_pt, consumer_api, provider_api, kind)
 }
 
-// ------------------------------------------------------------------ export-surface classification invariants (§3.5)
-
 /// Read-only view of one `[[export]]` (for [`check_export_invariants`]).
 #[derive(Clone, Debug)]
 pub struct ExportView<'a> {
@@ -553,7 +500,7 @@ pub struct ExportView<'a> {
     pub symbols: &'a [String],
 }
 
-/// Check the shape of a `reexport_of` element: `<provider>#<unit>` (§6.1).
+/// Check the shape of a `reexport_of` element: `<provider>#<unit>`.
 pub fn valid_unit_ref(s: &str) -> bool {
     match s.split_once('#') {
         Some((provider, unit)) => {
@@ -563,19 +510,16 @@ pub fn valid_unit_ref(s: &str) -> bool {
     }
 }
 
-/// Export-surface classification invariants (§3.5 invariants 1–4). Returns `(export index, code, message)`.
-///
-/// Split of duties: invariant 3's "every re-exported unit has an `api_iface` **equal to its own**"
-/// requires reading **other plugins**' export surfaces ⇒ a cross-file decision owned by agent-B
-/// (`iface`/`check`); this function only checks non-empty + element shape + inverse invariant 4.
+/// Export-surface classification invariants 1–4. Returns `(export index, code, message)`.
+/// Invariant 3's "re-exported unit's `api_iface` equals its own" needs other plugins' surfaces,
+/// is owned by the cross-file caller; this function checks non-empty + element shape + invariant 4.
 pub fn check_export_invariants(
     plugin_api_type: &str,
     exports: &[ExportView<'_>],
 ) -> Vec<(usize, &'static str, String)> {
     let mut out = Vec::new();
     for (i, e) in exports.iter().enumerate() {
-        // Invariants 1 + 2: api_iface must equal plugin.api_type; third_party must not export a foreign surface.
-        // The two **partition** the `third_party` case to avoid reporting one problem with two codes.
+        // Invariants 1 + 2 partition the `third_party` case to avoid two codes for one problem.
         if plugin_api_type == "third_party" {
             if e.api_iface != "third_party" {
                 out.push((
@@ -643,14 +587,11 @@ pub fn check_export_invariants(
     out
 }
 
-// ------------------------------------------------------------------ template availability (§8.4)
-
 /// Whether the v0.1 template is delivered. Not delivered ⇒ `BRV-TAX-0014` (severity=info, but command incomplete ⇒ exit code 2, G-1).
 pub fn template_available(api_type: &str, lang: &str) -> bool {
     in_list(TEMPLATE_API_TYPES, api_type) && in_list(TEMPLATE_LANGS, lang)
 }
 
-/// Explanation for an undelivered template (for hints).
 pub fn template_unavailable_reason(api_type: &str, lang: &str) -> String {
     format!(
         "v0.1 delivers only the `native` × `c` template; requested `{api_type}` × `{lang}` (unavailable = delivered in v0.x)"

@@ -1,33 +1,15 @@
 /*
- * brickOS prototype v0.1.0 — page allocator (static bitmap + first-fit contiguous run)
- *
- * Authoritative design: `docs/3-os-core/3-01-core-api-list.md` §6 (page pool) + §14 **CA-8**
- * ("page allocator = static bitmap + first-fit contiguous run; `BR_PAGE_SIZE` is a platform
- * compile-time constant"). Where the pool comes from: the platform declares it in the region
- * table as the `BR_MM_KIND_PAGE` entry, and `br_mem_init()` hands base/size to this file via
- * `br_page_pool_init()` (the "three pools divided by the region table" of
- * `docs/3-os-core/3-04-memory.md`).
- *
- * Bitmap upper bound (static, independent of the region table): BR_PAGE_MAX_PAGES = 4096 pages
- *   = 4096 × BR_PAGE_SIZE(4 KiB) = **16 MiB pool upper bound**; the bitmap itself is 512 B.
- * Why this number: the bitmap word count must be a compile-time constant (CA-8 "static"), and
- * the prototype's three pools total far less than 16 MiB; exceeding the bound makes
- * `br_page_pool_init()` return -ENOMEM rather than truncate silently.
- *
- * v1 semantics (§6 text + 3-04 §1):
- *   - `BR_PAGE_F_CONTIG` is always true (identity mapping + single pool); setting it neither
- *     errors nor changes the path;
- *   - `BR_PAGE_F_ZERO` zeroes byte by byte (no libc, self-contained loop);
- *   - runs never cross the pool end (first fit scans from low addresses; not found = failure).
- * Invariants: bitmap 1 = allocated; `s_page.used` always equals the number of set bits; the
- * only reading of free runs is max_run computed on demand (O(total pages) scan, observation
- * path, not hot).
+ * Page allocator: static bitmap + first-fit contiguous run. The pool is the platform's
+ * BR_MM_KIND_PAGE region, handed to br_page_pool_init() by br_mem_init(). Bitmap 1 =
+ * allocated; s_page.used always equals the set-bit count. Bound: BR_PAGE_MAX_PAGES = 4096
+ * pages = 16 MiB; over it init returns -ENOMEM (no truncation). BR_PAGE_F_CONTIG is always
+ * true (identity mapping, single pool); runs never cross the pool end.
  */
 #include <br/core/br_error.h>
-#include <br/core/br_mem.h>          /* BR_PAGE_SIZE / BR_PAGE_F_* / br_page_stats_t */
+#include <br/core/br_mem.h>
 #include <br/core/br_types.h>
 
-#include "tlsf_internal.h"           /* BR_PAGE_MAX_PAGES / br_page_pool_init */
+#include "tlsf_internal.h"
 
 #define BR_PAGE_BITMAP_WORDS   ((BR_PAGE_MAX_PAGES + 31u) / 32u)
 
@@ -41,7 +23,7 @@ static struct {
     br_u32       fail;
 } s_page;
 
-/* ---------------------------------------------------------------- bit ops */
+/* ---- bit ops ---- */
 
 static br_bool bit_test(br_u32 idx)
 {
@@ -58,7 +40,6 @@ static void bit_clr(br_u32 idx)
     s_page.bitmap[idx >> 5] &= ~((br_u32)1u << (idx & 31u));
 }
 
-/* Byte-by-byte zeroing without libc. */
 static void page_zero(br_u8 *p, br_size_t n)
 {
     for (br_size_t i = 0u; i < n; i++) {
@@ -66,7 +47,7 @@ static void page_zero(br_u8 *p, br_size_t n)
     }
 }
 
-/* ---------------------------------------------------------------- internal setup */
+/* ---- internal setup ---- */
 
 int br_page_pool_init(br_uintptr_t base, br_size_t size)
 {
@@ -95,7 +76,7 @@ int br_page_pool_init(br_uintptr_t base, br_size_t size)
     return BR_OK;
 }
 
-/* ---------------------------------------------------------------- public surface (§6) */
+/* ---- public surface ---- */
 
 void *br_page_alloc(br_size_t n_pages, br_u32 attrs)
 {
@@ -109,7 +90,7 @@ void *br_page_alloc(br_size_t n_pages, br_u32 attrs)
     br_u32 start = 0u;
     br_bool found = BR_FALSE;
 
-    /* First fit: scan from low addresses for the first run holding need pages, no pool-end crossing. */
+    /* First fit: first run of `need` pages from low addresses, no pool-end crossing. */
     while ((start + need) <= s_page.pages) {
         br_bool run_free = BR_TRUE;
         for (br_u32 k = 0u; k < need; k++) {
@@ -141,7 +122,7 @@ void *br_page_alloc(br_size_t n_pages, br_u32 attrs)
     if ((attrs & BR_PAGE_F_ZERO) != 0u) {
         page_zero(vaddr, (br_size_t)need * (br_size_t)BR_PAGE_SIZE);
     }
-    /* BR_PAGE_F_CONTIG: always true in this pool (identity mapping + single pool), deliberately not branched. */
+    /* BR_PAGE_F_CONTIG is always true here (identity mapping, single pool); not branched. */
     return (void *)vaddr;
 }
 

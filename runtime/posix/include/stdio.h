@@ -1,20 +1,9 @@
 /*
- * brickOS prototype v0.2.0 — standard I/O (stdio.h; provided by the runtime/posix plugin)
- *
- * ** This generation has no printf family** (`11-02` §2.5 rates it TR-C): formatted output needs a
- *    `vsnprintf`, and that is part of "libc selection" (an open question in design `11-01` §3 -- picolibc /
- *    newlib / a self-made subset is not decided yet). core does have **three private formatting subsets**
- *    (`core/src/log.c`, `panic.c`, `service/hexdump`), each serving one call site and exporting nothing.
- *    The proper order is to extract a `vsnprintf` first and then build stdio -- that is the next cut.
- *    => this generation provides the **stream layer** (`FILE*` + buffering + positioning), not the **formatting layer**.
- *
- * * Buffering policy (declared honestly so callers need not guess):
- *     - **write** is buffered (default 512 B, `setvbuf` can replace/disable it), flushed when full, and
- *       `fflush`/`fclose`/positioning operations flush first;
- *     - **read** is unbuffered (`fread` passes straight through to `read`). Reason: a read buffer introduces
- *       hidden state ("how much was pre-read") that correctness of mixing `fseek`/`ftell` with `read` depends on
- *       entirely -- not worth the semantic risk for that little performance in v1 (same discipline as SD-3 in
- *       vfs, "no cache favors correctness").
+ * Stream layer only (FILE* + buffering + positioning); no printf family this generation, since
+ * formatted output needs a vsnprintf and libc selection is undecided.
+ * Write is buffered (default 512 B; setvbuf may replace/disable it), flushed when full and on
+ * fflush/fclose/positioning. Read is unbuffered (fread passes through to read) -- no hidden
+ * pre-read state for fseek/ftell to account for.
  */
 #ifndef BR_POSIX_STDIO_H
 #define BR_POSIX_STDIO_H
@@ -26,10 +15,7 @@
 
 typedef struct br_posix_file FILE;
 
-/* Standard streams. v1 does **not auto-open** 0/1/2 (those three fds every POSIX process starts with belong to
- * the "process model", and this generation has no process model) => these three macros are **symbols**, with
- * value BR_NULL until runtime/posix's init installs them. With no stdio consumer they are just NULL --
- * dereferencing them panics instead of silently corrupting something. */
+/* Not auto-opened: BR_NULL until runtime/posix's init installs them (no process model). */
 extern FILE *stdin;
 extern FILE *stdout;
 extern FILE *stderr;
@@ -62,12 +48,11 @@ int   putchar(int c);
 #define _IOLBF  1
 #define _IONBF  2
 
-/* Namespace: **declaration** only (implementation lives in posix.c / posix_dir.c) */
+/* Declarations only (implementation in posix.c / posix_dir.c). */
 int remove(const char *path);
 int rename(const char *old_path, const char *new_path);
 
-/* ---- formatting layer: **not provided** in this generation (see the file header) ----
- * `printf`/`fprintf`/`snprintf`/`vprintf`/`scanf` are all absent. Declaring what cannot link is worse than
- * not declaring it (the design's "subset honesty obligation": unimplemented items should surface at **link time**). */
+/* Formatting layer absent: printf/fprintf/snprintf/vprintf/scanf are not declared, so
+ * unimplemented items surface at link time. */
 
 #endif /* BR_POSIX_STDIO_H */

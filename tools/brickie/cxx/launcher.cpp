@@ -1,39 +1,12 @@
 // brickie — **single-file self-contained** host entry ELF (zero third-party dependencies).
-//
-// Shape (user decision, see ADR-0004 §7): everything below is embedded as data into this executable
-// (freeze.py generates `brickie_payload.cpp`), unpacked at runtime into a temp dir, then interpreted
-// by the system `python3`, which also runs the embedded native tools:
-//   * the Python package (python/brickie/**)
-//   * skeleton templates (templates/**)
-//   * **native tools** (bin/**, currently `brickie-gen`, later `brickie-core` etc.)
-//
-//   ┌─ brickie (this ELF) ───────────────────────────────────────────────────┐
-//   │  1. locate own path (/proc/self/exe, fallback to argv[0])              │
-//   │  2. unpack payload -> $TMPDIR/brickie-XXXXXX/{python,templates,bin}    │
-//   │  3. set env: PYTHONPATH / BRICKIE_TOOL_ROOT / BRICKIE_GEN /            │
-//   │             BRICKIE_CORE (all point at the embedded files)             │
-//   │  4. fork+exec `python3 -m brickie <args>`; wait for child tree         │
-//   │  5. remove temp dir, forward the child's exit code                     │
-//   └────────────────────────────────────────────────────────────────────────┘
-//
-// Why not PyInstaller/Nuitka: the v0.1 design discipline is "zero third-party Python dependencies"
-// (BR-D3 revised wording); the bootstrap seed must be reproducible from source. A hand-written launcher
-// plus an uncompressed tar payload needs only g++ and the Python standard library, and the payload is
-// byte-for-byte reproducible.
-//
-// **Single-file self-contained**: native tools are embedded under `bin/` in the payload (with the
-// executable bit) — `brickie-gen` (L2) is always embedded, and `brickie-core` (L0/L1 Rust) too once it
-// exists. The launcher points `BRICKIE_GEN` / `BRICKIE_CORE` at the unpacked copies ⇒ copying **just the
-// single `brickie` file** anywhere works, with no sibling `brickie-gen`, no source tree and no
-// `PYTHONPATH` needed. (Transitional fallback: if the payload has no `brickie-gen` but a standalone
-// `brickie-gen` sits next to us, that is accepted too.)
-//
-// Exit code: the child's exit code is forwarded as-is; the launcher's own environment errors (payload
-// missing/undecodable, cannot create temp dir, cannot start python3) return **2** per BRV-D9's
-// "environment error" class.
-//
-// Platform: POSIX (/proc/self/exe on Linux; other platforms fall back to argv[0]/PATH lookup).
-// The Windows `_spawnvp` variant comes later (see ADR-0004 §7.4).
+// freeze.py embeds the payload (brickie_payload.cpp); at runtime the ELF unpacks it into a temp
+// dir, runs `python3 -m brickie` on it (PYTHONPATH / BRICKIE_TOOL_ROOT / BRICKIE_GEN /
+// BRICKIE_CORE point into the unpacked tree), then forwards the child's exit code.
+// Custom launcher + uncompressed tar payload need only g++ and the Python stdlib and stay
+// byte-reproducible. The payload carries python/**, templates/** and bin/** (executable bit), so
+// copying just the `brickie` file works with no sibling brickie-gen and no source tree.
+// Its own environment errors (payload missing/undecodable, cannot create temp dir, cannot start
+// python3) exit 2. Platform: POSIX (/proc/self/exe on Linux, else argv[0]/PATH).
 
 #define _GNU_SOURCE 1
 
@@ -65,8 +38,6 @@ constexpr unsigned long kBlock = 512;
     std::fprintf(stderr, "brickie: %s\n", message.c_str());
     std::exit(kEnvError);
 }
-
-// ------------------------------------------------------------------ own path
 
 std::string path_lookup(const std::string& name) {
     const char* path = std::getenv("PATH");
@@ -114,7 +85,7 @@ std::string dir_of(const std::string& path) {
     return slash == std::string::npos ? std::string(".") : path.substr(0, slash);
 }
 
-// ------------------------------------------------------------------ dirs/files
+// dirs/files
 
 void make_dirs(const std::string& path) {
     if (path.empty()) return;
@@ -158,8 +129,6 @@ void remove_tree(const std::string& path) {
     ::rmdir(path.c_str());
 }
 
-// ---------------------------------------------------------------------- tar
-
 unsigned long long parse_octal(const unsigned char* field, std::size_t width) {
     unsigned long long value = 0;
     for (std::size_t i = 0; i < width; ++i) {
@@ -182,7 +151,7 @@ void write_file(const std::string& path, const unsigned char* data, unsigned lon
                 unsigned mode) {
     int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_TRUNC, mode & 0777);
     if (fd < 0) die("cannot write " + path + ": " + std::strerror(errno));
-    // umask may strip the executable bit ⇒ set the mode explicitly (embedded native tools must be execable).
+    // umask may strip the executable bit, so set the mode explicitly.
     if (::fchmod(fd, mode & 0777) != 0) {
         ::close(fd);
         die("cannot set permissions on " + path + ": " + std::strerror(errno));
@@ -244,8 +213,6 @@ void extract_payload(const std::string& dest) {
     if (files == 0) die("embedded payload contains no files (build error)");
 }
 
-// -------------------------------------------------------------------- environment
-
 void set_env_if_absent(const char* key, const std::string& value) {
     if (::getenv(key) == nullptr) ::setenv(key, value.c_str(), 1);
 }
@@ -285,15 +252,13 @@ int main(int argc, char** argv) {
 
     extract_payload(work);
 
-    // Make the front-end use the **embedded** code and templates
+    // Front-end uses the embedded code and templates.
     prepend_pythonpath(work + "/python");
     set_env_if_absent("BRICKIE_TOOL_ROOT", work);
     set_env_if_absent("PYTHONDONTWRITEBYTECODE", "1");
     set_env_if_absent("PYTHONNOUSERSITE", "1");
 
-    // Native tools are already **embedded in the payload** (bin/brickie-gen): prefer that one ⇒ brickie is
-    // a single self-contained file needing no sibling brickie-gen and no source tree. An explicit
-    // BRICKIE_GEN is never overridden.
+    // Prefer the embedded bin/brickie-gen; never override an explicit BRICKIE_GEN.
     if (::getenv("BRICKIE_GEN") == nullptr) {
         std::string embedded = work + "/bin/brickie-gen";
         if (is_executable(embedded)) {
@@ -305,8 +270,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    // L0/L1 Rust core: point at it if the payload has it (absence is a permitted degradation — core may
-    // not be built yet, see CORE_EMBED in cxx/Makefile); like BRICKIE_GEN, never override an explicit value.
+    // L0/L1 Rust core if the payload has it; absence is a permitted degradation (core may not be
+    // built yet, see CORE_EMBED in cxx/Makefile). Never override an explicit value.
     if (::getenv("BRICKIE_CORE") == nullptr) {
         std::string embedded = work + "/bin/brickie-core";
         if (is_executable(embedded)) set_env("BRICKIE_CORE", embedded);

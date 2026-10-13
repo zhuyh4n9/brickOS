@@ -1,15 +1,8 @@
-//! Diagnostic model (BRV-D8: coded + located + machine-readable) and exit-code summary (BRV-D9).
-//!
-//! Each diagnostic = `{code, severity, target, file, span, message, hint}`.
-//! - `code` = `None` ⇒ uncoded diagnostic (usage/env error), JSON emits `"code": null`.
-//! - **Severity does not decide the exit code** (BRV-D8 note / G-1): the exit code reflects
-//!   whether the command completed. If `info`/`warning` diagnostics mean the command could not
-//!   complete, use [`Diags::shape`] / [`Diags::usage`] to set exit code 2 explicitly.
-//!
-//! Location: `file` is relative to `root`; `span` is a TOML path (e.g. `export[0].entries[2].sig`).
-//!
-//! Under `--json` the diagnostic array is **stably sorted** by `(code, file, span, target)`
-//! (contract §3) ⇒ reproducible snapshots.
+//! Diagnostic model (BRV-D8) and exit-code summary (BRV-D9). Each diagnostic =
+//! `{code, severity, target, file, span, message, hint}`; `code = None` => uncoded (usage/env
+//! error, emitted as `"code": null`). Severity does not decide the exit code -- use
+//! `shape`/`usage` to force 2 when the command did not complete. `file` is relative to `root`;
+//! `span` is a TOML path; `--json` entries are stably sorted by `(code, file, span, target)`.
 
 use serde_json::{json, Value};
 
@@ -32,12 +25,11 @@ impl Severity {
     }
 }
 
-/// BRV-D9 exit-code tiers. `2` outranks `1` (no point reporting validation red when input is malformed).
+/// BRV-D9 exit-code tiers. `2` outranks `1` (validation red is pointless on malformed input).
 pub const EXIT_OK: i32 = 0;
 pub const EXIT_RED: i32 = 1;
 pub const EXIT_USAGE: i32 = 2;
 
-/// One diagnostic.
 #[derive(Clone, Debug, Default)]
 pub struct Diag {
     pub code: Option<String>,
@@ -110,11 +102,10 @@ impl Diag {
     }
 }
 
-/// Diagnostic collection + exit-code summary.
 #[derive(Clone, Debug, Default)]
 pub struct Diags {
     items: Vec<Diag>,
-    /// Explicit exit-code override (used when the command did not complete but only info/warning exist, see G-1).
+    /// Exit-code override for commands that did not complete but only produced info/warnings (G-1).
     exit_override: Option<i32>,
 }
 
@@ -139,7 +130,6 @@ impl Diags {
         &self.items
     }
 
-    /// Coded diagnostic (code assigned by BRV-D8).
     pub fn coded(
         &mut self,
         code: &str,
@@ -160,10 +150,7 @@ impl Diags {
         );
     }
 
-    /// Declaration-surface / input **shape** error: coded + explicit exit code 2 (command cannot complete).
-    ///
-    /// For contract §7 field-table violations (missing required / wrong type / enum out of range /
-    /// version-string shape), and structural defects with no assigned code under ruling R-9.
+    /// Shape error: coded + exit code 2 (bad field type/missing field/enum range/version string).
     pub fn shape(
         &mut self,
         code: &str,
@@ -183,13 +170,13 @@ impl Diags {
         self.exit_override = Some(EXIT_USAGE);
     }
 
-    /// Environment error (uncoded): unreadable file / invalid TOML / missing directory. Exit code 2.
+    /// Environment error (uncoded): unreadable file / invalid TOML / missing dir; exit code 2.
     pub fn env(&mut self, message: impl Into<String>, hint: impl Into<String>) {
         self.push(Diag::new(Severity::Error, message).hint(hint));
         self.exit_override = Some(EXIT_USAGE);
     }
 
-    /// Explicitly set the exit code when the command did not complete but only info/warning exist (G-1: `BRV-TAX-0014`).
+    /// Force an exit code when only info/warning diagnostics exist (G-1: `BRV-TAX-0014`).
     pub fn set_exit_override(&mut self, code: i32) {
         self.exit_override = Some(code);
     }
@@ -202,10 +189,8 @@ impl Diags {
         self.items.iter().any(|d| d.severity == Severity::Error)
     }
 
-    /// BRV-D9 summary: explicit override > has error ⇒ 1 > 0.
-    ///
-    /// Note: `usage` / `env` / `shape` already set the override to 2, so a mix of shape errors and
-    /// validation red ends as 2 — validation red is meaningless when the input is malformed.
+    /// BRV-D9 summary: explicit override > has-error => 1 > 0. `usage`/`env`/`shape` set the
+    /// override to 2, so shape errors outrank validation red (meaningless on malformed input).
     pub fn exit_code(&self) -> i32 {
         if let Some(c) = self.exit_override {
             return c;
@@ -217,14 +202,12 @@ impl Diags {
         }
     }
 
-    /// JSON array stably sorted by `(code, file, span, target)`.
     pub fn to_json(&self) -> Value {
         let mut sorted: Vec<&Diag> = self.items.iter().collect();
         sorted.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
         Value::Array(sorted.into_iter().map(|d| d.to_json()).collect())
     }
 
-    /// Count the three severities (for `check`'s `summary`).
     pub fn counts(&self) -> (usize, usize, usize) {
         let mut e = 0;
         let mut w = 0;

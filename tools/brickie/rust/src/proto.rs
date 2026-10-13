@@ -1,27 +1,21 @@
-//! Process-boundary envelope (contract §2): one line of JSON from stdin, one line to stdout.
-//!
-//! Request: `{protocol, command, root, args, context}`
-//! Response: `{protocol, status, exit_code, diagnostics, files, data}`
-//!
-//! Protocol version mismatch ⇒ `BRV-PROTO-0001`, `exit_code = 2`, `status = "ok"`
-//! (protocol handled fine; the business exit code is in the response).
+//! Process-boundary envelope: one JSON request line on stdin, one response line on stdout.
+//! A protocol version mismatch ⇒ `BRV-PROTO-0001`, `exit_code = 2`, `status = "ok"` (the envelope
+//! itself was handled); business exit codes live in the response.
 
 use serde_json::{json, Map, Value};
 
 use crate::diag::{Diags, Severity, EXIT_USAGE};
 
-/// Current protocol version constant.
 pub const PROTOCOL: i64 = 1;
 
-/// Parsed request envelope.
 #[derive(Clone, Debug)]
 pub struct Request {
     pub protocol: Option<i64>,
     pub command: String,
     pub root: String,
-    /// Key-values in `args` (empty table if not an object).
+    /// Key-values in `args`; empty if not an object.
     pub args: Map<String, Value>,
-    /// Key-values in `context` (empty table if not an object).
+    /// Key-values in `context`; empty if not an object.
     pub context: Map<String, Value>,
 }
 
@@ -47,7 +41,7 @@ impl Request {
     }
 }
 
-/// Parse the stdin request. `Err` = not even a well-formed envelope (environment error, exit code 2).
+/// Parse the stdin request; `Err` = malformed envelope (environment error, exit code 2).
 pub fn parse_request(input: &str) -> Result<Request, String> {
     let v: Value = serde_json::from_str(input).map_err(|e| format!("request is not valid JSON: {e}"))?;
     if !v.is_object() {
@@ -87,7 +81,6 @@ pub fn parse_request(input: &str) -> Result<Request, String> {
     })
 }
 
-/// Response envelope.
 #[derive(Clone, Debug)]
 pub struct Response {
     pub protocol: i64,
@@ -111,7 +104,7 @@ impl Response {
         }
     }
 
-    /// Protocol handled successfully + attached `files` (machine-owned file contents, contract §4).
+    /// Protocol handled successfully + attached `files` (machine-owned file contents).
     pub fn ok_with_files(diags: Diags, files: Vec<Value>, data: Value) -> Self {
         Response {
             protocol: PROTOCOL,
@@ -123,9 +116,8 @@ impl Response {
         }
     }
 
-    /// Tool's own failure (L5 raises an environment error). Process exit code is non-zero.
-    ///
-    /// Fallback diagnostics may use `code: null` (BRV-D8: only for "unclassifiable fallback errors").
+    /// Tool's own failure (environment error); process exit code is non-zero. Fallback diagnostics
+    /// may use `code: null` (BRV-D8: only for unclassifiable fallback errors).
     pub fn internal_error(message: &str, hint: &str) -> Self {
         let mut d = Diags::new();
         d.push(crate::diag::Diag::new(Severity::Error, message).hint(hint));
@@ -139,7 +131,6 @@ impl Response {
         }
     }
 
-    /// Uniform reply for unimplemented commands: usage error (exit code 2) + `code: null`, see README.
     pub fn unimplemented(command: &str, owner: &str) -> Self {
         let mut d = Diags::new();
         d.usage(
@@ -149,7 +140,6 @@ impl Response {
         Response::ok(d, json!({}))
     }
 
-    /// `BRV-PROTO-0001`: protocol version mismatch.
     pub fn proto_mismatch(got: Option<i64>) -> Self {
         let mut d = Diags::new();
         d.push(
@@ -175,7 +165,6 @@ impl Response {
         })
     }
 
-    /// Write to stdout: one line of JSON.
     pub fn write_stdout(&self) {
         println!("{}", serde_json::to_string(&self.to_json()).expect("JSON is always serializable"));
     }

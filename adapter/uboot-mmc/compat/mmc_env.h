@@ -1,67 +1,10 @@
 /*
- * adapter/uboot-mmc -- **u-boot runtime environment** (adapter layer; ADR-0026 D-3)
- *
- * ============================== WHAT THIS FILE IS ==============================
- * Upstream `drivers/mmc/{mmc,mmc_write,mmc_legacy,sdhci,sdhci-adma}.c` are **u-boot style** C:
- * they assume `linux/types.h` `u8/u32/bool`, `malloc.h`, `log.h` `log_err/pr_debug`,
- * `cpu_func.h` `flush_dcache_range`, `udelay()`/`get_timer()`, `asm/io.h`
- * `readl/writel`... This plugin is a **bare-metal unikernel (no libc)**, so none of it exists.
- *
- * This file is the **single landing point** for that environment on brickOS: every thin shim in
- * `compat/<u-boot header name>` points here, and **not one line of upstream .c changes** to
- * compile. This is "give upstream the environment it depends on", not
- * "change upstream to fit us" (the ADR-0026 D-3 criterion).
- *
- *   u-boot side                        →  brickOS side
- *   ---------------------------------------------------------------------------
- *   u8/u16/u32/u64/bool                →  br_u8/... / `<stdbool.h>`
- *   malloc/calloc/free                 →  br_malloc/br_calloc/br_free
- *   memalign(alignment + DMA safe)     →  br_dma_alloc(BR_DMA_F_ALIGN4K, ...) (from glue)
- *   memcpy/memset/memcmp/memmove       →  core/src/string.c (discipline: use directly)
- *   printf/sprintf/puts                →  tiny formatter here → br_log_write / buffer
- *   log_err/log_warning/log_info/...   →  br_log_error/warn/info/debug
- *   pr_err/pr_info/pr_debug            →  same as above
- *   bare E* names (-EIO/-ETIMEDOUT/...)→  **core `<br/core/br_error.h>`** (ADR-0027:
- *                                          names are the POSIX originals, so upstream holds)
- *   udelay/mdelay/get_timer            →  ★ **sleep wait woken early by device IRQ** (below)
- *   readl/writel/readw/...             →  direct MMIO + record "window just touched" (below)
- *   flush_dcache_range/flush_cache     →  br_mm_cache_flush / br_mm_cache_invalidate
- *   dma_map_single/dma_unmap_single    →  identity map + per-direction cache maintenance
- *   dev_phys_to_bus(dev = NULL)        →  identity (v1 identity map ⇒ dma_addr == vaddr)
- *
- * ============ ★ CORE TRICK: upstream **polling waits** become **IRQ-driven sleep waits** ============
- * The two wait paths in upstream `sdhci.c` (task spec §2.4):
- *
- *   - command completion: `start = get_timer(0); do { stat = sdhci_readl(host, SDHCI_INT_STATUS);
- *     ...; if (get_timer(start) >= SDHCI_READ_STATUS_TIMEOUT) ... } while ((stat & mask) != mask);`
- *   - data transfer: `do { stat = sdhci_readl(host, SDHCI_INT_STATUS); ...;
- *     if (timeout-- > 0) udelay(10); ... } while (!(stat & SDHCI_INT_DATA_END));`
- *
- * Upstream yields the CPU **only** via `get_timer()` / `udelay()`. So this environment layer
- * implements those two as "**yield the CPU until the next ms or a device IRQ**" -- upstream's
- * polling loop then automatically becomes an **IRQ-driven** wait: "sleep → device IRQ → wake →
- * read INT_STATUS again", with **not one line of upstream code changed**. That is the core trick.
- *
- * The "device IRQ" is provided by glue (`glue/emmc_bdev.c` `uboot_mmc_env_wait()`):
- *   { ISR: read INT_STATUS + write SIGNAL_ENABLE 0 to deassert the level line + br_work_submit() to bh }
- *   { bh:  br_sem_give() }
- *   { this file's wait primitive: **re-enable SIGNAL_ENABLE** + sleep (so each round can be woken) }
- * This is ADR-0021 D-4 realized under "upstream compiles unchanged".
- *
- * ★ How the environment layer knows which card is being waited on: upstream's wait loop has no
- *   device argument. So the MMIO accessors report **the address just touched** to glue
- *   (`uboot_mmc_env_reg_touched()`), which maps it back window → instance. Concurrent waits on
- *   several cards thus each attach to their own IRQ channel (not a "global singleton").
- *
- * ============================== DEPENDENCY DIRECTION ==============================
- * `compat/` is the environment, `glue/` is the implementation. ⇒ This file **only declares** the
- * three hooks glue must provide (`uboot_mmc_env_wait` / `uboot_mmc_env_reg_touched` /
- * `uboot_mmc_env_memalign`) and includes nothing under `glue/`. The reverse direction
- * (glue → compat) is the only allowed one.
- *
- * ★ This file does **not** declare any upstream data type (that is `compat/mmc.h`/`sdhci.h`
- *   forwarding the vendor originals); it only covers the "runtime environment".
- * ==========================================================================
+ * u-boot runtime environment for the upstream `drivers/mmc/` sources: every `compat/<u-boot
+ * header>` shim lands here, so not one line of upstream .c changes. `udelay()`/`get_timer()` are
+ * "sleep until next ms or a device IRQ", which turns upstream's polling loops into IRQ-driven
+ * waits; `uboot_mmc_env_reg_touched()` reports the MMIO address just accessed so glue can map it
+ * back to the waiting card. `glue/` implements the three declared hooks; `compat/` never includes
+ * `glue/`. This file declares no upstream data type (`compat/mmc.h`/`sdhci.h` forward those).
  */
 #ifndef BR_ADAPTER_UBOOT_MMC_ENV_H
 #define BR_ADAPTER_UBOOT_MMC_ENV_H
@@ -79,16 +22,12 @@
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
-/* Config matrix: same role as `generated/autoconf.h` in a real u-boot build.
- * ★ Must come before any upstream header using `CONFIG_IS_ENABLED()` (see compat/config.h). */
+/* Config matrix, same role as `generated/autoconf.h`; must precede any header using
+ * CONFIG_IS_ENABLED(). */
 #include <linux/kconfig.h>
 
-/* ==================================================================== config matrix self-check
- *
- * The matrix's traps are documented one by one in `compat/generated/autoconf.h`. Here the two
- * **premises this adapter relies on** become compile-time assertions -- so that nobody later
- * "defines DM_MMC as 0" or "turns on BLK" unnoticed:
- * `#ifdef` tests definedness, so these two **must** be `!defined`, not `== 0`. */
+/* Compile-time premises this adapter relies on. `#ifdef` tests definedness, so the two shape
+ * switches must be !defined, not `== 0`. */
 #ifdef CONFIG_DM_MMC
 #error "CONFIG_DM_MMC must **not be defined**: it makes upstream sdhci.c take the DM/udevice shape"
 #endif
@@ -102,13 +41,8 @@
 #error "this adapter's sources include mmc_write.c ⇒ CONFIG_MMC_WRITE must be enabled"
 #endif
 
-/* ==================================================================== basic types
- *
- * ★ `u64`/`s64` are `unsigned/signed long long` -- **not** `uint64_t`. u-boot's
- *   `asm-generic/int-ll64.h` says `typedef unsigned long long __u64; typedef __u64 u64;`,
- *   while on LP64 `uint64_t` is `unsigned long`: same width, **different type**. Upstream
- *   formatting/assignments everywhere assume `long long`; changing the type breaks `-Wformat`
- *   and friends (the same trap was hit in the erofs adapter). */
+/* u64/s64 are `unsigned/signed long long`, not `uint64_t` (same width, different type on LP64);
+ * upstream formatting/assignments assume `long long`. */
 typedef br_u8   u8;
 typedef br_s8   s8;
 typedef br_u16  u16;
@@ -123,23 +57,13 @@ typedef unsigned short ushort;
 typedef unsigned int   uint;
 typedef unsigned long  ulong;
 
-/* u-boot's `phys_addr_t`/`dma_addr_t`: both 64-bit on aarch64. This adapter does **not** enable
- * `CONFIG_DMA_ADDR_T_64BIT` (u-boot's switch for 32-bit DMA controllers); it simply defines both
- * as `unsigned long` -- under an identity map they are the virtual/physical addresses themselves. */
+/* Both 64-bit on aarch64; identity map => they are the virtual/physical addresses themselves. */
 typedef unsigned long phys_addr_t;
 typedef unsigned long dma_addr_t;
 
-/*
- * Byte order (`asm/byteorder.h` → `linux/byteorder/little_endian.h` on aarch64).
- *   - the `__leN` family is identity on a **little-endian target** (u-boot does the same);
- *   - the `__beN` family is `__swabN` (target is little-endian ⇒ must really swap);
- *   - the bare names `be32_to_cpu`/`le32_to_cpu` etc. are lowercase aliases (the
- *     `#define be32_to_cpu __be32_to_cpu` block at the end of u-boot's `little_endian.h`).
- * Upstream uses `__be32_to_cpu` (SCR) and `be32_to_cpu` (SSR); both families are given here so
- * the next use of `be16`/`le32` does not require touching the environment layer.
- *
- * ★ Like `erofs_env.h`, this file guards the "little-endian premise" with an `#error` at the top
- * (this port is wrong on a big-endian target).
+/* Byte order: `__leN` is identity on this little-endian target, `__beN` is `__swabN`, and
+ * `be32_to_cpu`/`le32_to_cpu` are lowercase aliases. Upstream uses `__be32_to_cpu` (SCR) and
+ * `be32_to_cpu` (SSR).
  */
 static inline u16 uboot_mmc_swab16(u16 x) { return __builtin_bswap16(x); }
 static inline u32 uboot_mmc_swab32(u32 x) { return __builtin_bswap32(x); }
@@ -174,39 +98,32 @@ static inline u64 uboot_mmc_swab64(u64 x) { return __builtin_bswap64(x); }
 #define cpu_to_be64 __cpu_to_be64
 #define be64_to_cpu __be64_to_cpu
 
-/* u-boot `linux/types.h`'s `__uN`/`__sN` and `__leN`/`__beN` families (matching upstream).
- * Upstream uses `__be32` (the SCR buffer in `sd_get_capabilities`). The sparse annotations
- * (`__bitwise`) are dropped -- same treatment as `erofs_env.h`: on aarch64 those are static
- * checks only and do not affect semantics. */
+/* u-boot's `__uN`/`__leN`/`__beN` families; sparse `__bitwise` annotations dropped (static
+ * checks only on aarch64). */
 typedef br_u8  __u8;   typedef br_u16 __u16;  typedef br_u32 __u32;  typedef br_u64 __u64;
 typedef br_s8  __s8;   typedef br_s16 __s16;  typedef br_s32 __s32;  typedef br_s64 __s64;
 typedef br_u16 __le16; typedef br_u32 __le32; typedef br_u64 __le64;
 typedef br_u16 __be16; typedef br_u32 __be32; typedef br_u64 __be64;
 
-/* `loff_t`/`dev_t`/`umode_t`: present in u-boot's `linux/types.h`, used indirectly by `mmc.h`. */
+/* Present in u-boot's `linux/types.h`; used indirectly by `mmc.h`. */
 typedef long long      loff_t;
 typedef unsigned int   dev_t;
 typedef unsigned short umode_t;
 
-/* compile-time self-check: wrong type width breaks everything */
+/* width self-check */
 _Static_assert(sizeof(u8)  == 1u, "u8 must be 8 bits");
 _Static_assert(sizeof(u16) == 2u, "u16 must be 16 bits");
 _Static_assert(sizeof(u32) == 4u, "u32 must be 32 bits");
 _Static_assert(sizeof(u64) == 8u, "u64 must be 64 bits");
 
-/* ==================================================================== little-endian premise
- * Above, `__leN` is identity and `__beN` is __swabN -- true only if the **target really is
- * little-endian**. aarch64's QEMU virt and nearly all similar boards are little-endian; on a
- * big-endian target this port is wrong, so stop here rather than silently emit wrong words
- * (same guard as `erofs_env.h`). */
+/* The identity `__leN` / swapping `__beN` above hold only on a little-endian target; a
+ * big-endian target would be silently wrong, so stop here. */
 #if !defined(__BYTE_ORDER__) || (__BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__)
 #error "uboot-mmc implements leN_to_cpu()/beN_to_cpu() for little-endian targets only"
 #endif
 
-/* ==================================================================== attributes/annotations
- * u-boot's `include/linux/compiler*.h` family provides these. This adapter does not vendor that
- * family (it needs `__KERNEL__` plus build-time probes like `COMPILER_HAS_GENERIC_BUILTIN_OVERFLOW`)
- * and gives only the few upstream actually uses -- each with a clear use upstream. */
+/* u-boot's `linux/compiler*.h` family is not vendored (it needs `__KERNEL__` and build-time
+ * probes); only the attributes upstream actually uses are given. */
 #define __weak           __attribute__((weak))
 #define __maybe_unused   __attribute__((unused))
 #define __packed         __attribute__((__packed__))
@@ -218,7 +135,7 @@ _Static_assert(sizeof(u64) == 8u, "u64 must be 64 bits");
 #define __visible        __attribute__((visibility("default")))
 #define __always_inline  inline __attribute__((always_inline))
 
-/* ==================================================================== bit ops/utilities */
+/* ---- bit ops/utilities ---- */
 #define BITS_PER_LONG        64
 #define BITS_PER_LONG_LONG   64
 #define BITS_PER_BYTE        8
@@ -230,7 +147,7 @@ _Static_assert(sizeof(u64) == 8u, "u64 must be 64 bits");
 #define GENMASK(h, l)        (((~0UL) << (l)) & (~0UL >> (BITS_PER_LONG - 1 - (h))))
 #define GENMASK_ULL(h, l)    (((~0ULL) << (l)) & (~0ULL >> (BITS_PER_LONG_LONG - 1 - (h))))
 
-/* fls/ffs from u-boot `<linux/bitops.h>` (generic implementation, same semantics) */
+/* fls/ffs from u-boot `<linux/bitops.h>` (same semantics) */
 static inline int uboot_mmc_ffs(int x)
 {
     int r = 1;
@@ -271,9 +188,8 @@ static inline int uboot_mmc_fls(int x)
 #define IS_ALIGNED(x, a)  (((x) & ((typeof(x))(a) - 1u)) == 0u)
 #define __ALIGN_MASK(x, mask) (((x) + (mask)) & ~(mask))
 
-/* Same shape as upstream `include/linux/kernel.h` (lines 156-231): **each argument is evaluated
- * once** and types are checked. ★ A plain ternary will not do: upstream has several `max(a, b())`
- * style / side-effecting arguments, and a plain ternary would evaluate one of them twice. */
+/* Each argument is evaluated once and types are checked: upstream has side-effecting
+ * `max(a, b())` style arguments, which a plain ternary would evaluate twice. */
 #define min(x, y) ({                             \
         typeof(x) _min1 = (x);                   \
         typeof(y) _min2 = (y);                   \
@@ -297,15 +213,8 @@ static inline int uboot_mmc_fls(int x)
 #define likely(x)         __builtin_expect(!!(x), 1)
 #define unlikely(x)       __builtin_expect(!!(x), 0)
 
-/* ★ `lower_32_bits`/`upper_32_bits` are copied verbatim from upstream `include/linux/kernel.h`
- *   (lines 108/114). **Not decoration**: the ADMA2 descriptor `addr_lo` and `SDHCI_ADMA_ADDRESS`
- *   both rely on `lower_32_bits()`.
- *   (Measured lesson: this layer's first version mis-copied `lower_32_bits` as the
- *    `upper_32_bits` expansion, so every descriptor's data address became `addr >> 32 == 0`
- *    ⇒ QEMU's ADMA engine fetched address 0 ⇒ `SDHCI_INT_ADMA_ERROR` (`st=0x02008001`,
- *    `adma_err=0x1`) ⇒ `mmc_init` returned `-ECOMM`.
- *    That was an **adapter-layer bug**, not upstream's, and not "upstream cannot run on QEMU's
- *    emmc model".) */
+/* Verbatim from upstream: the ADMA2 descriptor `addr_lo` and `SDHCI_ADMA_ADDRESS` both rely on
+ * `lower_32_bits()`. */
 #define lower_32_bits(n)  ((u32)((n) & 0xffffffff))
 #define upper_32_bits(n)  ((u32)(((n) >> 16) >> 16))
 #define lower_16_bits(n)  ((u16)(n))
@@ -313,8 +222,7 @@ static inline int uboot_mmc_fls(int x)
 #define container_of(ptr, type, member) \
     ((type *)((char *)(ptr) - offsetof(type, member)))
 
-/* Subset of u-boot `<linux/sizes.h>` (upstream mmc.c's SD SSR table uses these).
- * These are **platform/interface constants**, not tunables; values match upstream one by one. */
+/* Subset of u-boot `<linux/sizes.h>` (upstream mmc.c's SD SSR table); values match upstream. */
 #define SZ_1    0x00000001
 #define SZ_2    0x00000002
 #define SZ_4    0x00000004
@@ -343,17 +251,9 @@ static inline int uboot_mmc_fls(int x)
 #define SZ_32M  0x02000000
 #define SZ_64M  0x04000000
 
-/*
- * 64-bit division helpers (u-boot `include/div64.h` + the BITS_PER_LONG==64 branch of
- * `include/linux/math64.h`). This adapter does not vendor those two headers (their other half is
- * 32-bit-platform log2/bit-alignment tricks); it gives only the three upstream uses -- semantics
- * must match the kernel set:
- *   - `do_div(n, base)`: **in place**, sets `n` to the quotient and returns the remainder
- *     (call sites rely on that side effect);
- *   - `div_u64_rem`: non-negative 64/32 division with a remainder out-parameter;
- *   - `lldiv`: a "does not modify its argument" wrapper over `do_div` (upstream `mmc.c` uses it
- *     to compute the LBA).
- */
+/* 64-bit division helpers (u-boot `div64.h` + the BITS_PER_LONG==64 branch of `linux/math64.h`):
+ * `do_div(n, base)` works **in place** and returns the remainder (call sites rely on that);
+ * `div_u64_rem()` takes a remainder out-param; `lldiv()` wraps `do_div` without modifying it. */
 #define do_div(n, base)                     \
     ({                                      \
         u32 __base = (u32)(base);           \
@@ -376,28 +276,14 @@ static inline u64 lldiv(u64 dividend, u32 divisor)
     return res;
 }
 
-/* ==================================================================== logging/printing
- *
- * Upstream uses `printf`/`puts`/`sprintf` plus `log_err/log_warning/log_info/log_debug/debug`
- * and `pr_err/pr_info/pr_debug`. This adapter has **no libc printf** (core's `br_log_write` is
- * line output only, and `runtime/posix` provides no printf family either -- ADR-0014 §4).
- *
- * ⇒ This file carries a **tiny formatter** covering the conversions upstream **actually uses**
- * (every call site checked):
- *   `%d %i %u %x %X %c %s %p %%`, flags `#` and `0`, width (e.g. `%06x`/`%08x`/`%03d`),
- *   length modifiers `l`/`ll`/`z`.
- *   ★ Why **no** `format(printf)` attribute: upstream passes `uint` to `%d` (u-boot's own
- *     printf does not validate strictly either); the attribute would immediately turn vendor code
- *     red under `-Werror` -- and "change upstream to pass warnings" is forbidden. The attribute
- *     is added only on the layer forwarding to core (those call sites are ours).
- *
- * ★ Deliberate deviation: upstream's `printf` goes to the u-boot console; this adapter goes to
- *   core's log (BR_LOG_INFO), so "what the driver says" and the rest of the kernel log share one
- *   stream (the gate greps those lines).
- */
+/* Upstream uses `printf`/`puts`/`sprintf` plus `log_*`/`pr_*`; this adapter has no libc printf, so
+ * a tiny formatter covers the conversions upstream actually uses (`%d %i %u %x %X %c %s %p %%`,
+ * flags `#`/`0`, width, length `l`/`ll`/`z`). No `format(printf)` attribute: upstream passes `uint`
+ * to `%d`, and the attribute is on the layer forwarding to core only. Output goes to core's log
+ * (BR_LOG_INFO), sharing one stream with the kernel log. */
 #define UBOOT_MMC_LOG_MAX 256u
 
-/* Unsigned integer → buffer (little-endian digit table emitted in reverse). Returns new write ptr. */
+/* Unsigned integer -> buffer, reversed digit table. Returns the new write pointer. */
 static inline char *uboot_mmc_fmt_uint(char *p, char *end, unsigned long long v,
                                       unsigned base, bool upper)
 {
@@ -422,11 +308,8 @@ static inline char *uboot_mmc_fmt_uint(char *p, char *end, unsigned long long v,
     return p;
 }
 
-/*
- * This plugin's formatter. `cap` includes the trailing NUL; overflow truncates silently
- * (logs/device strings are diagnostics, not a gate surface). Coverage is in the file header;
- * unimplemented modifiers are **emitted verbatim** (an ugly log beats silently dropping it).
- */
+/* `cap` includes the trailing NUL; overflow truncates silently. Unimplemented modifiers are
+ * emitted verbatim. */
 static inline int uboot_mmc_vformat(char *dst, br_size_t cap, const char *fmt,
                                     __builtin_va_list ap)
 {
@@ -548,12 +431,7 @@ static inline int uboot_mmc_vformat(char *dst, br_size_t cap, const char *fmt,
     return (int)(br_size_t)(p - dst);
 }
 
-/*
- * ★ Why not just use `__builtin_vsnprintf`: GCC's `__builtin_vsnprintf` is **not self-contained**
- *   -- after expansion it still calls libc `vsnprintf` (link-time `undefined reference`). This
- *   repo has no libc (`runtime/posix` has no printf family either) ⇒ we must carry our own
- *   (same treatment as `erofs_env.h`).
- */
+/* Not `__builtin_vsnprintf`: it still calls libc `vsnprintf` at link time. */
 static inline int printf(const char *fmt, ...)
 {
     char line[UBOOT_MMC_LOG_MAX];
@@ -562,8 +440,7 @@ static inline int printf(const char *fmt, ...)
     __builtin_va_start(ap, fmt);
     (void)uboot_mmc_vformat(line, sizeof(line), fmt, ap);
     __builtin_va_end(ap);
-    /* upstream format strings carry their own '\n'; br_log_write also terminates by line ⇒ one
-     * extra newline is harmless (and the gate greps by line). */
+    /* upstream format strings carry their own '\n'; br_log_write is per-line, so one extra */
     br_log_write(BR_LOG_INFO, "%s", line);
     return 0;
 }
@@ -586,41 +463,17 @@ static inline int puts(const char *s)
 }
 
 /* ---- u-boot's log_* / pr_* / debug ----
- * Upstream writes `log_err(fmt, ...)` and **we supply the implementation** -- exactly what
- * "adaptation only" looks like. Note upstream format strings carry their own '\n'; this layer
- * adds none (consistent with core's per-line output).
- *
- * ★★ There is a **required** distinction here (not a style question: without it the link fails):
- *    u-boot builds these two families as **different** filtering layers --
- *
- *      ➀ `log_err/log_warning/...` (upstream `include/log.h`) do **no compile-time filtering**:
- *         in u-boot they expand to `log(cat, level, ...)` and are filtered only **at runtime** by
- *         log level. ⇒ this layer does the same: forward straight to
- *         `br_log_write(BR_LOG_*, ...)` (core's level filter is that runtime gate).
- *      ➁ `pr_err/pr_info/pr_debug/...` (upstream `include/linux/printk.h`) do **compile-time
- *         filtering by `CONFIG_LOGLEVEL`**, shaped as a "constant-condition ternary":
- *             #define pr_debug(fmt, ...) ({ CONFIG_LOGLEVEL > 7 ? log_debug(fmt, ##__VA_ARGS__) : 0; })
- *
- *    Why ➁'s filtering is **required**: upstream `mmc.c:175` uses the **same condition** to also
- *    cut out the definition of `mmc_mode_name()` --
- *         #if CONFIG_IS_ENABLED(MMC_VERBOSE) || defined(DEBUG) || CONFIG_VAL(LOGLEVEL) >= LOGL_DEBUG
- *         const char *mmc_mode_name(enum bus_mode mode) { ... }
- *         #endif
- *    and its **call sites are all inside `pr_debug(...)` arguments** (mmc.c lines
- *    232/1748/1884/2228). If `pr_debug` did not filter by `CONFIG_LOGLEVEL` (e.g. forwarded
- *    unconditionally like `log_*`), those arguments would be evaluated ⇒ **definition cut,
- *    reference kept** ⇒ link-time `undefined reference to mmc_mode_name`. That is exactly what
- *    happened (hit by the first version of this layer; see the delivery report). ⇒ ➁ must use
- *    **the same thresholds** as upstream, one by one.
- *
- *    Thresholds copied from upstream `include/linux/printk.h` (not invented): `>0/>1/>2/>3/>4/>5/>6/>7`.
- *    This adapter's `CONFIG_LOGLEVEL = 4` ⇒ `pr_err` kept, `pr_warn` and below cut -- matching
- *    u-boot's default; and `log_warning()` (e.g. sdhci.c's reset warning) is **unaffected** (family ➀).
- */
+ * Both families are upstream's, so this file supplies them, but they must differ: `log_*`
+ * (include/log.h) do no compile-time filtering, so forward straight to `br_log_write` (core's
+ * runtime level filter). `pr_*` (linux/printk.h) filter by `CONFIG_LOGLEVEL` with the upstream
+ * thresholds >0/>1/.../>7; with `CONFIG_LOGLEVEL` = 4, `pr_err` is kept and `pr_warn` cut.
+ * The compile-time cut is required: `mmc.c:175` compiles out `mmc_mode_name()` under the same
+ * condition and all its call sites are inside `pr_debug(...)` arguments, so forwarding
+ * unconditionally would leave an undefined reference to `mmc_mode_name`. */
 #define UBOOT_MMC_LOG_GATED(cond, level, ...) \
     ({ (cond) ? br_log_write((level), __VA_ARGS__) : 0; })
 
-/* ➀ runtime filtering (no compile-time cut) */
+/* runtime filtering (no compile-time cut) */
 #define UBOOT_MMC_LOGF(level, ...) br_log_write((level), __VA_ARGS__)
 #define log_emerg(...)    UBOOT_MMC_LOGF(BR_LOG_ERROR, __VA_ARGS__)
 #define log_alert(...)    UBOOT_MMC_LOGF(BR_LOG_ERROR, __VA_ARGS__)
@@ -631,7 +484,7 @@ static inline int puts(const char *s)
 #define log_info(...)     UBOOT_MMC_LOGF(BR_LOG_INFO,  __VA_ARGS__)
 #define log_debug(...)    UBOOT_MMC_LOGF(BR_LOG_DEBUG, __VA_ARGS__)
 
-/* ➁ compile-time filtering (thresholds as upstream printk.h; see "required distinction" above) */
+/* compile-time filtering (thresholds as upstream printk.h) */
 #define pr_emerg(...)     UBOOT_MMC_LOG_GATED(CONFIG_LOGLEVEL > 0, BR_LOG_ERROR, __VA_ARGS__)
 #define pr_alert(...)     UBOOT_MMC_LOG_GATED(CONFIG_LOGLEVEL > 1, BR_LOG_ERROR, __VA_ARGS__)
 #define pr_crit(...)      UBOOT_MMC_LOG_GATED(CONFIG_LOGLEVEL > 2, BR_LOG_ERROR, __VA_ARGS__)
@@ -642,26 +495,13 @@ static inline int puts(const char *s)
 #define pr_debug(...)     UBOOT_MMC_LOG_GATED(CONFIG_LOGLEVEL > 7, BR_LOG_DEBUG, __VA_ARGS__)
 #define pr_devel(...)     UBOOT_MMC_LOG_GATED(CONFIG_LOGLEVEL > 7, BR_LOG_DEBUG, __VA_ARGS__)
 
-/* `debug()`: upstream is `debug_cond(_DEBUG, ...)` with `_DEBUG = (DEBUG ? 1 : 0)`; this adapter
- * does not define DEBUG ⇒ always 0. Upstream writes `if (cond) printf(...)` and relies on -O2 DCE
- * to drop the arguments; a constant ternary here is more robust (constant folding, any -O level). */
+/* `_DEBUG` is 0 here; upstream's `debug_cond` relies on -O2 DCE, this folds at any -O level. */
 #define _DEBUG            0
 #define debug(...)        UBOOT_MMC_LOG_GATED(_DEBUG != 0, BR_LOG_DEBUG, __VA_ARGS__)
 
-/*
- * The u-boot log level constants (a **same-value restatement** of `enum log_level_t` in
- * u-boot `include/log.h`).
- *
- * ★ Why these must be **macros**, not an enum: upstream `mmc.c:175` uses `LOGL_DEBUG` inside
- *   an **`#if`**
- *
- *       #if CONFIG_IS_ENABLED(MMC_VERBOSE) || defined(DEBUG) || CONFIG_VAL(LOGLEVEL) >= LOGL_DEBUG
- *
- *   The preprocessor only knows macros ⇒ an enum name there is "undefined" (true of u-boot's own
- *   line too). Under `-Wundef -Werror` this adapter must supply **macros** to both compile and be
- *   semantically right: with `CONFIG_LOGLEVEL` = 4 (= WARNING) that condition is false and the
- *   "per-command trace printing" is not compiled (consistent with "do not spam").
- */
+/* Same values as upstream `enum log_level_t`. They must be macros, not an enum: upstream
+ * `mmc.c:175` uses `LOGL_DEBUG` inside an `#if`, where only macros exist (and `-Wundef -Werror`
+ * demands it). */
 #define LOGL_EMERG          0
 #define LOGL_ALERT          1
 #define LOGL_CRIT           2
@@ -680,91 +520,51 @@ static inline int puts(const char *s)
 #define LOGL_MAX            LOGL_DEBUG_IO
 #define LOGL_CONT           (-1)
 
-/* ==================================================================== memory
- *
- * Project discipline: `memcpy/memset/memcmp/memmove` come from core and are used directly (do not
- * write our own, do not depend on runtime/posix). core's `string_internal.h` is private, so the
- * prototypes are repeated here (prototypes bring type checking -- the `-Wmissing-prototypes` half
- * of the discipline). */
+/* memcpy/memset/memcmp/memmove come from core and are used directly; core's `string_internal.h` is
+ * private, so the prototypes are repeated here for type checking. */
 void *memcpy (void *dst, const void *src, size_t n);
 void *memmove(void *dst, const void *src, size_t n);
 void *memset (void *dst, int c, size_t n);
 int   memcmp (const void *a, const void *b, size_t n);
 
-/* u-boot's `malloc.h`: wired to the core heap. ★ Macros rather than "declare functions for
- * runtime/posix to provide": the latter would make this plugin fail to link in products that do
- * **not** select runtime/posix, while the heap is a core capability. */
+/* u-boot `malloc.h` wired to the core heap. Macros, not functions, so products that do not select
+ * runtime/posix still link. */
 #define malloc(n)        br_malloc((br_size_t)(n))
 #define calloc(n, s)     br_calloc((br_size_t)(n), (br_size_t)(s))
 #define realloc(p, n)    br_realloc((p), (br_size_t)(n))
 #define free(p)          br_free(p)
 
-/* u-boot's `memalign.h`: upstream `sdhci_adma_init()` uses it to get a DMA-safe, aligned
- * descriptor table (`memalign(ARCH_DMA_MINALIGN, ADMA_TABLE_SZ)`).
- * ★ Why the environment layer cannot just wire it to br_malloc: the ADMA2 descriptor table **is
- *   read by the device**, so it must come from the DMA pool (uncached/physically contiguous, see
- *   ADR-0003's region table). ⇒ glue provides it; this is only the declaration. */
+/* u-boot `memalign.h`: the ADMA2 descriptor table is read by the device, so glue supplies it from
+ * the DMA pool (uncached/contiguous), not br_malloc. */
 void *uboot_mmc_env_memalign(br_size_t align, br_size_t size);
 #define memalign(align, size) uboot_mmc_env_memalign((align), (size))
 
-/* ==================================================================== errno
- * Upstream is full of bare `-EIO`/`-ETIMEDOUT`/`-ENODEV`/`-ENOSYS`/`-EINVAL`/`-EBUSY`/`-ECOMM`/
- * `-ENOMEM`/`-EOPNOTSUPP`/`-EMEDIUMTYPE`. ADR-0027 renamed errno names to the POSIX originals and
- * co-located them with their values in `br_error.h` ⇒ those sources need **not one character
- * changed** (that is the point of the rename). */
+/* Upstream's bare `-EIO`/`-ETIMEDOUT`/... come from `br_error.h`, which carries the POSIX-original
+ * errno names, so those sources need no change. */
 
-/*
- * ---- errno names upstream uses that core's `br_error.h` does **not yet** carry ----------------
- *
- * ★ This is a **known debt**, and the only place this adapter "adds errno names":
- *   `core/include/br/core/br_error.h` per ADR-0027 only carries the second-range names (from 35)
- *   that "this repo uses", and this adapter is a **new consumer**: the upstream `drivers/mmc/`
- *   originals use the five below (`-ECOMM` for command timeout/error return codes, `-EMEDIUMTYPE`
- *   when a hardware partition is unsupported, `-ENOTSUPP` as the fallback for "modes this adapter
- *   does not implement", the other two on the SD path). They are absent from core ⇒ "upstream
- *   unchanged" means they must be added here.
- *
- * ★ The values are taken **verbatim from u-boot `include/linux/errno.h`** (which took them from
- *   the Linux kernel), so moving these five into `br_error.h` later needs **no value changes**;
- *   criterion ➁ of `tools/check-errno.sh` ("no errno names defined outside br_error.h") currently
- *   only enforces the 53 names already in br_error.h, so this file does **not** trip it -- but the
- *   truth belongs back in core (see the debt list in the delivery report §6).
- *   This file does **not** modify core (hard constraint: do not touch the core directory).
- */
+/* ---- errno names upstream uses that `br_error.h` does not yet carry ----
+ * Five names used by the upstream `drivers/mmc/` originals are absent from core, so they are added
+ * here, values verbatim from u-boot `include/linux/errno.h`. They belong back in `br_error.h`
+ * eventually; `tools/check-errno.sh` only enforces the names already there. */
 #define ECOMM        70    /* Communication error on send */
 #define EBADMSG      74    /* Not a data message */
 #define ENOMEDIUM   123    /* No medium found */
 #define EMEDIUMTYPE 124    /* Wrong medium type */
 #define ENOTSUPP    524    /* Operation is not supported (kernel-internal code, not uapi) */
 
-/* ==================================================================== time
- *
- * ★ This adapter's core trick (see file header): `udelay()`/`get_timer()` are a "**sleep wait
- *   that a device IRQ can wake early**", so upstream's polling loops become IRQ-driven waits.
- *
- * Two hooks, **one per kind of u-boot wait** (provided by glue):
- *   - `uboot_mmc_env_wait(max_us)`: "yield the CPU **for at most max_us, or until the current
- *     device's device IRQ**" -- the **wait-for-device-event** path (command completion); before
- *     sleeping it re-enables this card's `SIGNAL_ENABLE` (the ISR deasserts the level line by
- *     writing SIGNAL_ENABLE 0), so normally a **device IRQ** wakes us; with no waitable device
- *     channel (or no scheduler yet) it falls back to a short yield.
- *   - `uboot_mmc_env_spin(us)`: **busy wait** (does not yield). Upstream uses `udelay()` to spin
- *     waiting for "register stable/reset complete" (measured values are only 10/100/1000/2000 µs,
- *     see §"why not sleep"); those loops have no device event to wait for, and the scheduler's
- *     sleep granularity is **one tick** (1/HZ = 5 ms) ⇒ routing them to the sleep path would
- *     "sleep 100 µs but really 5 ms" (measured: four-card bring-up 0.037 s → 0.35 s, pushing the
- *     whole self-test past `irq-test`'s 6 s gate limit; see ADR-0029 §4).
- * `uboot_mmc_env_reg_touched()` is provided by glue: it records "the MMIO address just accessed"
- *   for the "current device" lookup above (upstream's wait loops have no device argument).
- */
+/* `udelay()`/`get_timer()` are a sleep wait that a device IRQ can wake early, so upstream's
+ * polling loops become IRQ-driven. Glue provides three hooks: `uboot_mmc_env_wait(max_us)` yields
+ * for at most max_us or until the current device's IRQ (re-enabling `SIGNAL_ENABLE` first, which
+ * the ISR masks); `uboot_mmc_env_spin(us)` busy-waits without yielding, because upstream uses
+ * `udelay()` only for "register stable/reset complete" (10/100/1000/2000 us) and one tick of
+ * sleep would inflate those to 5 ms; `uboot_mmc_env_reg_touched()` records the MMIO address just
+ * accessed for the device lookup (upstream's wait loops have no device argument). */
 void uboot_mmc_env_wait(br_u32 max_us);
 void uboot_mmc_env_spin(br_u32 us);
 void uboot_mmc_env_reg_touched(const volatile void *reg);
 
-/*
- * **Upper bound** on a single yield window (= the "next ms" of task spec §2.4): only the
- * "wait-for-device-event" path uses it fully.
- */
+/* Upper bound on a single yield window (1 ms); only the wait-for-device-event path uses it
+ * fully. */
 #define UBOOT_MMC_WAIT_MAX_US   1000u
 
 /* One "yield the CPU" window: at most max_us microseconds, or a device IRQ. */
@@ -773,23 +573,15 @@ static inline void uboot_mmc_yield_once(br_u32 max_us)
     uboot_mmc_env_wait(max_us);
 }
 
-/*
- * `udelay(us)` -- u-boot's semantics are exactly a **busy wait**; upstream only uses it to wait
- * for "register stable/reset complete" (values 10/100/1000/2000 µs), so busy-wait like u-boot
- * here: no CPU yield, so a µs-level spin is not inflated to "one tick" (5 ms). No upper bound is
- * promised (upstream only guarantees "not early").
- */
+/* `udelay(us)`: u-boot semantics are a busy wait, and upstream uses it only for 10/100/1000/2000 us
+ * register-stable/reset waits -- do not yield, else a us spin becomes one 5 ms tick. */
 static inline void udelay(unsigned long usec)
 {
     uboot_mmc_env_spin((br_u32)usec);
 }
 
-/*
- * `mdelay(ms)`: u-boot uses it to wait for the **card** to become ready (the polling interval of
- * `mmc_send_op_cond`/`mmc_complete_op_cond`, values 5/10 ms). That is a "wait-for-device-event"
- * ⇒ it takes the opposite path from `udelay`: **yield the CPU**, at most 1 ms per slice, and a
- * device IRQ can wake it early.
- */
+/* `mdelay(ms)`: upstream waits for the card (`mmc_send_op_cond`/`mmc_complete_op_cond`, 5/10 ms),
+ * a device event => yield the CPU in 1 ms slices, woken early by an IRQ. */
 static inline void mdelay(unsigned long msec)
 {
     const br_time_t deadline = br_deadline_from_now((br_time_t)msec * (br_time_t)1000u);
@@ -807,11 +599,8 @@ static inline void mdelay(unsigned long msec)
     }
 }
 
-/*
- * `get_timer(base)`: returns "milliseconds since base". ★ Every call **yields the CPU first**
- * (until the next ms or a device IRQ) -- upstream uses it as the polling metronome, so its loops
- * become IRQ-driven.
- */
+/* `get_timer(base)`: milliseconds since base. Every call yields the CPU first (until the next ms or
+ * a device IRQ), so upstream's polling metronome becomes IRQ-driven. */
 static inline ulong get_timer(ulong base)
 {
     uboot_mmc_yield_once(UBOOT_MMC_WAIT_MAX_US);
@@ -825,18 +614,10 @@ static inline ulong timer_get_us(void)
 }
 #define time_after(a, b) ((long)((b) - (a)) < 0)
 
-/* ==================================================================== MMIO
- *
- * Upstream `sdhci.h`'s `sdhci_readl/writel/...` (with `MMC_SDHCI_IO_ACCESSORS` off) land directly
- * on `readl(host->ioaddr + reg)`. That environment is what this section provides.
- *
- * ★ Every access calls `uboot_mmc_env_reg_touched(addr)`: that is the entire secret of "how the
- *   environment layer knows which card is being waited on" (see file header). It is just a store
- *   plus a lookup (when waiting) and does not affect correctness.
- * ★ Alignment: the PCIe BAR sits in Device-nGnRnE memory and this target uses `-mstrict-align`
- *   ⇒ accesses must be aligned. Upstream `sdhci_readl/writel` use aligned offsets, so dereference
- *   by width here.
- */
+/* Upstream `sdhci.h`'s `sdhci_readl/writel/...` (`MMC_SDHCI_IO_ACCESSORS` off) land on
+ * `readl(host->ioaddr + reg)`. Every access reports the address to
+ * `uboot_mmc_env_reg_touched()`, which is how a wait finds its card; `-mstrict-align` and
+ * Device-nGnRnE memory force access by width. */
 static inline u32 uboot_mmc_readl(const volatile void *addr)
 {
     uboot_mmc_env_reg_touched(addr);
@@ -874,18 +655,10 @@ static inline void uboot_mmc_writeb(u8 v, volatile void *addr)
 #define writew(v, a) uboot_mmc_writew((v), (a))
 #define writeb(v, a) uboot_mmc_writeb((v), (a))
 
-/* ==================================================================== cache / DMA
- *
- * u-boot's `cpu_func.h`/`asm/cache.h`/`linux/dma-mapping.h`:
- *   - `ARCH_DMA_MINALIGN`: matches the platform -- Cortex-A53 L1 D-cache line is 64 B (QEMU virt);
- *   - `flush_cache(addr, size)` (upstream `sdhci-adma.c` calls it after filling the descriptor
- *     table) / `flush_dcache_range` / `invalidate_dcache_range` → core's `br_mm_cache_*` (hitting
- *     an uncached region ⇒ no-op);
- *   - `dma_map_single`/`dma_unmap_single`: u-boot's semantics are exactly "per-direction cache
- *     maintenance + return the identity-mapped dma_addr" (see upstream `linux/dma-mapping.h`);
- *   - `dev_phys_to_bus(dev, addr)`: here `!DM_MMC` ⇒ `mmc_to_dev()` is NULL; identity map
- *     ⇒ return as-is (`phys2bus.h`'s `#define dev_phys_to_bus(_, _addr) _addr`).
- */
+/* u-boot `cpu_func.h`/`asm/cache.h`/`linux/dma-mapping.h`: `ARCH_DMA_MINALIGN` = 64 B matches the
+ * Cortex-A53 L1 D-cache line (QEMU virt); `flush_cache`/`flush_dcache_range`/
+ * `invalidate_dcache_range` map to core's `br_mm_cache_*` (no-op on an uncached region);
+ * `dma_map_single`/`dma_unmap_single` do per-direction cache maintenance and identity-map. */
 #define ARCH_DMA_MINALIGN  64ul
 
 static inline void flush_dcache_range(unsigned long start, unsigned long stop)
@@ -905,7 +678,7 @@ static inline void invalidate_cache(phys_addr_t addr, unsigned long size)
     (void)br_mm_cache_invalidate((void *)(br_uintptr_t)addr, (br_size_t)size);
 }
 
-/* `linux/dma-direction.h` (matching upstream one by one) */
+/* `linux/dma-direction.h` (matching upstream) */
 enum dma_data_direction {
     DMA_BIDIRECTIONAL = 0,
     DMA_TO_DEVICE     = 1,
@@ -939,21 +712,18 @@ static inline void dma_unmap_single(dma_addr_t addr, size_t len,
 
 #define dma_mapping_error(x, y) 0
 
-/* `phys2bus.h` (both the `!CONFIG_PHYS_TO_BUS` and `!DM` branches degenerate to identity) */
+/* `phys2bus.h`: the `!CONFIG_PHYS_TO_BUS` and `!DM` branches both degenerate to identity */
 #define dev_phys_to_bus(_dev, addr) ((dma_addr_t)(addr))
 #define dev_bus_to_phys(_dev, addr) ((phys_addr_t)(addr))
 static inline unsigned long phys_to_bus(unsigned long phys) { return phys; }
 static inline unsigned long bus_to_phys(unsigned long bus)  { return bus; }
 
-/* u-boot's `virt_to_phys()`: identity here (identity map) (`sdhci_setup_cfg` uses it for the ADMA table address). */
+/* u-boot's `virt_to_phys()`: identity here (`sdhci_setup_cfg` uses it for the ADMA table
+ * address). */
 #define virt_to_phys(addr) ((phys_addr_t)(br_uintptr_t)(addr))
 
-/* ==================================================================== GPIO
- *
- * `struct sdhci_host` embeds two `struct gpio_desc` **by value** (pwr_gpio/cd_gpio), so the type
- * must be present. This adapter enables neither DM_GPIO nor DM_MMC ⇒ nothing initializes or uses
- * them. The definition matches upstream `asm-generic/gpio.h` field by field (three fields).
- */
+/* `struct sdhci_host` embeds two `struct gpio_desc` by value, so the type must exist; neither
+ * DM_GPIO nor DM_MMC is enabled, so nothing uses them. Matches upstream field by field. */
 struct udevice;                 /* forward declaration: no DM here */
 
 struct gpio_desc {
@@ -971,8 +741,7 @@ struct gpio_desc {
     uint offset;                /* GPIO offset within the device */
 };
 
-/* ==================================================================== other forward declarations
- * Upstream `mmc.h` declares `struct bd_info;` itself; the `mmc_initialize()` signature needs it. */
+/* Upstream `mmc.h` declares `struct bd_info;` itself; `mmc_initialize()`'s signature needs it. */
 struct bd_info;
 
 #endif /* BR_ADAPTER_UBOOT_MMC_ENV_H */

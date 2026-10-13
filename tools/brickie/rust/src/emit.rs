@@ -1,22 +1,12 @@
-//! Deterministic TOML / JSON text emitter (for machine files).
-//!
-//! Discipline (contract §4): machine files **must contain no timestamps / random numbers / host-specific info**;
-//! the same input run twice ⇒ byte-identical. This module only turns "structure → text" and does not sort semantics —
-//! ordering is given explicitly by the caller (inside this crate) to guarantee reproducibility.
-//!
-//! Public exports:
-//! - [`TDoc`] / [`TTable`] / [`TValue`] —— reusable "TOML table / array table" emit primitives
-//!   (snapshot serialization reuses these primitives in iface.rs, owned by agent-B; see README).
-//! - [`render_lock`] —— canonical text of `brickie.lock`.
-//! - [`render_dependents`] —— canonical text of `build/index/dependents.json`.
+//! Deterministic TOML / JSON text emitter for machine files. Same input run twice ⇒ byte-identical
+//! text: no timestamps, random numbers or host-specific info. This module never sorts; ordering
+//! comes from the caller.
 
 use crate::model::{Lock, Snapshot};
 
-/// First-line marker of generated files (same literal as cxx `text.h` `kGeneratedMarker` / contract §6).
-/// Used to tell whether a file is a product of this tool.
+/// First-line marker of generated files (same literal as cxx `text.h` `kGeneratedMarker`).
 pub const GENERATED_MARKER: &str = "brickie:generated";
 
-/// TOML scalar / array value.
 #[derive(Clone, Debug)]
 pub enum TValue {
     Str(String),
@@ -44,7 +34,6 @@ impl TValue {
     }
 }
 
-/// One TOML table (or `[[array table]]`) node.
 #[derive(Clone, Debug, Default)]
 pub struct TTable {
     /// Header path segments, e.g. `["plugin", "export"]`.
@@ -121,7 +110,7 @@ impl TTable {
     }
 }
 
-/// A TOML document: root key-values + tables (emitted in insertion order).
+/// A TOML document: root key-values + tables, emitted in insertion order.
 #[derive(Clone, Debug, Default)]
 pub struct TDoc {
     pub values: Vec<(String, TValue)>,
@@ -177,20 +166,15 @@ pub fn toml_string(s: &str) -> String {
     out
 }
 
-// ------------------------------------------------------------------ machine files
-
-/// Common header for machine TOML files: first-line marker + a "do not edit by hand" note (no timestamp).
+/// Common header for machine TOML files: first-line marker + "do not edit by hand" note.
 fn machine_header(what: &str) -> String {
     format!(
         "# {GENERATED_MARKER}\n# {what} — machine-owned file, do not edit by hand; byte-identical across runs on the same input (contract §4)\n\n"
     )
 }
 
-/// Canonical text of `brickie.lock` (idempotent / no timestamp).
-///
-/// Shape = `schema/lock.schema.json` (authoritative): `schema` + `profile` /
-/// `plugins[]` / `units[]` under `[lock]`. `[lock.product]` is an extension of this implementation
-/// (allowed by the schema's `additionalProperties: true`) to record the product header.
+/// Canonical text of `brickie.lock` (no timestamp); shape follows the authoritative
+/// `schema/lock.schema.json` (`[lock.product]` is permitted by `additionalProperties: true`).
 pub fn render_lock(lock: &Lock) -> String {
     let mut doc = TDoc::new().set("schema", TValue::Int(lock.schema));
 
@@ -249,10 +233,8 @@ pub fn render_dependents(index: &crate::model::DependentsIndex) -> String {
     format!("{}\n", serde_json::to_string_pretty(&root).expect("JSON must be serializable"))
 }
 
-/// **Reusable primitives** for snapshot serialization (agent-B: iface.rs assembles `api/iface/<provider>/<unit>.toml` from these).
-///
-/// This function gives a **shape example** (no hash computation — hashing belongs to agent-B's IFACE-IR):
-/// the snapshot header enforces `hash_scope` / `truth` and the `NOT_ABI` note (RV-3 / V-11).
+/// Snapshot emit primitives reused by iface.rs; shape example only, no hash computation. The
+/// header carries `hash_scope` / `truth` and the `NOT_ABI` note (RV-3 / V-11).
 pub fn render_snapshot(snap: &Snapshot) -> String {
     let mut doc = TDoc::new()
         .set("schema", TValue::Int(1))
@@ -272,9 +254,9 @@ pub fn render_snapshot(snap: &Snapshot) -> String {
     head.push_str("hash", snap.hash.clone().unwrap_or_default());
     head.push_str("hash_scope", snap.hash_scope.clone().unwrap_or_default());
     head.push_str("truth", snap.truth.clone().unwrap_or_default());
-    // IFACE-IR rule 10: `strict_params` must be stored in the snapshot (otherwise hashes vary across environments).
+    // IFACE-IR rule 10: `strict_params` must be stored, else hashes vary across environments.
     head.push_bool("strict_params", snap.strict_params.unwrap_or(false));
-    // Ruling R-7: baseline of the unfreeze window (present only while in an unfreeze window).
+    // Ruling R-7: unfreeze-window baseline; present only inside such a window.
     if let Some(b) = &snap.baseline_hash {
         head.push_str("baseline_hash", b.clone());
     }
@@ -323,7 +305,6 @@ pub fn render_snapshot(snap: &Snapshot) -> String {
     format!("{}{}", machine_header(&format!("api/iface snapshot {}", snap.file)), doc.render())
 }
 
-/// Common header for machine TOML files (reused by iface.rs proposals and other machine files).
 pub fn machine_text_header(what: &str) -> String {
     machine_header(what)
 }

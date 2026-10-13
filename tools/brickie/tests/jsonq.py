@@ -1,29 +1,19 @@
 #!/usr/bin/env python3
-"""**Structured** query / snapshot tool for `--json` output (the assertion backend for cases).
+"""Structured query / snapshot tool for `--json` output (the assertion backend for cases).
 
-Why not textual grep / whole-text diff:
-  contract §3 fixes a stable ordering of the diagnostics array by ``(code, file, span, target)``; §2
-  fixes the envelope fields. Acceptance must lock **those structures** (key sets / diagnostic order /
-  protocol version / exit codes), not text indented a few spaces on one machine — exactly four things:
+Locks the contract structures -- envelope field sets, the diagnostics array order by
+``code, file, span, target``, the protocol version, exit codes -- rather than text indentation:
 
   1. fetch values by key path (``get`` / ``count`` / ``has`` / ``keys``);
-  2. compress the diagnostics array into the canonical tuple sequence (``diags``) of
-     ``code|severity|file|span|target``, for "is the order stable" / "is the set unchanged after a stub swap";
-  3. assert that the diagnostics array really is ordered by the contract keys (``sorted``);
-  4. snapshots: project the whole response into stable JSON with **prose (message/hint) and dynamic
-     write-back bodies removed**, compared byte-for-byte with ``tests/snap/<name>.json``; ``--emit`` regenerates.
+  2. canonical diagnostic tuples (``diags``) of ``code|severity|file|span|target`` in array order;
+  3. assert the diagnostics array is ordered by the contract keys (``sorted``);
+  4. snapshots: the response projected to stable JSON with prose (message/hint) and dynamic
+     write-back bodies removed, compared with ``tests/snap/<name>.json``; ``--emit`` regenerates.
 
-Usage (all express assertion success or failure via exit code 0/1, so run.sh can check directly):
-  jsonq.py envelope   <resp.json>
-  jsonq.py get        <resp.json> <dotted.path>
-  jsonq.py keys       <resp.json> <dotted.path>
-  jsonq.py count      <resp.json> <dotted.path>
-  jsonq.py has        <resp.json> <dotted.path>
-  jsonq.py diags      <resp.json>
-  jsonq.py diagcodes  <resp.json>
-  jsonq.py sorted     <resp.json>          # yes/no
-  jsonq.py snapshot   <name> <resp.json>   # compare with tests/snap/<name>.json
-  jsonq.py snapshot   --emit <name> <resp.json>
+Usage (exit code 0/1 = assertion pass/fail, so run.sh can check directly); `snapshot` takes
+``[--emit] <name> <resp.json>``, everything else takes ``<resp.json>`` plus an optional path:
+  envelope | diags | diagcodes | sorted
+  get | keys | count | has <dotted.path>
 """
 
 from __future__ import annotations
@@ -35,12 +25,9 @@ import sys
 
 SNAP_DIR = pathlib.Path(__file__).resolve().parent / "snap"
 
-# Fields **deliberately dropped** from snapshots:
-#   message / hint    — human prose, not protocol shape; locking it locks wording, not the contract
-#   expected_snapshot — the "expected snapshot" body echoed when `iface status` mismatches (dynamic)
+# Snapshot drop list: human prose (message/hint) and dynamic write-back bodies (expected_snapshot).
 _DROP_KEYS = {"message", "hint", "expected_snapshot"}
-# The `data.languages[].version` of `--version --json` is the **build-environment toolchain version**
-# (e.g. rustc 1.93.1), not protocol shape; another toolchain reddens the snapshot ⇒ dropped (names kept).
+# Also dropped: the build-toolchain version under data.languages[].version (names kept).
 _DROP_TOOLCHAIN = re.compile(r"languages(\[\d+\])?$")
 _LONG_STRING = 200
 
@@ -92,8 +79,7 @@ def diag_tuples(resp: dict) -> list[list[str]]:
 
 
 def sort_key(t: list[str]) -> tuple:
-    # Same keys as python/brickie/present.sort_diagnostics (contract §3);
-    # diagnostics without a code sort first as "".
+    # Sort keys match python/brickie/present.sort_diagnostics; a missing code sorts first as "".
     return (t[0], t[2], t[3], t[4])
 
 
@@ -169,7 +155,6 @@ def main(argv: list[str]) -> int:
         print(",".join(sorted(resp.keys())))
         return 0
     if op == "text":
-        # text projection of diagnostics (so a case can use the same grep for both text/json modes)
         for d in resp.get("diagnostics", []):
             print(f'{d.get("severity", "?")}: {d.get("code") or "-"} '
                   f'[{d.get("file") or d.get("target") or ""}] ({d.get("span") or ""}) '

@@ -1,27 +1,10 @@
 /*
- * brickOS prototype v0.2.0 — **self-test suite** of framework/bdev-core (src/bdev_selftest.c)
- *
- * Design basis and rulings: `docs/decisions/0010-plugin-selftest.md` (self-test separated from core code),
- * `docs/decisions/0021-bdev-pci-emmc.md` (bdev shape and raw surface = v2).
- *
- * ## What it tests, and where the boundary with production code lies
- *   The block device subclass's **mechanism** (own numbering `TC-BDEV-*`): register-time validation of
- *   name/ops/geometry, retrieval semantics, registry bookkeeping, and "a bdev entry has no file surface"
- *   (D21 ⇒ `/dev/<bdev>` is visible but not openable).
- *   It does **not** test any concrete medium — real block round-trips live in the driver's own suite
- *   (e.g. `adapter/uboot-mmc`'s `TC-EMMC-*`); that is evidence about a "device", not about the "subclass framework".
- *
- * ## Why many cases use "legal name + illegal input"
- *   `br_bdev_register` validates **before entering the table**, so pairing a "legal, currently free name"
- *   with illegal ops/geometry covers every rejection branch while **registering nothing** (the registry is
- *   not polluted, so cases have no ordering coupling). Same trick as cdev-core's
- *   `br_cdev_register('cdevx', <ops with only open>)`.
- *
- * ## Contract with br_plugin_manager_selftest()
- *   Returns the **number of failures** (0 = all green); logs itself (`[BDEVCONF] PASS/FAIL ...` + `SUMMARY`).
- *   Failure does not halt — red/green is judged by the gate (`[BDEVCONF] FAIL` is in tests/gates.toml's forbid).
+ * Self-test suite of framework/bdev-core (src/bdev_selftest.c). Covers register-time name/ops/
+ * geometry validation, retrieval semantics, registry bookkeeping, and "a bdev entry has no file
+ * surface" (TC-BDEV-*). No concrete medium: real block round-trips belong to the driver's suite.
+ * Returns the number of failures; logs [BDEVCONF] PASS/FAIL.
  */
-#include <br/dev/br_bdev.h>     /* public contract (br_bdev_ops_t / br_bdev_geom_t) */
+#include <br/dev/br_bdev.h>
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -30,15 +13,11 @@
 
 #include "bdev_internal.h"
 
-/* Self-test entry prototype (defined at the end of this file; the generated `plugin_desc.c` `.selftest` hook calls it). */
+/* Referenced by the generated plugin_desc.c .selftest hook. */
 int bdev_core_selftest(void);
 
-/* =====================================================================
- * Probe device (serves only this file, not registered)
- *
- * geometry is answered verbatim from the `br_bdev_geom_t` that priv points at ⇒ one ops table can play
- * both "legal geometry" and "various illegal geometry" roles, without an ops table per illegal value.
- * ===================================================================== */
+/* Probe device (this file only, never registered): geometry is answered verbatim from the
+ * br_bdev_geom_t that priv points at, so one ops table plays every legal/illegal geometry role. */
 
 static int probe_geometry(void *priv, br_bdev_geom_t *g)
 {
@@ -67,7 +46,7 @@ static int probe_flush(void *priv)
     return 0;
 }
 
-/* "good ops" with all four required slots present (the only variable part is geometry injected via priv) */
+/* All four required slots present; only geometry varies, injected via priv. */
 static const br_bdev_ops_t s_good_ops = {
     .read     = probe_read,
     .write    = probe_write,
@@ -78,7 +57,7 @@ static const br_bdev_ops_t s_good_ops = {
     .resume   = BR_NULL,
 };
 
-/* bad ops with a missing slot (each table lacks exactly one, pinning each "required" slot individually) */
+/* Each table lacks exactly one required slot, pinning every "required" slot individually. */
 static const br_bdev_ops_t s_no_read_ops = {
     .read = BR_NULL, .write = probe_write, .flush = probe_flush, .geometry = probe_geometry,
 };
@@ -92,14 +71,12 @@ static const br_bdev_ops_t s_no_geom_ops = {
     .read = probe_read, .write = probe_write, .flush = probe_flush, .geometry = BR_NULL,
 };
 
-/* legal "geometry baseline" (512 B sectors / 8 sectors / max_rw 4 / no alignment requirement / PIO) */
+/* Legal geometry baseline: 512 B sectors / 8 sectors / max_rw 4 / no alignment / PIO. */
 #define PROBE_GEOM_SECTOR   512u
 #define PROBE_GEOM_SECTORS  8u
 #define PROBE_GEOM_MAXRW    4u
 
-/* =====================================================================
- * Conformance cases (own numbering TC-BDEV-*; registered in br-wa-test-001)
- * ===================================================================== */
+/* Conformance cases (TC-BDEV-*, registered in br-wa-test-001). */
 
 static br_u32 s_bd_pass;
 static br_u32 s_bd_fail;
@@ -115,7 +92,7 @@ static void bd_conf(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* count BR_CLASS_BDEV entries by walking the registry (public API) */
+/* Count BR_CLASS_BDEV entries by walking the registry. */
 static br_u32 bd_registry_count(void)
 {
     br_u32 n = 0u;
@@ -146,7 +123,7 @@ int bdev_core_selftest(void)
 
     br_log_info("[BDEVCONF] bdev-core conformance (register/get/geometry/raw-face)");
 
-    /* ---- TC-BDEV-001: name rules (legal ops; rejection happens before table entry) ---- */
+    /* TC-BDEV-001: name rules; rejection happens before table entry. */
     {
         br_bdev_geom_t g = { PROBE_GEOM_SECTOR, PROBE_GEOM_SECTORS, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
         const br_u32   n0 = br_dev_count();
@@ -166,7 +143,7 @@ int bdev_core_selftest(void)
                 "NULL/empty/uppercase/slash/underscore name ⇒ -EINVAL and registry unchanged");
     }
 
-    /* ---- TC-BDEV-002: required ops slots (legal free name + missing slot ⇒ -EINVAL, no table entry) ---- */
+    /* TC-BDEV-002: legal free name + missing required slot => -EINVAL, no table entry. */
     {
         br_bdev_geom_t g = { PROBE_GEOM_SECTOR, PROBE_GEOM_SECTORS, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
         const br_u32   n0 = br_dev_count();
@@ -187,10 +164,9 @@ int bdev_core_selftest(void)
                 "null ops / missing read|write|flush|geometry ⇒ -EINVAL and the name stays free");
     }
 
-    /* ---- TC-BDEV-003: geometry self-consistency (geometry called at register time and rejected item by item) ---- */
+    /* TC-BDEV-003: geometry is called at register time and rejected item by item. */
     {
         const br_u32 n0 = br_dev_count();
-        /* per item: {geometry, description} — geometry injected via priv */
         br_bdev_geom_t g_zero_sec = { 0u, PROBE_GEOM_SECTORS, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
         br_bdev_geom_t g_not_pow2 = { 500u, PROBE_GEOM_SECTORS, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
         br_bdev_geom_t g_zero_n   = { PROBE_GEOM_SECTOR, 0u, PROBE_GEOM_MAXRW, 0u, BR_BDEV_F_PIO };
@@ -221,7 +197,7 @@ int bdev_core_selftest(void)
                 "sector=0/not a power of 2, n_sectors=0, max_rw=0/>n, align not a power of 2, DMA|PIO both set ⇒ -EINVAL");
     }
 
-    /* ---- TC-BDEV-004: retrieval semantics (unregistered is NULL and does not write the out-param) ---- */
+    /* TC-BDEV-004: unregistered is NULL and does not write the out-param. */
     {
         void *sentinel = (void *)&s_bd_pass;      /* any non-NULL sentinel */
         void *priv = sentinel;
@@ -234,9 +210,7 @@ int bdev_core_selftest(void)
                 "unregistered ⇒ NULL and *priv unchanged; br_bdev_get(NULL,NULL) ⇒ NULL");
     }
 
-    /* ---- TC-BDEV-005: raw file surface = v2 (walk registry: bdev entries always have open_file NULL) ----
-     * Mechanical criterion: whoever wires a file surface onto bdev (or lets the register path miss the NULL)
-     * turns this red (same shape as TC-CDEV-008). */
+    /* TC-BDEV-005: raw file surface = v2: every bdev entry has open_file == NULL. */
     {
         br_bool all_null = BR_TRUE;
         for (br_u32 i = 0u; i < br_dev_count(); i++) {
@@ -249,7 +223,7 @@ int bdev_core_selftest(void)
                 "all BR_CLASS_BDEV entries have open_file == NULL (D21: raw block access is v2)");
     }
 
-    /* ---- TC-BDEV-006: live device round-trip (when the composition includes a bdev; no bdev ⇒ "not applicable") ---- */
+    /* TC-BDEV-006: live device round-trip; no bdev in the composition => "not applicable". */
     {
         const char *name = bd_first_name();
         if (name == BR_NULL) {
@@ -272,7 +246,7 @@ int bdev_core_selftest(void)
         }
     }
 
-    /* ---- TC-BDEV-007: pool bookkeeping (used <= capacity, and matches the registry entry count) ---- */
+    /* TC-BDEV-007: used slots <= capacity and == registry bdev entry count. */
     {
         const br_u32 cap  = bdev_internal_capacity();
         const br_u32 used = bdev_internal_slot_count();
@@ -283,7 +257,7 @@ int bdev_core_selftest(void)
                 "slot_count <= capacity and slot_count == registry bdev entry count");
     }
 
-    /* ---- TC-BDEV-008: flags bitfield (live device; unknown bit ⇒ red) ---- */
+    /* TC-BDEV-008: geometry.flags holds only known bits (live device). */
     {
         const char *name = bd_first_name();
         if (name == BR_NULL) {

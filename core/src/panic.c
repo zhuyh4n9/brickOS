@@ -1,24 +1,10 @@
 /*
- * brickOS prototype v0.1.0 — panic: minimal formatted output on a standalone channel + halt
- *
- * Authoritative design: `docs/3-os-core/3-02-int.md` §8.3.1 (panic ISR contract) and §10.6.
- *
- * ★ Division of the two entries (§8.3.1):
- *   br_panic_bare()  —— **any context** (ISR / fault / double fault); only polls the console
- *                       for one minimal line then halts. **No lock / no heap / no scheduler /
- *                       no trace ring writes**, same principle as 5-01 §2 "panic channel is
- *                       standalone".
- *   br_panic()       —— thread-only convenience entry; in v0.1 it differs from bare only in
- *                       that one banner line (the full path waits for trace/tamdump services).
- *   Both are **terminal**: "halt" is the semantics, so they are not bound by "no blocking in
- *   an ISR", but they **still must not take locks before halting** (that would leave locks to
- *   a world that no longer exists, and make panic depend on lock state).
- *
- * Why a private formatter: no printf under -ffreestanding -nostdlib; and linking a full printf
- * for panic conflicts with "panic depends on no plugin stack" (design §8.3.1). Only the
- * required subset is implemented here:
- *   %% %c %s %d %i %u %x %X %p, with '0' zero padding, minimum width, l/ll/z length modifiers.
- * Output sink = the polling console contract owned by core (br_console_putc / br_console_puts).
+ * Panic: minimal formatted output on a standalone channel, then halt (terminal, never returns).
+ * br_panic_bare() is callable from any context (ISR/fault/double fault): no lock, heap, scheduler
+ * or trace-ring writes; br_panic() is the thread-only entry (v0.1: only a different banner).
+ * Neither may take a lock before halting.
+ * No printf under -ffreestanding -nostdlib and panic must not depend on the plugin stack, so the
+ * private formatter covers %% %c %s %d %i %u %x %X %p; the sink is the polling console.
  */
 #include <br/core/br_console.h>
 #include <br/core/br_fault.h>
@@ -27,11 +13,7 @@
 
 #include <stdarg.h>
 
-/*
- * State of the panic re-entrancy guard (§10.6 and ADR-0003 §5).
- * v0.1 is single-core ⇒ a file-static is enough (v2 per-CPU comes with TPIDR_EL1 per-CPU);
- * it is **volatile**: a fault may re-enter where the compiler cannot see it.
- */
+/* Panic re-entrancy depth; volatile since a fault may re-enter where the compiler cannot see it. */
 static volatile br_u32 s_panic_depth;
 
 br_bool br_panic_in_progress(void)
@@ -41,15 +23,15 @@ br_bool br_panic_in_progress(void)
 
 BR_NORETURN void br_panic_halt(void)
 {
-    /* No printing, no locking, no touching anything possibly corrupted — just stop.
-     * wfe not wfi: an event-type wait, not promising to wake on "masked pending interrupts" (§11.1). */
+    /* No printing, no locking, nothing possibly corrupted -- just stop. wfe, not wfi: an
+     * event-type wait, not promising to wake on masked pending interrupts. */
     for (;;) {
         __asm__ volatile("wfe" ::: "memory");
     }
 }
 
-/* Emit an unsigned value in base: buf is built in reverse, padded to width (zero/space), then
- * printed forward. buf of 24 bytes suffices: 64-bit decimal is at most 20 digits, hex 16. */
+/* Reverse-generate into buf, pad to width (zero/space), print forward. buf[24] suffices: 64-bit
+ * decimal is at most 20 digits, hex 16. */
 static void panic_emit_uint(br_u64 value, br_u32 base, br_u32 width,
                             br_bool zero_pad, br_bool upper)
 {
@@ -151,8 +133,7 @@ static void panic_emit_field(const char **pp, va_list *ap)
         *pp = p - 1;
         return;
     default:
-        /* unsupported conversion: print it rather than swallow it, avoiding odd "a chunk is
-         * missing" symptoms */
+        /* unsupported conversion: print it rather than swallow it */
         br_console_putc('%');
         br_console_putc(*p);
         break;
@@ -164,12 +145,8 @@ static void panic_emit_field(const char **pp, va_list *ap)
 /* Line format: "\n" + tag + " " + <message> + "\n"; all written straight to the polling console. */
 static void panic_vprint(const char *tag, const char *fmt, va_list ap)
 {
-    /*
-     * Before halting, set all four exception mask bits (same origin as §10.2 "fault stubs
-     * always mask everything explicitly"): prevent re-entry by a new IRQ/SError/debug
-     * exception during panic output from garbling the final message.
-     * PSTATE only — no locks, no plugin calls, no heap/clock/trace.
-     */
+    /* Mask all four exception mask bits before halting (PSTATE only -- no locks, plugin calls,
+     * heap/clock/trace): a re-entrant IRQ/SError/debug exception would garble the final message. */
     __asm__ volatile("msr daifset, #0xf" ::: "memory");
 
     br_console_putc('\n');
@@ -194,9 +171,8 @@ BR_NORETURN void br_panic_bare(const char *fmt, ...)
 {
     va_list ap;
 
-    /* ★ set the re-entrancy flag before printing: if the print path faults again, the fault
-     *   path sees it and halts silently instead of recursing (see the background note in
-     *   panic_internal.h). */
+    /* Set the re-entrancy flag before printing: a fault in the print path then halts silently
+     * instead of recursing (see panic_internal.h). */
     s_panic_depth++;
 
     va_start(ap, fmt);

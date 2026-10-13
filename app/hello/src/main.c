@@ -23,8 +23,6 @@ static void ap(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* ------------------------------------------------------------------ Case ①:
- * mutex-protected counter + barrier start + retval moved via join. */
 static pthread_barrier_t s_start_bar;      /* APP_WORKERS + main thread */
 static pthread_mutex_t   s_count_lock = PTHREAD_MUTEX_INITIALIZER;
 static long              s_count;
@@ -32,7 +30,7 @@ static long              s_count;
 static void *worker_count(void *arg)
 {
     const long bump = (long)(br_intptr_t)arg;
-    (void)pthread_barrier_wait(&s_start_bar);       /* all three workers on one start line */
+    (void)pthread_barrier_wait(&s_start_bar);
     for (int i = 0; i < APP_ITERS; i++) {
         if (pthread_mutex_lock(&s_count_lock) != 0) {
             return (void *)(br_intptr_t)(-1);
@@ -42,7 +40,7 @@ static void *worker_count(void *arg)
             return (void *)(br_intptr_t)(-2);
         }
     }
-    return (void *)(br_intptr_t)bump;               /* retval returns to the main thread via join */
+    return (void *)(br_intptr_t)bump;               /* read back by the main thread via join */
 }
 
 static br_bool case_mutex_count(void)
@@ -53,20 +51,18 @@ static br_bool case_mutex_count(void)
     for (unsigned i = 0u; i < APP_WORKERS; i++) {
         ok = ok && (pthread_create(&t[i], BR_NULL, worker_count, (void *)(br_intptr_t)(i + 1u)) == 0);
     }
-    (void)pthread_barrier_wait(&s_start_bar);        /* release the start line */
+    (void)pthread_barrier_wait(&s_start_bar);
     long sum = 0;
     for (unsigned i = 0u; i < APP_WORKERS; i++) {
         void *ret = BR_NULL;
         ok = ok && (pthread_join(t[i], &ret) == 0);
-        sum += (long)(br_intptr_t)ret;               /* sum of retvals = 1+2+3 */
+        sum += (long)(br_intptr_t)ret;               /* retvals 1+2+3 */
     }
     ok = ok && (sum == 6) && (s_count == (long)(APP_WORKERS * (unsigned)APP_ITERS));
     ok = ok && (pthread_barrier_destroy(&s_start_bar) == 0);
     return ok;
 }
 
-/* ------------------------------------------------------------------ Case ②:
- * condvar rendezvous (main thread waits for all workers ready, then broadcasts go). */
 static pthread_mutex_t s_join_lock = PTHREAD_MUTEX_INITIALIZER;
 static pthread_cond_t  s_join_ready = PTHREAD_COND_INITIALIZER;
 static pthread_cond_t  s_join_go = PTHREAD_COND_INITIALIZER;
@@ -117,8 +113,6 @@ static br_bool case_cond_rendezvous(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ Case ③:
- * TLS key: per-thread value isolation + destructor on exit. */
 static pthread_key_t s_tls_key;
 static int           s_tls_dtors;
 
@@ -130,7 +124,7 @@ static void *worker_tls(void *arg)
     if (pthread_setspecific(s_tls_key, (void *)(br_intptr_t)(idx + 1)) != 0) {
         return (void *)(br_intptr_t)(-1);
     }
-    (void)pthread_yield();                           /* let other threads write their own slots too */
+    (void)pthread_yield();                           /* let peers write their own slots */
     const long got = (long)(br_intptr_t)pthread_getspecific(s_tls_key);
     return (void *)(br_intptr_t)((got == (long)(idx + 1)) ? 0 : -2);
 }
@@ -152,8 +146,6 @@ static br_bool case_tls_key(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ Case ④:
- * detach (lazy reclaim): the detached thread still runs; join detached => EINVAL. */
 static int            s_det_ran;
 static sem_t          s_det_gate;
 
@@ -179,15 +171,13 @@ static br_bool case_detach(void)
     ok = ok && (pthread_join(t, &r) == EINVAL);      /* record still exists => EINVAL (not ESRCH) */
     ok = ok && (sem_post(&s_det_gate) == 0);
     for (int i = 0; i < 8; i++) {
-        (void)pthread_yield();                       /* let it exit; later calls trigger lazy reclaim */
+        (void)pthread_yield();                       /* let it exit; lazy reclaim on a later call */
     }
     ok = ok && (s_det_ran == 1);
     ok = ok && (sem_destroy(&s_det_gate) == 0);
     return ok;
 }
 
-/* ------------------------------------------------------------------ Case ⑤:
- * per-thread errno isolation (each thread writes its own slot; barrier makes the write precede the read). */
 static pthread_barrier_t s_err_bar;
 static int               s_err_seen[2];
 
@@ -216,8 +206,6 @@ static br_bool case_errno_isolated(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ Case ⑥:
- * rwlock: concurrent readers / exclusive writer. */
 static pthread_rwlock_t s_rw = PTHREAD_RWLOCK_INITIALIZER;
 static pthread_mutex_t  s_rw_stats = PTHREAD_MUTEX_INITIALIZER;
 static int              s_rw_value;
@@ -285,8 +273,6 @@ static br_bool case_rwlock(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ Case ⑦:
- * once (exactly once) + thread name set/get. */
 static pthread_once_t s_once = PTHREAD_ONCE_INIT;
 static int            s_once_count;
 static sem_t          s_name_gate;
@@ -338,32 +324,21 @@ static br_bool case_once_and_name(void)
     return ok;
 }
 
-/* ------------------------------------------------------------------ Cases ⑧–⑭:
- * End-to-end samples for media-class filesystems (third-party FAT / EROFS ports) (ADR-0022).
- *
- * ★ **Include only POSIX headers, call only the POSIX face** (via the iface/posix skin): the value of
- *   this family is exactly that "the APP sees no third filesystem" — only ordinary
- *   open/read/write/stat/opendir on the four mount points `/fat12`, `/fat16`, `/fat32`, `/assets`.
- *   The mount table, block device, SDHCI and LZ4 decompression are all several layers below; the APP
- *   knows none of it.
- * ★ The criterion is **byte-for-byte**: the host uses authoritative external tools (mkfs.fat + mcopy /
- *   mkfs.erofs) to place these bytes into the volumes (build/emmc0..3.img, see tools/mk-fs-images.sh) —
- *   a homemade mkfs and a homemade reader mirroring each other prove nothing, so "bytes read == bytes
- *   put in by the external tool" is this family's root criterion.
- * ★ Write-path cases **clean up after themselves** (unlink before create, unlink/rmdir after use): the
- *   gate may boot the same image repeatedly, and leftover garbage would drift the next directory check.
+/*
+ * End-to-end samples for the media-class filesystems (third-party FAT / EROFS ports): POSIX face
+ * only on /fat12, /fat16, /fat32, /assets. Criterion is byte-for-byte against bytes placed by
+ * external host tools (mkfs.fat + mcopy / mkfs.erofs); write-path cases clean up after themselves.
  */
 
-/* Chunk-compare buffer: 512 B is intentional — APP thread stacks are 4 KiB-class and the largest
- * checked file is 70000 B (the EROFS LZ4 artifact); it cannot be read into the stack whole. */
+/* 512 B chunks: the 70000 B LZ4 artifact does not fit a 4 KiB-class APP thread stack. */
 #define FS_CHUNK 512u
 static br_u8 s_fs_buf[FS_CHUNK];
 
-/* Expected-byte generators (ids correspond one-to-one with tools/mk-fs-images.sh content generation) */
-#define FSGEN_CONST   0   /* constant character `ch` */
-#define FSGEN_ABCDEF  1   /* "ABCDEFGH" repeated forever (the EROFS LZ4 artifact) */
-#define FSGEN_IDX     2   /* byte i = i & 0xFF */
-#define FSGEN_PRNG    3   /* same LCG as the image-building script (EROFS raw.bin) */
+/* Expected-byte generators; ids match the content generation in tools/mk-fs-images.sh */
+#define FSGEN_CONST   0
+#define FSGEN_ABCDEF  1
+#define FSGEN_IDX     2
+#define FSGEN_PRNG    3
 
 static br_u8 fs_gen(int gen, char ch, br_u64 i)
 {
@@ -376,7 +351,7 @@ static br_u8 fs_gen(int gen, char ch, br_u64 i)
     }
 }
 
-/* Read exactly `len` bytes and compare byte-for-byte; also requires "exactly EOF here" (one more read must return 0). */
+/* Read exactly `len` bytes, compare byte-for-byte, require EOF there (next read returns 0). */
 static br_bool fs_check_read(const char *path, br_u64 len, int gen, char ch)
 {
     const int fd = open(path, O_RDONLY);
@@ -405,7 +380,7 @@ static br_bool fs_check_read(const char *path, br_u64 len, int gen, char ch)
 
     if (ok == BR_TRUE) {
         br_u8 tail = 0u;
-        if (read(fd, &tail, 1u) != 0) {   /* the file must end exactly at len */
+        if (read(fd, &tail, 1u) != 0) {   /* must end exactly at len */
             ok = BR_FALSE;
         }
     }
@@ -413,7 +388,7 @@ static br_bool fs_check_read(const char *path, br_u64 len, int gen, char ch)
     return ok;
 }
 
-/* Compare a constant string byte-for-byte (no generator path; a plainer criterion: logs show where it differs). */
+/* Compare a constant string byte-for-byte (no generator path). */
 static br_bool fs_check_exact(const char *path, const char *text)
 {
     const size_t len = strlen(text);
@@ -440,7 +415,7 @@ static br_bool fs_check_exact(const char *path, const char *text)
     return ok;
 }
 
-/* APP-FS-001: all four mount points present; hello.txt type/size/content byte-correct (uncompressed path) */
+/* APP-FS-001: four mount points present; hello.txt type/size/content byte-correct */
 static br_bool case_fs_hello(void)
 {
     static const struct { const char *path; const char *text; } t[] = {
@@ -460,7 +435,7 @@ static br_bool case_fs_hello(void)
     return ok;
 }
 
-/* APP-FS-002: dir/a.bin on each volume compared byte-for-byte via generators (cross-block/large reads) */
+/* APP-FS-002: dir/a.bin per volume compared byte-for-byte via generators (cross-block reads) */
 static br_bool case_fs_binaries(void)
 {
     br_bool ok = BR_TRUE;
@@ -472,7 +447,7 @@ static br_bool case_fs_binaries(void)
     return ok;
 }
 
-/* APP-FS-003: FAT write round-trip (create -> three writes -> fsync -> close -> reopen/read back -> stat -> unlink) */
+/* APP-FS-003: FAT write round-trip (create -> writes -> fsync -> reopen/read -> stat -> unlink) */
 static br_bool case_fs_write_roundtrip(void)
 {
     const char *path = "/fat16/app-rw.txt";
@@ -499,7 +474,7 @@ static br_bool case_fs_write_roundtrip(void)
     return ok;
 }
 
-/* APP-FS-004: FAT directory face (mkdir -> create file inside -> opendir/readdir sees it -> clean up) */
+/* APP-FS-004: FAT directory face (mkdir -> create -> opendir/readdir sees it -> clean up) */
 static br_bool case_fs_directory(void)
 {
     const char *dir  = "/fat32/appdir";
@@ -540,7 +515,7 @@ static br_bool case_fs_directory(void)
     return ok;
 }
 
-/* APP-FS-005: FAT rename + truncate (old name gone after rename; truncate changes size and content) */
+/* APP-FS-005: FAT rename (old name gone) + truncate changes size and content */
 static br_bool case_fs_rename_truncate(void)
 {
     const char *old_path = "/fat12/app-ren.txt";
@@ -570,7 +545,7 @@ static br_bool case_fs_rename_truncate(void)
     return ok;
 }
 
-/* APP-FS-006: EROFS read-only enforcement (write/mkdir/unlink must give EROFS, not another error) + LZ4 read path */
+/* APP-FS-006: EROFS write/mkdir/unlink must give EROFS + LZ4 read path */
 static br_bool case_fs_erofs_readonly_lz4(void)
 {
     errno = 0;
@@ -623,26 +598,11 @@ static void app_pthread_conformance(void)
 }
 
 /*
- * Media-class filesystem conformance (ADR-0022). **Shares** the same counter pair and the same SUMMARY
- * line as the set above — so the gate's one-liner `[APPCONF] SUMMARY ... fail=0` covers both families,
- * while the per-case tags still flag "one family got compiled out" as before.
- *
- * ★ Why this family runs in the **start phase** (called directly by `hello_start`) rather than in an APP
- *   thread: the selftest pass runs "after all starts, before `br_sched_run()`", and **timer preemption is
- *   already in effect before that** (the ADR-0011 IRQ-exit stack switch only looks at "is any task ready",
- *   not at whether `br_sched_run()` was called). Measured: the first version put this family in an APP
- *   thread and it immediately ran concurrently with `[SELFTEST]`, so **both sides touched the same
- *   card/volume at once**: the EROFS side read `bdev read failed lba=2 rc=-5`, two eMMC cases each hit the
- *   full 2 s timeout (sdhci wait timeout/pending=0), and the APP-side FAT write round-trip also went red.
- *   In the start phase there is no such concurrency window: there is only one control flow (the boot
- *   context), and all four volumes are mounted, interrupts are on, the block device is registered — every
- *   precondition this family needs **holds**.
- *   (This also honestly exposes the v1 boundary "this generation's FS stack does not guarantee
- *    multithreaded concurrency": vfs-core / fs/tmpfs / both ports have no volume-level lock, which is a
- *    different matter from "device ops are self-locked by the driver".)
- *
- * WORKAROUND(br-wa-test-001): like `APP-PT-*`, `APP-FS-*` is **self-numbered** — the `6-01` design case
- * table has no "APP's own samples" family. Registered together with the other families' numbering debt.
+ * Media-class filesystem conformance. Shares the counter pair and SUMMARY line with the pthread
+ * set above, so one `fail=0` covers both. Runs in the start phase (called by hello_start): only
+ * one control flow exists there, so it cannot race the plugin selftest pass that follows (v1 has
+ * no volume-level lock; running it in a thread made both sides touch the same card at once).
+ * WORKAROUND(br-wa-test-001): like APP-PT-*, APP-FS-* is self-numbered.
  */
 static void app_fs_conformance(void)
 {
@@ -661,13 +621,11 @@ static void app_fs_conformance(void)
 }
 
 /*
- * APP thread body = MainLoop (**never returns**): run the multithreading conformance cases once, then
- * enter the periodic heartbeat.
- *
- * ⚠ The "sleep" in the heartbeat loop uses `usleep` (POSIX; implemented in runtime/posix, ending at core's
- *   `br_task_sleep`). Wakeup resolution = one tick (the inverse of `product.toml [kernel].hz`, default 200
- *   => 5 ms; ADR-0017) => each tick is really about 1.00–1.01 s; in the 3 s smoke gate `tick=2` still holds.
- *   The criterion "delay >= requested" is the "no early wakeup" duty of design 3-01 §2.1.
+ * APP thread body = MainLoop (**never returns**): run the multithreading conformance cases once,
+ * then enter the periodic heartbeat. The heartbeat "sleep" is POSIX usleep (ends at core
+ * br_task_sleep); wakeup resolution is one tick (product.toml [kernel].hz, default 200 Hz), so each
+ * period is really about 1.00-1.01 s, and the measured delay is >= the requested one (no early
+ * wakeup).
  */
 static void *hello_mainloop(void *arg)
 {
@@ -695,7 +653,7 @@ static void *hello_mainloop(void *arg)
     return BR_NULL;
 }
 
-/* EARLY phase: no heap/threads/interrupts => the APP has nothing to do (the hook must be present). */
+/* EARLY phase: no heap/threads/interrupts => APP has nothing to do (hook must be present). */
 int hello_early_init(void)
 {
     return 0;
@@ -710,25 +668,11 @@ int hello_init(void)
 }
 
 /*
- * START phase (**the last** start): set the APP thread name -> `pthread_create` the thread -> return 0;
- * the manager then calls `br_sched_run()` for the first schedule, and the APP thread takes over MainLoop.
- * ★ Selftests are not driven by the APP (ADR-0010): core runs each plugin's selftest after all starts;
- *   the `[APPCONF]` here is the **APP's own multithreading samples**, not plugin selftest.
- */
-/* ==================================================================== Mounting (ADR-0030)
- *
- * ★ **The APP decides mounting**: FS plugins only register drivers with vfs-core
- *   (`"tmpfs"`/`"devfs"`/`"fat"`/`"erofs"`) and no longer mount themselves. What to mount and where
- *   is written in this plugin's `brick.toml` under `[[mount]]`; brickie generates that table plus
- *   the walk into `hello_mount_plan_apply()` (see the notes in `include/hello/hello.h`: the APP may
- *   not include core headers, so the table does not enter APP sources).
- *
- * ★ Why the start phase rather than init:
- *   ① Media-class FS `mount()` needs a block device, and bdev is registered by `adapter/uboot-mmc`
- *      in **its** start phase; APP starts run only after all non-APP starts (plugin manager phase
- *      rules) => this is the earliest it is available.
- *   ② Mount point order: generation already sorts by `order` ("/" first), otherwise child mount
- *      points have no parent FS to attach to (-ENODEV).
+ * START phase (**the last** start): name and create the APP thread, return 0; the manager then
+ * calls `br_sched_run()` and the APP thread takes over MainLoop. Selftests are core's job, not the
+ * APP's. Mounting happens here because media-class FS `mount()` needs the block device that
+ * adapter/uboot-mmc registers in its own start phase; mount points are sorted by `order` ("/"
+ * first), else a child has no parent FS.
  */
 int hello_start(void)
 {
@@ -737,17 +681,12 @@ int hello_start(void)
     br_log_info("clock: %lu Hz (arch timer), %lu ticks/ms (exact integer conversion)",
                 br_clock_freq_hz(), br_clock_ticks_per_ms());
 
-    /* ① Execute this APP's declared mount plan first — only then is there a namespace to see */
+    /* Apply the declared mount plan first: only then is there a namespace to see */
     if (hello_mount_plan_apply() != 0) {
         return -1;
     }
 
-    /*
-     * ★ The media-class FS end-to-end samples run **here** (not in an APP thread): only one control
-     *   flow exists, so they cannot concurrently touch the same volumes/card as the plugin selftest
-     *   pass that starts right after start. Rationale and measurements are in the app_fs_conformance
-     *   comment.
-     */
+    /* Run here, not in an APP thread, so they cannot race the plugin selftest pass below */
     app_fs_conformance();
 
     pthread_t app = BR_NULL;

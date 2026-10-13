@@ -1,23 +1,7 @@
-/*
- * brickOS prototype v0.2.0 — service/trace selftest suite (service/trace/src/trace_selftest.c)
- *
- * Design basis and ruling: `docs/decisions/0010-plugin-selftest.md` (selftest separate from
- * production code). Cases (TC-DBG-001..003) taken verbatim from `trace.c`: case ids,
- * assertions and log strings unchanged — gate `tests/gates.toml` decides by `[DBGCONF] PASS/FAIL`.
- *
- * ## Boundary
- *   Driven only through the public API of `br/debug/br_trace_svc.h` (marker / register / name /
- *   report / seen / reset / summary), never core ring internals;
- *   only two exceptions: "two tags share an initial slot" and "names are byte-equal" need
- *   `trc_slot_of` / `trc_streq` from the production implementation. They are reached through the
- *   `src/trace_internal.h` accessors (no logic copied); see that header for the rationale.
- *
- * ## Contract with the plugin manager
- *   Returns the failure count (0 = all green); logs are emitted here (`[DBGCONF] PASS/FAIL ...`).
- *   Failure does not halt — the gate decides (`[DBGCONF] FAIL` is in tests/gates.toml forbid).
- *   The entry name `trace_selftest` is derived by the generated code from `symbol_prefix` (see
- *   `.selftest` in plugin_desc.c), not this plugin's public API.
- */
+/* Self-test suite for service/trace: its own cases TC-DBG-001..003, driven only through the public
+ * API of br/debug/br_trace_svc.h except for two internal-mechanism checks (src/trace_internal.h).
+ * Returns the failure count (0 = all green); a failure does not halt. The entry name trace_selftest
+ * is derived by the generated code from symbol_prefix. */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 #include <br/core/br_trace.h>
@@ -26,40 +10,32 @@
 
 #include "trace_internal.h"
 
-/* Entry prototype (declarations live in generated code; restated here for the global-function prototype rule). */
 int trace_selftest(void);
 
-/* ==================================================================== Test fixtures
- *
- * selftest tags use static arrays: marker idempotence is judged by pointer equality.
- */
+/* Selftest tags use static arrays: marker idempotence is judged by pointer equality. */
 static const char TRC_TAG_SELFTEST[] = "selftest.a";
 
-/* Linear-probe check: the next two tags have the same initial slot (here = 16; verified in
- * the case via trc_slot_of), asserting a slot collision no longer yields -ENOSPC but probes on to distinct ids. */
+/* The next two tags have the same initial slot (verified in the case via trc_slot_of): a collision
+ * must not yield -ENOSPC, it probes on to distinct ids. */
 static const char TRC_TAG_SLOT_A[] = "selftest.victor";
 static const char TRC_TAG_SLOT_B[] = "selftest.yankee";
 
-/* "Same contents but different pointers => -ENOSPC" check. Deliberately non-const writable
- * arrays: constant merging (-fmerge-constants) could fold identical const arrays to one
- * address, which would no longer exercise the "different pointers" branch. */
+/* "Same contents but different pointers => -ENOSPC". Deliberately non-const writable arrays:
+ * -fmerge-constants could fold identical const arrays to one address. */
 static char TRC_TAG_DUP_A[] = "selftest.dup";
 static char TRC_TAG_DUP_B[] = "selftest.dup";
 
-/* Record one DBGCONF check; returns 0/1 so failures can be summed */
 static br_u32 trc_conf(br_bool ok, const char *tag, const char *what)
 {
     br_log_info("[DBGCONF] %s %s %s", ok ? "PASS" : "FAIL", tag, what);
     return ok ? 0u : 1u;
 }
 
-/* ==================================================================== Cases */
-
 int trace_selftest(void)
 {
     br_u32 fails = 0u;
 
-    /* ---- TC-DBG-001: marker idempotence + dynamic id/name + drain count ---- */
+    /* TC-DBG-001: marker idempotence + dynamic id/name + drain count */
     br_trace_svc_reset();
 
     const int   id1 = br_trace_svc_marker(TRC_TAG_SELFTEST);
@@ -77,10 +53,9 @@ int trace_selftest(void)
                       "TC-DBG-001",
                       "report(0) returns >=2 records and seen(id) >= 2");
 
-    /* ---- TC-DBG-001 (cont.): slot collision takes linear probing, no longer "collision is an error" ----
-     * Both tags share the same initial slot (verified in the case via trc_slot_of, so a hash
-     * change cannot silently turn this assertion into a no-op); asserts both register, with distinct
-     * ids and decodable names. Uses register (no event); tags are static arrays (stable pointers) => rerunning selftest stays idempotent. */
+    /* TC-DBG-001 (cont.): a slot collision takes linear probing, not an error. Both tags
+     * share an initial slot (re-checked via trc_slot_of, so a hash change cannot make it a no-op);
+     * register (no event) with static tags keeps reruns idempotent. */
     const int   ca  = br_trace_svc_register(TRC_TAG_SLOT_A);
     const int   cb  = br_trace_svc_register(TRC_TAG_SLOT_B);
     const char *cna = (ca >= 0) ? br_trace_svc_name((br_u32)ca) : BR_NULL;
@@ -95,8 +70,8 @@ int trace_selftest(void)
                       "TC-DBG-001",
                       "two tags with the same hash slot both register after linear probing (distinct ids, correct names)");
 
-    /* Same contents but different pointers => -ENOSPC (identity undecidable: no reuse, no second name).
-     * Also asserts the two static array addresses really differ (constant merging would surface here first). */
+    /* Same contents but different pointers => -ENOSPC (no reuse, no second name); asserts the two
+     * static array addresses really differ. */
     const int da = br_trace_svc_register(TRC_TAG_DUP_A);
     const int db = br_trace_svc_register(TRC_TAG_DUP_B);
 
@@ -107,10 +82,8 @@ int trace_selftest(void)
                       "TC-DBG-001",
                       "same contents but different pointers => -ENOSPC (no reuse, no new entry)");
 
-    /* ---- TC-DBG-002: deliberately overflow the ring; overrun > 0 is the honest "this history is untrustworthy" signal ----
-     * Emit RING_SIZE + 8 records without draining: the producer overwrites unread old slots, so overrun grows.
-     * The overrun printed by summary comes straight from br_trace_overrun(), same source as the asserted
-     * value => equality holds by construction; additionally verifies the reading is unchanged across the print (drain/summary do not touch the producer count). */
+    /* TC-DBG-002: overflow the ring; overrun > 0 is the honest "history untrustworthy" signal. Emit
+     * RING_SIZE + 8 records without draining, then check overrun matches and stays unchanged. */
     const br_u32 orun_before = br_trace_overrun();
 
     for (br_u32 i = 0u; i < ((br_u32)BR_TRACE_RING_SIZE + 8u); i++) {
@@ -133,7 +106,7 @@ int trace_selftest(void)
                       "TC-DBG-002",
                       "after overflowing the ring overrun > 0 and summary's overrun matches");
 
-    /* ---- TC-DBG-003: after a truncated drain, resume at the oldest unread record without losing the backlog ---- */
+    /* TC-DBG-003: after a truncated drain, resume at the oldest unread record, losing no backlog */
     br_trace_svc_reset();
 
     for (br_u32 i = 0u; i < 5u; i++) {
@@ -147,7 +120,7 @@ int trace_selftest(void)
                       "TC-DBG-003",
                       "report(2) takes only 2 records, then report(0) resumes with >=3");
 
-    /* ---- Teardown: reset counters and drain the ring so later dumps' trace section stays clean ---- */
+    /* Teardown: reset counters and drain the ring so later dumps' trace section stays clean */
     br_trace_svc_reset();
     for (br_u32 i = 0u; i < 8u; i++) {
         if (br_trace_svc_report(0u) == 0u) {

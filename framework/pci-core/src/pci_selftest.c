@@ -1,27 +1,8 @@
 /*
- * brickOS prototype v0.2.0 — the **selftest suite** of framework/pci-core (src/pci_selftest.c)
- *
- * Design basis and rulings: `docs/decisions/0021-bdev-pci-emmc.md` (D-2 PCIe ownership and
- * highmem=off; D-4 INTx over interrupts).
- *
- * ## What it tests
- *   **Observable facts** of the enumeration and allocation results (self-numbered `TC-PCI-*`):
- *     - the device table is non-empty and does not exceed the upper bound;
- *     - the target endpoint `1b36:0007` (QEMU's sdhci-pci, class 0x0805) is found;
- *     - its **BAR0 is really allocated** (non-zero, inside the platform MMIO window, size-aligned) ⇒ a driver can write registers later;
- *     - the endpoint's **command register** has Memory Space + Bus Master set and INTx not disabled ⇒ DMA and interrupts are usable;
- *     - the **INTx line swizzle** matches the platform fact (`(pin_index + slot) % 4`);
- *     - round trip and argument validation of the public config-space read/write port (misaligned ⇒ -EINVAL).
- *
- * ## Why these are worth judging on the real machine (not only on the host)
- *   BAR probing/allocation is a **write-hardware-then-read-back** action: one wrong bit (e.g. treating
- *   a ROM hook as a BAR) silently breaks other functions. A round trip on real QEMU is the only
- *   evidence that "the allocation did not step on someone else". The host cannot test ECAM.
- *
- * ## Contract with br_plugin_manager_selftest()
- *   Returns the **number of failing items** (0 = all green); it prints its own logs
- *   (`[PCICONF] PASS/FAIL ...` + `SUMMARY`). A failure does not halt — red/green is judged by the
- *   gate (forbid contains `[PCICONF] FAIL`).
+ * Selftest suite of framework/pci-core: observable facts of enumeration and BAR allocation
+ * (TC-PCI-*): table bounds, the 1b36:0007 target endpoint, BAR0 allocated inside the platform MMIO
+ * window, command register (Memory Space|Bus Master, INTx enabled), INTx swizzle, and the public
+ * config-space port. Returns the number of failures; logs [PCICONF] PASS/FAIL.
  */
 #include <br/pci/br_pci.h>
 
@@ -30,12 +11,11 @@
 #include <br/core/br_types.h>
 #include <br/platform/br_plat_pci.h>
 
-/* Selftest entry prototype (defined at the end of this file; referenced by the generated `plugin_desc.c` `.selftest` hook). */
+/* Referenced by the generated plugin_desc.c .selftest hook. */
 int pci_core_selftest(void);
 
-/* Identity of QEMU `-device sdhci-pci` (measured via `info pci`: 1b36:0007, class 2053 = 0x0805).
- * These two numbers identify the **target under test**, not an "internal mechanism" — they are
- * written in the case precisely so that it turns red. */
+/* QEMU -device sdhci-pci identity (1b36:0007, class 0x0805): the target under test, so the case
+ * turns red if enumeration regresses. */
 #define PCI_CONF_SDHCI_VENDOR  0x1b36u
 #define PCI_CONF_SDHCI_DEVICE  0x0007u
 
@@ -63,15 +43,15 @@ int pci_core_selftest(void)
     const br_u32 n = br_pci_dev_count();
     const br_pci_dev_t *sdhci = br_pci_find(PCI_CONF_SDHCI_VENDOR, PCI_CONF_SDHCI_DEVICE);
 
-    /* ---- TC-PCI-001: device table non-empty and within bounds ---- */
+    /* TC-PCI-001: device table non-empty and within bounds. */
     pc_conf((n > 0u) && (n <= (br_u32)BR_PCI_MAX_DEVS), "TC-PCI-001",
             "enumerated >= 1 function and <= BR_PCI_MAX_DEVS");
 
-    /* ---- TC-PCI-002: target endpoint found and class correct ---- */
+    /* TC-PCI-002: target endpoint found and class correct. */
     pc_conf((sdhci != BR_NULL) && (sdhci->class_code == (br_u16)BR_PCI_CLASS_SDHCI),
             "TC-PCI-002", "br_pci_find(1b36:0007) hit and class = 0x0805 (System SDHCI)");
 
-    /* ---- TC-PCI-003: BAR0 allocated, inside the platform MMIO window, size-aligned ---- */
+    /* TC-PCI-003: BAR0 allocated, inside the platform MMIO window, size-aligned. */
     {
         br_bool ok = BR_FALSE;
         if (sdhci != BR_NULL && sdhci->bar[0] != 0u && sdhci->bar_size[0] >= 256u) {
@@ -87,7 +67,7 @@ int pci_core_selftest(void)
                 "sdhci BAR0 non-zero, inside the mmio window, size-aligned");
     }
 
-    /* ---- TC-PCI-004: command register = Memory Space + Bus Master, INTx not disabled ---- */
+    /* TC-PCI-004: command register = Memory Space + Bus Master, INTx not disabled. */
     {
         br_bool ok = BR_FALSE;
         if (sdhci != BR_NULL) {
@@ -99,7 +79,7 @@ int pci_core_selftest(void)
         pc_conf(ok, "TC-PCI-004", "command register: Memory Space|Bus Master set, INTx Disable clear");
     }
 
-    /* ---- TC-PCI-005: INTx swizzle matches the platform fact (pin A ⇒ virq_a + (slot % 4)) ---- */
+    /* TC-PCI-005: INTx swizzle matches the platform fact (pin A => virq_a + (slot % 4)). */
     {
         br_bool ok = BR_FALSE;
         if (sdhci != BR_NULL && sdhci->intx_pin == 1u) {
@@ -111,7 +91,7 @@ int pci_core_selftest(void)
         pc_conf(ok, "TC-PCI-005", "pin A virq == platform intx_virq_a + (slot % 4)");
     }
 
-    /* ---- TC-PCI-006: public config-space port: round trip + argument validation ---- */
+    /* TC-PCI-006: public config-space port: round trip + argument validation. */
     {
         br_bool ok = BR_FALSE;
         if (sdhci != BR_NULL) {
@@ -126,7 +106,7 @@ int pci_core_selftest(void)
                 "cfg_read32 vendor round trip correct; misaligned/null out-param ⇒ -EINVAL");
     }
 
-    /* ---- TC-PCI-007: miss and out of range ---- */
+    /* TC-PCI-007: miss and out of range. */
     {
         const br_bool ok = (br_pci_find(0xFFFFu, 0xFFFFu) == BR_NULL) &&
                            (br_pci_dev_at(n) == BR_NULL) &&
@@ -134,7 +114,7 @@ int pci_core_selftest(void)
         pc_conf(ok, "TC-PCI-007", "find(nonexistent) and dev_at(out of range) ⇒ NULL");
     }
 
-    /* ---- TC-PCI-008: BAR allocations do not overlap ---- */
+    /* TC-PCI-008: BAR allocations do not overlap. */
     {
         br_bool ok = BR_TRUE;
         for (br_u32 i = 0u; i < n && ok == BR_TRUE; i++) {

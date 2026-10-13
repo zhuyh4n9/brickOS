@@ -1,37 +1,15 @@
 /*
- * adapter/uboot-mmc — self-test suite (TC-EMMC-*)
+ * Self-test suite (TC-EMMC-*), driving only the public surface (`br_bdev_get` + `br_dev_*` + ioctl
+ * encodings) so that "a bdev round-trip really writes and reads back" has a criterion. Returns the
+ * failure count (0 = all green) for `br_plugin_manager_selftest()`; logs `[EMMCCONF] PASS/FAIL` +
+ * `SUMMARY`.
  *
- * Design basis: `docs/decisions/0010-plugin-selftest.md` (self-test separated from
- * production), `docs/decisions/0021-bdev-pci-emmc.md` D-4/D-5 (interrupt + ADMA2/PIO +
- * flush semantics), `docs/decisions/0022-erofs-fat.md` (four-card split and "scratch area"
- * convention).
+ * WORKAROUND(br-wa-test-001): `TC-EMMC-*` are self-assigned numbers (the design case table has no
+ * eMMC family); logged in `WORKAROUNDS.md`.
  *
- * WORKAROUND(br-wa-test-001): `TC-EMMC-*` are **self-assigned numbers** — the design `6-01`
- * case table has no eMMC family (that revision merged block devices into BDEV/IO). This
- * suite's numbering and criteria come from ADR-0021/0022 and are logged in `WORKAROUNDS.md`.
- *
- * Drives only through the **public surface**: `br_bdev_get` (bdev-core class API) +
- * `br_dev_*` (dev-core registry) + device ioctl encodings. No internal state is inspected —
- * otherwise "a bdev round-trip really writes and reads back" would have no criterion.
- *
- * ★ After ADR-0026 the **semantics and criteria of this file are unchanged word for word**:
- *   the upstream originals (all files under `drivers/mmc/`) are compiled in and glue only
- *   adapts, so "round-trip through bdev" now also pins "the upstream stack really runs".
- *   The only internal change: the 8-sector/32-sector buffers are still static arrays (same
- *   origin as before), plus the **interrupt count comparison** (see `irq_mark`/`irq_report`
- *   below) — the observable criterion for ADR-0021 D-4 "ISR→bh→wakeup".
- *
- * ## Why "write then read" every time
- *   In the gate's backing images, `emmc0/1/2` carry **live FAT volumes** (built on the host
- *   with mkfs.fat + mcopy) and `emmc3` carries the EROFS image. Device-level cases therefore
- *   write **only to the `emmc3` scratch area** (512 KiB starting at `BR_EMMC_SCRATCH_LBA`,
- *   well past the EROFS image) — the criterion is always "what I wrote, I read back the
- *   same", assuming no sector is 0 or any pattern. Writing to emmc0/1/2 is **forbidden**: it
- *   would tear the FAT volumes, and this suite runs after the FAT/EROFS suites (self-test
- *   phase) ⇒ it would tear data others already used.
- *
- * ## Contract with br_plugin_manager_selftest()
- *   Returns the **number of failures** (0 = all green); logs `[EMMCCONF] PASS/FAIL` + `SUMMARY`.
+ * Device-level cases write only to the emmc3 scratch area (512 KiB from `BR_EMMC_SCRATCH_LBA`, past
+ * the EROFS image): emmc0/1/2 carry live FAT volumes, and this suite runs after the FAT/EROFS
+ * suites.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
@@ -43,7 +21,7 @@
 
 int uboot_mmc_selftest(void);
 
-/* 16 KiB double buffer (= 32 sectors), 4-byte aligned ⇒ ADMA2 usable */
+/* 16 KiB double buffer (= 32 sectors), 4-byte aligned -> ADMA2 usable */
 static br_u32 s_a[(32u * 512u) / 4u];
 static br_u32 s_b[(32u * 512u) / 4u];
 
@@ -78,8 +56,7 @@ static br_bool em_same(const br_u32 *a, const br_u32 *b, br_u32 words)
     return BR_TRUE;
 }
 
-/* `emmc<d>`; same naming rule as emmc_bdev.c (5 lines each, no mutable buffer shared
- * across files) */
+/* `emmc<d>`; same naming rule as emmc_bdev.c (no mutable buffer shared across files) */
 static void em_name(char *out, br_u32 idx)
 {
     out[0] = 'e'; out[1] = 'm'; out[2] = 'm'; out[3] = 'c';
@@ -87,17 +64,9 @@ static void em_name(char *out, br_u32 idx)
     out[5] = '\0';
 }
 
-/* ================================================================ interrupt count comparison
- *
- * The task statement (§5 report format) and ADR-0021 D-4 both require "interrupt driven" to
- * be **observable**: not just a comment saying "we use interrupts" while a pure timeout poll
- * via `udelay`/`get_timer` actually carries it. Criterion:
- *   during a transfer the card's INTx ISR count must **grow with the command count** (every
- *   CMD at least one RESPONSE/data event), and be of the **same order** as the command count
- *   (disproportion means it leans on timeouts).
- * So each case takes a snapshot before and after and logs the deltas (the gate does not
- * require these lines, but they must be readable).
- */
+/* Interrupt counts must be observable, not just asserted: during a transfer the INTx ISR count
+ * must grow with the command count and stay of the same order (a disproportionate count means it
+ * leans on timeouts). Each case snapshots before and after; the logged deltas are the evidence. */
 typedef struct irq_mark {
     br_u32 isr;
     br_u32 bh;
@@ -114,18 +83,8 @@ static irq_mark_t irq_mark(br_u32 idx)
     return m;
 }
 
-/*
- * The **interrupt comparison line** for one transfer. This line is the measured evidence for
- * ADR-0021 D-4 ("ISR→bh→wake waiting thread") and the criterion for "interrupts or timeout
- * fallback":
- *   ISR +N     — the device really delivered N level interrupts during the transfer (not a
- *                comment claiming "we use interrupts");
- *   wake +A/+T — the wait primitive was woken by an interrupt A times and returned via the
- *                1 ms fallback timeout T times.
- *                ★ The criterion is **A ≫ T**: if T is of the same order as A it "leaned on
- *                  timeout polling" and must be stated here and in the delivery report (see
- *                  the field notes in emmc_internal.h).
- */
+/* Interrupt comparison line for one transfer: ISR +N (real level interrupts), wake +A/+T (woken by
+ * an interrupt A times, returned via the 1 ms fallback T times). The criterion is A >> T. */
 static void irq_report(const char *tag, br_u32 idx, const char *dev,
                        irq_mark_t before, irq_mark_t after)
 {
@@ -147,7 +106,7 @@ int uboot_mmc_selftest(void)
 
     br_log_info("[EMMCCONF] uboot-mmc conformance (4 cards / bdev round-trip / ADMA2 / PIO / flush)");
 
-    /* ---- all four cards visible via the bdev class API, each geometry self-consistent ---- */
+    /* all four cards visible via the bdev class API, each geometry self-consistent */
     const br_bdev_ops_t *ops[BR_EMMC_MAX_DEVS];
     void                *priv[BR_EMMC_MAX_DEVS];
     br_bdev_geom_t       geo[BR_EMMC_MAX_DEVS];
@@ -170,20 +129,16 @@ int uboot_mmc_selftest(void)
     em_conf(ok_geo == BR_EMMC_MAX_DEVS, "TC-EMMC-001",
             "emmc0..emmc3 all present with self-consistent geometry (512 B sector / max_rw / DMA|PIO bits)");
 
-    /* scratch area must be on the EROFS card and large enough for this suite's max offset
-     * (128 + 32 sectors) */
+    /* scratch area must be large enough for this suite's max offset (128 + 32 sectors) */
     const char *assets = BR_EMMC_ASSETS_DEV;
     br_u32 assets_idx = (br_u32)(assets[4] - '0');
-    /* The whole scratch area (including this suite's max offset 128 + 32 sectors) must lie
-     * inside the card — out-of-range cases then fail instead of "silently writing off-card".
-     * Non-overlap with the EROFS image is asserted by the image build script (see file head). */
+    /* The whole scratch area must lie inside the card, else out-of-range cases write off-card. */
     em_conf((assets_idx < BR_EMMC_MAX_DEVS) &&
             (ops[assets_idx] != BR_NULL) &&
             (BR_EMMC_SCRATCH_LBA + 160u < geo[assets_idx].n_sectors),
             "TC-EMMC-002", "scratch area (emmc3 from LBA 4096, 512 KiB) lies entirely inside the card");
 
-    /* ---- the other two: dev-core entry shape and raw file surface (D21: visible but not
-     * openable) ---- */
+    /* the other two: dev-core entry shape and raw file surface (visible but not openable) */
     {
         br_u32 hits = 0u;
         for (br_u32 i = 0u; i < BR_EMMC_MAX_DEVS; i++) {
@@ -198,7 +153,7 @@ int uboot_mmc_selftest(void)
                 "all four cards' dev-core entries class == bdev and open_file == NULL (D21)");
     }
 
-    /* ---- 004: out-of-range access rejected (not sent to the card) ---- */
+    /* 004: out-of-range access rejected before reaching the card */
     {
         int rc = 0;
         const irq_mark_t before = irq_mark(assets_idx);
@@ -208,14 +163,14 @@ int uboot_mmc_selftest(void)
         const irq_mark_t after = irq_mark(assets_idx);
         em_conf(rc < 0, "TC-EMMC-004", "read(lba == n_sectors) ⇒ negative errno (out of range never reaches the card)");
         if (after.isr != before.isr) {
-            /* Out of range must be rejected at **this layer**: no command should reach the
-             * card ⇒ ISR must not grow. */
+            /* Out of range is rejected at this layer: no command reaches the card, so ISR must
+             * not grow. */
             br_log_info("uboot-mmc: IRQ[TC-EMMC-004] out-of-range produced %u interrupts (expected 0)",
                         (unsigned)(after.isr - before.isr));
         }
     }
 
-    /* ---- 005: default (DMA) path: scratch area 8 sectors write then read back identical ---- */
+    /* 005: default (DMA) path: scratch area 8 sectors write then read back identical */
     {
         em_fill(s_a, 8u * 128u, 0xE3E30000u);
         const irq_mark_t before = irq_mark(assets_idx);
@@ -230,7 +185,7 @@ int uboot_mmc_selftest(void)
         irq_report("005/ADMA2-8sec", assets_idx, BR_EMMC_ASSETS_DEV, before, after);
     }
 
-    /* ---- 006: switch PIO on **one** card: its geometry then reports PIO, others stay DMA ---- */
+    /* 006: switch PIO on one card: its geometry reports PIO, others stay DMA */
     {
         const br_u32 cmd = BR_IOW(BR_EMMC_IOC_MAGIC, BR_EMMC_IOC_SET_PATH, br_u32);
         const br_u32 path = BR_MMC_PATH_PIO;
@@ -248,7 +203,7 @@ int uboot_mmc_selftest(void)
         em_conf(ok, "TC-EMMC-006", "SET_PATH(PIO) changes only that card: it reports PIO, emmc0 still reports DMA (multi-instance)");
     }
 
-    /* ---- 007: PIO path 8 sectors write then read back identical ---- */
+    /* 007: PIO path 8 sectors write then read back identical */
     {
         em_fill(s_a, 8u * 128u, 0x06060000u);
         const irq_mark_t before = irq_mark(assets_idx);
@@ -264,7 +219,7 @@ int uboot_mmc_selftest(void)
         irq_report("007/PIO-8sec", assets_idx, BR_EMMC_ASSETS_DEV, before, after);
     }
 
-    /* ---- 008: back to ADMA2 for 32-sector multi-block DMA + flush + self-consistent GET_INFO ---- */
+    /* 008: back to ADMA2: 32-sector multi-block DMA + flush + self-consistent GET_INFO */
     {
         const br_u32 cmd_set = BR_IOW(BR_EMMC_IOC_MAGIC, BR_EMMC_IOC_SET_PATH, br_u32);
         const br_u32 cmd_inf = BR_IOR(BR_EMMC_IOC_MAGIC, BR_EMMC_IOC_GET_INFO, br_emmc_info_t);
@@ -292,8 +247,7 @@ int uboot_mmc_selftest(void)
         irq_report("008/ADMA2-32sec", assets_idx, BR_EMMC_ASSETS_DEV, before, after);
     }
 
-    /* ---- one readable interrupt count line per card (proves INTx really delivers and is
-     * handled by ISR/bh) ---- */
+    /* one interrupt count line per card (proves INTx delivers and ISR/bh handle it) */
     for (br_u32 i = 0u; i < BR_EMMC_MAX_DEVS; i++) {
         char nm[BR_EMMC_NAME_MAX];
         em_name(nm, i);

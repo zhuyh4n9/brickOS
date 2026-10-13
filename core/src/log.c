@@ -1,14 +1,6 @@
 /*
- * brickOS prototype v0.1.0 — logging implementation (formatting + level filtering)
- *
- * Does not pull in libc printf: it is absent under -ffreestanding -nostdlib, and linking a printf
- * implementation just to print a few log lines contradicts the design stance "v1 introduces no
- * libc" (design ch. 7/11: POSIX is explicitly provided by runtime/posix, not a default backdrop).
- *
- * Output funnels through exactly one point: br_console_putc (the platform early console).
- * Once service/trace (design 5-01) and service/log (design 11-01) land, this file's
- * br_log_write should change to "format -> hand to service" instead of writing the console.
- *
+ * Logging (formatting + level filtering). No libc printf under -ffreestanding -nostdlib; all output
+ * funnels through br_console_putc (platform early console).
  * WORKAROUND(br-wa-boot-001): write the console directly, bypassing the service registry.
  */
 #include <br/core/br_log.h>
@@ -44,10 +36,8 @@ br_log_level_t br_log_get_level(void)
     return s_level;
 }
 
-/*
- * Unsigned number output: generate buf in reverse, then pad to width (space/zero fill) and emit
- * forward. buf of 24 bytes suffices: 64-bit decimal is at most 20 digits, hex 16 digits.
- */
+/* Reverse-generate into buf, then pad to width (space/zero fill) and emit forward.
+ * buf[24] suffices: 64-bit decimal is at most 20 digits, hex 16. */
 static void emit_uint(br_u64 value, br_u32 base, br_u32 width, br_bool zero_pad)
 {
     char     buf[24];
@@ -78,8 +68,7 @@ static void emit_str(const char *s)
     br_console_puts((s != BR_NULL) ? s : "(null)");
 }
 
-/* Parse "<flags><width><length><conversion>", starting after the conversion character at *pp,
- * and leave *pp on the consumed conversion character. */
+/* Parse "<flags><width><length><conversion>" at *pp; leaves *pp on the conversion char. */
 static void emit_field(const char **pp, va_list *ap)
 {
     const char *p = *pp;
@@ -147,8 +136,7 @@ static void emit_field(const char **pp, va_list *ap)
         *pp = p - 1;
         return;
     default:
-        /* Unsupported conversion: print it rather than swallow it, to avoid the odd "a piece of
-         * the log went missing" effect */
+        /* Unsupported conversion: print it rather than swallow it */
         br_console_putc('%');
         br_console_putc(*p);
         break;
@@ -172,7 +160,6 @@ void br_log_write(br_log_level_t level, const char *fmt, ...)
     va_list ap;
     va_start(ap, fmt);
 
-    /* Line prefix: [<seconds>.<microseconds, 6 digits>] <level> <body>\n */
     const br_time_t elapsed_us = br_clock_now() - s_t0;
 
     br_console_putc('[');

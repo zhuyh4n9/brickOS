@@ -1,36 +1,17 @@
 #!/usr/bin/env bash
-# brickOS prototype — FAT/EROFS backing image generator (ADR-0022)
-#
-# ============================ Why it exists ============================
-# The gates verify two things in QEMU:
-#   (1) the third-party FAT port (adapter/uboot-fat) can read and write real volumes;
-#   (2) the third-party EROFS port (adapter/uboot-erofs) can read real images (uncompressed + LZ4).
-# Both must be judged on **bytes produced by an external authoritative tool** — a home-grown mkfs
-# and a home-grown reader mirror each other, so neither can prove the other. Hence the images here
-# are produced by `mkfs.fat` (dosfstools) and `mkfs.erofs` (erofs-utils), with versions and sha256
-# pinned in `prebuilts/toolchain.lock.toml`.
-#
-# ============================ Why not commit binaries ============================
-# Image contents change as tests evolve (changing one expected byte in a case means regenerating),
-# and committed bytes **cannot be replayed**; also the smallest legal FAT32 volume is 32 MiB —
-# a repo should not hold tens of MiB of sparse files. So we take the "version-locked tools +
-# rebuild every time" route: the same discipline as make/ninja (ADR-0002).
-#
-# ============================ The four cards (must match driver/FS pieces) ============================
-#   emmc0  2 MiB   FAT12 volume   -> mounted at /fat12
-#   emmc1  16 MiB  FAT16 volume   -> mounted at /fat16
-#   emmc2  32 MiB  FAT32 volume   -> mounted at /fat32   (FAT32's cluster-count floor makes 32 MiB its minimum)
-#   emmc3  16 MiB  EROFS image (uncompressed + LZ4) + 512 KiB device-level scratch area at card tail -> /assets
-#
-# * Three **cross-piece invariants** (changing one side here means changing that side too; held on
-#   both sides by this script's assertions and the gate's criteria):
-#   1. Each FAT volume's label and file contents = the constants in
-#      `adapter/uboot-fat/src/fat_internal.h`;
-#   2. the EROFS image is <= 1 MiB (assert), and the scratch area starts at **LBA 4096 (2 MiB)**
-#      (`BR_EMMC_SCRATCH_LBA`) => "image and scratch area never overlap" is **computed**, not a convention;
-#   3. the four cards' names/order = `[build.target.qemu].extra` in `platform/qemu-aarch64/brick.toml`
-#      (QEMU pairs `-drive id=emmcN` with `-device emmc,drive=emmcN` one to one).
-#
+# brickOS prototype — FAT/EROFS backing image generator.
+# The gates check the third-party FAT port (read/write real volumes) and the EROFS port
+# (uncompressed + LZ4 images) against bytes from an external authoritative tool: mkfs.fat
+# (dosfstools) and mkfs.erofs (erofs-utils), version- and sha256-pinned in
+# prebuilts/toolchain.lock.toml. Images are not committed (contents change with the tests and
+# cannot be replayed; FAT32's minimum is 32 MiB), so the locked tools rebuild them every time.
+# Cards (names/order match [build.target.qemu].extra; paired one-to-one with -device emmc):
+#   emmc0   2 MiB  FAT12 -> /fat12      emmc1  16 MiB  FAT16 -> /fat16
+#   emmc2  32 MiB  FAT32 -> /fat32      emmc3  16 MiB  EROFS + 512 KiB scratch at tail -> /assets
+# Cross-piece invariants: each FAT volume's label/contents are the constants in
+# adapter/uboot-fat/src/fat_internal.h; the EROFS image is <= 1 MiB (asserted) and the scratch area
+# starts at LBA 4096 / 2 MiB (BR_EMMC_SCRATCH_LBA), so overlap is computed, not conventional; the
+# four card names/order come from the platform plugin's [build.target.qemu].extra.
 # Usage: tools/mk-fs-images.sh [<output dir>]     default = build
 set -euo pipefail
 
@@ -42,10 +23,9 @@ DUMP_EROFS_REL="erofs-utils/bin/dump.erofs"
 MCOPY_REL="mtools/bin/mcopy"
 MMD_REL="mtools/bin/mmd"
 
-# ---------------------------------------------------------------- tool resolution
-# Candidate order as for the cross toolchain: **prebuilts/toolchain/ first** (locked version,
-# reproducible) -> a same-named tool on PATH. Missing both => fail loudly with the fetch command
-# (rather than silently degrading to "no images, gate always red").
+# ---- tool resolution ----
+# Candidate order as for the cross toolchain: prebuilts/toolchain/ first (locked version), else a
+# same-named tool on PATH; missing both fails loudly with the fetch command.
 resolve() {
     local rel="$1" name="$2"
     if [ -x "prebuilts/toolchain/$rel" ]; then
@@ -68,8 +48,7 @@ DUMP_EROFS=$(resolve "$DUMP_EROFS_REL" dump.erofs)
 MCOPY=$(resolve "$MCOPY_REL"         mcopy)
 MMD=$(resolve "$MMD_REL"             mmd)
 
-# mtools exits with an error when "the image size does not match the geometry it computed"
-# (a false positive for the super-floppy volumes we create).
+# mtools rejects a size/geometry mismatch (a false positive for our super-floppy volumes).
 export MTOOLS_SKIP_CHECK=1
 
 mkdir -p "$OUT_DIR"
@@ -77,10 +56,8 @@ STAGE="$OUT_DIR/fs-stage"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 
-# ---------------------------------------------------------------- content generation
-# Content is generated with python3 (the repo already requires python3: tools/fetch-prebuilt.py).
-# **Byte-exact**, instead of dd/head/tr style "depends on host behaviour" — criteria must be
-# byte-comparable.
+# ---- content generation ----
+# Content is generated with python3, byte-exactly (dd/head/tr behaviour would be host-dependent).
 python3 - "$STAGE" <<'PY'
 import os
 import sys
@@ -102,18 +79,12 @@ put("fat/a256.bin", b"B" * 256)
 put("fat/a4096.bin", b"C" * 4096)
 put("fat/lfn.txt",  b"lfn\n")
 
-# Source tree for the EROFS image (**all uncompressed** here; whether to compress is mkfs.erofs's call)
-#
-# * Sizes are **chosen deliberately** so one image covers all three datalayouts:
-#   - `hello.txt` (12 B) / `dir/sub/deep.txt` (5 B) => **FLAT_INLINE** (packed into metadata blocks);
-#   - `dir/a.bin` (exactly 4096 B) / `raw.bin` (8192 B, near-random) => **FLAT_PLAIN**;
-#   - `comp/lz4.txt` (**70000 B**, highly compressible) => **compressed block (LZ4)**.
-#   Why the compressed file must be **larger than one block**: erofs-utils does not compress files
-#   of "no more than one block" — one block is the lower bound it occupies anyway, so compressing
-#   saves nothing => single-block files always take the uncompressed layout.
-#   Measured (recorded in ADR-0022 §4): 2 KiB/4 KiB compressible files are layout 2/0; only 64 KiB
-#   is layout 3. 70000 B is also deliberately **not** block-aligned => a tail extent exists, covering
-#   the "compressed file tail" branch.
+# Source tree for the EROFS image (all uncompressed here; whether to compress is mkfs.erofs's call).
+# Sizes are chosen so one image covers all three datalayouts: hello.txt (12 B) and dir/sub/deep.txt
+# (5 B) => FLAT_INLINE; dir/a.bin (exactly 4096 B) and raw.bin (8192 B, near-random) => FLAT_PLAIN;
+# comp/lz4.txt (70000 B, highly compressible) => compressed block (LZ4). erofs-utils does not
+# compress files of one block or less, so a compressible single-block file always takes the
+# uncompressed layout; 70000 B is also not block-aligned, covering the compressed-tail branch.
 put("erofs/hello.txt", b"erofs hello\n")
 put("erofs/comp/lz4.txt", b"ABCDEFGH" * 8750)                    # 70000 B, highly compressible => LZ4
 put("erofs/dir/a.bin", bytes(i & 0xFF for i in range(4096)))     # exactly one block => FLAT_PLAIN
@@ -125,20 +96,11 @@ print("ok   fs-stage content generated (sizes: %s)" % ", ".join(
     for r, _, ns in sorted(os.walk(stage)) for n in sorted(ns)))
 PY
 
-# ---------------------------------------------------------------- FAT volumes
-# One volume = mkfs.fat (empty volume) + mmd (directory) + mcopy (files). The three differ only in
-# bits/capacity/cluster size/contents.
-#
-# * `-s` (sectors per cluster) **must be given explicitly**, it is not tuning:
-#   - FAT12 cluster ceiling is 4084 => a 2 MiB volume with 512 B clusters yields 4096 clusters,
-#     straight past the ceiling;
-#   - FAT32 cluster floor is 65525 => the volume must use 512 B clusters to reach it (4 KiB clusters
-#     fall short even of the floor).
-#   Capacity must also clear a **third** boundary (QEMU's `-device emmc`): the backing file size
-#   **must be a power of two** (otherwise QEMU refuses it outright: "Invalid eMMC size: 34 MiB /
-#   eMMC size has to be a power of 2").
-#   The three boundaries together => 64 MiB is the smallest power of two satisfying all of them
-#   (34 MiB meets the FAT32 floor but fails the QEMU check; see ADR-0022 §7 finding 2).
+# ---- FAT volumes ----
+# One volume = mkfs.fat + mmd (directory) + mcopy (files); the three differ only in bits/capacity.
+# -s (sectors per cluster) is not tuning: FAT12's ceiling is 4084 clusters (2 MiB at 512 B clusters
+# yields 4096) and FAT32's floor is 65525 (needs 512 B clusters). QEMU's -device emmc adds a third
+# boundary: the backing file must be a power of two; 64 MiB is the smallest such size.
 make_fat() {
     local img="$1" bytes="$2" bits="$3" spc="$4" label="$5" hello="$6" abin="$7"
     rm -f "$img"
@@ -154,19 +116,16 @@ make_fat "$OUT_DIR/emmc1.img" "16M" 16 1 "BRKFAT16" hello16.txt a256.bin
 make_fat "$OUT_DIR/emmc2.img" "64M" 32 1 "BRKFAT32" hello32.txt a4096.bin
 "$MCOPY" -i "$OUT_DIR/emmc2.img" "$STAGE/fat/lfn.txt" "::/long name file.txt"
 
-# Independent verification (not "mkfs said ok so it is ok"): fsck.fat reads back each volume's
-# directory and FAT chain.
+# Independent verification: fsck.fat reads back each volume's directory and FAT chain.
 for v in 0 1 2; do
     "$FSCK_FAT" -n "$OUT_DIR/emmc$v.img" >/dev/null
 done
 echo "ok   FAT volumes build/emmc0.img (2 MiB FAT12) / emmc1.img (16 MiB FAT16) / emmc2.img (64 MiB FAT32)"
 
-# ---------------------------------------------------------------- EROFS image
+# ---- EROFS image ----
 ERO_RAW="$STAGE/emmc3.ero"
-# `-T 0`: fixed timestamps (reproducible); `-zlz4`: compressed blocks take the LZ4 path; no options
-# beyond `--all-root`, so mkfs decides which files are "incompressible/too small" — that is exactly
-# where the uncompressed datalayouts (FLAT_INLINE/FLAT_PLAIN) come from naturally, so **one image
-# covers both the uncompressed and the LZ4 read paths**.
+# -T 0 fixes timestamps (reproducible); -zlz4 sends compressed blocks down the LZ4 path. mkfs decides
+# which files are too small/incompressible, so one image covers both the uncompressed and LZ4 paths.
 "$MKFS_EROFS" -T 0 -zlz4 "$ERO_RAW" "$STAGE/erofs" >/dev/null
 "$DUMP_EROFS" "$ERO_RAW" >/dev/null       # structural read-back (independent check of image self-consistency)
 

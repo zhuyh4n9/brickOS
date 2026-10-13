@@ -1,16 +1,7 @@
 /*
- * brickOS prototype v0.1.0 — minimal trace ring (ISR-safe event trail)
- *
- * Authoritative design: `docs/5-debug/5-01-debug.md` (16 B fixed events, recordable
- * from ISR) and the many "count + trail" obligations in `docs/3-os-core/3-02-int.md`:
- *   §4.2 capability downgrade must leave a trace / §7.1 priority quantization reported
- *   both ways / §5.2 spurious / §8.3 storm protection default action = trace + continue /
- *   §9.3/§9.6 domain events / §10.5/§10.6 fault.
- *
- * ISR safety (hard constraint): br_trace_emit does only "one slot write + one head
- * increment", **no locks, no allocation, no clock read, no logging**. That makes it the
- * only trail facility callable from ISR/fault paths (spirit of the CA-3 whitelist).
- * Single-core v0.1 ⇒ single producer/single consumer, no atomics needed.
+ * Minimal trace ring (ISR-safe): fixed 16 B events. br_trace_emit is one slot write + one head
+ * increment -- no locks/allocation/clock/logging -- so it is callable from ISR/fault paths.
+ * Single-core v0.1: single producer/single consumer, no atomics.
  */
 #include <br/core/br_trace.h>
 
@@ -21,13 +12,11 @@ static br_u32 s_overrun;   /* producer overwrites of not-yet-consumed slots */
 
 void br_trace_emit(br_u32 id, br_u32 a, br_u64 b)
 {
-    /* ring full (head - tail == SIZE) ⇒ this entry overwrites the oldest unconsumed slot */
+    /* ring full (head - tail == SIZE): this entry overwrites the oldest unconsumed slot */
     if ((s_head - s_tail) >= (br_u32)BR_TRACE_RING_SIZE) {
         s_overrun++;
-        /* ★ tail is **not advanced here**: when full the semantics are "drop oldest, keep
-         *   newest", and only the consumer (drain) may advance tail. The cost is that the
-         *   consumer may replay overwritten slots — so br_trace_overrun() > 0 is the only
-         *   honest signal that this history is untrustworthy. */
+        /* Tail is not advanced here: "drop oldest, keep newest" -- only the consumer advances
+         * tail, so br_trace_overrun() > 0 signals that history was lost. */
     }
 
     br_trace_evt_t *slot = &s_ring[s_head % (br_u32)BR_TRACE_RING_SIZE];
@@ -55,16 +44,9 @@ br_u32 br_trace_drain(br_trace_evt_t *out, br_u32 max)
     br_u32 start;
     br_u32 avail;
 
-    /*
-     * ★ The start must be the **oldest unconsumed event** (s_tail), not `head - avail`
-     *   — the latter reads the "latest max entries" when `avail` is clipped by `max`
-     *   and pushes `s_tail` straight to head, **silently dropping the backlog in
-     *   between** (observed: 160 backlogged during a storm, consumer takes only 16 per
-     *   call ⇒ the offending entry is skipped and the test case fails).
-     *   The only allowed discard is when the producer has run more than one full lap:
-     *   then the earliest entries are **physically** overwritten, so start at
-     *   `head - SIZE` (and br_trace_overrun() > 0).
-     */
+    /* start must be the oldest unconsumed event (s_tail), not head - avail: the latter reads the
+     * latest entries when avail is clipped by max, silently dropping the backlog between; old data
+     * may be skipped only after the producer ran more than one full lap. */
     if (backlog > (br_u32)BR_TRACE_RING_SIZE) {
         start = head - (br_u32)BR_TRACE_RING_SIZE;   /* overwritten part cannot be read back */
         avail = (br_u32)BR_TRACE_RING_SIZE;
@@ -114,7 +96,7 @@ const char *br_trace_name(br_u32 id)
     case BR_TRACE_FAULT:                   return "fault";
     case BR_TRACE_FAULT_FIXUP:             return "fault_fixup";
     case BR_TRACE_FAULT_DOUBLE:            return "fault_double";
-    /* bottom half (ADR-0011) */
+    /* bottom half */
     case BR_TRACE_IRQ_BH_DEFER:            return "irq_bh_defer";
     case BR_TRACE_IRQ_BH_DROP:             return "irq_bh_drop";
     case BR_TRACE_IRQ_DISPATCH_SUPPRESSED: return "irq_dispatch_suppressed";

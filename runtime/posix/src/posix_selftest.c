@@ -1,37 +1,8 @@
 /*
- * brickOS prototype v0.2.0 - POSIX runtime conformance suite
- * (runtime/posix/src/posix_selftest.c)
- *
- * Design basis and rulings: `docs/decisions/0010-plugin-selftest.md` (selftest kept
- *                          separate from core code),
- *                          `docs/decisions/0014-svc-posix-posix-runtime.md` (coverage
- *                          and outstanding debt).
- *
- * ## This suite has one discipline unlike other plugins: **drive everything through
- * ## POSIX headers**
- *   It `#include <unistd.h>` / `<fcntl.h>` / `<sys/stat.h>` ... - the code under test
- *   always uses POSIX names; only `br_log_info` (observation) and `br_clock_now`
- *   (timing reference) are native. Reason: this plugin's product **is** the "POSIX
- *   surface", so if cases were tested through the native API the **surface itself**
- *   (names, signatures, error channel) would never be tested - and that is where
- *   mistakes are likeliest (pthread returning an error number vs a syscall returning
- *   -1 + errno are two different channels; using the wrong one is very hard to spot).
- *
- * ## tmpfs is the medium, but no reliance on its implementation details
- *   Cases create their own temp directory ("/posixconf.d") under "/" and assert only
- *   on POSIX-surface behavior. So "rootfs is tmpfs" is invisible to the suite -
- *   swapping the FS still runs these cases (vfs's `[VFSCONF]` keeps the same
- *   discipline).
- *
- * ## Contract with br_plugin_manager_selftest()
- *   Returns the number of **failures** (0 = all green); it logs for itself
- *   (`[POSIXCONF] PASS/FAIL ...` + `SUMMARY`).
- *   **A failure does not stop the run** - red/green is decided by the gate
- *   (`posix-test` in `tests/gates.toml`).
- *
- * WORKAROUND(br-wa-test-001): `TC-POSIX-*` are **self-assigned numbers** (design
- * `6-01` has no such group); the descriptive text is the actual criterion. The
- * design side must first decide "which section of `6-01` POSIX cases belong to".
+ * POSIX conformance suite (runtime/posix/src/posix_selftest.c); cases drive the POSIX headers so
+ * the surface itself is tested, tmpfs is only the medium. Returns the failure count (0 = all
+ * green) and logs [POSIXCONF] PASS/FAIL + SUMMARY; a failure does not stop the run.
+ * WORKAROUND(br-wa-test-001): TC-POSIX-* are self-assigned; the case text is the criterion.
  */
 #include <dirent.h>
 #include <errno.h>
@@ -52,11 +23,8 @@
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
-/* Selftest entry prototype (defined at the end of this file; the generated
- * `plugin_desc.c` references it as its `.selftest` hook). */
+/* Selftest entry; the generated plugin_desc.c references it as its .selftest hook. */
 int posix_selftest(void);
-
-/* ==================================================================== fixtures */
 
 #define PT_BASE   "/posixconf.d"
 #define PT_PATH   128u
@@ -121,7 +89,6 @@ static long pt_read_all(const char *path, char *buf, unsigned cap)
     return (long)r;
 }
 
-/* ---- shared fixtures for the pthread cases ---- */
 static sem_t       s_sem_req;
 static sem_t       s_sem_done;
 static int         s_worker_value;
@@ -153,7 +120,6 @@ static void *pt_errno_worker(void *arg)
     return BR_NULL;
 }
 
-/* ---- 022: ERRORCHECK unlock by a non-owner ---- */
 static pthread_mutex_t s_m22;
 
 static void *pt_eperm_worker(void *arg)
@@ -162,7 +128,6 @@ static void *pt_eperm_worker(void *arg)
     return (void *)(br_intptr_t)pthread_mutex_unlock(&s_m22);
 }
 
-/* ---- 023: once (runs exactly once across threads) ---- */
 static pthread_once_t  *s_once23_p;
 static int              s_once23_count;
 static void s_once23_fn(void) { s_once23_count++; }
@@ -244,7 +209,7 @@ static void *pt_key_worker(void *arg)
 static int   s_det26_ran;
 static sem_t s_det26_gate;
 static void *pt_det_worker(void *arg) { (void)arg; s_det26_ran++; return BR_NULL; }
-/* Block on the sem first => the record must still exist (not ZOMBIE), so "join detached => EINVAL" is testable. */
+/* Block on the sem so the record is not yet ZOMBIE: "join detached => EINVAL" stays testable. */
 static void *pt_det_gated(void *arg) { (void)arg; (void)sem_wait(&s_det26_gate); s_det26_ran++; return BR_NULL; }
 
 /* ---- 027: attr / name ---- */
@@ -264,8 +229,6 @@ static void *pt_name_worker(void *arg)
     return BR_NULL;
 }
 
-
-/* ==================================================================== cases */
 
 int posix_selftest(void)
 {
@@ -315,22 +278,19 @@ int posix_selftest(void)
         int       d2 = -1;
         br_bool   ok = (fd >= 0) && (d1 >= 0) && (d1 != fd);
 
-        /* the two fds from dup share one open file description => shared offset */
         ok = ok && (lseek(fd, 3, SEEK_SET) == 3) && (lseek(d1, 0, SEEK_CUR) == 3);
 
-        /* dup2 onto an occupied number: the old handle is displaced */
         d2 = open(p1, O_RDONLY);
         ok = ok && (d2 >= 0) && (dup2(fd, d2) == d2);
         ok = ok && (lseek(d2, 0, SEEK_CUR) == 3);
 
-        /* closing d2 does not affect fd/d1 (other references remain) */
         ok = ok && (close(d2) == 0) && (lseek(fd, 0, SEEK_CUR) == 3);
 
         ok = ok && (close(d1) == 0) && (close(fd) == 0);
         pc(ok, "TC-POSIX-002", "dup shares offset; dup2 replaces target; closing one reference leaves the others");
     }
 
-    /* ---- TC-POSIX-003: access-mode enforcement (**this service's job**: vfs deliberately does not) ---- */
+    /* ---- TC-POSIX-003: access-mode enforcement (vfs does not enforce it) ---- */
     {
         char    buf[8];
         const int ro = open(p1, O_RDONLY);
@@ -408,7 +368,7 @@ int posix_selftest(void)
         pc(ok, "TC-POSIX-006", "mkdir/rename/unlink/rmdir/remove; EEXIST/ENOENT/ENOTEMPTY mapping");
     }
 
-    /* ---- TC-POSIX-007: symlinks (lstat sees the link, stat follows, readlink reads the target) ---- */
+    /* ---- TC-POSIX-007: symlinks (lstat sees the link, stat follows, readlink reads it) ---- */
     {
         char      tgt[64];
         struct stat lst;
@@ -423,11 +383,9 @@ int posix_selftest(void)
         const ssize_t n = readlink(p1, tgt, sizeof(tgt));
         ok = ok && (n == 5) && (tgt[0] == 'b') && (tgt[4] == 't');
 
-        /* reading through the link = reading the target */
         char buf[8];
         ok = ok && (pt_read_all(p1, buf, sizeof(buf)) == 6) && (buf[0] == 'l');
 
-        /* O_NOFOLLOW looks at the link itself => ELOOP */
         ok = ok && (open(p1, O_RDONLY | O_NOFOLLOW) == -1) && (errno == ELOOP);
         ok = ok && (readlink(p2, tgt, sizeof(tgt)) == -1) && (errno == EINVAL);
         ok = ok && (unlink(p1) == 0);
@@ -445,17 +403,15 @@ int posix_selftest(void)
         ok = ok && (link(p2, PT_BASE) == -1) && (errno == EEXIST || errno == EPERM ||
                                                  errno == EISDIR || errno == ENOENT);
 
-        /* change content through one name; the other name must see it */
         const int fd = open(p1, O_WRONLY);
         ok = ok && (fd >= 0) && (write(fd, "SHARED", 6u) == 6) && (close(fd) == 0);
         char buf[8];
         ok = ok && (pt_read_all(p2, buf, sizeof(buf)) == 6) && (buf[0] == 'S');
 
-        /* delete one name: the data is still there */
         ok = ok && (unlink(p2) == 0) && (stat(p1, &st) == 0) && (st.st_nlink == 1);
         ok = ok && (pt_read_all(p1, buf, sizeof(buf)) == 6) && (buf[3] == 'R');
         ok = ok && (unlink(p1) == 0);
-        /* the next case still needs b.txt => restore it here (cases do not rely on the previous one cleaning up) */
+        /* The next case needs b.txt and cases do not rely on earlier cleanup => restore it. */
         ok = ok && (pt_make(p2, "shared", 6u) == 0);
         pc(ok, "TC-POSIX-008", "link shares the data body; nlink counting; data survives deleting one name");
     }
@@ -496,7 +452,6 @@ int posix_selftest(void)
         br_bool ok = (getcwd(cwd, sizeof(cwd)) != BR_NULL) && (cwd[0] == '/');
         ok = ok && (chdir(PT_BASE) == 0);
         ok = ok && (getcwd(cwd, sizeof(cwd)) != BR_NULL) && (cwd[0] == '/' );
-        /* a relative path lands in the new cwd */
         ok = ok && (pt_make("rel.txt", "rel", 3u) == 0);
         struct stat st;
         ok = ok && (stat(PT_BASE "/rel.txt", &st) == 0) && (st.st_size == 3);
@@ -509,7 +464,7 @@ int posix_selftest(void)
         pc(ok, "TC-POSIX-010", "chdir/getcwd round trip; relative path lands in the new cwd; small buffer => ERANGE");
     }
 
-    /* ---- TC-POSIX-011: permission surface = no-op returning 0 (user ruling) + existence still checked ---- */
+    /* ---- TC-POSIX-011: permission surface = no-op returning 0; existence still checked ---- */
     {
         br_bool ok = (chmod(p2, 0600) == 0) && (chown(p2, 100, 100) == 0);
         const mode_t old = umask(0022);
@@ -526,7 +481,6 @@ int posix_selftest(void)
         const int fd = openat(AT_FDCWD, p2, O_RDONLY);
         br_bool ok = (fd >= 0) && (close(fd) == 0);
         ok = ok && (openat(0, p2, O_RDONLY) == -1) && (errno == ENOTSUP);
-        /* misusing O_DIRECTORY => ENOTDIR */
         ok = ok && (open(p2, O_RDONLY | O_DIRECTORY) == -1) && (errno == ENOTDIR);
         pc(ok, "TC-POSIX-012", "openat(AT_FDCWD) works; real dirfd => ENOTSUP; O_DIRECTORY misuse => ENOTDIR");
     }
@@ -548,7 +502,6 @@ int posix_selftest(void)
         fl.l_pid    = 0;
         ok = ok && (fcntl(fa, F_SETLK, &fl) == 0);
 
-        /* another open file description can see this lock */
         struct flock q;
         q.l_type   = F_WRLCK;
         q.l_whence = SEEK_SET;
@@ -557,7 +510,6 @@ int posix_selftest(void)
         q.l_pid    = 0;
         ok = ok && (fcntl(fb, F_GETLK, &q) == 0) && (q.l_type == F_WRLCK);
 
-        /* conflicting write lock => EAGAIN */
         struct flock c;
         c.l_type   = F_WRLCK;
         c.l_whence = SEEK_SET;
@@ -566,7 +518,6 @@ int posix_selftest(void)
         c.l_pid    = 0;
         ok = ok && (fcntl(fb, F_SETLK, &c) == -1) && (errno == EAGAIN);
 
-        /* no conflict after unlocking */
         fl.l_type = F_UNLCK;
         ok = ok && (fcntl(fa, F_SETLK, &fl) == 0);
         ok = ok && (fcntl(fb, F_GETLK, &q) == 0) && (q.l_type == F_UNLCK);
@@ -585,7 +536,7 @@ int posix_selftest(void)
         pf.fd      = fd;
         pf.events  = POLLIN;
         pf.revents = 0;
-        /* memory files are always readable (the driver has no poll slot => this service answers "always ready") */
+        /* Memory files are always readable: no poll slot => this service answers "always ready". */
         ok = ok && (poll(&pf, 1u, 0) == 1) && ((pf.revents & POLLIN) != 0);
 
         struct pollfd bad;
@@ -655,7 +606,7 @@ int posix_selftest(void)
         pc(ok, "TC-POSIX-016", "pthread_create/join brings retval back; sem paired wakeup; detach after join => ESRCH");
     }
 
-    /* ---- TC-POSIX-017: pthread mutex / condition variable (**error-number channel**: errno untouched) ---- */
+    /* ---- TC-POSIX-017: pthread mutex / condition variable (error-number channel) ---- */
     {
         pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;     /* static init: uses core's initial value directly */
         pthread_cond_t  c = PTHREAD_COND_INITIALIZER;
@@ -695,7 +646,6 @@ int posix_selftest(void)
         ok = ok && (fread(line, 1u, 5u, f) == 5u) && (line[0] == 'w');
         ok = ok && (fclose(f) == 0);
 
-        /* write -> read: the content really landed in the file */
         char buf[16];
         ok = ok && (pt_read_all(p3, buf, sizeof(buf)) == 12) && (buf[11] == '\n');
         ok = ok && (unlink(p3) == 0);
@@ -735,7 +685,6 @@ int posix_selftest(void)
         ok = ok && (strcmp(strerror(ENOENT), "ENOENT") == 0);
         ok = ok && (strcmp(strerror(EBADF), "EBADF") == 0);
         ok = ok && (strcmp(strerror(9999), "UNKNOWN") == 0);
-        /* robustness: null arguments / invalid fd always give the contract error code, never crash */
         ok = ok && (open(BR_NULL, O_RDONLY) == -1) && (errno == EINVAL);
         ok = ok && (read(999, BR_NULL, 1u) == -1) && (errno == EBADF);
         ok = ok && (close(999) == -1) && (errno == EBADF);
@@ -932,7 +881,6 @@ int posix_selftest(void)
         pc(ok, "TC-POSIX-028", "condattr clock (MONOTONIC only) + cond/mutex timed* timeout => ETIMEDOUT");
     }
 
-    /* wrap up: remove what we created (the next case starts from a clean slate) */
     (void)unlink(PT_BASE "/a.txt");
     (void)unlink(PT_BASE "/b.txt");
     (void)unlink(PT_BASE "/c.txt");

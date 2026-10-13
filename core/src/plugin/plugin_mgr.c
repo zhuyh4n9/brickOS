@@ -1,38 +1,12 @@
 /*
- * brickOS prototype v0.2.0 — plugin manager
- *
- * Design basis (design repo):
- *   - `1-01` §9 boot sequence, §6.2 the four lifecycle phases and "two completion points per plugin", §6.5 init-DAG (cycle = hard error)
- *   - `3-05` §2 (plugin_manager: scan section -> topology -> phase drive), §2.2 (`__br_plugins_start/stop`)
- *   - `3-01` §13.3 (section collection: plugins export almost nothing, enumerated via the `.br_plugins` section + linker boundary symbols)
- *
- * **Everything** this file does, split by the three cells of the core boot chain (see `br/core/br_main.h` / ADR-0008):
- *
- *   `br_plugin_manager_init()`           [boot chain 1] scan `.br_plugins` -> plugin table + explicitly find platform
- *   `br_plugin_manager_platform_init()`  [boot chain 2] run the platform plugin's `early_init`
- *   `br_plugin_manager_run()`            [boot chain 4] topology + phase drive:
- *     1 section-count self-check + duplicate-name self-check (duplicates should have been caught at compose time; prove it at runtime too)
- *     2 build init edges (only `kind == BR_DEP_INIT`) -> **Kahn topological sort**
- *        * cycle ⇒ print the **full cycle path** and `br_panic` (a cycle is a compose-time hard error; runtime must prove it too)
- *     3 EARLY: the remaining plugins in topological order (**platform already ran in boot chain 2**, skipped here)
- *     4 CORE: category-decided `init` (non Service/Interface; `1-01` §9/§6.2)
- *     5 LATE: `init` of Service / Interface
- *     6 **globally enable IRQs** (core's `br_irq_cpu_enable()`)
- *     7 START: topological order, but **APP last is an explicit rule** (in topological order app/hello may come first)
- *     8 `br_sched_registered()` ⇒ `br_sched_run()`; if not registered, let the last start() hold the
- *        CPU itself (transition bridge: before the scheduler lands, APP's start does not return -- see ADR-0005 §2.5)
- *
- * ★ Clock/logging (where core.init goes) and heap/address mapping are **not in this file**: they belong to
- *   `core/src/main.c`'s four-stage boot chain -- ADR-0008 paid off ADR-0005 §2.6's debt of "the manager does core.init",
- *   so the plugin manager now does only the three plugin-related things: scan sections / sort / drive.
- *
- * Failure granularity (ruling G6): **first failure stops the machine** -- print `[PLUGIN] FAIL <name> phase=<phase> rc=<n>` then
- * `br_panic`. init failure = boot failure, no degradation (same obligation as design `3-02` §14.3).
- *
- * Why the phase names in logs are **lowercase** (early/core/late/start): the smoke gate in `tests/gates.toml`
- * uses `forbid = ["EARLY"]` to catch "a delay self-test printed EARLY" (delay shorter than requested); using uppercase
- * phase names in the plugin manager would **falsely trip** that forbidden pattern. The public phase name
- * (`br_plugin_phase_name`) still uses the design doc's uppercase form; only the log takes lowercase.
+ * Plugin manager: scan the `.br_plugins` section into a table + find the platform plugin
+ * (boot chain 1), run the platform's early_init (boot chain 2), then topology + phase drive
+ * (boot chain 4): build init edges, Kahn sort, EARLY/CORE/LATE init, enable IRQs, START
+ * (non-APP first, APP last by rule), self-test pass, hand off to the scheduler.
+ * A cycle is a compose-time hard error, re-proven at runtime (full path + br_panic); the first
+ * failure stops the machine (ruling G6). Clock/logging and heap setup are not here (main.c).
+ * Log phase names are lowercase on purpose: tests/gates.toml forbids "EARLY"; the public
+ * br_plugin_phase_name() keeps the uppercase form.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_fault.h>
@@ -44,43 +18,29 @@
 
 #include "plugin_mgr_internal.h"
 
-/* ==================================================================== section bounds */
+/* ---- section bounds ---- */
 
 /*
- * Boundary symbols from the linker script (`platform/…/src/link.ld`, same pattern as `.br_extable`: the section name
- * contains `.`, so GNU ld does not auto-generate `__start_/__stop_` -- they must be assigned explicitly). `KEEP`
- * stops `--gc-sections` from dropping the descriptors.
+ * Linker boundary symbols: GNU ld does not generate `__start_/__stop_` for a section name
+ * containing `.`; `KEEP` stops `--gc-sections` from dropping the descriptors.
  */
 extern const br_plugin_t __br_plugins_start[];
 extern const br_plugin_t __br_plugins_stop[];
 
-/*
- * **Weak reference** to the core self-test suite entry (`core/selftest/`, ADR-0010).
- *
- * Why it must be weak: with self-test off, the whole `core/selftest/` directory **is not compiled** (see build.rs) ⇒ the
- * symbol does not exist. A weak reference still lets core link on its own (same trick as `br_plugin_gen_total`'s weak
- * reference in `plugin_mgr_internal.h`), and
- * a NULL pointer is the **only criterion** for "self-test not built into this image" -- no second switch needed and no
- * inconsistency where "the switch says on but the code was not compiled in".
- */
+/* Weak ref to the core self-test entry (core/selftest/): not compiled when the switch is off,
+ * so the symbol may be missing. NULL is the only criterion for "self-test not in this image". */
 extern int br_core_selftest(void) __attribute__((weak));
 
-/* ==================================================================== static bounds */
+/* ---- static bounds ---- */
 
-/* `BR_PLUGIN_MAX` (upper bound on descriptor count) is also in plugin_mgr_internal.h -- self-test uses it to size a temporary array. */
+/* BR_PLUGIN_MAX (descriptor bound) is in plugin_mgr_internal.h; self-test sizes a temp array. */
 #define BR_PLUGIN_MAX_EDGES  128u  /* upper bound on init edges */
 #define BR_PLUGIN_CYCLE_BUF  512u  /* cycle-path text buffer */
 #define BR_DEP_TERM_GUARD    512u  /* hard bound when walking deps (no overrun even if a bad table does not terminate) */
 
-/* The truth for `plug_edge_t` is in plugin_mgr_internal.h (the self-test's negative fixtures build fake edge sets). */
-
-/* ==================================================================== state */
-/*
- * ★ The entries marked `[self-test readable]` dropped `static` (contract in `plugin_mgr_internal.h`):
- *   the plugin manager's self-test suite (`core/selftest/plugin_selftest.c`, ADR-0010) uses **real state** as its
- *   criterion rather than mirroring a parallel ledger. They are still core-internal symbols only -- not part of
- *   `br_plugin.h`'s interface. The rest (`s_order` / `s_init_done` / start counters) stay private: self-test does not read them.
- */
+/* ---- state ---- */
+/* `[self-test readable]` entries dropped `static` for plugin_mgr_internal.h's contract and
+ * remain core-internal; s_order/s_init_done/start counters stay private. */
 
 const br_plugin_t *s_plugins[BR_PLUGIN_MAX];           /* [self-test readable] section order */
 br_u32  s_count;                                       /* [self-test readable] entry count in the section */
@@ -102,7 +62,7 @@ static br_u32  s_non_app_start_total;    /* plugins that are non-APP and have a 
 br_bool s_app_start_last_ok;      /* [self-test readable] before calling the first APP start: all non-APP ones already ran */
 br_bool s_in_app_start;           /* [self-test readable] currently inside an APP start */
 
-/* ==================================================================== section enumeration */
+/* ---- section enumeration ---- */
 
 static br_u32 section_count(void)
 {
@@ -137,8 +97,7 @@ static br_u32 index_of_name(const char *name)
     if (name == BR_NULL) {
         return (br_u32)-1;
     }
-    /* The section itself is the "name table" (built by the linker at boot); do not depend on whether scan() ran --
-     * an observation entry should answer "is this name in the section" even before the manager starts. */
+    /* The section is the name table; answer from it even if scan() has not run yet. */
     for (br_u32 i = 0u; i < section_count(); i++) {
         const char *n = section_at(i)->name;
         if (n == BR_NULL) {
@@ -157,7 +116,7 @@ static br_u32 index_of_name(const char *name)
     return (br_u32)-1;
 }
 
-/* ==================================================================== phases and completion points */
+/* ---- phases and completion points ---- */
 
 /* Phase name for logs (lowercase, see the file header). */
 static const char *phase_key(br_u32 phase)
@@ -178,13 +137,8 @@ static br_bool is_service_like(const br_plugin_t *p)
     return (p->plugin_type == BR_PLUGIN_TYPE_ABILITY) && (p->subkind == BR_SUBKIND_SERVICE);
 }
 
-/*
- * Which phase `init` lands in is decided by **category** (`1-01` §9: non Service/Interface ⇒ CORE,
- * Service/Interface ⇒ LATE). No init hook ⇒ completion point = EARLY (steps 2 and 1 coincide).
- *
- * Non-static: self-test uses it to re-check "every init edge is phase-monotonic" (TC-PLUG-003) --
- * see plugin_mgr_internal.h.
- */
+/* Which phase `init` lands in, by category: non Service/Interface => CORE, Service/Interface
+ * => LATE; no init hook => EARLY. Non-static so TC-PLUG-003 can recheck phase monotonicity. */
 br_u32 init_phase_of(const br_plugin_t *p)
 {
     if (p->init == BR_PLUGIN_NO_HOOK) {
@@ -193,18 +147,12 @@ br_u32 init_phase_of(const br_plugin_t *p)
     return is_service_like(p) ? BR_PHASE_LATE : BR_PHASE_CORE;
 }
 
-/* ==================================================================== topological sort */
+/* ---- topological sort ---- */
 
-/*
- * Kahn topological sort (pure algorithm: touches nothing outside plugin declarations, so negative cases can run it on a fake graph).
- *
- * Semantics: `edges[e] = {from, to}` = "from depends on to" ⇒ to must be dequeued first.
- * Returns BR_TRUE = sorted (first n entries of `order` valid); BR_FALSE = cycle (`cycle` holds the **closed** path,
- * first and last index equal, `cycle_len` includes the repeated closing entry).
- *
- * Non-static: TC-PLUG-002b's **negative case** must run this real thing (hand-built cycle fed in); otherwise it only proves a copy reports cycles
- * -- see plugin_mgr_internal.h.
- */
+/* Kahn topological sort (pure: touches no plugin state, so negative cases can run it on a
+ * fake graph). edges[e] = {from,to} = "from depends on to" => to is dequeued first.
+ * BR_TRUE = sorted (first n of `order` valid); BR_FALSE = cycle in `cycle` (closed path, first
+ * and last index equal, `cycle_len` counts the repeated closing entry). TC-PLUG-002b runs it. */
 br_bool topo_sort(br_u32 n, const plug_edge_t *edges, br_u32 m,
                          br_u16 *order, br_u16 *cycle, br_u32 *cycle_len)
 {
@@ -258,7 +206,7 @@ br_bool topo_sort(br_u32 n, const plug_edge_t *edges, br_u32 m,
         }
         *cycle_len = 0u;
 
-        /* Iterative DFS (explicit stack), avoiding recursion and stack-depth worries for an n=32 graph. */
+        /* Iterative DFS (explicit stack): no recursion. */
         for (br_u32 root = 0u; root < n; root++) {
             if (state[root] != 0u) {
                 continue;
@@ -278,7 +226,7 @@ br_bool topo_sort(br_u32 n, const plug_edge_t *edges, br_u32 m,
                         continue;
                     }
                     if (state[v] == 1u) {
-                        /* back edge ⇒ the cycle is from v's position in the stack up to the top */
+                        /* back edge => the cycle is from v's position in the stack up to the top */
                         br_u32 at = 0u;
                         while (at < depth && stack[at] != v) {
                             at++;
@@ -309,7 +257,7 @@ br_bool topo_sort(br_u32 n, const plug_edge_t *edges, br_u32 m,
     return BR_FALSE;
 }
 
-/* ==================================================================== failure stop */
+/* ---- failure stop ---- */
 
 static BR_NORETURN void plugin_fail(const char *name, br_u32 phase, int rc)
 {
@@ -320,7 +268,7 @@ static BR_NORETURN void plugin_fail(const char *name, br_u32 phase, int rc)
              (name != BR_NULL) ? name : "(null)", phase_key(phase), rc);
 }
 
-/* ==================================================================== manager */
+/* ---- manager ---- */
 
 static void build_edges(void)
 {
@@ -339,7 +287,7 @@ static void build_edges(void)
             }
             const br_u32 to = index_of_name(d->name);
             if (to == (br_u32)-1) {
-                /* Compose-time closure should guarantee the provider is present; missing means a hard error (reporting beats silently misordering). */
+                /* Provider must exist by compose-time closure; missing is a hard error. */
                 br_panic("plugin_manager: `%s` declares an init dependency on `%s`, which is not in the .br_plugins section",
                          s_plugins[i]->name, d->name);
             }
@@ -353,7 +301,7 @@ static void build_edges(void)
     }
 }
 
-/* Cycle path text (bounded; truncates long names but still shows "there is a cycle + who is on it"). */
+/* Cycle path text (bounded; may truncate long names). */
 static void cycle_text(const br_u16 *cycle, br_u32 cycle_len, char *out, br_u32 cap)
 {
     br_u32 n = 0u;
@@ -377,16 +325,14 @@ static void cycle_text(const br_u16 *cycle, br_u32 cycle_len, char *out, br_u32 
     }
 }
 
-/* ==================================================================== boot chain 1 */
+/* ---- boot chain 1 ---- */
 
 void br_plugin_manager_init(void)
 {
-    /* Scanning the section is pure computation with **no output**: the early console belongs to the boot chain 2 platform
-     * plugin (see br_main.h), and writing PL011's DR now would be dropped by QEMU (CR.UARTEN = 0). */
+    /* No output: the early console belongs to boot chain 2 (QEMU drops PL011 DR now). */
     scan();
 
-    /* ★ Find platform via the `plugin_type` field (explicit), not via a topological coincidence: PIC/page tables/
-     *   console are not ready yet, so who comes first in topological order is unrelated to "can we observe". */
+    /* Find platform via plugin_type, not topology: page tables/console are not ready. */
     br_u32 plat = (br_u32)-1;
     for (br_u32 i = 0u; i < s_count; i++) {
         if (s_plugins[i]->plugin_type == BR_PLUGIN_TYPE_PLATFORM) {
@@ -402,12 +348,12 @@ void br_plugin_manager_init(void)
     s_init_done  = BR_TRUE;
 }
 
-/* ==================================================================== boot chain 2 */
+/* ---- boot chain 2 ---- */
 
 void br_plugin_manager_platform_init(void)
 {
     if (s_init_done == BR_FALSE || s_plat_index == (br_u32)-1) {
-        /* This line is also dropped by QEMU (console not up), but "running on with an unscanned section" is worse */
+        /* Dropped by QEMU too (console not up), but worse to run on with an unscanned section. */
         br_panic("plugin_manager: br_plugin_manager_init() must be called before platform_init()");
     }
 
@@ -417,8 +363,7 @@ void br_plugin_manager_platform_init(void)
                  "console/PIC/page tables must be built by it first (design 1-01 §9)", p->name);
     }
 
-    /* First step of the EARLY phase = platform's early_init (hard constraint). This is also where TC-PLUG-003's criterion
-     * ("the first early_init that actually runs belongs to platform") is sampled. */
+    /* EARLY's first step is the platform's early_init (hard constraint); TC-PLUG-003 samples it. */
     s_phase_reached    = BR_PHASE_EARLY;
     s_first_early_name = p->name;
 
@@ -429,7 +374,7 @@ void br_plugin_manager_platform_init(void)
     }
 }
 
-/* ==================================================================== boot chain 4 */
+/* ---- boot chain 4 ---- */
 
 BR_NORETURN void br_plugin_manager_run(void)
 {
@@ -437,11 +382,10 @@ BR_NORETURN void br_plugin_manager_run(void)
         br_panic("plugin_manager: br_plugin_manager_init() must be called before br_plugin_manager_run()");
     }
 
-    /* ---- 1 section-count self-check: console is up from boot chain 2's platform.early_init,
-     *      so logs are meaningful from this line on ---- */
+    /* Console is up from boot chain 2, so logs are meaningful from here on. */
     br_log_info("[PLUGIN] manager: .br_plugins section has %u descriptors", s_count);
 
-    /* Duplicate-name self-check: duplicates should have been caught at compose time (globally unique). */
+    /* Duplicate names should have been caught at compose time (globally unique). */
     for (br_u32 i = 0u; i < s_count; i++) {
         for (br_u32 j = i + 1u; j < s_count; j++) {
             const char *a = s_plugins[i]->name;
@@ -481,7 +425,7 @@ BR_NORETURN void br_plugin_manager_run(void)
     }
     s_sorted = BR_TRUE;
 
-    /* ---- 3 EARLY: remaining plugins in topological order (platform ran in boot chain 2, skipped here) ---- */
+    /* ---- 3 EARLY: remaining plugins in topological order (platform already ran) ---- */
     for (br_u32 k = 0u; k < s_count; k++) {
         const br_u32 i = s_order[k];
         const br_plugin_t *p = s_plugins[i];
@@ -530,9 +474,7 @@ BR_NORETURN void br_plugin_manager_run(void)
         }
     }
     for (br_u32 pass = 0u; pass < 2u; pass++) {
-        /* pass 0 = non-APP; pass 1 = APP. APP last is an **explicit rule** (§6.2's table:
-         * "after globally enabling IRQs start(all plugins) -> app.start()"), not a topological coincidence --
-         * in practice app/hello comes first in topological order. */
+        /* pass 0 = non-APP, pass 1 = APP: APP last is an explicit rule, not topological order. */
         if (pass == 1u) {
             s_app_start_last_ok = (s_non_app_start_done == s_non_app_start_total);
         }
@@ -564,22 +506,15 @@ BR_NORETURN void br_plugin_manager_run(void)
         }
     }
 
-    /* ---- 7 self-test pass (after START, before the scheduler takes over; ADR-0010) ----
-     * Why it must be here: the timer is armed, IRQs are on, devices are registered, mounts are in place --
-     * all existing consistency suites have their preconditions met; and once `br_sched_run()` takes over, control flow can never
-     * return to the "run tests sequentially on one thread" shape.
+    /* ---- 7 self-test pass (after START, before the scheduler takes over) ----
+     * Timer armed, IRQs on, devices registered: existing suites have their preconditions met.
      *
-     * WORKAROUND(br-wa-boot-002): "before the scheduler takes over" is **not** the same as "single-threaded" -- timer preemption
-     * already works before `br_sched_run()` (ADR-0011's IRQ-exit stack switch only checks "is there a ready task"),
-     * so **any plugin that created a thread in the start phase** (app/hello does) makes that thread run concurrently with
-     * this self-test pass from that moment on. ADR-0022 really hit it: both sides accessed the same eMMC card/volume at once,
-     * with symptoms of EROFS read EIO, SDHCI command timeout, and a red FAT write closure. The action then was to move
-     * "APP cases that touch devices" back into the start phase (see `app/hello/src/main.c`), **not** to change this --
-     * the correct exit condition is to add a "no preemption during the self-test pass" constraint to the phase machine (or move the self-test pass
-     * after `br_sched_run()` in a scheduler-driven shape); that is a phase-model change, out of scope here. */
+     * WORKAROUND(br-wa-boot-002): timer preemption already works before br_sched_run(), so a plugin
+     * that starts a thread in the start phase (app/hello does) runs concurrently with this pass
+     * pass -- keep device-touching APP cases in the start phase. */
     br_plugin_manager_selftest();
 
-    /* ---- 8 scheduler: if registered, hand over; if not ⇒ the last start() was supposed to hold the CPU ---- */
+    /* ---- 8 scheduler: hand over if registered, else the last start() holds the CPU ---- */
     if (br_sched_registered()) {
         br_log_info("[PLUGIN] manager: scheduler registered ⇒ br_sched_run()");
         br_sched_run();
@@ -590,17 +525,10 @@ BR_NORETURN void br_plugin_manager_run(void)
     }
 }
 
-/* ==================================================================== self-test pass */
+/* ---- self-test pass ---- */
 
-/*
- * Self-test is **observation**, not a cell of boot, so its discipline **differs** from init/start's (ADR-0010 §2.4):
- *   - init/start failure ⇒ `plugin_fail` stops the machine (ruling G6: boot failure does not degrade);
- *   - self-test failure ⇒ **record only, do not stop**: red/green is judged by the gate (`[XXXCONF] FAIL` is in gates.toml's forbid list),
- *     because "some case is red" and "the system cannot boot" are two different things, and mixing them makes debugging hopeless.
- *
- * Order = init's topological order (no separate rule): self-tests have no dependencies; topological order just gives the "output order"
- * **determinism** (same log order across two runs of the same image), which matters for diffing logs.
- */
+/* Self-test is observation, not boot: init/start failure stops the machine (ruling G6); a
+ * self-test failure is only recorded (the gate judges [XXXCONF] FAIL). */
 void br_plugin_manager_selftest(void)
 {
     if (s_sorted == BR_FALSE) {
@@ -623,8 +551,7 @@ void br_plugin_manager_selftest(void)
 
         const int rc = p->selftest();
         if (rc < 0) {
-            /* Negative = the hook itself failed (not "N items failed"). Count separately, so "a case is red"
-             * and "the self-test never finished" are not mixed into one number. */
+            /* Negative = the hook itself failed, not "N items failed": counted separately. */
             errors++;
             br_log_error("[SELFTEST] ERROR %s: selftest hook returned %d (hook error, not a failure count)",
                          p->name, rc);
@@ -635,10 +562,8 @@ void br_plugin_manager_selftest(void)
         ran++;
     }
 
-    /* core's own suites (plugin manager/service registry/scheduler/sync; implementations all in `core/selftest/`).
-     * They share the switch with plugin self-tests --
-     * when off, `core/selftest/` is not compiled at all ⇒ the weak reference here reads BR_NULL and is skipped.
-     * This is how "core-side code also stays out of the image" is implemented (ADR-0010 §2.3 / build.rs). */
+    /* Core's own suites share the switch with plugin self-tests; when off, core/selftest/ is
+     * not compiled and the weak reference reads BR_NULL. */
     if (br_core_selftest != BR_NULL) {
         const int rc = br_core_selftest();
         if (rc < 0) {
@@ -657,7 +582,7 @@ void br_plugin_manager_selftest(void)
                 s_count, ran, skipped, fails, errors);
 }
 
-/* ==================================================================== observation surface */
+/* ---- observation surface ---- */
 
 const char *br_plugin_phase_self(const br_plugin_t *p)
 {
@@ -681,7 +606,7 @@ const br_plugin_t *br_plugin_at(br_u32 index)
     if (s_sorted && index < s_count) {
         return s_plugins[s_order[index]];
     }
-    /* Manager has not sorted yet ⇒ fall back to section order (topological order only matters after run()). */
+    /* Not sorted yet => section order (topological order matters only after run()). */
     return section_at(index);
 }
 

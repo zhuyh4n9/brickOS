@@ -1,37 +1,22 @@
 # brickie-core — L0/L1 Rust core (`prototype/tools/brickie/rust/`)
 
-> `brickie check` is a **declaration-surface completeness checker**: it guarantees a combination is **logically**
-> self-consistent, not that it "compiles / runs correctly".
-> This crate is the **single place of judgement**: no business rule for taxonomy / version / range /
-> privilege / generation plan may stay in L5 (Python). Authoritative interface = [`../docs/contract.md`](../docs/contract.md); design = `Design/docs/2-toolchain/brickie/brickie-v0.1.md` (hereafter `§x`).
+> `brickie check` is a **declaration-surface completeness checker**: it guarantees a combination is **logically** self-consistent, not that it "compiles / runs correctly".
+> This crate is the **single place of judgement**: no business rule for taxonomy / version / range / privilege / generation plan may stay in L5 (Python). Authoritative interface = [`../docs/contract.md`](../docs/contract.md).
 
-**The v0.1 command surface is fully wired** (23 leaf commands + `version` / `model`): the first cut delivered
-`version` / `model` / `plan-new` / `plan-init` / `gen-plan` / `dep-add` / `dep-rm`;
-the second cut (agent-B) added `check` / `closure` / `dep-tree` / `dep-graph` / `dep-why` /
-`dep-index` / `ver-show` / `ver-bump` / `iface-list` / `iface-show` / `iface-diff` /
-`iface-status` / `iface-publish` / `iface-freeze` / `iface-deprecate` /
-`iface-undeprecate` / `iface-unfreeze` / `iface-refreeze`.
-Command-surface status is in §3, implementation-time rulings in §7/§10, field alignment with L5 in §12.
+**The v0.1 command surface is fully wired** (23 leaf commands + `version` / `model`): the first cut delivered `version` / `model` / `plan-new` / `plan-init` / `gen-plan` / `dep-add` / `dep-rm`; the second cut (agent-B) added `check` / `closure` / `dep-tree` / `dep-graph` / `dep-why` / `dep-index` / `ver-show` / `ver-bump` / `iface-list` / `iface-show` / `iface-diff` / `iface-status` / `iface-publish` / `iface-freeze` / `iface-deprecate` / `iface-undeprecate` / `iface-unfreeze` / `iface-refreeze`. Command-surface status is in §3, implementation-time rulings in §7/§10, field alignment with L5 in §12.
 
 ---
 
 ## 1. Build and self-verification
 
-Toolchain threshold: `Cargo.lock` is **version 4** ⇒ requires `cargo ≥ 1.83` (older cargo only reports
-`lock file version 4 requires -Znext-lockfile-bump`, an error that is useless to follow). The repo entry point
-(`make core` / `make tools-prebuilt`) spares you the choice: the selection order in `../Makefile` is
-"explicit `CARGO=…` → the workspace's own `.toolchain` (`<repo>/.toolchain` or `<repo>/../.toolchain`) →
-PATH", and if the selected cargo is too old it **FAILs on the spot** and gives the fix.
-
-Recommended: use the repo entry point (it drops artifacts straight into the host bin location):
+Toolchain threshold: `Cargo.lock` is **version 4** ⇒ requires `cargo ≥ 1.83` (older cargo only reports `lock file version 4 requires -Znext-lockfile-bump`). The repo entry point spares you the choice: the selection order in `../Makefile` is "explicit `CARGO=…` → the workspace's own `.toolchain` (`<repo>/.toolchain` or `<repo>/../.toolchain`) → PATH", and if the selected cargo is too old it **FAILs on the spot** and gives the fix.
 
 ```sh
 cd prototype/tools/brickie
 make core                      # = cargo build --release + copy to build/host/<triple>/bin/
 ```
 
-When `$HOME` is read-only you **must** set a writable `CARGO_HOME` (`make core` already points both CARGO_* at
-the out-of-tree directory); the equivalent when calling cargo directly:
+When `$HOME` is read-only you **must** set a writable `CARGO_HOME` (`make core` already points both CARGO_* at the out-of-tree directory):
 
 ```sh
 cd prototype/tools/brickie/rust
@@ -41,24 +26,14 @@ cargo build --release          # artifact: rust/target/release/brickie-core
 ./target/release/brickie-core --selftest
 ```
 
-- Dependencies (§9.3 minimal dependency set): `toml = "0.8"`, `serde_json = "1"`, `sha2 = "0.10"`;
-  clap / serde derive are **not introduced**. `Cargo.lock` is generated and **committed**.
+- Dependencies (minimal dependency set): `toml = "0.8"`, `serde_json = "1"`, `sha2 = "0.10"`; clap / serde derive are **not introduced**. `Cargo.lock` is generated and **committed**.
 - Recorded self-verification (passed on this machine, re-tested at the end of the second cut):
-  - `CARGO_HOME=… cargo build --release --locked` ⇒ `Finished release ... in 3.9s`,
-    **0 error / 0 warning** (full rebuild, not a cache hit).
+  - `CARGO_HOME=… cargo build --release --locked` ⇒ `Finished release ... in 3.9s`, **0 error / 0 warning** (full rebuild, not a cache hit).
   - `brickie-core --selftest` ⇒ `ok 432 cases`, exit code 0 (first cut 247 ⇒ second cut +185 assertions).
-  - `echo '{"protocol":1,"command":"version","root":"."}' | brickie-core` ⇒ `exit_code:0`, `data.languages[0].version = "1.93.1"` (the toolchain at the time of the second cut; that field **follows the rustc that built it**, now determined by the workspace `.toolchain` 1.99.0, see `prebuilts/README.md` §5.1).
-  - End to end (real L5 CLI, `BRICKIE_CORE` pointing at this cut's artifact): create a cycle ⇒ full path + exit 1;
-    `iface publish` twice ⇒ second run `files=[]`; `iface status --check` consistent;
-    `check --profile dev` green / `release` red; `unfreeze`/`refreeze` empty unfreeze ⇒ four segments unchanged
-    (output excerpts in the repo conversation log / `§12`).
-- Re-tested 2026-10-12 (after switching to the workspace's own rustc 1.99.0): `make tools-prebuilt` green
-  (host g++ 13.3 + cargo 1.99.0, auto-discovered by `make core`), the three seed files re-issued, and
-  `make tools-prebuilt-check` all three ok; the entry ELF can still run standalone as a **single file**
-  (`prebuilts/seed/brickie/x86-64/linux/bin/brickie --version` ⇒ `brickie 0.1.0`).
-- **Drop point**: this cut's artifact is `rust/target/release/brickie-core` (`rust/.gitignore` already ignores `target/`).
-  Per G-6 it should go **out of tree** to `build/host/<host-arch>/<host-os>/bin/brickie-core` (the repo-root Makefile
-  is owned by a parallel agent; this directory's Makefile was not touched).
+  - `echo '{"protocol":1,"command":"version","root":"."}' | brickie-core` ⇒ `exit_code:0`, `data.languages[0].version = "1.93.1"` (that field **follows the rustc that built it**, now determined by the workspace `.toolchain` 1.99.0, see `prebuilts/README.md` §5.1).
+  - End to end (real L5 CLI, `BRICKIE_CORE` pointing at this cut's artifact): create a cycle ⇒ full path + exit 1; `iface publish` twice ⇒ second run `files=[]`; `iface status --check` consistent; `check --profile dev` green / `release` red; `unfreeze`/`refreeze` empty unfreeze ⇒ four segments unchanged.
+- Re-tested 2026-10-12 (after switching to the workspace's own rustc 1.99.0): `make tools-prebuilt` green (host g++ 13.3 + cargo 1.99.0, auto-discovered by `make core`), the three seed files re-issued, and `make tools-prebuilt-check` all three ok; the entry ELF can still run standalone as a **single file** (`prebuilts/seed/brickie/x86-64/linux/bin/brickie --version` ⇒ `brickie 0.1.0`).
+- **Drop point**: this cut's artifact is `rust/target/release/brickie-core` (`rust/.gitignore` already ignores `target/`); per G-6 it should go **out of tree** to `build/host/<host-arch>/<host-os>/bin/brickie-core`.
 
 ## 2. Module map
 
@@ -110,15 +85,12 @@ cargo build --release          # artifact: rust/target/release/brickie-core
 
 ## 4. Envelope, diagnostics and exit codes
 
-- Request `{protocol, command, root, args, context}`; response `{protocol, status, exit_code,
-  diagnostics, files, data}`. stdin is read **in full** (one line or pretty-printed multi-line), stdout gets **one line** of JSON.
+- Request `{protocol, command, root, args, context}`; response `{protocol, status, exit_code, diagnostics, files, data}`. stdin is read **in full**, stdout gets **one line** of JSON.
 - `protocol != 1` (including missing) ⇒ `BRV-PROTO-0001` + `exit_code:2` + `status:"ok"` + **process exit code 0**.
-- **The process exit code is always 0** (except `status:"internal_error"` and crashes, both 2): business conclusions live only in
-  `exit_code` (BRV-D9).
+- **The process exit code is always 0** (except `status:"internal_error"` and crashes, both 2): business conclusions live only in `exit_code`.
 - Exit-code aggregation: explicit override (2) > any `error` (1) > 0. Diagnostics of class `usage`/`env`/`shape` set the override to 2.
 - The `--json` diagnostics array is **stably sorted** by `(code,file,span,target)`; code-less diagnostics come first.
-- **JSON key order**: serde_json uses `BTreeMap` by default ⇒ object keys are emitted in lexicographic order. **Byte-exact snapshot tests
-  must know this**; to be byte-identical to the key order of contract examples you need to reassemble on the L5 side.
+- **JSON key order**: serde_json uses `BTreeMap` by default ⇒ object keys are emitted in lexicographic order. **Byte-exact snapshot tests must know this**; to be byte-identical to the key order of contract examples you need to reassemble on the L5 side.
 
 ## 5. Reusable interfaces (the first cut's entry points for the second cut, all now called)
 
@@ -159,33 +131,23 @@ cargo build --release          # artifact: rust/target/release/brickie-core
 
 ### 5.3 Codes **not to report twice**
 
-`model::load_tree` already reports the following for **every record** at load time:
-`BRV-MF-0001` (shape), `BRV-VER-0005/0006` (version strings), `BRV-IFACE-0011` (truth/hash_scope),
-`BRV-TAX-0013` (plan-new only), `BRV-TAX-0015/0016/0017/0018/0019`, `BRV-PRIV-0001/0002`.
+`model::load_tree` already reports the following for **every record** at load time: `BRV-MF-0001` (shape), `BRV-VER-0005/0006` (version strings), `BRV-IFACE-0011` (truth/hash_scope), `BRV-TAX-0013` (plan-new only), `BRV-TAX-0015/0016/0017/0018/0019`, `BRV-PRIV-0001/0002`.
 
-`check.rs` does **not** report the same plugin/export surface again; it only reports the **cross-record/cross-file** part:
-cycles and topology (`BRV-MF-0001` + full edge paths), phase monotonicity (`BRV-DEP-0009/0010`),
-single-version policy (`BRV-DEP-0011`), `compat_gen`/`range` (`BRV-VER-0001/0002/0004`),
-budget and exclusive-resource conflicts (`BRV-MF-0001` + both sides/difference), release gate (`BRV-IFACE-0009`),
-the **cross-file classification equality** of export invariant 3 (`BRV-TAX-0018`).
+`check.rs` does **not** report the same plugin/export surface again; it only reports the **cross-record/cross-file** part: cycles and topology (`BRV-MF-0001` + full edge paths), phase monotonicity (`BRV-DEP-0009/0010`), single-version policy (`BRV-DEP-0011`), `compat_gen`/`range` (`BRV-VER-0001/0002/0004`), budget and exclusive-resource conflicts (`BRV-MF-0001` + both sides/difference), release gate (`BRV-IFACE-0009`), the **cross-file classification equality** of export invariant 3 (`BRV-TAX-0018`).
 
 ### 5.4 Rules implemented by the second cut (**deliberately not done** in the first)
 
-- **Cross-plugin** enforcement of the dependency-direction table (call site of `dep_edge_violation`) + the
-  `api_type` exemption for `skin` re-export edges (§3.5 consumer 3).
+- **Cross-plugin** enforcement of the dependency-direction table (call site of `dep_edge_violation`) + the `api_type` exemption for `skin` re-export edges.
 - Cycle detection: init cycle ⇒ hard error + **structured full path**; runtime/type cycle ⇒ info only.
-- Phase monotonicity R1/R2 (§7.2; for the R2 convention ruling see §10 S-6).
-- `sched_class` combination-time conflicts (`TT_SAFE` missing `[sched.tt]`; `COOP_ONLY` × non-coop scheduler;
-  `sched_kind` see ruling R-5).
+- Phase monotonicity R1/R2 (for the R2 convention ruling see §10 S-6).
+- `sched_class` combination-time conflicts (`TT_SAFE` missing `[sched.tt]`; `COOP_ONLY` × non-coop scheduler; `sched_kind` see ruling R-5).
 - Budget totals (product `[budget]` + platform capacity) and IRQ/DMA/pin/device-name exclusivity conflicts.
 - The cross-file part of export invariant 3 (the unit named by `reexport_of` exists and has equal classification) + unit-name/symbol-family collisions.
-- IFACE-IR canonicalization + `sha256` + change set + impact report + unfreeze window (§5.3/§5.4/§6.2/§6.3).
+- IFACE-IR canonicalization + `sha256` + change set + impact report + unfreeze window.
 
 ## 6. Machine file shapes
 
-> The shapes are **authoritative in `schema/*.schema.json`** (delivered by a parallel agent; this crate is aligned and has
-> verified with `jsonschema` that `plan-init`'s lock passes `lock.schema.json`).
-> Generated files uniformly carry `# brickie:generated` on the first line (same literal as `brickie-gen`; see `emit::GENERATED_MARKER`).
+> The shapes are **authoritative in `schema/*.schema.json`** (verified with `jsonschema` that `plan-init`'s lock passes `lock.schema.json`). Generated files uniformly carry `# brickie:generated` on the first line (see `emit::GENERATED_MARKER`).
 
 ### 6.1 `brickie.lock` (TOML, `emit::render_lock`, shape = `schema/lock.schema.json`)
 
@@ -220,9 +182,7 @@ hash_scope = "decl"
 truth = "decl"
 ```
 
-`[[lock.plugins]]` is sorted by plugin name and `[[lock.units]]` by unit id (the caller guarantees this);
-no timestamp / randomness / host info ⇒ byte-reproducible. `model::load_lock` tolerates missing fields
-(v0.1 weak validation in the schema: no top-level required).
+`[[lock.plugins]]` is sorted by plugin name and `[[lock.units]]` by unit id (the caller guarantees this); no timestamp / randomness / host info ⇒ byte-reproducible. `model::load_lock` tolerates missing fields (v0.1 weak validation: no top-level required).
 
 ### 6.2 `build/index/dependents.json` (`emit::render_dependents`, shape = `schema/index.schema.json`)
 
@@ -230,15 +190,11 @@ no timestamp / randomness / host info ⇒ byte-reproducible. `model::load_lock` 
 {"schema": 1, "dependents": {"service/crypto": [{"from": "app/hsm", "kind": "runtime"}]}}
 ```
 
-keys are sorted with `BTreeMap`; edges are built only from **declared** `[[dep]]` (runtime registry lookups produce no edge, §3.1/BRV-Q13).
+keys are sorted with `BTreeMap`; edges are built only from **declared** `[[dep]]` (runtime registry lookups produce no edge).
 
 ### 6.3 Snapshot reading `api/iface/<provider path segments>/<unit>.toml`
 
-`model::load_snapshots` reads **tolerantly**: fields may be flat or under `[unit_meta]`; entry table names
-accept `[[entry]]` / `[[entries]]` / `[[export.entries]]`; it also reads `strict_params` (rule 10),
-`baseline_hash` and `[[baseline_entry]]` (the unfreeze baseline of ruling R-7). `provider` is derived from the relative path
-(`api/iface/service/crypto/crypto.toml` ⇒ `service/crypto`), `id = <provider>#<unit>` (ruling R-11).
-`api/iface` missing ⇒ empty table + no diagnostics = "not published"; `brickie.lock` missing ⇒ `None`.
+`model::load_snapshots` reads **tolerantly**: fields may be flat or under `[unit_meta]`; entry table names accept `[[entry]]` / `[[entries]]` / `[[export.entries]]`; it also reads `strict_params` (rule 10), `baseline_hash` and `[[baseline_entry]]` (the unfreeze baseline of ruling R-7). `provider` is derived from the relative path (`api/iface/service/crypto/crypto.toml` ⇒ `service/crypto`), `id = <provider>#<unit>` (ruling R-11). `api/iface` missing ⇒ empty table + no diagnostics = "not published"; `brickie.lock` missing ⇒ `None`.
 
 ### 6.4 Machine files added by the second cut
 
@@ -276,55 +232,32 @@ accept `[[entry]]` / `[[entries]]` / `[[export.entries]]`; it also reads `strict
 
 `ok 432 cases` (first cut 247 + second cut 185), covering:
 
-1. **Version matrix row by row** (V-4 a–f): `COMPAT_GEN+1` clears minor/revise only, `MAJOR+1` leaves `COMPAT_GEN` alone,
-   add/enum append/status transition ⇒ `MINOR+1`, bug fix ⇒ `REVISE+1`, empty unfreeze ⇒ all four segments unchanged.
+1. **Version matrix row by row** (V-4 a–f): `COMPAT_GEN+1` clears minor/revise only, `MAJOR+1` leaves `COMPAT_GEN` alone, add/enum append/status transition ⇒ `MINOR+1`, bug fix ⇒ `REVISE+1`, empty unfreeze ⇒ all four segments unchanged.
 2. **Version strings**: 4-segment parse/serialize/`v` display, 3 segments ⇒ `0005`, `compat_gen` exact match, `0007` regression.
-3. **range**: `=`,`>=`,`>`,`<=`,`<`,`~`,`^`,`*`, missing segments right-padded with 0, 4 segments ⇒ `0006`,
-   intersection + satisfiability (open/closed at the same point).
+3. **range**: `=`,`>=`,`>`,`<=`,`<`,`~`,`^`,`*`, missing segments right-padded with 0, 4 segments ⇒ `0006`, intersection + satisfiability (open/closed at the same point).
 4. **Name contract and subkind**: legal/illegal names, namespace extraction, recommended form, `derive_subkind`.
 5. **Phase**: ranks, derivation defaults, allowed sets (incl. the `app+app` case and the `service+core` counterexample).
 6. **Privilege**: per-level caps, orthogonal-table positives/negatives, three counterexample groups for `BRV-PRIV-0001/0002`.
 7. **Dependency direction**: three hard prohibitions + `api_type` prohibitions + `allowedges` exempting only the direction table.
 8. **Export-surface invariants**: `TAX-0016/0017/0018/0019` + the skin multi-provider positive case.
-9. **TOML model loading**: positive cases (incl. `[[privileged.resources]]` array tables, `value` string arrays,
-   R-6 platform capacity), missing name, 3-segment version, 4-segment range, incompatible phase, subkind conflict, duplicate names,
-   invalid TOML, skipping `build/` and `.hidden/`, `[compat]` missing `core`, export missing `freeze_state`,
-   `[privileged]` missing `level`.
+9. **TOML model loading**: positive cases (incl. `[[privileged.resources]]` array tables, `value` string arrays, R-6 platform capacity), missing name, 3-segment version, 4-segment range, incompatible phase, subkind conflict, duplicate names, invalid TOML, skipping `build/` and `.hidden/`, `[compat]` missing `core`, export missing `freeze_state`, `[privileged]` missing `level`.
 10. **Snapshot / lock**: snapshot reading, "not published", lock round-trip byte-identical, dependents idempotent.
-11. **`plan-new` four classes**: 6-item plans / phase / template paths / lower- and upper-case placeholders; bare name + `--subkind`;
-    missing `--subkind`, `subkind` conflict, `runtime_adapter` (TAX-0014 + exit 2), name contract,
-    hand-written conflict (`GEN-0002` exit 1), generated-artifact conflict + `--force`.
+11. **`plan-new` four classes**: 6-item plans / phase / template paths / lower- and upper-case placeholders; bare name + `--subkind`; missing `--subkind`, `subkind` conflict, `runtime_adapter` (TAX-0014 + exit 2), name contract, hand-written conflict (`GEN-0002` exit 1), generated-artifact conflict + `--force`.
 12. **`plan-init`**: `product.toml` + `app/<name>/` + `brickie.lock`.
 13. **Emitter**: TOML escaping / arrays / idempotence / re-parsable by `toml`.
-14. **Cycles and topology** (V-3): init cycle ⇒ `MF-0001` + full path + `data.cycles[].path/edges` + exit 1;
-    runtime cycles report info only; `topo_order` is the **initialization order** (provider first).
-15. **Phase monotonicity** (V-8): R1 counterexample (`BRV-DEP-0009`), R2 counterexample/positive (`BRV-DEP-0010`),
-    `sched-coop(core) → platform(core)` **not falsely rejected**.
-16. **Version conflicts** (V-7): `range` out of bounds `VER-0002`, `requires_iface`'s `compat_gen` conflict
-    `VER-0001`, mutually exclusive ranges `DEP-0011`, missing dependency `MF-0001`, budget difference.
+14. **Cycles and topology** (V-3): init cycle ⇒ `MF-0001` + full path + `data.cycles[].path/edges` + exit 1; runtime cycles report info only; `topo_order` is the **initialization order** (provider first).
+15. **Phase monotonicity** (V-8): R1 counterexample (`BRV-DEP-0009`), R2 counterexample/positive (`BRV-DEP-0010`), `sched-coop(core) → platform(core)` **not falsely rejected**.
+16. **Version conflicts** (V-7): `range` out of bounds `VER-0002`, `requires_iface`'s `compat_gen` conflict `VER-0001`, mutually exclusive ranges `DEP-0011`, missing dependency `MF-0001`, budget difference.
 17. **profile gate** (V-14): same input dev green (info `VER-0004`) / release red (error `VER-0004`).
-18. **`requires_iface` not part of the closure** (V-10②): adding/removing the field leaves `closure`'s `data` byte-identical;
-    `iface show` reports info only for it (V-10③).
-19. **Cross-file export invariants** (V-12): skin points at a nonexistent unit / unequal classification ⇒ `TAX-0018`;
-    unit-name collision / symbol-family collision ⇒ `MF-0001`.
-20. **Exclusive resources and scheduling** (V-19④): IRQ/DMA conflict **reports both sides**; `P2 + map` ⇒ `PRIV-0001`;
-    illegal `(ops×granularity×region)` ⇒ `PRIV-0002`; `TT_SAFE` missing `[sched.tt]`;
-    `COOP_ONLY` × `sched-preempt` red / × `sched-coop` green.
-21. **IFACE-IR / hash input completeness** (V-17): `BR_MAX 16→4096`, service ops slot added, enum append,
-    enum reorder **each produce different hashes**; `status` does not enter the hash; declaration order does not affect the hash; domain separation;
-    parameter names/layout are non-strict and do not enter the hash, strict does; typedef expansion is equivalent.
-22. **append vs modify** (V-15): enum tail ⇒ `EXTENDED`; enum reorder/struct field added/service
-    ops slot added/func signature/macro value ⇒ `CHANGED`; `is_hard` is true only for already `frozen`/`deprecated`.
-23. **publish idempotence** (V-5): first run writes 3 kinds of machine files (`kind=machine`) + snapshot header `NOT_ABI`/
-    `hash_scope`/`truth`/`strict_params`; second run `files=[]` + `noop`; two runs byte-identical;
-    `status --check` in both the consistent/inconsistent directions.
-24. **Unfreeze window** (V-16): no `--note` red; `frozen→unfreezing` with baseline recorded in the snapshot;
-    release inside the window ⇒ `IFACE-0009` (dev green); empty unfreeze + `refreeze` ⇒ all four segments unchanged;
-    changing a frozen entry then `refreeze` ⇒ `COMPAT_GEN+1`.
+18. **`requires_iface` not part of the closure** (V-10②): adding/removing the field leaves `closure`'s `data` byte-identical; `iface show` reports info only for it (V-10③).
+19. **Cross-file export invariants** (V-12): skin points at a nonexistent unit / unequal classification ⇒ `TAX-0018`; unit-name collision / symbol-family collision ⇒ `MF-0001`.
+20. **Exclusive resources and scheduling** (V-19④): IRQ/DMA conflict **reports both sides**; `P2 + map` ⇒ `PRIV-0001`; illegal `(ops×granularity×region)` ⇒ `PRIV-0002`; `TT_SAFE` missing `[sched.tt]`; `COOP_ONLY` × `sched-preempt` red / × `sched-coop` green.
+21. **IFACE-IR / hash input completeness** (V-17): `BR_MAX 16→4096`, service ops slot added, enum append, enum reorder **each produce different hashes**; `status` does not enter the hash; declaration order does not affect the hash; domain separation; parameter names/layout are non-strict and do not enter the hash, strict does; typedef expansion is equivalent.
+22. **append vs modify** (V-15): enum tail ⇒ `EXTENDED`; enum reorder/struct field added/service ops slot added/func signature/macro value ⇒ `CHANGED`; `is_hard` is true only for already `frozen`/`deprecated`.
+23. **publish idempotence** (V-5): first run writes 3 kinds of machine files (`kind=machine`) + snapshot header `NOT_ABI`/`hash_scope`/`truth`/`strict_params`; second run `files=[]` + `noop`; two runs byte-identical; `status --check` in both the consistent/inconsistent directions.
+24. **Unfreeze window** (V-16): no `--note` red; `frozen→unfreezing` with baseline recorded in the snapshot; release inside the window ⇒ `IFACE-0009` (dev green); empty unfreeze + `refreeze` ⇒ all four segments unchanged; changing a frozen entry then `refreeze` ⇒ `COMPAT_GEN+1`.
 25. **dep command surface**: graph in three formats (incl. parseable `text` for `json`), why positive/negative, index idempotent.
-26. **Version-surface commands**: `ver show` four segments/source, `ver bump` three rules + illegal `compat_gen` ⇒ usage error,
-    multiple export plugin names ⇒ usage error (R-3), `iface freeze`'s A-26 proposal (A-26).
-
+26. **Version-surface commands**: `ver show` four segments/source, `ver bump` three rules + illegal `compat_gen` ⇒ usage error, multiple export plugin names ⇒ usage error (R-3), `iface freeze`'s A-26 proposal (A-26).
 
 ## 9. TODO (explicit remaining items)
 
@@ -332,30 +265,20 @@ accept `[[entry]]` / `[[entries]]` / `[[export.entries]]`; it also reads `strict
 - [x] `check.rs`: cycles + topology, cross-plugin dependency-direction enforcement, phase monotonicity, single version, budget/exclusivity, profile gate.
 - [x] `solver.rs`: `closure` / `dep-tree` / `dep-graph` (dot/mermaid/json) / `dep-why` / `dep-index`.
 - [x] `iface.rs`: `ver-show` / `ver-bump` / `iface-list/show/diff/status/publish/freeze/deprecate/undeprecate/unfreeze/refreeze`; IFACE-IR hash.
-- [ ] `iface-publish --strict-params`: core already supports it (`args.strict_params`), but **L5's
-      argparse has no such flag** ⇒ it can only be called directly on core; when needed, add one line in `cli.py` (not done under the no-touching-`python/` discipline).
+- [ ] `iface-publish --strict-params`: core already supports it (`args.strict_params`), but **L5's argparse has no such flag** ⇒ it can only be called directly on core; when needed, add one line in `cli.py` (not done under the no-touching-`python/` discipline).
 
 ### 9.2 Not done / not implementable (honest list, see §10 gaps)
-- [ ] `SEMANTIC` change category: v0.1's declaration surface has **no input for a pure semantic change** (`sig/layout/value/ops`
-      none of them moves ⇒ unobservable from TOML) ⇒ `iface-diff` never produces `SEMANTIC`,
-      `BRV-IFACE-0010` has nothing to report (gap S-11).
-- [ ] the "two minors with no use" count of the deprecation cycle: v0.1 only enforces the **zero use on the declaration surface** hard gate
-      (`reexport_of`/`requires_iface` reference check); symbol-surface usage statistics need v0.2 (§6.4, gap S-16).
-- [ ] `check`'s quantity constraints (`app` exactly 1 / `platform` exactly 1 / `scheduler` exactly 1):
-      with a product these are countable within the closure, but §3.2's "exactly 1 per image" in **whole-tree mode without a product**
-      cannot decide "which image" ⇒ not enforced (gap S-17).
+- [ ] `SEMANTIC` change category: v0.1's declaration surface has **no input for a pure semantic change** (`sig/layout/value/ops` none of them moves ⇒ unobservable from TOML) ⇒ `iface-diff` never produces `SEMANTIC`, `BRV-IFACE-0010` has nothing to report (gap S-11).
+- [ ] the "two minors with no use" count of the deprecation cycle: v0.1 only enforces the **zero use on the declaration surface** hard gate (`reexport_of`/`requires_iface` reference check); symbol-surface usage statistics need v0.2 (gap S-16).
+- [ ] `check`'s quantity constraints (`app` exactly 1 / `platform` exactly 1 / `scheduler` exactly 1): with a product these are countable within the closure, but "exactly 1 per image" in **whole-tree mode without a product** cannot decide "which image" ⇒ not enforced (gap S-17).
 - [ ] out-of-tree install to `build/host/<triple>/bin` (G-6, to be done by the repo Makefile owner).
 - [ ] verify placeholders once `templates/` is finalized (especially `descriptor_include`; gap D-5).
 
 ## 10. Spec gap register (to be fed back into the design/BRV-D8)
 
-> The first 16 items (R-1…R-16) were registered by the **first cut**; S-1…S-17 are where the **second cut** (solver/check/iface) was forced to commit.
-> **S-B1…S-B6** come from the **third cut** (build family `build.rs`, ADR-0004 / S1–S4 of design ADR-0003).
-> ⚠ The `BRV-D8` code table has **no BUILD family** ⇒ this cut opens `BRV-BLD-0001..0014` (item by item see
-> `docs/contract.md` §3); this must be fed back into the design code table; the exact wording of the boundary discipline is in contract §9 R-13.
-> 0013/0014 are the **two info entries added later** (half of generated-artifact filtering): the former is "attribution clear but not selected",
-> the latter is "no plugin of this name is left in the tree" — stale leftovers get compiled into **ghost plugins** by the `build/gen/**` glob,
-> which in measurement stopped `plugin_manager` at startup (`third_party/uboot-mmc` renamed to `adapter/uboot-mmc`).
+> R-1…R-16 were registered by the **first cut**; S-1…S-17 by the **second cut** (solver/check/iface); **S-B1…S-B6** by the **third cut** (build family `build.rs`).
+> ⚠ The `BRV-D8` code table has **no BUILD family** ⇒ this cut opens `BRV-BLD-0001..0014` (see `docs/contract.md` §3); the boundary discipline wording is in contract §9 R-13.
+> 0013/0014 are the **two info entries added later**: "attribution clear but not selected" and "no plugin of this name is left in the tree" — stale leftovers get compiled into **ghost plugins** by the `build/gen/**` glob, which in measurement stopped `plugin_manager` at startup (`third_party/uboot-mmc` renamed to `adapter/uboot-mmc`).
 
 | # | Gap | This implementation | Suggestion |
 |---|---|---|---|
@@ -405,14 +328,13 @@ accept `[[entry]]` / `[[entries]]` / `[[export.entries]]`; it also reads `strict
 
 - **Judgement lives only in this crate**: do not move closure/range/topology/taxonomy/privilege/version advance into Python.
 - **Codes come only from BRV-D8**: for defects with no assigned code use `BRV-MF-0001` (R-9) **and update the gap table in §10**.
-- **Machine files have no timestamp/randomness/host info**; all new serialization goes through `emit.rs` primitives (do not write a second copy).
-- **`brick.toml` / `product.toml` are read-only**: no command may rewrite them (§9.1.1 rule 1);
-  `new`/`init` create files only when they do **not** exist.
+- **Machine files have no timestamp/randomness/host info**; all new serialization goes through `emit.rs` primitives.
+- **`brick.toml` / `product.toml` are read-only**: no command may rewrite them; `new`/`init` create files only when they do **not** exist.
 - After changes run `cargo build --release --locked && ./target/release/brickie-core --selftest`.
 
 ## 12. Field alignment with L5 (Python)
 
-`python/**` was not changed (discipline). Alignment is judged by end-to-end runs of the real CLI:
+`python/**` was not changed. Alignment is judged by end-to-end runs of the real CLI:
 
 | Command | Fields read by L5 | Provided by core | Conclusion |
 |---|---|---|---|
@@ -433,13 +355,8 @@ accept `[[entry]]` / `[[entries]]` / `[[export.entries]]`; it also reads `strict
 
 **Known differences (they do not affect L5 orchestration)**:
 
-1. L5's `--json` outer envelope uses `{protocol,status,command,exit_code,diagnostics,data,written}`,
-   while the core response in contract §5 uses `{protocol,status,exit_code,diagnostics,files,data}` —
-   L5 is the **presentation layer** and replaces `files` with the "actually written list `written`". **The core side keeps the contract shape**;
-   `python/` was not changed.
+1. L5's `--json` outer envelope uses `{protocol,status,command,exit_code,diagnostics,data,written}`, while the core response uses `{protocol,status,exit_code,diagnostics,files,data}` — L5 is the **presentation layer** and replaces `files` with the "actually written list `written`". **The core side keeps the contract shape.**
 2. in `dep tree` / `dep graph`'s `nodes`, core additionally provides `file`/`phase` (L5 ignores them) — purely additive.
-3. `iface publish`'s `data.changes[].from/to` may be `null` for `ADDED`/`REMOVED` (L5 uses
-   `is not None`, already compatible).
-4. `check`'s `data.scope_results` is an **object** (keys = domains) and also contains the `manifest` pseudo-domain — L5's
-   `present.py` supports both shapes (dict / list).
+3. `iface publish`'s `data.changes[].from/to` may be `null` for `ADDED`/`REMOVED` (L5 uses `is not None`, already compatible).
+4. `check`'s `data.scope_results` is an **object** (keys = domains) and also contains the `manifest` pseudo-domain — L5's `present.py` supports both shapes (dict / list).
 5. L5 is missing the `iface publish --strict-params` flag (see §9.1) — core already supports that `args` key.

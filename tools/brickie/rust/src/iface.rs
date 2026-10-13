@@ -1,26 +1,9 @@
-//! Version surface and interface publish surface: `ver-show` / `ver-bump` / `iface-*`.
-//!
-//! Landing point for V-4/V-5/V-6/V-11/V-15/V-16/V-17:
-//!
-//! - **IFACE-IR canonicalization** (the 10 rules of §6.2) + `sha256` domain-separated hash;
-//! - **change set** (§6.3): `ADDED`/`EXTENDED`/`CHANGED`/`SEMANTIC`/`REMOVED`/`STATUS`/
-//!   `FREEZE`/`NONE`; append vs modify decided by **entry internal structure** (§5.4);
-//! - **impact report**: `dependents.direct/transitive/unsatisfied`;
-//! - **version advance** (§5.2 row by row) and **idempotence** (§6.5): unchanged surface ⇒ no-op;
-//! - **unfreeze window** (§5.3.4) + `unfreeze` records baseline (ruling R-7), `refreeze` compares;
-//! - **write-path discipline** (§9.1.1): emit machine files only, `brick.toml` is never rewritten.
-//!
-//! ## Implementation rulings (see rust/README.md §10)
-//! - **S-8**: **first publish = record creation** (no old snapshot ⇒ advance no segment, only record the current declared version and hash);
-//!   later publishes advance per change set. Otherwise every new unit would burn a MINOR on its first publish.
-//! - **S-9**: validity of state-machine commands (`deprecate`/`undeprecate`) is judged by **snapshot status** (publish record);
-//!   the new surface is built from the declaration ⇒ repeated runs are **no-ops** (idempotent).
-//! - **S-10**: the "dependents' compat_gen still matches" gate of `publish --profile release` follows the §6.5 table:
-//!   a `COMPAT_GEN` transition with any `unsatisfied` dependent ⇒ refuse to write (`BRV-VER-0001`).
-//! - **S-11**: `SEMANTIC` changes have **no declaration-surface input** in v0.1 (pure behavioral semantics are not observable from TOML)
-//!   ⇒ the category is never produced; `BRV-IFACE-0010` has nothing to report; logged as a gap.
-//! - **S-12**: `iface status` **emits no files** (it is a gate, not a repair command); on mismatch it puts
-//!   the "expected snapshot" in `data.expected_snapshot` for manual use.
+//! Version and interface publish surface: `ver-show` / `ver-bump` / `iface-*`.
+//! IFACE-IR canonicalization + domain-separated `sha256`; change set ADDED/EXTENDED/CHANGED/
+//! REMOVED/STATUS/FREEZE (append vs modify from entry internal structure); version advance is
+//! idempotent (unchanged surface ⇒ no-op). First publish records the declared version/hash only;
+//! later ones advance per change set. Emits machine files only, never rewrites `brick.toml`.
+//! `SEMANTIC` has no declaration-surface input in v0.1 ⇒ never produced (`BRV-IFACE-0010`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
@@ -34,16 +17,14 @@ use crate::model::{self, Plugin, SnapshotEntry, TreeLoad};
 use crate::proto::{Request, Response};
 use crate::version::{self, Version};
 
-/// Hash domain-separation prefix for IFACE-IR (rule 10: `hash_rev` enters the domain separator).
+/// IFACE-IR hash domain-separation prefix (rule 10).
 pub const HASH_REV: &str = "brickie-iface-ir/1";
-
-// ================================================================== IFACE-IR
 
 fn is_ident_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || b == b'_'
 }
 
-/// Replace `from` with `to` in `text` where `from` appears at **identifier boundaries**.
+/// Replace `from` with `to` at identifier boundaries only.
 fn replace_token(text: &str, from: &str, to: &str) -> String {
     if from.is_empty() {
         return text.to_string();
@@ -69,7 +50,7 @@ fn replace_token(text: &str, from: &str, to: &str) -> String {
     out
 }
 
-/// Rule 4: expand type aliases to canonical names (iterate to fixpoint, capped at 8 rounds against alias cycles).
+/// Rule 4: expand type aliases to canonical names; capped at 8 rounds against cycles.
 pub fn expand_typedefs(text: &str, typedefs: &[(String, String)]) -> String {
     let mut cur = text.to_string();
     for _ in 0..8 {
@@ -88,7 +69,7 @@ pub fn expand_typedefs(text: &str, typedefs: &[(String, String)]) -> String {
     cur
 }
 
-/// Rule 2: normalize whitespace (single space / no trailing); also removes layout differences around operators.
+/// Rule 2: normalize whitespace (single space, no trailing) and operator layout.
 pub fn normalize_ws(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut prev_space = false;
@@ -108,7 +89,7 @@ pub fn normalize_ws(s: &str) -> String {
     out
 }
 
-/// Rule 3: **parameter names do not enter** the sig (keep types and order only); kept with `--strict-params`.
+/// Rule 3: parameter names do not enter the sig (types and order); kept with `--strict-params`.
 pub fn strip_param_names(sig: &str) -> String {
     let open = match sig.find('(') {
         Some(i) => i,
@@ -172,7 +153,6 @@ pub fn strip_param_names(sig: &str) -> String {
     }
 }
 
-/// Canonicalize the `sig` of a `func`.
 pub fn canonical_sig(raw: &str, typedefs: &[(String, String)], strict_params: bool) -> String {
     let expanded = expand_typedefs(raw, typedefs);
     let stripped = if strict_params {
@@ -183,12 +163,11 @@ pub fn canonical_sig(raw: &str, typedefs: &[(String, String)], strict_params: bo
     normalize_ws(&stripped)
 }
 
-/// Canonicalize the `layout` of a `type`.
 pub fn canonical_layout(raw: &str, typedefs: &[(String, String)]) -> String {
     normalize_ws(&expand_typedefs(raw, typedefs))
 }
 
-/// One interface-surface entry (shared by declaration and snapshot surfaces).
+/// Interface-surface entry (declaration or snapshot).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Entry {
     pub kind: String,
@@ -229,7 +208,7 @@ impl Entry {
         (self.kind.clone(), self.name.clone())
     }
 
-    /// Compare only "surface" fields (`status` does not enter the hash; see rule 6).
+    /// Compare surface fields only (`status` does not enter the hash; rule 6).
     pub fn same_surface(&self, other: &Entry) -> bool {
         self.kind == other.kind
             && self.name == other.name
@@ -240,7 +219,7 @@ impl Entry {
     }
 }
 
-/// Rules 1 + 5 + 6 + 7 + 9: canonical body (sorting, field selection, enums in declaration order).
+/// Rules 1+5+6+7+9: canonical body (sorting, field selection, enum declaration order).
 pub fn canonical_surface_text(
     id: &str,
     entries: &[Entry],
@@ -252,7 +231,6 @@ pub fn canonical_surface_text(
     let mut out = String::new();
     out.push_str(HASH_REV);
     out.push('\n');
-    // Rule 10: domain separator = hash_rev + unit id (prevents cross-unit collisions).
     out.push_str(id);
     out.push('\n');
     for e in sorted {
@@ -268,7 +246,7 @@ pub fn canonical_surface_text(
         if let Some(l) = &e.layout {
             out.push_str(&format!("layout {}\n", canonical_layout(l, typedefs)));
         }
-        // Rule 9: macro/var use value, enum uses the member list (declaration order), service uses the ops slot summary.
+        // Rule 9: value for macro/var, member list for enum, ops summary for service.
         if let Some(v) = &e.value {
             out.push_str(&format!("value {}\n", normalize_ws(v)));
         }
@@ -292,7 +270,7 @@ pub fn surface_hash(
     format!("sha256:{hex}")
 }
 
-/// Display takes the first 12 hex chars (§5.1).
+/// Display form: first 12 hex chars.
 pub fn short_hash(h: Option<&str>) -> String {
     match h {
         None => String::new(),
@@ -303,9 +281,7 @@ pub fn short_hash(h: Option<&str>) -> String {
     }
 }
 
-// ================================================================== surface model
-
-/// The "surface" of an interface unit (may come from a declaration or from a snapshot).
+/// Interface-unit surface (from a declaration or a snapshot).
 #[derive(Clone, Debug, Default)]
 pub struct Surface {
     pub id: String,
@@ -382,7 +358,6 @@ impl Surface {
         surface_hash(&self.id, &self.entries, &self.typedefs, strict_params)
     }
 
-    /// A snapshot (for reading).
     pub fn to_snapshot(&self, hash: &str, strict_params: bool, baseline: Option<(&str, &[Entry])>) -> model::Snapshot {
         model::Snapshot {
             file: snapshot_path(&self.provider, &self.unit),
@@ -425,7 +400,7 @@ pub fn entry_to_snapshot(e: &Entry) -> SnapshotEntry {
     }
 }
 
-/// Ruling R-11: `api/iface/<provider path segments>/<unit>.toml`.
+/// Snapshot path: `api/iface/<provider segments>/<unit>.toml`.
 pub fn snapshot_path(provider: &str, unit: &str) -> String {
     let mut p = String::from("api/iface");
     for seg in provider.split('/') {
@@ -440,16 +415,14 @@ pub fn snapshot_path(provider: &str, unit: &str) -> String {
     p
 }
 
-// ================================================================== change set
-
-/// One change entry (§6.3).
+/// One change-set entry.
 #[derive(Clone, Debug)]
 pub struct Change {
     pub kind: &'static str,
     pub name: String,
     pub from: Option<String>,
     pub to: Option<String>,
-    /// Governance status of the old entry (used to decide "must unfreeze").
+    /// Old entry's governance status (decides "must unfreeze").
     pub old_status: String,
     pub note: String,
 }
@@ -467,14 +440,14 @@ impl Change {
         })
     }
 
-    /// §6.3: `CHANGED`/`REMOVED` touching an already `frozen`/`deprecated` entry ⇒ must unfreeze.
+    /// `CHANGED`/`REMOVED` on a `frozen`/`deprecated` entry ⇒ must unfreeze.
     pub fn is_hard(&self) -> bool {
         matches!(self.kind, "CHANGED" | "REMOVED")
             && matches!(self.old_status.as_str(), "frozen" | "deprecated")
     }
 }
 
-/// Compute the change set from `old` (usually the snapshot) → `new` (usually declaration + this change).
+/// Change set from `old` (usually snapshot) to `new` (usually declaration).
 pub fn change_set(old: &Surface, new: &Surface) -> Vec<Change> {
     let mut out: Vec<Change> = Vec::new();
     let old_map: BTreeMap<(String, String), &Entry> =
@@ -546,7 +519,7 @@ pub fn change_set(old: &Surface, new: &Surface) -> Vec<Change> {
     out
 }
 
-/// §5.4 append vs modify decision (based on **entry internal structure**).
+/// Append vs modify decision, from the entry's internal structure.
 pub fn classify_modify(oe: &Entry, ne: &Entry) -> &'static str {
     match oe.kind.as_str() {
         // member appended at the end of an enum ⇒ append; reorder/value change/remove ⇒ modify.
@@ -559,13 +532,9 @@ pub fn classify_modify(oe: &Entry, ne: &Entry) -> &'static str {
                 "CHANGED"
             }
         }
-        // service: a new service name = a new entry; adding a slot to an existing ops table = modify.
         "service" => "CHANGED",
-        // type (struct): add/remove/reorder fields = modify (D22).
         "type" => "CHANGED",
-        // macro/var: changing the value of an existing macro ⇒ modify.
         "macro" | "var" => "CHANGED",
-        // func: signature change ⇒ modify (pure semantic changes are not observable from the declaration surface; see S-11).
         _ => "CHANGED",
     }
 }
@@ -586,9 +555,6 @@ fn describe(e: &Entry) -> Option<String> {
     None
 }
 
-// ================================================================== impact report
-
-/// Reverse-dependency report (§6.3).
 #[derive(Clone, Debug, Default)]
 pub struct Dependents {
     pub direct: Vec<String>,
@@ -606,9 +572,8 @@ impl Dependents {
     }
 }
 
-/// Compute the dependents of a `provider` (per declared `[[dep]]` / `requires_iface` / `reexport_of`).
-///
-/// `new_cg` / `new_ver` are used to decide `unsatisfied` (mismatched) dependents.
+/// Dependents of `provider` (per `[[dep]]` / `requires_iface` / `reexport_of`);
+/// `new_cg`/`new_ver` decide which `requires_iface` entries are `unsatisfied`.
 pub fn dependents_of(
     tree: &TreeLoad,
     provider: &str,
@@ -660,7 +625,6 @@ pub fn dependents_of(
         }
     }
 
-    // Transitive closure (reverse): who depends on the direct set.
     let mut transitive: BTreeSet<String> = direct.clone();
     let mut grew = true;
     while grew {
@@ -682,9 +646,7 @@ pub fn dependents_of(
     }
 }
 
-// ================================================================== environment
-
-/// Command load environment (IO happens only here).
+/// Command load environment; all IO happens here.
 pub struct Env {
     pub root: PathBuf,
     pub tree: TreeLoad,
@@ -711,7 +673,7 @@ impl Env {
     }
 }
 
-/// Resolve `<provider>#<unit>` or a plugin name (ruling R-3).
+/// Resolve `<provider>#<unit>` or a single-export plugin name.
 fn resolve(tree: &TreeLoad, id: &str) -> Result<(String, String, usize), String> {
     if let Some((prov, unit)) = id.split_once('#') {
         let p = tree
@@ -737,7 +699,7 @@ fn resolve(tree: &TreeLoad, id: &str) -> Result<(String, String, usize), String>
     }
 }
 
-/// Note path existence (relative to `root` or the current working directory).
+/// True if `note` is a file under `root` or the cwd.
 fn note_exists(root: &Path, note: &str) -> bool {
     let p = PathBuf::from(note);
     if p.is_absolute() {
@@ -761,7 +723,7 @@ pub fn effective_freeze(decl: &str, snap: Option<&str>) -> String {
     }
 }
 
-/// Build the body of `brickie.lock` (plugins from the tree, units from published snapshots + this update).
+/// Body of `brickie.lock`: plugins from the tree, units from published snapshots + this update.
 fn build_lock_content(
     tree: &TreeLoad,
     root: &Path,
@@ -812,7 +774,7 @@ fn build_lock_content(
     emit::render_lock(&lock)
 }
 
-/// Version section of `api/iface/CHANGELOG.md` (ruling R-12: section head = `<unit> v<4 segments> (compat_gen=<N>)`).
+/// Version section of `api/iface/CHANGELOG.md`; head = `<unit> v<4 segments> (compat_gen=N)`.
 fn changelog_content(root: &Path, unit_id: &str, ver: Version, hash: &str, summary: &str) -> String {
     let rel = "api/iface/CHANGELOG.md";
     let abs = root.join(rel);
@@ -842,9 +804,6 @@ fn changelog_content(root: &Path, unit_id: &str, ver: Version, hash: &str, summa
     out
 }
 
-// ================================================================== command entry
-
-/// Unified entry point for `ver-show` / `ver-bump` / `iface-*`.
 pub fn run(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
     match req.command.as_str() {
@@ -880,8 +839,6 @@ fn resolve_or_usage(env: &Env, id: &str) -> Result<(String, String, usize), Resp
     })
 }
 
-// ------------------------------------------------------------------ ver-show
-
 fn cmd_ver_show(req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
     let id = req.arg_str("id").unwrap_or_default();
@@ -909,9 +866,7 @@ fn cmd_ver_show(req: &Request, root: &Path) -> Response {
             false,
         ),
     };
-    // RV-11/C-12 require `ver show` to **explicitly mark** that "generation is not compared". This is **output semantics**, not a diagnostic:
-    // it is carried by `data.not_comparable = true` + the L5 presentation line (see ver show in present.py),
-    // and consumes no BRV code — packing a pure hint into `BRV-MF-0001` would steer machine consumers toward "there is a declaration-surface error here".
+    // `not_comparable` is output semantics, not a diagnostic; consumes no BRV code.
     let d = env.diags.clone();
     let source_note = if compat_gen == 0 {
         "never frozen (compat_gen = 0)".to_string()
@@ -938,8 +893,6 @@ fn cmd_ver_show(req: &Request, root: &Path) -> Response {
             "status": status,
             "source": source,
             "compat_gen_source": {"kind": if compat_gen == 0 { "never-frozen" } else { "refreeze-sequence" }, "note": source_note},
-            // RV-11 / C-12: explicitly mark that "generation is not compared". This is **output semantics** (the explicit mark C-12 requires),
-            // not a diagnostic — packing a pure hint into a BRV code would steer machine consumers toward "there is a declaration-surface error here".
             "not_comparable": true,
             "published": published,
             "not_abi": true,
@@ -948,8 +901,6 @@ fn cmd_ver_show(req: &Request, root: &Path) -> Response {
         }),
     )
 }
-
-// ------------------------------------------------------------------ ver-bump
 
 fn cmd_ver_bump(req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
@@ -992,7 +943,7 @@ fn cmd_ver_bump(req: &Request, root: &Path) -> Response {
         return Response::ok(d, json!({}));
     }
 
-    // Surface entries: snapshot first (publish record), else declaration.
+    // Entries: snapshot (publish record) first, else declaration.
     let entries: Vec<Entry> = match &snap {
         Some(s) => s.entries.iter().map(Entry::from_snapshot).collect(),
         None => decl.entries.clone(),
@@ -1005,7 +956,7 @@ fn cmd_ver_bump(req: &Request, root: &Path) -> Response {
     let mut new_surface = decl.clone();
     new_surface.entries = entries;
     new_surface.version = new_ver;
-    // S-19: version advance does not touch the unfreeze window.
+    // Version advance does not touch the unfreeze window.
     new_surface.freeze_state = effective_freeze(
         &decl.freeze_state,
         snap.as_ref().and_then(|s| s.freeze_state.as_deref()),
@@ -1056,8 +1007,6 @@ fn cmd_ver_bump(req: &Request, root: &Path) -> Response {
     )
 }
 
-// ------------------------------------------------------------------ iface-list
-
 fn cmd_iface_list(_req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
     let mut units: Vec<Value> = Vec::new();
@@ -1069,8 +1018,7 @@ fn cmd_iface_list(_req: &Request, root: &Path) -> Response {
                 Some(s) => (
                     s.version.unwrap_or(decl.version),
                     s.compat_gen.unwrap_or(decl.compat_gen),
-                    // Effective freeze state (S-19): `unfreezing` in either declaration or snapshot counts as in-window —
-                    // same rule as check / publish / ver show, so list/show never fight the gates.
+                    // `unfreezing` in declaration or snapshot counts as in-window.
                     effective_freeze(&decl.freeze_state, s.freeze_state.as_deref()),
                     s.status.clone().unwrap_or_else(|| decl.status.clone()),
                     true,
@@ -1111,8 +1059,6 @@ fn cmd_iface_list(_req: &Request, root: &Path) -> Response {
     Response::ok(env.diags.clone(), json!({"units": units, "count": units.len()}))
 }
 
-// ------------------------------------------------------------------ iface-show
-
 fn cmd_iface_show(req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
     let id = req.arg_str("id").unwrap_or_default();
@@ -1135,7 +1081,7 @@ fn cmd_iface_show(req: &Request, root: &Path) -> Response {
         .unwrap_or_else(|| "decl".to_string());
 
     let mut d = env.diags.clone();
-    // NOTE_ABI hint (V-11③) and requires_iface info (V-10③).
+    // NOTE_ABI hint (V-11③) + requires_iface info (V-10③).
     d.push(
         Diag::new(
             Severity::Info,
@@ -1167,9 +1113,7 @@ fn cmd_iface_show(req: &Request, root: &Path) -> Response {
     }
 
     let entries: Vec<Value> = decl.entries.iter().map(entry_json).collect();
-    // Effective values (S-19 rule): the snapshot is the **publish record**, the declaration is the **current intent**; they differ inside an unfreeze window,
-    // so unit/data must report the "effective freeze state" (unfreezing anywhere ⇒ unfreezing),
-    // otherwise `iface show` would contradict the verdict of `check --profile release` (BRV-IFACE-0009).
+    // Effective values: snapshot = publish record, declaration = current intent; unfreezing wins.
     let (eff_version, eff_cg, eff_freeze, eff_status) = match snap {
         Some(s) => (
             s.version.unwrap_or(decl.version).to_string(),
@@ -1240,8 +1184,6 @@ fn entry_json(e: &Entry) -> Value {
     })
 }
 
-// ------------------------------------------------------------------ version advance helpers
-
 struct VersionPlan {
     from: Version,
     to: Version,
@@ -1296,8 +1238,6 @@ fn plan_version(
     VersionPlan { from, to, reasons }
 }
 
-// ------------------------------------------------------------------ iface-diff
-
 fn cmd_iface_diff(req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
     let id = req.arg_str("id").unwrap_or_default();
@@ -1342,8 +1282,6 @@ fn cmd_iface_diff(req: &Request, root: &Path) -> Response {
         }),
     )
 }
-
-// ------------------------------------------------------------------ iface-status
 
 fn cmd_iface_status(req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
@@ -1420,7 +1358,7 @@ fn cmd_iface_status(req: &Request, root: &Path) -> Response {
     }
 
     let files = if !check && !consistent {
-        // S-12: status is a gate and writes nothing; the "expected snapshot" goes into data for manual use.
+        // `iface status` is a gate: writes nothing, only reports `expected_snapshot`.
         Vec::new()
     } else {
         Vec::new()
@@ -1448,8 +1386,6 @@ fn cmd_iface_status(req: &Request, root: &Path) -> Response {
     )
 }
 
-// ------------------------------------------------------------------ iface-publish
-
 fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
     let id = req.arg_str("id").unwrap_or_default();
@@ -1470,7 +1406,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
     let snap = env.snap(&decl.id).cloned();
     let decl_hash = decl.hash(strict);
 
-    // `--set` (ruling R-8): overrides the unit version written by this run, still bound by monotonicity.
+    // `--set`: overrides this run's unit version, still bound by monotonicity.
     let set = match req.arg_str("set") {
         None => None,
         Some(raw) => match version::parse_version(&raw) {
@@ -1490,11 +1426,10 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
         },
     };
 
-    // ---- idempotence (§6.5): surface content + entry set + status + freeze_state all equal ⇒ no-op ----
+    // Idempotence: equal surface + entry set + status + freeze_state ⇒ no-op.
     if let Some(s) = &snap {
         let old = Surface::from_snapshot(s);
         let same_entries = entries_equal(&old.entries, &decl.entries);
-        // S-19: freeze state compares the "effective freeze state" (declaration OR snapshot) ⇒ repeated publish inside the window is still a no-op.
         let same_freeze = s.freeze_state.clone().unwrap_or_else(|| "unfrozen".into())
             == effective_freeze(
                 &decl.freeze_state,
@@ -1537,7 +1472,6 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
         change_set(&old, &decl)
     };
 
-    // ---- gates (§6.3/§6.5) ----
     let mut d = env.diags.clone();
     let hard: Vec<&Change> = changes.iter().filter(|c| c.is_hard()).collect();
     let eff_freeze = effective_freeze(
@@ -1546,7 +1480,7 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
     );
     let mut blocked = false;
     if !hard.is_empty() {
-        // REMOVED requires the entry to be deprecated first (§6.3).
+        // REMOVED requires `deprecated` first.
         for c in &hard {
             if c.kind == "REMOVED" && c.old_status != "deprecated" {
                 blocked = true;
@@ -1671,13 +1605,12 @@ fn cmd_iface_publish(req: &Request, root: &Path) -> Response {
         );
     }
 
-    // ---- write machine files: snapshot + CHANGELOG + lock (§5.2 table) ----
+    // Write machine files: snapshot + CHANGELOG + lock.
     let mut new_surface = decl.clone();
     new_surface.version = plan.to;
-    // Ruling S-19: `publish` **must not** erase the unfreeze window — the effective freeze state takes "declaration OR snapshot".
+    // Publish keeps the unfreeze window open (effective state = declaration OR snapshot) and
+    // consumes the baseline, so a later `refreeze` closes the window without bumping `COMPAT_GEN`.
     new_surface.freeze_state = eff_freeze.clone();
-    // and a publish inside the window **consumes** the baseline (the new surface becomes the new promise), so a later `refreeze` only closes the window
-    // without bumping `COMPAT_GEN` again (avoiding a "publish + refreeze double bump").
     let baseline_owned: Option<(String, Vec<Entry>)> =
         if eff_freeze == "unfreezing" {
             Some((decl_hash.clone(), decl.entries.clone()))
@@ -1752,8 +1685,6 @@ fn entries_equal(a: &[Entry], b: &[Entry]) -> bool {
         .all(|(x, y)| x.same_surface(y) && x.status == y.status)
 }
 
-// ------------------------------------------------------------------ iface-freeze
-
 fn cmd_iface_freeze(req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
     let id = req.arg_str("id").unwrap_or_default();
@@ -1797,7 +1728,7 @@ fn cmd_iface_freeze(req: &Request, root: &Path) -> Response {
         }
     }
 
-    // §6.4 / A-26: v0.1 only emits a "promotion proposal"; writes no frozen snapshot and bumps no COMPAT_GEN.
+    // v0.1 emits only a promotion proposal: no frozen snapshot, no COMPAT_GEN bump.
     let proposal_rel = format!("build/gen/proposals/{}.toml", decl.unit);
     let mut doc = TDoc::new()
         .set("schema", TValue::Int(1))
@@ -1854,8 +1785,6 @@ fn cmd_iface_freeze(req: &Request, root: &Path) -> Response {
     )
 }
 
-// ------------------------------------------------------------------ iface-deprecate / undeprecate
-
 fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
     let env = Env::load(root);
     let id = req.arg_str("id").unwrap_or_default();
@@ -1898,7 +1827,7 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
         "frozen"
     };
     let mut new_surface = decl.clone();
-    // State-machine commands do not touch the unfreeze window (S-19): the effective freeze state takes "declaration OR snapshot".
+    // State-machine commands do not touch the unfreeze window (declaration OR snapshot wins).
     new_surface.freeze_state = effective_freeze(
         &decl.freeze_state,
         snap.as_ref().and_then(|s| s.freeze_state.as_deref()),
@@ -1906,7 +1835,7 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
     let mut changed_any = false;
     let mut errors: Vec<String> = Vec::new();
 
-    // Current status = publish record (snapshot) first ⇒ repeated runs are no-ops (ruling S-9).
+    // Status comes from the publish record (snapshot) first ⇒ repeated runs are no-ops.
     let cur_status = |name: &str| -> Option<String> {
         if let Some(s) = &snap {
             if let Some(e) = s.entries.iter().find(|e| e.name == name) {
@@ -1956,14 +1885,13 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
             e.status = target_status.to_string();
         }
     }
-    // Unit-level status (when no entry is specified).
+    // Unit-level status when no entry is given.
     if entry.is_none() {
         let cur_unit = snap
             .as_ref()
             .and_then(|s| s.status.clone())
             .unwrap_or_else(|| decl.status.clone());
         if cur_unit == target_status {
-            // already at the target state
         } else if (verb == "deprecate" && cur_unit == "frozen")
             || (verb == "undeprecate" && cur_unit == "deprecated")
         {
@@ -2064,8 +1992,6 @@ fn cmd_iface_state(req: &Request, root: &Path, verb: &str) -> Response {
     )
 }
 
-// ------------------------------------------------------------------ iface-unfreeze
-
 fn cmd_iface_unfreeze(req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
     let id = req.arg_str("id").unwrap_or_default();
@@ -2122,7 +2048,7 @@ fn cmd_iface_unfreeze(req: &Request, root: &Path) -> Response {
         return Response::ok(d, json!({"id": decl.id, "freeze_state": cur}));
     }
 
-    // Baseline = current surface hash + entry table (ruling R-7).
+    // Baseline = current surface hash + entry table.
     let entries: Vec<Entry> = match &snap {
         Some(s) if !s.entries.is_empty() => s.entries.iter().map(Entry::from_snapshot).collect(),
         _ => decl.entries.clone(),
@@ -2157,8 +2083,6 @@ fn cmd_iface_unfreeze(req: &Request, root: &Path) -> Response {
         }),
     )
 }
-
-// ------------------------------------------------------------------ iface-refreeze
 
 fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
     let env = Env::load(root);
@@ -2215,7 +2139,7 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
         return Response::ok(d, json!({"id": decl.id, "freeze_state": cur}));
     };
 
-    // Baseline surface (ruling R-7): compare with the baseline; COMPAT_GEN+1 only if a frozen entry was actually changed/removed.
+    // Baseline surface: COMPAT_GEN+1 only if a frozen entry was changed/removed.
     let baseline = Surface {
         id: decl.id.clone(),
         provider: prov.clone(),
@@ -2243,7 +2167,7 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
     new_surface.version = s.version.unwrap_or(decl.version);
     new_surface.compat_gen = s.compat_gen.unwrap_or(decl.compat_gen);
     new_surface.entries = baseline.entries.clone();
-    // Use the declaration surface's current entries (equal to the baseline if the declaration is unchanged).
+    // Current entries from the declaration (equal to the baseline if unchanged).
     let mut current = decl.clone();
     current.entries = if decl.entries.is_empty() {
         baseline.entries.clone()
@@ -2348,12 +2272,10 @@ fn cmd_iface_refreeze(req: &Request, root: &Path) -> Response {
     )
 }
 
-/// Reused by selftest / check: get the declaration surface from a plugin and unit.
 pub fn declaration_surface(tree: &TreeLoad, provider: &str, unit: &str, idx: usize) -> Surface {
     Surface::from_declaration(tree, provider, unit, idx)
 }
 
-/// Reused by selftest: plugin model (easy to construct) ⇒ declaration surface.
 pub fn surface_of_export(p: &Plugin, idx: usize) -> Surface {
     let e = &p.exports[idx];
     Surface {
@@ -2379,7 +2301,6 @@ pub fn surface_of_export(p: &Plugin, idx: usize) -> Surface {
     }
 }
 
-/// Reused by selftest: snapshot paths of all units in a plugin.
 pub fn unit_ids_of(p: &Plugin) -> Vec<String> {
     p.unit_ids()
 }

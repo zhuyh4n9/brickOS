@@ -1,30 +1,10 @@
 /*
- * sched/coop — cooperative scheduler (coop) implementation
- *
- * Design basis: `3-03-sched.md` §1 ("semantics in core, policy in the plugin")/§2;
- *           `3-01-core-api-list.md` §5.1 (br_sched_ops registration point)/§6 (tasks and threads);
- *           `3-02-int.md` §11.3 (coop IRQ-scheduling semantics: an IRQ return must resume the interrupted thread);
- *           rulings and the ops table: `docs/decisions/0006-scheduler-framework.md`.
- *
- * ## All the policy this plugin owns
- *   - **ready queue = FIFO** (singly linked list, node in the plugin-private tail — zero
- *     allocation, same shape as CA-2);
- *   - `pick_next` dequeues; empty ⇒ BR_NULL ⇒ core goes idle/WFI (3-02 §11.1's L2 critical section);
- *   - **no tick policy** (`on_tick = BR_NULL`): coop does not time-slice — there is no
- *     preemption, and round-robin semantics come only from voluntary yields in
- *     `br_task_yield()`. That is the boundary between coop and preempt.
- *   - `sleep_until` hook returns 0: timeout wakeups are **owned solely by core's `wake_at` table**;
- *     the slot is kept here for preempt/tt to attach their own timer wheel/schedule table.
- *
- * ## State-machine split with core (ADR-0006 §1's I2)
- *   The plugin **changes queue membership only**; `state` is always changed by core. `pick_next`
- *   only dequeues; setting RUNNING is core's job — that keeps a single source of truth.
- *
- * ## ISR safety
- *   Every change to the ready queue happens inside an `br_irq_lock()/br_irq_unlock()` L2 critical
- *   section: the timer ISR wakes threads (⇒ enqueue) in `br_sched_on_tick()`, while the thread
- *   side may be mid-`pick_next` — without this critical section the ISR could tear the queue
- *   "half way through the tail update".
+ * sched/coop -- cooperative scheduler. Ready queue = FIFO singly linked list, nodes in the
+ * plugin-private tail (zero allocation); pick_next only dequeues -- core sets RUNNING, so the
+ * plugin changes queue membership only, never thread state. on_tick = BR_NULL: no time slicing,
+ * so round-robin comes only from voluntary yields in br_task_yield().
+ * Every queue change runs in an br_irq_lock()/br_irq_unlock() critical section: the timer ISR can
+ * enqueue a woken thread in br_sched_on_tick() while a thread is mid-pick_next.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_irq.h>
@@ -33,7 +13,7 @@
 
 #include <br/sched/coop.h>
 
-/* plugin-private tail (hangs after the common TCB header; size reported to core's tcb_size). */
+/* Plugin-private tail (after the common TCB header; size reported to core's tcb_size). */
 struct coop_priv {
     struct br_thread *ready_next;
 };
@@ -42,7 +22,7 @@ static struct br_thread *s_head;   /* queue head (next to run) */
 static struct br_thread *s_tail;   /* queue tail (where yield re-enqueues) */
 static br_u32            s_len;
 
-static br_sched_ops_t    s_ops;    /* not const: tcb_size is computed at runtime (br_sched_tcb_size()) */
+static br_sched_ops_t    s_ops;    /* not const: tcb_size is set at runtime */
 
 static struct coop_priv *priv_of(br_thread_t *t)
 {
@@ -74,11 +54,8 @@ static int coop_thread_ready(br_thread_t *t)
     return 0;
 }
 
-/*
- * RUNNING → BLOCKED hook. Under coop the RUNNING thread is **not in the queue anyway**, so
- * this is normally a no-op; a defensive linear unlink is still done: if the plugin is misused
- * (double ready), no ghost node "not runnable yet still queued" is left behind.
- */
+/* RUNNING -> BLOCKED hook: normally a no-op (the RUNNING thread is not queued); the defensive
+ * linear unlink keeps plugin misuse (double ready) from leaving a ghost node. */
 static void coop_thread_block(br_thread_t *t)
 {
     if (t == BR_NULL) {
@@ -109,7 +86,7 @@ static void coop_thread_block(br_thread_t *t)
     br_irq_unlock(st);
 }
 
-/* Dequeue. Does **not** change state (core sets RUNNING); empty ⇒ BR_NULL ⇒ core idle. */
+/* Dequeue. Does not change state (core sets RUNNING); empty => BR_NULL => core idle. */
 static br_thread_t *coop_pick_next(void)
 {
     br_thread_t *t;
@@ -131,9 +108,9 @@ static br_thread_t *coop_pick_next(void)
 }
 
 /*
- * Timeout-registration hook. Core's `wake_at` table is the single source of truth (expiries
- * are scanned on the periodic tick); returning 0 here means "registration accepted", and the
- * slot is kept for preempt/tt to attach their own time structures.
+ * Timeout-registration hook. Core's wake_at table is the single source of truth (expiries are
+ * scanned on the periodic tick); returning 0 means "registration accepted". The slot is kept for
+ * preempt/tt to attach their own time structures.
  */
 static int coop_sleep_until(br_thread_t *t, br_time_t abs_us)
 {
@@ -156,9 +133,9 @@ int coop_early_init(void)
     s_ops.thread_ready = coop_thread_ready;
     s_ops.thread_block = coop_thread_block;
     s_ops.pick_next    = coop_pick_next;
-    s_ops.on_tick      = BR_NULL;      /* coop has no time slice: no tick policy */
+    s_ops.on_tick      = BR_NULL;      /* no time slice: no tick policy */
     s_ops.sleep_until  = coop_sleep_until;
-    s_ops.idle         = BR_NULL;      /* default = core's L2 critical section + WFI (3-02 §11.1) */
+    s_ops.idle         = BR_NULL;      /* default = core's WFI critical section */
 
     br_sched_register(&s_ops);         /* exactly once; a second registration = core panic */
     return 0;

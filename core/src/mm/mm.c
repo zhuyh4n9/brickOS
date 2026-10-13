@@ -1,30 +1,12 @@
 /*
- * brickOS prototype v0.1.0 — MMU / region table / cache dispatch (mm.c)
- *
- * Authoritative design: `docs/3-os-core/3-01-core-api-list.md` §7 (the five br-mm functions) +
- *   §13.6 (three privilege-tier memory axes: ops × granularity × regions) +
- *   `docs/3-os-core/3-04-memory.md` (identity map + attribute isolation; static region table).
- *
- * Three-layer model (design 1-01 §8): **interface in core / construction in platform / data in
- * the platform region table**. This file is the two core-side pieces:
- *   ① the region table (static array, BR_MM_MAX_REGIONS; single source of truth for duplicates);
- *   ② dispatch to `br_mm_ops_t` (state machine in core, page-table construction in platform).
- *
- * v1 virtual-memory policy = identity map + attribute isolation (3-04 §1):
- *   - `br_mm_map`/`br_mm_unmap` are **signature first** (main doc risk R4), always -ENOTSUP in
- *     v1 (TC-MM-003);
- *   - the region table is declared in platform early_init; page tables are built in one pass by
- *     `ops.activate()`;
- *   - a region added after activation is **also** placed via `ops.map_region`; if that fails the
- *     table entry is rolled back, never leaving a second truth "table and page table disagree"
- *     (design §7's consistency obligation).
- *
- * No locking: v0.1 is single-core, and the region table and active flag are touched only during
- * boot / consistency cases (thread-only).
+ * MMU / region table / cache dispatch: static region table (BR_MM_MAX_REGIONS) in core, page
+ * tables in platform via br_mm_ops_t. v1 = identity map + attribute isolation: br_mm_map/unmap
+ * always return -ENOTSUP, and a post-activation add rolls back if ops.map_region fails, so table
+ * and page table never disagree. No locking (single-core, boot/consistency cases only).
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>   /* BR_PAGE_SIZE: region granularity and pool granularity share a source (§6/§7) */
+#include <br/core/br_mem.h>
 #include <br/core/br_mm.h>
 #include <br/core/br_types.h>
 
@@ -70,7 +52,7 @@ br_u32 br_mm_region_count_kind(br_u32 kind)
     return n;
 }
 
-/* ---------------------------------------------------------------- native surface (§7) */
+/* ---------------------------------------------------------------- native surface */
 
 int br_mm_region_add(const br_mm_region_t *r)
 {
@@ -85,10 +67,8 @@ int br_mm_region_add(const br_mm_region_t *r)
         return BR_ERR(EINVAL);   /* address wrap */
     }
 
-    /* Overlap test: half-open intervals intersect. **An exact duplicate counts as overlap**
-     * (TC-MM-001 requires both "overlap" and "duplicate" to fail), because it would give one
-     * physical page two attribute declarations — the page table honors one, the other is a
-     * second truth. */
+    /* Overlap test on half-open intervals; an exact duplicate counts as overlap (TC-MM-001),
+     * since it would give one physical page two attribute declarations. */
     const br_uintptr_t nlo = r->base;
     const br_uintptr_t nhi = r->base + r->size;
     for (br_u32 i = 0u; i < s_count; i++) {
@@ -106,7 +86,7 @@ int br_mm_region_add(const br_mm_region_t *r)
     s_regions[s_count] = *r;
     s_count++;
 
-    /* Already active: table and page table must grow together; on failure roll back the entry (never "in the table but not in the page table"). */
+    /* Active: table and page table must grow together; roll back the entry on failure. */
     if (s_active == BR_TRUE) {
         if ((s_ops == BR_NULL) || (s_ops->map_region == BR_NULL)) {
             s_count--;
@@ -135,15 +115,8 @@ int br_mm_unmap(br_uintptr_t addr, br_size_t size)
     return BR_ERR(ENOTSUP);   /* v1 signature first (TC-MM-003) */
 }
 
-/*
- * Cache maintenance (§7; around driver DMA, risk R4). Semantics per §13.6's orthogonal table:
- *   ① address not declared ⇒ -EINVAL (the prototype deliberately does not "guess" attributes —
- *      see ADR-0003, TC-MM-EXTRA);
- *   ② size == 0 ⇒ 0 (no bytes to maintain);
- *   ③ region not marked CACHED (DEVICE/plain) ⇒ 0 (no-op);
- *   ④ MMU not active (caches are off anyway) ⇒ 0;
- *   ⑤ otherwise dispatch via ops; ops missing ⇒ -ENOTSUP.
- */
+/* Cache maintenance around driver DMA. size 0 => 0; address not declared => -EINVAL (TC-MM-EXTRA);
+ * region not CACHED or MMU inactive => 0; otherwise dispatch, missing op => -ENOTSUP. */
 static int mm_cache_dispatch(void *addr, br_size_t size, br_bool flush)
 {
     if (size == 0u) {
@@ -211,7 +184,7 @@ int br_mm_activate(void)
 
     const int rc = s_ops->activate(s_regions, s_count);
     if (rc != BR_OK) {
-        return rc;   /* propagate as is, do **not** set the flag: activation can be retried after failure */
+        return rc;   /* propagate as is, do not set the flag: activation can be retried after failure */
     }
     s_active = BR_TRUE;
     return BR_OK;

@@ -1,80 +1,38 @@
 /*
- * brickOS prototype v0.2.0 — scheduler framework + coop self-test suite (core/selftest/)
- *
- * Design basis and rulings: `docs/decisions/0010-plugin-selftest.md`.
- * Case spec: `6-01-test.md` §3.1/§3.3 (`TC-TASK-*` / `TC-TIME-*`); implementation: `3-03-sched.md`.
- *
- * ## Why these lines moved here from `sched_core.c`
- *   They are tests, yet lived in the same .c as the production implementation — so
- *   "disable self-test" could not drop them, and readers of the production code had to
- *   dig through a thousand lines of mechanism for the checks. After the move:
- *     - `core/src/sched/sched_core.c` keeps mechanism only (state machine/timeouts/switch/thread API);
- *     - self-test off ⇒ `core/selftest/` is not compiled at all ⇒ case code does not
- *       reach the image (mechanical fact, not "compiled but not run"; see product.toml
- *       selftest_sources and build.rs);
- *     - case readers and implementation readers no longer interfere.
- *   This is a move, not a rewrite: checks/logs/order are unchanged (see the log contract below).
- *
- * ## The only cross-boundary observation
- *   The suite really does create/yield/join/sleep and must print which scheduler was
- *   registered (`scheduler=%s kind=%u spawn=%u`). Those fields exist only in the production
- *   registry — read via `br_sched_ops_get()` from `sched_internal.h`, not copied into a
- *   second plugin table here (that would give "what is registered" two sources of truth).
- *
- * ## Log contract (gates match literally ⇒ one changed character changes the check)
- *   `[TASKCONF] PASS/FAIL <id> <desc>` … `[TASKCONF] SUMMARY pass=%d fail=%d total=%d`
- *   require/forbid/require_tags in `tests/gates.toml` and the tag table in
- *   `sched/coop/tests/smoke.toml` are anchored to these two lines.
- *
- * ## Return value
- *   `int` = number of failed cases (ADR-0010 §2.4: the suite only aggregates, `br_core_selftest()`
- *   sums, gates decide red/green). No failure stops the system — it is just logged.
- *
- * ## ★ Branch by scheduler kind (ADR-0011 §5)
- *   This suite serves both `sched/coop` and `sched/rr` (preempt) plugins. Shared cases always
- *   run; the domain-specific ones branch on the registry `ops.kind` (not a compile-time switch,
- *   so "the kind the plugin reports" and "what the case expects" cannot disagree):
- *     - coop        ⇒ `TC-TASK-101`: a busy thread that never yields is NOT preempted (the coop definition)
- *     - preempt(rr) ⇒ `TC-TASK-102`: the same shape MUST be preempted by the time slice;
- *                      `TC-TASK-103`: no preemption may occur inside an L2 critical section (honesty clause).
- *   They are the two directions of one boundary; only together is it visible that they are opposites.
+ * Scheduler framework + coop/preempt self-test suite. Cases are not a plugin capability, so they
+ * stay out of the golden headers; with selftest off core/selftest/ is not compiled. The suite runs
+ * in a real thread and really creates/yields/joins/sleeps. Scheduler identity comes from the
+ * production registry via br_sched_ops_get(), never from a copy. Log contract, matched literally
+ * by tests/gates.toml: [TASKCONF] PASS/FAIL <id> <desc> ...
+ * [TASKCONF] SUMMARY pass=%d fail=%d total=%d.
+ * Returns the number of failed cases; no failure stops the system.
+ * Cases branch on the registry ops.kind, not a compile-time switch: coop runs TC-TASK-101 (busy
+ * thread not preempted); preempt (rr) runs TC-TASK-102 (the same shape must be sliced away) and
+ * TC-TASK-103 (no preemption inside an L2 critical section).
  */
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>          /* TC-TASK-103: L2 critical section (IRQs off ⇒ no IRQ exit) */
+/* TC-TASK-103: L2 critical section (IRQs off -> no IRQ exit) */
+#include <br/core/br_irq.h>
 #include <br/core/br_log.h>
 #include <br/core/br_sched.h>
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
-/* TCB common header (BR_TASK_MAX / struct br_thread) and the read-only registry view are
- * core-private; cross-directory relative includes have precedent here
- * (core/src/sync/sync.c -> "../sched/sched_internal.h"). */
+/* TCB common header (BR_TASK_MAX / struct br_thread) + read-only registry view (core-private). */
 #include "../src/sched/sched_internal.h"
 
-/* The entry's visible declaration lives in `core/selftest/core_selftest.c` (the only
- * aggregator); repeating it here satisfies this file's rule that every function has a
- * prototype before use (-Wmissing-prototypes). */
 int br_sched_selftest(void);
 
-/* =====================================================================
- * Conformance cases (TC-TASK-* / TC-TIME-*, 6-01 §3.1/§3.3)
- *
- * Shape: the suite itself runs in a real thread (APP thread / host supervisor thread) and
- * really does create/yield/join/sleep — so it validates switching/blocking/wakeup/timeout,
- * not just data structures. Each sub-case's thread stack is a static array (the prototype
- * has no dynamic allocation).
- * ===================================================================== */
+/* ---- Conformance cases (TC-TASK-* / TC-TIME-*) ----
+ * The suite runs in a real thread and really creates/yields/joins/sleeps, so it validates
+ * switching/blocking/wakeup/timeout; every thread stack is a static array (no heap). */
 
 #define BR_CONF_STACK_BYTES 4096u
 #define BR_CONF_BUSY_ITERS  200000u
 
-/*
- * Time basis for the preemption cases (TC-TASK-102/103): the criterion is "switched away
- * within a few time slices", and wall-clock length varies with the product's HZ
- * (`product.toml [kernel].hz`, default 200 ⇒ tick = 5 ms, rr slice = 2 tick = 10 ms;
- * ADR-0017). 600 ms gives ≈ 60 slices at the default and still ~30 slices at HZ=100 — what
- * is needed here is a window far larger than one slice, not an exact duration.
- */
+/* Time basis for TC-TASK-102/103: the criterion is "switched away within a few slices", so what
+ * matters is a window far larger than one slice (600 ms is ~60 slices at HZ=200, ~30 at HZ=100),
+ * not an exact duration. */
 #define BR_CONF_PREEMPT_WAIT_US 600000u
 #define BR_CONF_CRIT_US         400000u
 
@@ -120,14 +78,14 @@ static br_task_attr_t conf_attr(br_u32 slot, const char *name)
     return a;
 }
 
-/* --- Thread bodies of each case ---------------------------------------  * WORKAROUND(br-wa-test-001): this suite's `TC-TASK-*`/`TC-TIME-*` ids are
- * not yet aligned one-by-one with the `6-01` §3.1/§3.3 table (meaning drift; the prose here
- * is accurate); see WORKAROUNDS.md for the alignment work.
+/* --- Thread bodies of each case ---
+ * WORKAROUND(br-wa-test-001): the TC-TASK-* / TC-TIME-* ids are not yet aligned one-by-one with
+ * the 6-01 table; see WORKAROUNDS.md for the alignment work.
  */
 
 static void conf_entry_ok(void *arg)
 {
-    (void)arg;                          /* normal return ⇒ trampoline calls br_task_exit(0) */
+    (void)arg;                          /* normal return => trampoline calls br_task_exit(0) */
 }
 
 static void conf_entry_code(void *arg)
@@ -188,7 +146,7 @@ static void conf_entry_busy(void *arg)
 {
     (void)arg;
 
-    /* busy loop: never yields. Under coop the victim must NOT be switched in meanwhile. */
+    /* busy loop: never yields; under coop the victim must NOT be switched in meanwhile. */
     for (br_u32 i = 0u; i < BR_CONF_BUSY_ITERS; i++) {
         if (s_victim_ticks != 0u) {
             s_preempt_seen = 1;
@@ -202,12 +160,9 @@ static void conf_entry_busy(void *arg)
     }
 }
 
-/*
- * Preempting busy loop (TC-TASK-102): the length is bounded by the clock, not by iteration
- * count — the criterion is "was it switched away within a few slices", and iteration counts
- * drift with optimization level and platform. Stop as soon as the victim has run (avoid
- * always burning the full 600 ms).
- */
+/* Preempting busy loop (TC-TASK-102): bounded by the clock, not by iteration count (the criterion
+ * is "switched away within a few slices"; iteration counts drift with optimization level). Stops
+ * as soon as the victim has run, instead of always burning the full 600 ms. */
 static void conf_entry_busy_preempt(void *arg)
 {
     (void)arg;
@@ -228,12 +183,9 @@ static void conf_entry_busy_preempt(void *arg)
     }
 }
 
-/*
- * Critical-section variant (TC-TASK-103): stay inside `br_irq_lock()` for far longer than
- * one time slice. Criterion: the victim must not run even once meanwhile (the I4 honesty
- * clause — preemption happens only at an IRQ exit, and with IRQs off there is no exit); once
- * released it must run soon (proving it was not lost, rather than never scheduled).
- */
+/* Critical-section variant (TC-TASK-103): stay inside br_irq_lock() far longer than one time
+ * slice; the victim must not run meanwhile (preemption happens only at an IRQ exit, and with IRQs
+ * off there is none), yet must run soon after release. */
 static void conf_entry_crit(void *arg)
 {
     (void)arg;
@@ -296,10 +248,8 @@ static void case_task_003_interleave(void)
     int code_a = -1;
     int code_b = -1;
 
-    /*
-     * (a) Direct check: after this thread yields, the other thread really ran (flag set).
-     *     The ready queue holds only the flag thread now, so FIFO must run it first.
-     */
+    /* (a) After this thread yields the other thread really ran (flag set); the ready queue holds
+     * only the flag thread now, so FIFO must run it first. */
     s_flag_a = 0;
     const int rf = br_task_create(&tf, &af, conf_entry_flag, BR_NULL);
     br_task_yield();
@@ -308,10 +258,8 @@ static void case_task_003_interleave(void)
     conf_result((rf == 0) && (jf == 0) && ran, "TC-TASK-003",
                 "another thread really ran after yield");
 
-    /*
-     * (b) Interleave evidence: two workers each do "append letter + yield" x 4.
-     *     join(A) blocks this thread — so the scheduler alternates A/B.
-     */
+    /* (b) Interleave evidence: two workers each do "append letter + yield" 4 times; join(A) blocks
+     * this thread, so the scheduler alternates A/B. */
     s_seq_n = 0;
     for (br_u32 i = 0u; i < BR_ARRAY_SIZE(s_seq); i++) {
         s_seq[i] = '.';
@@ -343,7 +291,7 @@ static void case_task_004(void)
     int code = -1;
 
     const int r = br_task_create(&t, &a, conf_entry_ok, BR_NULL);
-    br_task_yield();                    /* let it finish (entry returns ⇒ trampoline ⇒ exit) */
+    br_task_yield();                    /* let it finish (entry returns => trampoline => exit) */
 
     const br_bool zombie = (t != BR_NULL) && (br_task_state(t) == BR_TASK_ZOMBIE);
     const int j = (t != BR_NULL) ? br_task_join(t, &code) : BR_ERR(EINVAL);
@@ -445,12 +393,9 @@ static void case_time_002(void)
     const int r = br_task_sleep(0u);
     const br_time_t d = br_clock_now() - t0;
 
-    /*
-     * The check uses "measured < 1 ms" rather than `d == 0`: on target a timer ISR may land
-     * between the two reads (it is preemptive), so d may be a few us — which does not
-     * contradict "returns immediately". The real counterexample is "registered in the timeout
-     * table and switched away", which takes at least one tick (`1/HZ`, 5 ms by default).
-     */
+    /* "measured < 1 ms" rather than d == 0: on target a preemptive timer ISR may land between the
+     * two reads, so a few us do not contradict "returns immediately". The real counterexample
+     * sleep that entered the timeout table takes at least one tick (5 ms at HZ=200). */
     br_log_info("[TASKCONF] TRACE sleep0 rc=%d elapsed_us=%lu", r, (br_u64)d);
     conf_result((r == 0) && (d < BR_US_PER_MS), "TC-TIME-002",
                 "sleep(0) returns 0 immediately (measured < 1ms, never entered the timeout table)");
@@ -464,18 +409,11 @@ static void case_time_003(void)
 }
 
 /*
- * TC-TASK-104 (ADR-0011 §5): the observable face of I2 — "a RUNNING thread is not in the
- * ready structure".
- *
- * Why this deserves a case: I2 states "the state machine has one source of truth", but it
- * stayed a paper rule (ADR-0006 §1 lists it without a check). Preemption raises the stakes:
- * the IRQ exit switch stack cycles through "push to tail → pop → set RUNNING", and one wrong
- * write leaves a ghost node that is "not runnable but still queued" or "RUNNING but still queued".
- *
- * The check uses relative counts (not absolute): in the image selftest runs in the main
- * context while the APP thread already sits in the ready queue, so the absolute value is not
- * 0. Instead it asserts "current (RUNNING) is never counted": create one thread ⇒ +1; join it
- * ⇒ back to baseline.
+ * TC-TASK-104: the observable face of I2 -- "a RUNNING thread is not in the ready structure".
+ * Preemption cycles the IRQ-exit switch stack through "push to tail -> pop -> set RUNNING", so one
+ * wrong write leaves a ghost node ("not runnable but still queued" or vice versa). The check uses
+ * relative counts because in the image the APP thread already sits in the queue: create => +1,
+ * join => back to baseline.
  */
 static void case_task_104_ready_set(void)
 {
@@ -487,7 +425,7 @@ static void case_task_104_ready_set(void)
     const int r = br_task_create(&t, &a, conf_entry_ok, BR_NULL);
     const br_u32 after_create = br_sched_ready_count();
 
-    /* just wait for it to finish (trampoline → exit → ZOMBIE): it is then neither queued nor RUNNING. */
+    /* just wait for it to finish (trampoline -> exit -> ZOMBIE); then not queued, not RUNNING. */
     br_task_yield();
     const br_u32 after_exit = br_sched_ready_count();
 
@@ -497,18 +435,15 @@ static void case_task_104_ready_set(void)
     br_log_info("[TASKCONF] TRACE ready-set base=%u +create=%u +exit=%u +join=%u",
                 base, after_create, after_exit, after_join);
 
-    /*
-     * Four values matching point by point (note ZOMBIE is NOT in the ready structure, so the
-     * count drops back to baseline once it finishes):
-     *   create ⇒ base+1 (READY); exit ⇒ base (ZOMBIE); join reclaims ⇒ base (slot released).
-     */
+    /* create => base+1 (READY); exit => base (ZOMBIE is not in the ready structure); join reclaims
+     * the slot => base. */
     conf_result((r == 0) && (j == 0) && (after_create == base + 1u) &&
                 (after_exit == base) && (after_join == base),
                 "TC-TASK-104",
                 "I2: READY ⇄ ready structure; RUNNING/ZOMBIE are never in it (relative counts match point by point)");
 }
 
-/* ---- Domain-specific: the coop definition (no yield ⇒ no preemption) ---- */
+/* ---- Domain-specific: the coop definition (no yield => no preemption) ---- */
 
 static void case_task_101_coop(void)
 {
@@ -527,7 +462,7 @@ static void case_task_101_coop(void)
     s_preempt_seen = 0;
     s_victim_after_yield = 0;
 
-    /* create busy before victim ⇒ ready order [busy, victim]; after join(busy) busy runs first. */
+    /* create busy before victim => ready order [busy, victim]; after join(busy) busy runs first. */
     const int r1 = br_task_create(&tb, &ab, conf_entry_busy, BR_NULL);
     const int r2 = br_task_create(&tv, &av, conf_entry_victim, BR_NULL);
     const int j1 = (tb != BR_NULL) ? br_task_join(tb, BR_NULL) : BR_ERR(EINVAL);
@@ -569,11 +504,8 @@ static void case_task_102_preempt(void)
     br_log_info("[TASKCONF] TRACE preempt busy_us=%lu victim_ticks=%u seen=%d",
                 (br_u64)elapsed, (unsigned)s_victim_ticks, s_preempt_seen);
 
-    /*
-     * Criterion = the victim ran during the busy loop (before busy yielded) ⇒ the time slice
-     * really switched busy out. This is the OPPOSITE of TC-TASK-101: the same code must be
-     * false under coop and true under preempt.
-     */
+    /* Criterion: the victim ran during the busy loop, before busy yielded -- the opposite of
+     * TC-TASK-101, so the same code must be false under coop and true under preempt. */
     conf_result((r1 == 0) && (r2 == 0) && (j1 == 0) && (j2 == 0) &&
                 (s_preempt_seen == 1),
                 "TC-TASK-102",
@@ -618,7 +550,7 @@ int br_sched_selftest(void)
     s_conf_pass = 0;
     s_conf_fail = 0;
 
-    /* read-only registry snapshot (byte-identical to the old code, which read s_ops in sched_core.c). */
+    /* read-only registry snapshot; the production registry stays the single source of truth. */
     const br_sched_ops_t *ops = br_sched_ops_get();
 
     br_log_info("[TASKCONF] ==== sched framework + scheduler conformance (3-03 / 6-01 §3.1/§3.3)");
@@ -640,18 +572,14 @@ int br_sched_selftest(void)
     case_time_002();
     case_time_003();
 
-    /*
-     * ---- Domain-specific: branch on the registry `kind` (not a compile-time switch) ----
-     * coop and preempt are the two directions of one boundary ("does a busy thread that never
-     * yields get switched away"): running both would be self-contradictory, so only one side
-     * runs here — chosen from the truth in `ops->kind`.
-     */
+    /* Domain-specific: branch on the registry kind, not a compile-time switch. coop and preempt
+     * are the two directions of one boundary, so only one side runs, chosen from ops->kind. */
     const br_u32 kind = (ops != BR_NULL) ? ops->kind : BR_SCHED_KIND_COOP;
 
     if (kind == BR_SCHED_KIND_COOP) {
         case_task_101_coop();
     } else {
-        /* preempt / tt: the slice (or schedule table) preempts ⇒ the check flips. */
+        /* preempt: the slice preempts, so the check flips. */
         case_task_102_preempt();
         case_task_103_critical();
     }
@@ -663,6 +591,5 @@ int br_sched_selftest(void)
         br_log_error("[TASKCONF] failures present — sched framework/coop not conformant");
     }
 
-    /* return the failure count: the aggregator sums it, gates decide red/green (ADR-0010 §2.4). */
     return s_conf_fail;
 }

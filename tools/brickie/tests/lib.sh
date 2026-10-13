@@ -1,18 +1,11 @@
 #!/usr/bin/env bash
-# Shared skeleton for brickie v0.1 end-to-end cases (used by run.sh and purity.sh).
-#
-# Discipline:
-#   * every case runs in a `mktemp -d` temp dir; cases share no state;
-#   * assertions take only two routes: **exit code** + **structured JSON** (tests/jsonq.py) or key text;
-#   * this file calls no compiler (cc/g++/cargo/nm) — V-9's "zero compile deps" binds the tests too.
-#
-# Dependency injection (set/overridden by the caller after source):
-#   TOOL_ROOT / REPO_ROOT / TESTS_DIR / TMPROOT / PY / CORE / GEN
+# Shared skeleton for brickie end-to-end cases (run.sh, purity.sh). Each case runs in its own
+# mktemp -d; assertions use only exit codes + structured JSON (jsonq.py) or key text; no compiler
+# is called. After source the caller sets TOOL_ROOT REPO_ROOT TESTS_DIR TMPROOT PY CORE GEN.
 set -u
 
 # ------------------------------------------------------------------ environment resolution
-# Binary lookup order (**same as python/brickie/native.py**): in-tree build first, then bootstrap seed.
-# Cases must explicitly point BRICKIE_CORE/BRICKIE_GEN at the copy actually used (no "self-lookup").
+# Binary lookup order (same as python/brickie/native.py): in-tree build first, then the seed.
 pick_first() {
     local p
     for p in "$@"; do
@@ -42,7 +35,6 @@ resolve_env() {
     export TESTS_DIR TOOL_ROOT REPO_ROOT PY HOST_ARCH HOST_OS CORE GEN LAUNCHER SEED_LAUNCHER
 }
 
-# ------------------------------------------------------------------ counters and reporting
 PASS=0
 FAIL=0
 FAILLOG=""
@@ -58,7 +50,6 @@ bad() {
     { printf 'FAIL %s\n' "$1"; shift || true; for line in "$@"; do printf '     %s\n' "$line"; done; } >>"$FAILLOG"
 }
 
-# assertion: string equality
 eq() { # eq <name> <expected> <actual>
     if [ "$2" = "$3" ]; then ok "$1"; else bad "$1" "expected: $2" "actual: $3"; fi
 }
@@ -71,7 +62,6 @@ contains() { # contains <name> <fragment> <full text>
     esac
 }
 
-# assertion: a pattern occurs >=1 times in a file
 grep_at_least() { # grep_at_least <name> <pattern> <file>
     local n
     n="$(grep -cE -- "$2" "$3" 2>/dev/null || true)"
@@ -85,10 +75,8 @@ grep_none() { # grep_none <name> <pattern> <file...>
     if [ "${n:-0}" -eq 0 ]; then ok "$label"; else bad "$label" "forbidden pattern matched $n times: $pat"; fi
 }
 
-# ------------------------------------------------------------------ workspace
 new_work() { mktemp -d "$TMPROOT/work.XXXXXX"; }
 
-# copy the fixture into a private workspace for one case
 cp_fx() { # cp_fx <fixture name> [target parent dir]
     local name="$1" parent="${2:-$TMPROOT}"
     local w
@@ -103,7 +91,7 @@ ERR=""
 RC=0
 
 # run_brickie <workdir> [args...]: run the frontend in the workdir; RC/OUT/ERR hold the result.
-# Default is the source-tree frontend (python3 -m brickie); a non-empty BRICKIE_LAUNCHER uses the entry ELF.
+# Default is the source-tree frontend (python3 -m brickie); BRICKIE_LAUNCHER uses the entry ELF.
 run_brickie() {
     local work="$1"; shift
     OUT="$TMPROOT/.last.out"
@@ -123,13 +111,11 @@ run_brickie() {
 }
 
 
-# ------------------------------------------------------------------ JSON assertions
 JSONQ="$TESTS_DIR/jsonq.py"
 JQ_RESP=""
 
-# run_json <workdir> [args...]: run once with --json and leave the response in JQ_RESP.
-# So a case can use **the same** grep for both modes, project the JSON diagnostics to text into ERR
-# (in JSON mode the process stderr is empty anyway; diagnostics live in the envelope).
+# run_json <workdir> [args...]: run once with --json and leave the response in JQ_RESP, so a case
+# can use the same grep for both modes; diagnostics are projected to text into ERR.
 run_json() {
     local work="$1"; shift
     run_brickie "$work" "$@" --json
@@ -161,7 +147,7 @@ sortedj() { # the diagnostics array is ordered by (code,file,span,target)
 }
 
 snapj() { # snapj <snapshot name> <response file> — structured snapshot (N-4)
-    # With BRICKIE_SNAP_EMIT=1, **regenerate** the baseline instead (only when intentionally updating it).
+    # BRICKIE_SNAP_EMIT=1 regenerates the baseline instead (only when updating it on purpose).
     local name="$1" resp="$2"
     local detail
     if [ "${BRICKIE_SNAP_EMIT:-0}" = "1" ]; then
@@ -179,11 +165,9 @@ snapj() { # snapj <snapshot name> <response file> — structured snapshot (N-4)
     fi
 }
 
-# ------------------------------------------------------------------ file-level tools
 tree_hash() { # directory content fingerprint (path + sha256), used to assert byte-for-byte idempotence
     ( cd "$1" && find . -type f -not -name out -not -name err | LC_ALL=C sort \
         | xargs -r sha256sum )
 }
 
-# ------------------------------------------------------------------ section headings
 section() { printf '\n=== %s ===\n' "$1"; }

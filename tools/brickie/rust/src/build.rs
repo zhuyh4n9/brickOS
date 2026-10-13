@@ -1,37 +1,11 @@
-//! `brickie build` — **declaration-driven build orchestration** (core side: plan + verdict).
-//!
-//! ## Why this lives in core
-//!
-//! Design `2-02` §1 assigns "plugin discovery / manifest parsing / closure solving /
-//! topology and cycle detection / generated artifacts / **build orchestration**" to brickie;
-//! `Design/docs/decisions/0003` (build ownership transfer) lays it out as stages S1–S3. This module implements that table:
-//!
-//! * **Which sources enter the image** ← the `product.toml [select]` closure (solver) + each plugin's
-//!   `[build].sources` (declaration surface) — no longer `wildcard` literal paths in the top-level `Makefile`;
-//! * **How to compile** ← `[build.target]` (platform plugin: arch/triple/linker script/QEMU model) +
-//!   `product.toml [build]` (flags/artifact locations);
-//! * **Which gates run** ← `tests/gates.toml` (hand-written: host cases / QEMU log criteria / script gates).
-//!
-//! L5 (Python) only executes + writes + presents: the `data.steps[i].argv` it receives are **concrete commands**
-//! with no verdicts. Log criteria (`judge`) are decided in core from `tests/gates.toml` regexes — so
-//! "red/green" has a single source of truth, and `--json` and text are two serializations of one `data`.
-//!
-//! ## Ownership of three concerns (rulings S-B1…S-B6, itemized in `rust/README.md` §10)
-//!
-//! | Concern | Owner | Rationale |
-//! |---|---|---|
-//! | Tool **candidate order** (`gcc` → `gcc-16` → …) and **resolution result** | core | generated files (make/ninja backends) must bake in the resolution; L5 only executes argv |
-//! | Incremental decision (`stamp` = argv + inputs (size,mtime)) | core | pure function, injectable via `context.files` ⇒ reproducible self-test |
-//! | Process orchestration (concurrency / timeouts / log capture) | L5 | §8 "spawn subprocesses"; core touches neither clocks nor concurrency |
-//!
-//! ## Divergences from the design (logged in `docs/contract.md` §9)
-//!
-//! * `brickie-v0.1.md` §0 boundary discipline says "no v0.1 command may require cc/cargo/nm present".
-//!   This family **deliberately violates** it — it is the "cross-compiler must be present" command.
-//!   The precise rule should be "**composition-time** commands do not require a compiler" (see ADR-0004 §deviation log).
-//! * `brick.toml [build]` is noted in `brickie-v0.1.md` §7.1 as "recorded in v0.1 only; consumed from v0.3"
-//!   — this change **consumes it early** (ADR-0004 S1–S3) and adds two fields (`defines`,
-//!   the whole `[build.target]` table), now reflected in contract §7.1.
+//! `brickie build` — declaration-driven build orchestration (core side: plan + verdict).
+//! Sources come from the `product.toml [select]` closure + each plugin's `[build].sources`; compile
+//! flags from `product.toml [build]` + platform `[build.target]`; gates from `tests/gates.toml`.
+//! L5 only executes `data.steps[i].argv` and writes files; log criteria (`judge`) are decided here,
+//! so red/green has one source of truth. Core owns tool resolution and the incremental decision
+//! (`stamp` = argv + inputs (size, mtime), injectable via `context.files`); L5 owns process
+//! orchestration (concurrency, timeouts, log capture).
+//! This command family requires cc/objcopy (composition-time commands do not).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -45,26 +19,21 @@ use crate::model::{self, Plugin, ProductBuild, TreeLoad};
 use crate::proto::{Request, Response};
 use crate::solver;
 
-// ------------------------------------------------------------------ Diagnostic codes
-//
-// `BRV-D8`'s code table has no BUILD family ⇒ this change opens one, each entry logged in
-// `docs/contract.md` §9 R-13/mark and `rust/README.md` §10 (design feedback: `BRV-D8` needs a BUILD family).
-
 /// `product.toml` lacks `[build]` (or the whole product is absent).
 pub const CODE_NO_BUILD: &str = "BRV-BLD-0001";
 /// `[build].sources` expands to nothing (declared but matching no file).
 pub const CODE_EMPTY_SOURCES: &str = "BRV-BLD-0002";
 /// No platform plugin declares `[build.target]` (no way to know arch/linker script).
 pub const CODE_NO_TARGET: &str = "BRV-BLD-0003";
-/// Multiple platform plugins declare `[build.target]` (which one is authoritative is unclear).
+/// Several platform plugins declare `[build.target]`: which one is authoritative is unclear.
 pub const CODE_TARGET_AMBIGUOUS: &str = "BRV-BLD-0004";
-/// Tool resolution failed (cross compiler / objcopy / qemu absent). **Environment error** (exit code 2).
+/// Tool resolution failed (compiler / objcopy / qemu absent); environment error (exit code 2).
 pub const CODE_TOOL_MISSING: &str = "BRV-BLD-0005";
 /// A plugin in the closure has no `[build]` (it gets composed but says nothing about compiling).
 pub const CODE_UNIT_NO_BUILD: &str = "BRV-BLD-0006";
-/// A **literal** path in `[build].sources` does not exist (a non-matching glob is not an error, see 0002).
+/// A literal path in `[build].sources` does not exist; a non-matching glob is not an error.
 pub const CODE_MISSING_SOURCE: &str = "BRV-BLD-0007";
-/// No gate with this name in `tests/gates.toml` (or the whole file is absent).
+/// No gate with this name in `tests/gates.toml` (or the file is absent).
 pub const CODE_GATE_UNKNOWN: &str = "BRV-BLD-0008";
 /// Gate judged red (log missing a require / hitting a forbid / missing a PASS case tag).
 pub const CODE_GATE_FAILED: &str = "BRV-BLD-0009";
@@ -76,13 +45,9 @@ pub const CODE_STEP_FAILED: &str = "BRV-BLD-0011";
 pub const CODE_GATE_SHAPE: &str = "BRV-BLD-0012";
 /// Generated artifact belongs to a plugin **outside the closure** ⇒ skipped (info: not a defect, but must be visible).
 pub const CODE_GEN_NOT_SELECTED: &str = "BRV-BLD-0013";
-/// A generated artifact under `build/gen/` with **no identifiable owner** (stale leftover after a plugin rename/delete) ⇒ skipped.
-///
-/// Difference from 0013: 0013 means "owner known, just not selected"; this code means "no plugin with that name remains in the tree".
-/// Both must be skipped, but the fix differs (former: change `[select]`; latter: clean `build/gen/`) — hence separate codes.
+/// Generated artifact under `build/gen/` with no identifiable owner (stale leftover) ⇒ skipped.
+/// 0013 = owner known but unselected; this = no plugin of that name, hence separate codes.
 pub const CODE_GEN_ORPHAN: &str = "BRV-BLD-0014";
-
-// ------------------------------------------------------------------ Entry
 
 /// Dispatch for the build command family (forwarded from `main.rs`).
 pub fn run(req: &Request) -> Response {
@@ -105,27 +70,22 @@ pub fn run(req: &Request) -> Response {
     }
 }
 
-// ================================================================== Planner
-
-/// One compilation unit (core body / plugin / generated artifacts).
+/// One compilation unit (core body / plugin / generated artifacts); paths are relative to root.
 #[derive(Clone, Debug, Default)]
 struct Unit {
-    /// Display name: plugin name (`service/trace`) or `core` / `build/gen (generated)`.
+    /// Plugin name (`service/trace`), or `core` / `build/gen (generated)`.
     name: String,
-    /// Unit directory relative to root (`""` = repo root, used by core and generated artifacts).
+    /// Unit dir (`""` = repo root).
     dir: String,
-    /// Source files relative to root (globs expanded, lexicographic order).
+    /// Sources (globs expanded, lexicographic).
     sources: Vec<String>,
-    /// Include directories relative to root.
     includes: Vec<String>,
     defines: Vec<String>,
-    /// The unit's own compile flags (`[build].cflags`), appended **after** the **product-level**
-    /// cflags — so it can disable a product-level warning (e.g. `-Wno-shadow` for vendor code).
+    /// Unit cflags (`[build].cflags`), applied after product cflags so they can disable a warning.
     cflags: Vec<String>,
     plugin: Option<String>,
 }
 
-/// Target facts (from the platform plugin's `[build.target]`).
 #[derive(Clone, Debug, Default)]
 struct Target {
     arch: String,
@@ -140,30 +100,26 @@ struct Target {
     owner: String,
 }
 
-/// One command to execute.
 #[derive(Clone, Debug, Default)]
 struct Step {
     label: String,
     /// `compile` / `link` / `objcopy` / `run` / `script` / `hosttest` / `hostrun` / `backend`
     kind: String,
     argv: Vec<String>,
-    /// Steps in the same `group` may run concurrently (L5's orchestration contract).
+    /// Steps sharing a `group` may run concurrently (L5's orchestration contract).
     group: u32,
-    /// Log destination relative to root (`None` = inherit stdio directly).
+    /// Log destination relative to root (`None` = inherit stdio).
     log: Option<String>,
     timeout_s: Option<u64>,
-    /// The step is **expected** to end in a timeout (QEMU gate: the image runs until killed).
+    /// Expected to end in a timeout (QEMU gate: the image runs until killed).
     expect_timeout: bool,
     /// Gate name requiring a core verdict (see `cmd_judge`).
     judge: Option<String>,
-    /// Cap on lines forwarded to stdout (`--head` expansion).
     stdout_lines: Option<u64>,
-    /// Files this step writes (for incremental state and cleanup).
+    /// Files this step writes (incremental state + cleanup).
     outputs: Vec<String>,
-    /// Files this step **consumes** that other steps in this plan produce.
-    ///
-    /// Only one purpose: when an upstream step fails, L5 must **skip** downstream instead of
-    /// rerunning with stale outputs (stale objects still link ⇒ logs print "ok ld" while the artifact is stale — misleading).
+    /// Files produced by other steps of this plan. When an upstream step fails, L5 must skip
+    /// downstream instead of rerunning on stale outputs (stale objects still link).
     consumes: Vec<String>,
 }
 
@@ -181,14 +137,13 @@ impl Step {
             "stdout_lines": self.stdout_lines,
             "outputs": self.outputs,
             "consumes": self.consumes,
-            // Failure codes ship with the step to L5: "codes" have one source of truth (contract §3); L5 invents none.
+            // Failure codes ship with the step, so codes have one source of truth; L5 invents none.
             "fail_code": CODE_STEP_FAILED,
             "tool_code": CODE_TOOL_MISSING,
         })
     }
 }
 
-/// Resolved build configuration + static plan.
 struct Ctx {
     root: PathBuf,
     profile: String,
@@ -206,27 +161,19 @@ struct Ctx {
     cflags: Vec<String>,
     asflags: Vec<String>,
     ldflags: Vec<String>,
-    /// Product-level **semantic config** → compile-time define (currently only `[kernel].hz` ⇒
-    /// `BR_CFG_TICK_HZ=<hz>`). Separate from `[build].cflags`: former is config, latter generic flags
-    /// (ADR-0017). Pushed to **all** compilation units so "timer interrupts per second" has one source of truth.
+    /// Product config as defines (`[kernel].hz` ⇒ `BR_CFG_TICK_HZ=<hz>`), pushed to all C units
+    /// so "timer interrupts per second" has one source of truth. Distinct from `[build].cflags`.
     config_defines: Vec<String>,
-    /// Unit name → its include dirs (relative to repo root, sorted and deduped).
-    ///
-    /// **No more global union**: each unit gets only core + itself + its **declared dep closure** headers
-    /// (ADR-0018). Undeclared deps surface at compile time as "header not found" instead of being masked by a global `-I`.
+    /// Unit name → include dirs (root-relative, sorted, deduped). No global union: core + self +
+    /// the declared dep closure, so an undeclared dep fails at compile time (header not found).
     unit_includes: BTreeMap<String, Vec<String>>,
-    /// Tool name → candidates (in order).
     tools: BTreeMap<String, Vec<String>>,
-    /// Tool name → resolution result (absolute path or bare name).
     resolved: BTreeMap<String, String>,
-    /// Tool name → what it is (for presentation).
     tool_what: BTreeMap<String, String>,
-    /// `context.files[path] = (size, mtime_ns)`; when `Some`, **no disk access** (for self-test).
+    /// `context.files[path] = (size, mtime_ns)`; when `Some`, no disk access (self-test).
     stat_override: Option<BTreeMap<String, (u64, i64)>>,
     force: bool,
 }
-
-// ------------------------------------------------------------------ Helpers
 
 fn hex_of(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
@@ -276,12 +223,9 @@ fn has_wildcard(pat: &str) -> bool {
     pat.contains('*') || pat.contains('?')
 }
 
-/// Expand a glob relative to `base_dir`, returning **root-relative** file paths (lexicographic).
-///
-/// Supports `*`/`?` (**not crossing `/`**) and `**` (crossing any number of dirs; `**` may match **zero** levels).
-/// Why `**`: generated-artifact depth = plugin-name namespace depth (`build/gen/service/dump/...`
-/// is two levels, `build/gen/foo/...` one). Writing `build/gen/*/*/plugin_desc.c` would tie
-/// "can the tool find generated artifacts" to "plugin names happen to have two segments" — coincidence, not contract.
+/// Expand a glob relative to `base_dir`, returning root-relative paths (lexicographic). Supports
+/// `*`/`?` (not crossing `/`) and `**` (any number of dirs, including zero): artifact depth follows
+/// plugin-name namespace depth, so a fixed `*/*/` pattern would not be a contract.
 fn expand_glob(root: &Path, base_dir: &str, pattern: &str) -> Vec<String> {
     let base = if base_dir.is_empty() {
         root.to_path_buf()
@@ -304,7 +248,6 @@ fn expand_glob(root: &Path, base_dir: &str, pattern: &str) -> Vec<String> {
     out
 }
 
-/// One level of recursive glob matching: `comps` are the **remaining** pattern components.
 fn glob_walk(dir: &Path, comps: &[&str], out: &mut Vec<PathBuf>) {
     let Some(comp) = comps.first().copied() else {
         return;
@@ -356,7 +299,6 @@ fn glob_walk(dir: &Path, comps: &[&str], out: &mut Vec<PathBuf>) {
     }
 }
 
-/// Map a plugin name to its repo-root-relative dir (layout convention `4-02`: top-level dir = namespace).
 fn plugin_dir_of(name: &str) -> String {
     name.to_string()
 }
@@ -386,7 +328,7 @@ fn parse_depfile(path: &Path, root: &Path) -> Vec<String> {
             if tok.is_empty() {
                 continue;
             }
-            // Paths inside `.d` are **relative to the compile-time cwd** (= repo root), usable as-is.
+            // `.d` paths are relative to the compile-time cwd (= repo root).
             let rel = tok.replace('\\', "/");
             if rel.starts_with('/') {
                 if let Ok(p) = Path::new(&rel).strip_prefix(root) {
@@ -402,9 +344,6 @@ fn parse_depfile(path: &Path, root: &Path) -> Vec<String> {
     out
 }
 
-// ================================================================== Config loading
-
-/// Default artifact location for `[build]` (matches the historical top-level Makefile layout).
 fn default_obj_dir() -> String {
     "build/obj".to_string()
 }
@@ -436,11 +375,9 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         return Err(d);
     };
 
-    // ---- [kernel]: tick frequency (cf. Linux CONFIG_HZ; ADR-0017) ----
-    // Default 200 Hz (5 ms per tick). Product config becomes a **compile-time define** for all units:
-    // the platform timer reload period and core jiffies both read the same `BR_CFG_TICK_HZ`, so
-    // "timer interrupts per second" has one source of truth. The schema already rejects clearly
-    // illegal values via `minimum: 1`; this re-checks (composition-time validation and build may be called separately).
+    // `[kernel].hz`, default 200 Hz (5 ms/tick): becomes `BR_CFG_TICK_HZ` for all units, so the
+    // platform timer reload and core jiffies agree. Re-checked although the schema sets minimum: 1,
+    // because composition-time validation and build may be called separately.
     const DEFAULT_TICK_HZ: i64 = 200;
     let tick_hz = prod.kernel_hz.unwrap_or(DEFAULT_TICK_HZ);
     if tick_hz < 1 {
@@ -455,7 +392,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     }
     let config_defines = vec![format!("BR_CFG_TICK_HZ={tick_hz}")];
 
-    // ---- profile: `--profile` overrides `[product].stage` (§7.5) ----
+    // `--profile` overrides `[product].stage`.
     let profile = req
         .arg_str("profile")
         .filter(|s| !s.is_empty())
@@ -487,7 +424,6 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         format!("-{tag}")
     };
 
-    // ---- Target facts: exactly one platform declares `[build.target]` ----
     let owners: Vec<&Plugin> = tree
         .plugins
         .iter()
@@ -564,7 +500,6 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         }
     }
 
-    // ---- Closure: selected units = core body + plugins in closure + generated artifacts ----
     let sol = solver::solve(tree, &profile, false);
     let closure = sol.closure.clone();
     let mut diags = sol.into_diags();
@@ -574,18 +509,15 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     }
     let mut units: Vec<Unit> = Vec::new();
 
-    // The **single** read point for the self-test master switch (ADR-0010 §2.3) (`Product::selftest_on` is the only decider):
-    // it decides both whether core self-test sources compile and whether generated artifacts emit the selftest hook (latter in gen_plan).
+    // Self-test master switch: decides both core selftest sources and the generated selftest hook.
     let selftest_on = tree
         .product
         .as_ref()
         .map(|p| p.selftest_on())
         .unwrap_or(false);
 
-    // (a) Core body (**not a plugin**, referenced by `[compat].core`)
-    // The core self-test suite (`core/selftest/**`) compiles only when the product switch allows (ADR-0010 §2.3):
-    // switch off ⇒ these files **do not compile** ⇒ `br_core_selftest()` is absent ⇒ plugin_mgr's
-    // weak reference reads NULL and skips all core-side self-test. That is "off = code absent from image".
+    // (a) Core body (not a plugin; referenced by `[compat].core`). Selftest sources compile only
+    // when the switch allows: off ⇒ `br_core_selftest()` is absent and the weak ref reads NULL.
     let mut core_sources =
         expand_many(&root, "", &pb.core_sources, "core", "product.toml", "build.core_sources", &mut diags);
     if selftest_on {
@@ -609,7 +541,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         plugin: None,
     });
 
-    // (b) Plugins in the closure (topological order: init first, making link order reproducible too)
+    // (b) Plugins in the closure, in topological order (makes link order reproducible too).
     let mut ordered: Vec<String> = closure.topo_order.clone();
     for name in &closure.selected {
         if !ordered.contains(name) {
@@ -648,15 +580,11 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         });
     }
 
-    // (c) Generated artifacts (`build/gen/**`): produced by `brickie gen`, declared in `product.toml`
+    // (c) Generated artifacts (`build/gen/**`), produced by `brickie gen`.
     if !pb.gen_sources.is_empty() {
         let sources = expand_many(&root, "", &pb.gen_sources, "build/gen", "product.toml", "build.gen_sources", &mut diags);
-        // **Filter by closure**: an artifact belongs to a plugin (path = `build/gen/<plugin>/…`), and the image
-        // contains only plugins in the closure. Without filtering, a plugin present in the tree but not selected
-        // would have its descriptor compiled into the image while its .c is not ⇒ **undefined symbols at link time** (hit in F1).
-        // Typical "second source of truth in the declaration surface": the artifact glob and `[select]` must be aligned by the tool.
-        // The same spot must also block **stale artifacts** (`build/gen/<old name>/` still on disk after rename/delete):
-        // that is not "not selected" but "no plugin with this name remains" ⇒ see filter_gen_sources.
+        // Keep only artifacts of selected plugins: a descriptor compiled without its .c links
+        // as an undefined symbol; artifacts naming no plugin in the tree are skipped as stale.
         let (sources, skipped, orphans) = filter_gen_sources(&sources, tree, &closure.selected);
         for path in &skipped {
             diags.push(
@@ -689,7 +617,6 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
                 name: "build/gen".to_string(),
                 dir: String::new(),
                 sources,
-                // Generated artifacts include their own plugin dirs (templates use `#include "qemu-aarch64/qemu-aarch64.h"`)
                 includes: tree
                     .plugins
                     .iter()
@@ -703,14 +630,9 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         }
     }
 
-    // ---- Per-unit include surface = core + self + **declared dep closure** (ADR-0018) ----
-    // Key point: no longer union the whole tree's include dirs into one global `-I` list for all units — that let
-    // "using another's header without declaring `[[dep]]`" compile silently (the state before this change, see ADR-0018 §1).
-    // The closure follows **declared edges** ⇒ undeclared dep = header not found = hard compile error.
-    //   - plugin unit: core_includes + its own includes + includes of transitive dep plugins;
-    //   - core (not a plugin): core_includes + **platform** headers (core.init stage ③ depends on platform
-    //     data and ISA headers; `br_plat.h`/`br_mmu.h` are the in-design core→platform direction);
-    //   - build/gen: core_includes + includes of all selected plugins (artifacts include each plugin's anchor header).
+    // Per-unit include surface = core + self + declared dep closure; no global union, so an
+    // undeclared dep is a hard compile error. Core also gets platform headers; build/gen gets every
+    // selected plugin's includes.
     let platform_incs: Vec<String> = tree
         .plugins
         .iter()
@@ -737,12 +659,10 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         unit_includes.insert(u.name.clone(), incs);
     }
 
-    // ---- Declaration/use cross-check: undeclared cross-plugin `#include` = **build error** (ADR-0018) ----
-    // Narrowing `-I` is a structural measure, but the target toolchain ships glibc headers, so common names
-    // like `unistd.h` get caught by system headers (instead of "header not found", glibc declarations are used silently) ⇒
-    // "source includes another's header" must be explicitly aligned with the declaration surface. `check`'s deps domain uses the same function, so build and check agree.
+    // An undeclared cross-plugin `#include` is a build error. Narrowing `-I` alone is not enough:
+    // glibc headers mask common names such as `unistd.h`. `check` calls the same function.
     for u in model::cross_plugin_includes(&root, &tree, &closure.selected) {
-        // A-2 (ADR-0020): APP directly including a core header = build error; other plugins unrestricted (see the same spot in check.rs).
+        // A-2: an APP directly including a core header is a build error; others are unrestricted.
         if u.provider == "core" {
             let is_app = tree
                 .plugins
@@ -780,7 +700,6 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         );
     }
 
-    // ---- Flags ----
     let cflags = if profile == "release" {
         let mut v = pb.cflags.clone();
         v.extend(pb.release_cflags_extra.clone());
@@ -830,7 +749,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         format!("{obj_dir}{tag_suffix}")
     };
 
-    // ---- Tool candidates (order = policy) ----
+    // Tool candidates, in resolution order.
     let cross = &target.cross;
     let mut tools: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut cc_cands: Vec<String> = vec![format!("{cross}gcc")];
@@ -864,7 +783,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     tool_what.insert("make".into(), "BR-D4 backend A".into());
     tool_what.insert("ninja".into(), "BR-D4 backend B".into());
 
-    // ---- Tool resolution (core does it: generated files must bake in the result; ruling S-B1) ----
+    // Tool resolution happens here: generated backend files must bake in the result.
     let path_env = req
         .context("path")
         .and_then(Value::as_str)
@@ -878,7 +797,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         }
     }
 
-    // ---- `context.files`: deterministic stat for self-test (when given, no disk access) ----
+    // `context.files`: deterministic stat for self-test (when given, no disk access).
     let stat_override = req.context("files").and_then(Value::as_object).map(|m| {
         let mut out: BTreeMap<String, (u64, i64)> = BTreeMap::new();
         for (k, v) in m {
@@ -894,8 +813,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         return Err(diags);
     }
 
-    // Note: diags must **not** be dropped here — loading also produces info/warning
-    // (e.g. "generated artifact belongs to a plugin outside the closure, skipped"), which callers must present.
+    // Do not drop `diags`: loading also emits info/warning diagnostics that callers must present.
     Ok((Ctx {
         root,
         profile,
@@ -923,7 +841,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     }, diags))
 }
 
-/// Expand a group of globs; a literal path that does not exist ⇒ `BRV-BLD-0007` (an empty glob match ⇒ silent, covered by 0002).
+/// Expand a group of globs; a literal path that does not exist ⇒ `BRV-BLD-0007`.
 fn expand_many(
     root: &Path,
     base_dir: &str,
@@ -957,9 +875,7 @@ fn expand_many(
     out
 }
 
-/// Tool resolution: `<root>/prebuilts/toolchain/bin/` → PATH.
-///
-/// The order is **policy** (ruling S-B1): the repo's own prebuilt first (reproducible), then host PATH.
+/// Tool resolution: `<root>/prebuilts/toolchain/bin/` first (reproducible), then PATH.
 fn resolve_tool(root: &Path, candidates: &[String], path_env: &str) -> Option<String> {
     let dirs: Vec<PathBuf> = path_env
         .split(':')
@@ -974,12 +890,10 @@ fn resolve_tool(root: &Path, candidates: &[String], path_env: &str) -> Option<St
             }
             continue;
         }
-        // (1) The repo's own prebuilt toolchain
         let local = root.join("prebuilts/toolchain/bin").join(cand);
         if local.is_file() {
             return Some(format!("prebuilts/toolchain/bin/{cand}"));
         }
-        // (2) PATH
         for dir in &dirs {
             if dir.join(cand).is_file() {
                 return Some(cand.clone());
@@ -1021,8 +935,6 @@ impl Ctx {
             .unwrap_or_else(|| format!("@{name}"))
     }
 
-    /// A unit's include dirs (alias: `-I` arguments). Resolved **per unit**, no global union
-    /// — the include surface is the declared dep closure (ADR-0018), see `unit_includes` in `load_ctx`.
     fn unit_includes_argv(&self, unit: &str) -> Vec<String> {
         self.unit_includes
             .get(unit)
@@ -1031,9 +943,6 @@ impl Ctx {
     }
 }
 
-// ================================================================== Plan
-
-/// Generate all steps (no incremental filtering).
 fn all_steps(ctx: &Ctx) -> Vec<Step> {
     let mut steps: Vec<Step> = Vec::new();
     let cc = ctx.tool("cc");
@@ -1041,8 +950,7 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
     let arch_flags = ctx.target.arch_flags.clone();
     let arch_in_cflags = !arch_flags.is_empty();
     let arch_in_asflags = !arch_flags.is_empty();
-    // Product-level config defines (`[kernel].hz` ⇒ `BR_CFG_TICK_HZ` etc.): pushed to **every C unit**,
-    // placed **after** the unit's own defines — semantic config is decided by the product (ADR-0017).
+    // Product config defines go to every C unit, after the unit's own defines.
     let config_defines: Vec<String> = ctx
         .config_defines
         .iter()
@@ -1061,7 +969,7 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
         let obj = ctx.obj_of(src);
         let dep = ctx.dep_of(src);
         let is_asm = src.ends_with(".S") || src.ends_with(".s");
-        // This unit's include surface (declared dep closure); not a global union (ADR-0018).
+        // This unit's include surface (declared dep closure, not a global union).
         let includes = ctx.unit_includes_argv(unit);
         let mut argv: Vec<String> = vec![cc.clone()];
         if is_asm {
@@ -1074,8 +982,7 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
             if arch_in_cflags {
                 argv.extend(arch_flags.clone());
             }
-            // ★ Unit-level cflags go **after** product-level ones: order matters — later `-Wno-*`
-            //   can disable some of the earlier `-Wall -Wextra -Werror` (used by vendor code).
+            // Unit cflags follow product cflags: a later `-Wno-*` can undo an earlier `-Werror`.
             {
                 let unit_cflags: Vec<String> = ctx
                     .units
@@ -1180,7 +1087,7 @@ fn step_inputs(ctx: &Ctx, step: &Step) -> Vec<String> {
                 inputs.push(src.clone());
                 let dep = format!("{}.d", _obj.cloned().unwrap_or_default());
                 if ctx.stat_override.is_some() {
-                    // In self-test mode `.d` comes from context (`context.files` carries a `deps:<obj>` key)
+                    // In self-test mode `.d` comes from context (`context.files` key `deps:<obj>`)
                 } else {
                     let deps = parse_depfile(&ctx.root.join(&dep), &ctx.root);
                     inputs.extend(deps);
@@ -1208,27 +1115,9 @@ fn step_inputs(ctx: &Ctx, step: &Step) -> Vec<String> {
     inputs
 }
 
-/// Filter paths expanded from `build/gen/**` by **ownership**.
-///
-/// Ownership test: a path looks like `build/gen/<plugin>/<file>` (`<plugin>` may carry a namespace,
-/// e.g. `service/dump`), so "which plugin owns it" = the plugin whose **name is a prefix of the path**.
-/// Three outcomes:
-///
-/// * owner plugin is in the closure ⇒ **keep** (it enters the image);
-/// * owner plugin is in the tree but not in the closure ⇒ **skip** (its .c is not compiled; compiling its descriptor = undefined symbol at link);
-/// * **owner unrecognizable** and the path is under `build/gen/` ⇒ **skip**. That is not "not selected" but **stale leftover**:
-///   after a plugin rename/delete the old dir stays on disk forever (`brickie gen` only writes plugins in the current tree, never deletes),
-///   and the `[build].gen_sources` glob picks the old descriptor up again.
-///   Observed for real (2026-10, after ADR-0029 renamed `third_party/uboot-mmc` to `adapter/uboot-mmc`):
-///   the old and new descriptors' `start` point at the **same** `uboot_mmc_start` (same symbol name), so
-///   plugin_manager registers it twice — on the second start the 4 cards are already claimed, `BR_EMMC_MAX_DEVS`
-///   is hit and it returns `-ENOSPC`, then "first failure stops the boot" (G6) **panics during kernel startup**:
-///   `FAIL third_party/uboot-mmc phase=start rc=-28`.
-///   Skipping it is enough to block such ghost plugins; `brickie gen` has a separate "prune stale descriptors" pass (see L5's
-///   `writer.prune_orphan_descriptors`) that sweeps it off disk.
-///
-/// Paths **outside** `build/gen/` with no recognizable owner are left as-is — those are hand-written artifacts or another tool's
-/// output, and the tool should not decide for them.
+/// Filter paths from `build/gen/**` by ownership (owner = plugin that prefixes the path).
+/// Selected owner ⇒ keep; owner in tree but unselected ⇒ skip (would link as an undefined
+/// symbol); no owner under `build/gen/` ⇒ skip as stale (a ghost descriptor panics the boot).
 fn filter_gen_sources(
     sources: &[String],
     tree: &TreeLoad,
@@ -1302,7 +1191,6 @@ fn load_state(ctx: &Ctx) -> BTreeMap<String, StateEntry> {
     out
 }
 
-/// Build plan: steps to run + state file content + counters.
 struct BuildPlan {
     todo: Vec<Step>,
     stale: Vec<String>,
@@ -1312,15 +1200,9 @@ struct BuildPlan {
     plan_hash: String,
 }
 
-/// Incremental policy (**two criteria, same family as make / ninja**):
-///
-/// 1. **Command fingerprint**: `argv` changed (flags / compiler / output path) ⇒ rerun;
-/// 2. **Timestamps**: the target does not exist, or any input (source + headers listed in `.d` + objects and scripts used for linking)
-///    is **newer** than the target, or an input **is gone** ⇒ rerun.
-///
-/// Why not "input set + content hash": `.d` is a **build product** (it exists only after the first compile), so
-/// "hash the input set" makes two runs after the first build necessarily disagree — header deps get rebuilt one extra round
-/// (hit in practice). The timestamp policy has no such self-reference: a missing `.d` ⇒ recompile once, then every round just compares times.
+/// Incremental policy, two criteria (like make/ninja): rerun when the argv fingerprint changed,
+/// or the target is missing / an input is newer or gone. Not "input set + content hash": `.d` is
+/// itself a build product, so the hash would disagree with itself on every run after the first.
 fn make_plan(ctx: &Ctx) -> BuildPlan {
     let steps = all_steps(ctx);
     let old = load_state(ctx);
@@ -1330,8 +1212,8 @@ fn make_plan(ctx: &Ctx) -> BuildPlan {
     let mut up_to_date = 0usize;
     let mut plan_parts: Vec<String> = Vec::new();
 
-    // Upstream rebuilds ⇒ downstream must rebuild too. **Must be propagated explicitly**: the plan is computed **before** the build,
-    // when object files are still old — timestamps alone would wrongly conclude "no need to link".
+    // Propagate upstream rebuilds explicitly: the plan is computed before the build, when
+    // objects are still old, so timestamps alone would miss a needed relink.
     let mut dirty: BTreeSet<String> = BTreeSet::new();
     for step in &steps {
         let target = step.outputs.first().cloned().unwrap_or_default();
@@ -1351,7 +1233,7 @@ fn make_plan(ctx: &Ctx) -> BuildPlan {
             }
         }
         if !needs && step.kind == "compile" {
-            // Missing `.d` ⇒ header deps unknown ⇒ recompile once (better one extra compile than one bad link).
+            // Missing `.d` ⇒ header deps unknown ⇒ recompile once (a bad link is worse).
             if ctx.stat(&format!("{target}.d")).is_none() {
                 needs = true;
             }
@@ -1439,8 +1321,6 @@ fn make_plan(ctx: &Ctx) -> BuildPlan {
     }
 }
 
-// ================================================================== Backend files
-
 /// Render the make backend (BR-D4 A): generated, do not edit by hand.
 fn render_make(ctx: &Ctx, steps: &[Step]) -> String {
     let mut s = String::new();
@@ -1482,18 +1362,15 @@ fn render_make(ctx: &Ctx, steps: &[Step]) -> String {
 }
 
 /// Render the ninja backend (BR-D4 B).
-///
-/// Two rules: `cc` (C) and `asm` (assembly). They **must be separate** — C and `.S` have different argv
-/// (`-std=c11`/`-O2`/warning flags vs `-g3`); one template for both would compile assembly as C.
-/// The template is derived from the **first step of that kind**, so generated commands match the `direct` backend verbatim.
+/// `cc` and `asm` must be separate rules: C and `.S` have different argv, so one template
+/// would compile assembly as C. Each template is the first step of its kind.
 fn render_ninja(ctx: &Ctx, steps: &[Step]) -> String {
     let mut s = String::new();
     s.push_str("# brickie:generated — generated file, do not edit by hand.\n");
     s.push_str("# regenerate: brickie build --backend ninja\n");
     s.push_str("# This file is BR-D4's **backend B** (ninja does the work); it produces a **byte-identical** image to backend A.\n\n");
     s.push_str(&format!("cc = {}\n\n", ctx.tool("cc")));
-    // ninja's `.ninja_log` / `.ninja_deps` default to the **invocation directory**. Pin them under build/,
-    // otherwise one `brickie build --backend ninja` drops two state files into the repo root (hit in practice).
+    // Pin ninja's `.ninja_log`/`.ninja_deps` under build/ instead of the invocation directory.
     s.push_str(&format!("builddir = {}/ninja\n\n", ctx.gen_dir));
 
     let compiles: Vec<&Step> = steps.iter().filter(|s| s.kind == "compile").collect();
@@ -1579,8 +1456,6 @@ fn shell_join(argv: &[String]) -> String {
         .join(" ")
 }
 
-// ================================================================== Presentation data
-
 fn summary_json(ctx: &Ctx, plan: &BuildPlan, steps: &[Step], extra: Value) -> Value {
     let mut units: Vec<Value> = ctx
         .units
@@ -1651,8 +1526,6 @@ fn summary_json(ctx: &Ctx, plan: &BuildPlan, steps: &[Step], extra: Value) -> Va
     data
 }
 
-// ================================================================== Command: build
-
 fn cmd_build(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
     let tree = model::load_tree(&root);
@@ -1670,7 +1543,6 @@ fn cmd_build(req: &Request) -> Response {
     let dry_run = req.arg_bool("dry_run").unwrap_or(false);
     let emit_backends = req.arg_bool("emit_backends").unwrap_or(false);
 
-    // ---- Backend files (generated) ----
     let mut files: Vec<Value> = Vec::new();
     let want_make = emit_backends || ctx.backend == "make";
     let want_ninja = emit_backends || ctx.backend == "ninja";
@@ -1691,7 +1563,6 @@ fn cmd_build(req: &Request) -> Response {
         }));
     }
 
-    // ---- Steps to execute ----
     let exec_steps: Vec<Step> = match ctx.backend.as_str() {
         "make" => {
             let jobs = req.arg_u64("jobs").unwrap_or(0);
@@ -1740,7 +1611,7 @@ fn cmd_build(req: &Request) -> Response {
         _ => plan.todo.clone(),
     };
 
-    // ---- Tool resolution failed ⇒ environment error (exit code 2) ----
+    // Tool resolution failed ⇒ environment error (exit code 2).
     if !dry_run && ctx.backend == "direct" && !plan.todo.is_empty() {
         for name in ["cc", "objcopy"] {
             if !ctx.resolved.contains_key(name) {
@@ -1796,8 +1667,6 @@ fn cmd_build(req: &Request) -> Response {
     );
     Response::ok_with_files(diags, files, data)
 }
-
-// ================================================================== Commands: clean / run / size / disasm
 
 fn cmd_clean(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
@@ -1995,8 +1864,6 @@ fn binutils_cmd(req: &Request, which: &str) -> Response {
     Response::ok(diags, data)
 }
 
-// ================================================================== gates.toml
-
 #[derive(Clone, Debug, Default)]
 struct GateSpec {
     name: String,
@@ -2146,7 +2013,7 @@ fn load_gates(root: &Path, d: &mut Diags) -> GatesFile {
         g.build_post = str_list(b, "post");
     }
 
-    // Regex subset validation: prefer a **shape error** over a never-matching require turning falsely green.
+    // Prefer a shape error over a never-matching require turning falsely green.
     let mut check_patterns: Vec<(String, String, String)> = Vec::new();
     for gate in &g.gates {
         for (i, pat) in gate.require.iter().enumerate() {
@@ -2179,10 +2046,8 @@ fn load_gates(root: &Path, d: &mut Diags) -> GatesFile {
     g
 }
 
-/// Return the **first unsupported metacharacter** in the pattern (`None` = inside the subset).
-///
-/// Why not pull in a regex crate: the criteria only need "does the log contain this shape", and these patterns are short;
-/// a crate would add a tool dependency (§9.3 minimal dependency set). The cost is that out-of-subset syntax **must be rejected truthfully**.
+/// First unsupported metacharacter in the pattern (`None` = inside the subset). No regex crate:
+/// only ask "does the log contain this shape", so out-of-subset syntax must be rejected truthfully.
 fn regex_unsupported(pat: &str) -> Option<char> {
     let mut escaped = false;
     for ch in pat.chars() {
@@ -2199,8 +2064,6 @@ fn regex_unsupported(pat: &str) -> Option<char> {
     None
 }
 
-// ================================================================== Command: test
-
 fn cmd_test(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
     let tree = model::load_tree(&root);
@@ -2215,7 +2078,6 @@ fn cmd_test(req: &Request) -> Response {
         diags.merge(d);
     }
 
-    // `--list`: list only (a discovery path besides CI self-test and `--help`).
     if req.arg_bool("list").unwrap_or(false) {
         let data = json!({
             "gates": g.gates.iter().map(|x| x.name.clone()).collect::<Vec<_>>(),
@@ -2287,7 +2149,6 @@ fn cmd_test(req: &Request) -> Response {
     let mut steps: Vec<Step> = Vec::new();
     let mut group: u32 = 0;
 
-    // ---- Host cases: compile + run ----
     for h in &g.hosttests {
         if !selected.contains(&h.name) {
             continue;
@@ -2417,8 +2278,6 @@ fn cmd_test(req: &Request) -> Response {
     Response::ok(diags, data)
 }
 
-// ================================================================== Command: judge
-
 fn cmd_judge(req: &Request) -> Response {
     let root = PathBuf::from(&req.root);
     let mut diags = Diags::new();
@@ -2510,7 +2369,7 @@ fn cmd_judge(req: &Request) -> Response {
 
     let pass_lines = lines.iter().filter(|l| l.contains("PASS ")).count();
     if failed == 0 {
-        // All green is **info with no code**: it is not a defect, and borrowing a failure code would mislead `--json` readers.
+        // All green is info with no code: not a defect, and a failure code would mislead readers.
         diags.push(
             crate::diag::Diag::new(
                 Severity::Info,
@@ -2546,11 +2405,7 @@ fn cmd_judge(req: &Request) -> Response {
     resp
 }
 
-/// Minimal regex: **subset** matching for `.` `*` `+` `?` `[...]` `\(`/`\)` `|` (no compilation, linear scan).
-///
-/// Why not bundle a regex crate: the criteria only need "does the log contain this shape", and this subset covers
-/// every pattern actually used in `tests/gates.toml` (`pass=[0-9]* fail=0 `, `\[PANIC\]`,
-/// `irq_ticks=[1-9]`). **No regex engine** also avoids one "tool dependency" liability.
+/// Minimal regex: subset matching for `.` `*` `+` `?` `[...]` and `\x` escapes (no engine).
 fn regex_lite_match(pat: &str, text: &str) -> bool {
     match regex_lite_at(pat, text) {
         Some(_) => true,
@@ -2671,8 +2526,6 @@ fn regex_lite_here(p: &[char], t: &[char], pi: usize, ti: usize) -> Option<usize
     }
 }
 
-// ================================================================== Self-test hooks
-
 /// Pure-function entry for `brickie-core --selftest` (no disk access: stat injected via `context.files`).
 pub fn selftest_plan(root: &Path, req: &Request) -> (Diags, Value) {
     let tree = model::load_tree(root);
@@ -2704,12 +2557,10 @@ pub fn selftest_regex(pat: &str, text: &str) -> bool {
     regex_lite_match(pat, text)
 }
 
-/// `selftest`: metacharacters outside the regex subset (should be rejected).
 pub fn selftest_regex_unsupported(pat: &str) -> Option<char> {
     regex_unsupported(pat)
 }
 
-/// `selftest`: glob matching (`*` does not cross `/`).
 pub fn selftest_glob(pat: &str, name: &str) -> bool {
     glob_match(pat, name)
 }

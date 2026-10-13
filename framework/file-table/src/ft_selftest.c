@@ -1,42 +1,19 @@
 /*
- * brickOS prototype v0.2.0 — file table conformance suite (framework/file-table/src/ft_selftest.c)
- *
- * Design basis and decisions: `docs/decisions/0010-plugin-selftest.md` (self-test separate
- *                 from core code), `docs/decisions/0012-file-table-and-errno.md` (aligned
- *                 with errno).
- *
- * ## Why this suite needs no QEMU at all
- *   The file table is **pure algorithm**: it never **dereferences** `br_file_t` (the contract
- *   header states "holds pointers and compares only"). So cases can use "a few distinct fake
- *   pointers" as handles and exercise **all** the boundaries only real load would hit — table
- *   full / dup2 displacement / last reference — in milliseconds on the host
- *   (`tests/host/ft_test.c` is the host version of the same leg, judged by exit code).
- *
- * ## Contract with br_plugin_manager_selftest()
- *   Returns the **number of failures** (0 = all green); logs itself
- *   (`[FTCONF] PASS/FAIL ...` + `SUMMARY`). **Failure does not halt** — red/green is judged by
- *   the gate (`tests/gates.toml` plugin-test: require an all-green summary, forbid
- *   `[FTCONF] FAIL`, require_tags naming TC-FT-* entries).
- *
- * WORKAROUND(br-wa-test-001): `TC-FT-*` are **self-assigned** (design `6-01` has no file-table
- * group); the self-describing text is the criterion, and the per-case alignment with the design
- * case table is in WORKAROUNDS.md.
+ * File table conformance suite (framework/file-table). The table never dereferences br_file_t, so
+ * cases use distinct fake pointers as handles and need no QEMU. WORKAROUND(br-wa-test-001): TC-FT-*
+ * are self-assigned (there is no file-table group in the design); the self-describing text is the
+ * criterion. Returns the number of failures; logs [FTCONF] PASS/FAIL.
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 #include <br/core/br_types.h>
 #include <br/ft/br_ft.h>
 
-/* Self-test entry prototype (defined at the end of this file; referenced by the generated
- * `plugin_desc.c` `.selftest` hook). */
+/* Referenced by the generated plugin_desc.c .selftest hook. */
 int file_table_selftest(void);
 
-/* ==================================================================== fake handles */
-
-/* The table never dereferences handles ⇒ cases need only N **distinct** pointer values.
- * Use the address of static byte arrays, not "integer literal to pointer" (the latter is
- * implementation-defined and rejected by -Werror).
- * 16 of them: 0..7 as "file handles", 9..15 as "**unoverwritten**" sentinels (see TC-FT-008 disp3). */
+/* Distinct pointer values only: handles are never dereferenced. 16 in total -- 0..7 as "file
+ * handles", 9..15 as "unoverwritten" sentinels (see TC-FT-008 disp3). */
 #define FAKE_N 16u
 static br_u8 s_fake[FAKE_N][16];
 
@@ -44,8 +21,6 @@ static br_file_t *fake(br_u32 i)
 {
     return (br_file_t *)(void *)&s_fake[i][0];
 }
-
-/* ==================================================================== report */
 
 static br_u32 s_pass;
 static br_u32 s_fail;
@@ -61,16 +36,13 @@ static void pc(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* Fill the table (handles cycle through the FAKE_N fake pointers — the table compares pointer
- * equality only, so repeats do not affect "full"). */
+/* Fill the table; handles cycle through the fake pointers (only pointer equality matters). */
 static void fill_all(void)
 {
     for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
         (void)br_ft_alloc(fake(i % FAKE_N), 0u);
     }
 }
-
-/* ==================================================================== cases */
 
 int file_table_selftest(void)
 {
@@ -79,7 +51,7 @@ int file_table_selftest(void)
 
     br_log_info("[FTCONF] file-table conformance (fd table / dup / ref counting / errno)");
 
-    /* ---- TC-FT-001: empty table and lowest-number allocation ---- */
+    /* TC-FT-001: empty table and lowest-number allocation. */
     {
         (void)br_ft_reset();
         const br_u32 n0 = br_ft_count();
@@ -91,7 +63,7 @@ int file_table_selftest(void)
            "TC-FT-001", "empty table ⇒ first fd = 0; count/fd_at match the present set");
     }
 
-    /* ---- TC-FT-002: **lowest available** fd (the core POSIX convention), not an "incrementing counter" ---- */
+    /* TC-FT-002: lowest available fd, not an incrementing counter. */
     {
         (void)br_ft_reset();
         const int a = br_ft_alloc(fake(0), 0u);
@@ -104,7 +76,7 @@ int file_table_selftest(void)
            "TC-FT-002", "after releasing 1, allocation returns the **lowest free slot** 1 (not 3)");
     }
 
-    /* ---- TC-FT-003: table full ⇒ -EMFILE; null handle ⇒ -EINVAL; neither **leaves side effects** ---- */
+    /* TC-FT-003: table full => -EMFILE; null handle => -EINVAL; neither leaves side effects. */
     {
         (void)br_ft_reset();
         fill_all();
@@ -116,7 +88,7 @@ int file_table_selftest(void)
            "TC-FT-003", "table full ⇒ -EMFILE; null handle ⇒ -EINVAL; existing fds unaffected");
     }
 
-    /* ---- TC-FT-004: any invalid fd is -EBADF (out of range and empty slot use the **same code**) ---- */
+    /* TC-FT-004: any invalid fd is -EBADF (out of range and empty slot share one code). */
     {
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(0), 0u);
@@ -134,7 +106,7 @@ int file_table_selftest(void)
         pc(ok, "TC-FT-004", "out of range / empty slot / negative ⇒ always -EBADF, get ⇒ BR_NULL");
     }
 
-    /* ---- TC-FT-005: flags are a **per-fd snapshot** (stored and returned; the table does not interpret them) ---- */
+    /* TC-FT-005: flags are a per-fd snapshot (stored and returned, not interpreted). */
     {
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(0), 0x0021u);
@@ -150,9 +122,9 @@ int file_table_selftest(void)
            "TC-FT-005", "get/set flags round-trip; null out ⇒ -EINVAL");
     }
 
-    /* ---- TC-FT-006: release's "last reference" decision ---- */
+    /* TC-FT-006: release's "last reference" decision. */
     {
-        /* (a) exclusive ⇒ report the handle; empty slot ⇒ -EBADF and **must zero out** */
+        /* (a) exclusive => report the handle; empty slot => -EBADF and the out-param is zeroed. */
         (void)br_ft_reset();
         br_file_t *last = fake(7);                  /* seed a non-null value: verify "always overwritten" */
         (void)br_ft_alloc(fake(0), 0u);
@@ -161,14 +133,14 @@ int file_table_selftest(void)
         br_file_t *last2 = fake(7);
         const int bad = br_ft_release(0, &last2);   /* same slot, now empty */
 
-        /* (b) shared ⇒ no report; last reference gone ⇒ report */
+        /* (b) shared => no report; last reference gone => report. */
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(1), 0u);             /* fd 0 */
         const int d = br_ft_dup(0);                 /* fd 1 shares with fd 0 */
         br_file_t *last3 = fake(7);
-        const int r2 = br_ft_release(0, &last3);    /* fd 1 remains ⇒ NULL */
+        const int r2 = br_ft_release(0, &last3);    /* fd 1 remains => NULL */
         br_file_t *last4 = BR_NULL;
-        const int r3 = br_ft_release(d, &last4);    /* last one ⇒ report */
+        const int r3 = br_ft_release(d, &last4);    /* last one => report */
 
         pc((r1 == 0) && (last == fake(0)) &&
            (bad == BR_ERR(EBADF)) && (last2 == BR_NULL) &&
@@ -177,7 +149,7 @@ int file_table_selftest(void)
            "TC-FT-006", "exclusive ⇒ report handle; shared ⇒ report NULL; invalid ⇒ -EBADF + zeroed");
     }
 
-    /* ---- TC-FT-007: dup shares the same open file description ---- */
+    /* TC-FT-007: dup shares the same open file description. */
     {
         (void)br_ft_reset();
         br_u32 fl0 = 0u;
@@ -193,28 +165,26 @@ int file_table_selftest(void)
         pc(ok, "TC-FT-007", "dup: same handle + matching flag snapshot; invalid oldfd ⇒ -EBADF");
     }
 
-    /* ---- TC-FT-008: dup2 target displacement and displaced reporting ----
-     * Track state step by step with the `fd0=A fd1=B …` comments so assertions match the table. */
+    /* TC-FT-008: dup2 target displacement and displaced reporting (fd0=A fd1=B fd2=C). */
     {
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(0), 0u);      /* fd0=A */
         (void)br_ft_alloc(fake(1), 0u);      /* fd1=B */
         (void)br_ft_alloc(fake(2), 0u);      /* fd2=C */
 
-        /* (a) target is exclusive (C) ⇒ report the displaced handle; result fd0=A fd1=B fd2=A */
+        /* (a) target is exclusive (C) => report the displaced handle; result fd0=A fd1=B fd2=A */
         br_file_t *disp1 = fake(9);
         const int r1 = br_ft_dup2(0, 2, &disp1);
 
-        /* (b) target handle (A) is still referenced by fd0 ⇒ **not** reported; result fd0=A fd1=B fd2=B */
+        /* (b) target (A) still referenced by fd0 => not reported; result fd0=A fd1=B fd2=B */
         br_file_t *disp2 = fake(9);
         const int r2 = br_ft_dup2(1, 2, &disp2);
 
-        /* (c) dup2(f,f) is a no-op: returns f, table unchanged; `displaced` is written as BR_NULL
-         *     per contract (it is written on **every** return path — see br_ft.h) */
+        /* (c) dup2(f,f) is a no-op (returns f, unchanged); displaced written BR_NULL always. */
         br_file_t *disp3 = fake(9);
         const int r3 = br_ft_dup2(1, 1, &disp3);
 
-        /* (d) invalid oldfd (empty slot) / out-of-range newfd ⇒ -EBADF, table and state unchanged */
+        /* (d) invalid oldfd (empty slot) / bad newfd => -EBADF, table/state unchanged */
         br_file_t *disp4 = fake(9);
         const int r4 = br_ft_dup2(3, 0, &disp4);
         const int r5 = br_ft_dup2(0, (int)BR_FT_MAX, &disp4);
@@ -233,7 +203,7 @@ int file_table_selftest(void)
            "dup2: displacing a target reports displaced; shared target ⇒ NULL; dup2(f,f) is a no-op; invalid ⇒ -EBADF");
     }
 
-    /* ---- TC-FT-009: release_all dedupes by pointer + leaves table unchanged if it does not fit ---- */
+    /* TC-FT-009: release_all dedupes by pointer; table unchanged if it does not fit. */
     {
         (void)br_ft_reset();
         (void)br_ft_alloc(fake(0), 0u);      /* fd 0 */
@@ -242,7 +212,7 @@ int file_table_selftest(void)
         (void)br_ft_dup(1);                  /* fd 3 shares with fd 1 */
 
         br_file_t *small[1];
-        const int too_small = br_ft_release_all(small, 1u);       /* needs 2 entries ⇒ -ENOSPC */
+        const int too_small = br_ft_release_all(small, 1u);       /* needs 2 entries => -ENOSPC */
         const br_bool intact = (br_ft_count() == 4u);
 
         br_file_t *got[4] = { BR_NULL, BR_NULL, BR_NULL, BR_NULL };
@@ -257,7 +227,7 @@ int file_table_selftest(void)
            "TC-FT-009", "release_all: one report per handle; insufficient cap ⇒ -ENOSPC and table unchanged");
     }
 
-    /* ---- TC-FT-010: errno values (aligned with the Linux kernel; host ft-test compares each code against <errno.h>) ---- */
+    /* TC-FT-010: errno values (Linux kernel numbering). */
     {
         const br_bool ok =
             (EINVAL == 22) && (EBADF == 9) && (EMFILE == 24) && (ENFILE == 23) &&
@@ -267,14 +237,13 @@ int file_table_selftest(void)
         pc(ok, "TC-FT-010", "errno values = Linux (kernel errno-base/errno.h); aliases share values");
     }
 
-    /* ---- TC-FT-011: bounds and observation surface ---- */
+    /* TC-FT-011: bounds and observation surface. */
     {
         (void)br_ft_reset();
         int last = -2;
         for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
             last = br_ft_alloc(fake(i % FAKE_N), 0u);
         }
-        /* ascending observation: fd_at(k) == k (since fully occupied) */
         br_bool order = BR_TRUE;
         for (br_u32 i = 0u; i < BR_FT_MAX; i++) {
             if (br_ft_fd_at(i) != (int)i) {
@@ -286,7 +255,7 @@ int file_table_selftest(void)
             (last == (int)(BR_FT_MAX - 1u)) &&
             (br_ft_fd_at(BR_FT_MAX) == BR_FT_NONE) &&
             (order == BR_TRUE) &&
-            (br_ft_reset() == BR_FT_MAX);            /* full table cleared ⇒ dropped count = slot count */
+            (br_ft_reset() == BR_FT_MAX);            /* full table cleared => dropped count = slot count */
         pc(ok, "TC-FT-011", "last valid fd = BR_FT_MAX-1; fd_at ascending; reset reports dropped count");
     }
 

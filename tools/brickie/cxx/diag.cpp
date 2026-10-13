@@ -71,7 +71,7 @@ bool Diags::hasError() const {
     return false;
 }
 
-// usage/env errors = code-less diagnostics (see README "Diagnostics and exit codes")
+// usage/env errors are codeless diagnostics
 bool Diags::hasUsage() const {
     for (const auto &d : items_)
         if (d.code.empty()) return true;

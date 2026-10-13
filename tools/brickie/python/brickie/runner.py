@@ -1,24 +1,10 @@
-"""brickie's **executor** (L5): turn the ``steps`` given by core into processes.
+"""brickie's executor (L5): run core's ``steps`` as processes; make no judgments.
 
-## Discipline (contract §8 / V-18c)
-
-This module **makes no judgments**:
-
-* ``argv`` comes from core (``data.steps[i].argv``) -- even "which compiler" is resolved by core
-  (ruling S-B1: generated make/ninja files bake in the resolution, so resolution can only live in core);
-* tool candidate order, incrementality rules and log pass/fail criteria likewise live in core;
-* this module does only four things: **validate executables**, **schedule concurrency**, **time out / collect logs**, **show progress**.
-  "Validate executables" also includes a **capability precheck** (`check_device_models`): whether this QEMU actually has the
-  device model the platform names -- for those with a known hard edge (see `EMMC_MIN_QEMU`), say so clearly **before** starting the process.
-
-## Scheduling rules
-
-``steps`` is ordered; **consecutive** steps sharing a ``group`` may run concurrently (compile steps share a group),
-while groups run serially (link must wait for compile). ``--jobs N`` caps concurrency; ``N <= 0`` ⇒ use the CPU count.
-
-QEMU gate steps declare ``expect_timeout: true``: the image is meant to run until killed -- so "timeout" is an
-**expected result**, not a failure (equivalent to the old Makefile's ``rc == 124`` criterion). Log criteria are
-pointed at core's ``judge`` command by the ``judge`` field (regexes come from ``tests/gates.toml``).
+argv, candidate order, incrementality and log pass/fail all come from core. Here we validate
+executables (incl. the ``check_device_models`` capability precheck), schedule concurrency, time out
+and collect logs, and show progress. ``steps`` is ordered: consecutive steps sharing a ``group`` may
+run concurrently, groups run serially; ``--jobs N`` caps concurrency (N <= 0 = CPU count). QEMU gate
+steps declare ``expect_timeout: true``, so their timeout is an expected result, not a failure.
 """
 
 from __future__ import annotations
@@ -35,20 +21,15 @@ from pathlib import Path
 #: Per-step log cap (truncate beyond this, so an 8 MiB log never enters the JSON envelope).
 MAX_LOG_BYTES = 4 * 1024 * 1024
 
-#: **Minimum** QEMU that supports `-device emmc` (the eMMC card model). Why 10.2 and not 9.1:
-#: the card model landed in QEMU 9.1, but `emmc_class_init()` then set `dc->user_creatable = false`
-#: (comment "Reason: Soldered on board"), so `-device emmc` was rejected as a non-hotpluggable device type;
-#: that line was only removed in **10.2.0**. Older builds just report
-#: `'emmc' is not a valid device model name` (no version, no fix).
+#: Minimum QEMU with a hotpluggable `-device emmc`: the model landed in 9.1 but
+#: `dc->user_creatable` was cleared only in 10.2.0 (older builds just reject the device name).
 EMMC_MIN_QEMU = (10, 2)
 
-#: `path → (major, minor)`. One command surface holds a dozen-plus QEMU gate steps, and "what version is this
-#: binary" does not change within a run -- do not fork `--version` a dozen times for the same answer.
 _QEMU_VERSION_CACHE: dict[str, tuple[int, int] | None] = {}
 
 
 class StepError(RuntimeError):
-    """A step **could not start** (executable missing / wrong cwd) -- environment error (exit code 2)."""
+    """A step could not start (missing executable / wrong cwd); environment error, exit code 2."""
 
     def __init__(self, message: str, code: str | None = None) -> None:
         super().__init__(message)
@@ -83,12 +64,9 @@ def _truncate(text: str) -> str:
 
 
 def resolve_exe(root: Path, exe: str, what: str, code: str | None) -> str:
-    """Check that ``argv[0]`` is really executable.
+    """Last check that ``argv[0]`` is executable; core already resolved it in candidate order.
 
-    ``core`` already resolved it once following the candidate order (it may be a relative path like
-    ``prebuilts/toolchain/bin/...``, or just a bare name on PATH). This is only the **last** check --
-    it separates "it vanished at run time" from "core never resolved it at all".
-    """
+    Relative paths resolve against ``root``, bare names through PATH."""
     if os.sep in exe or (os.altsep and os.altsep in exe):
         candidate = root / exe
         if candidate.is_file() and os.access(candidate, os.X_OK):
@@ -101,10 +79,7 @@ def resolve_exe(root: Path, exe: str, what: str, code: str | None) -> str:
 
 
 def _device_drivers(argv: list[str]) -> list[str]:
-    """Extract the driver from ``-device <driver>[,prop=...]`` (only the one right after ``-device``).
-
-    Deliberately only **pairs** are recognized: an `emmc` substring inside another argument must not count.
-    """
+    """Driver from each ``-device <driver>[,prop=...]`` pair (only the arg after ``-device``)."""
     drivers: list[str] = []
     for i, arg in enumerate(argv):
         if arg == "-device" and i + 1 < len(argv):
@@ -113,7 +88,7 @@ def _device_drivers(argv: list[str]) -> list[str]:
 
 
 def _qemu_version(exe: str) -> tuple[int, int] | None:
-    """Ask for ``(major, minor)``; return ``None`` when it cannot be determined (not QEMU / no ``--version``)."""
+    """Return ``(major, minor)``, or ``None`` when undeterminable (not QEMU / no ``--version``)."""
     if exe in _QEMU_VERSION_CACHE:
         return _QEMU_VERSION_CACHE[exe]
     version: tuple[int, int] | None = None
@@ -136,11 +111,10 @@ def _qemu_version(exe: str) -> tuple[int, int] | None:
 
 
 def check_device_models(exe: str, argv: list[str], label: str, code: str | None) -> None:
-    """Capability precheck **before** starting the process: does this QEMU have the device model the platform names?
+    """Precheck the device models ``argv`` names; raises StepError before the process starts.
 
-    There is currently one known hard edge -- `-device emmc` requires QEMU >= 10.2 (`EMMC_MIN_QEMU`).
-    When the version cannot be determined (not QEMU / no `--version`) we **do not block**: the precheck only speaks
-    when the binary is certainly too old, and lets real execution report the rest (a precheck must not become a second judge).
+    Only ``-device emmc`` is checked (needs QEMU >= EMMC_MIN_QEMU). An undeterminable version
+    does not block, so the precheck never becomes a second judge.
     """
     if "emmc" not in _device_drivers(argv):
         return
@@ -190,11 +164,10 @@ def _exec_one(
     exe = resolve_exe(root, argv[0], label, step.get("tool_code"))
     argv = [exe] + argv[1:]
     result.argv = argv
-    # Device-model capability precheck (see EMMC_MIN_QEMU): a failure is an **environment error**, not a judgment.
+    # Device-model precheck (EMMC_MIN_QEMU); failure is an environment error, not a judgment.
     check_device_models(exe, argv, label, step.get("tool_code"))
 
-    # Create output directories' parents ourselves: compilers will not do it (hit when compiling into a fresh dir).
-    # This is **scheduling**, not judgment -- core only declares which files a step writes.
+    # Create output dirs ourselves (compilers will not); core declares which files a step writes.
     for out in step.get("outputs") or []:
         parent = (root / str(out)).parent
         if not parent.is_dir():
@@ -205,7 +178,7 @@ def _exec_one(
     timeout = step.get("timeout_s")
     timeout = float(timeout) if isinstance(timeout, (int, float)) and timeout else None
     stdout_lines = step.get("stdout_lines")
-    # `run` is **interactive** (the user's QEMU console) -- inherit stdio directly.
+    # `run` is interactive (the user's QEMU console) -- inherit stdio directly.
     inherit = kind == "run"
     if kind == "print" or dry_run:
         inherit = False
@@ -245,7 +218,7 @@ def _exec_one(
         path.write_text(result.text, encoding="utf-8")
         result.log = str(log_rel)
 
-    # Criteria live in core: hand the log back to be judged (the judge field is filled by core).
+    # Criteria live in core: hand the log to the judge (its name comes from core).
     judge_name = step.get("judge")
     if judge_name and judge is not None and not dry_run:
         verdict = judge(str(judge_name), result.text)
@@ -272,20 +245,17 @@ def run_steps(
     out=sys.stdout,
     err=sys.stderr,
 ) -> tuple[list[StepResult], bool]:
-    """Run all steps concurrently within a ``group`` and serially between groups; return (results, all green).
+    """Run steps concurrently within a ``group``, serially between groups; return (results, ok).
 
-    A failure **does not abort the batch**: already-started steps of the same group finish (their errors matter too)
-    and later groups still run -- the caller decides the exit code.
-    """
+    A failure does not abort the batch: in-flight steps finish and later groups run; only steps
+    consuming a failed step's outputs are skipped. The caller decides the exit code."""
     results: list[StepResult] = []
     workers = jobs if jobs > 0 else (os.cpu_count() or 4)
     index = 0
     ok_all = True
     total = len(steps)
-    # Upstream failure ⇒ downstream **must be skipped**; never continue from a previous run's stale artifacts:
-    # stale objects still link fine, so the log prints "ok ld" while `build/brick.elf` is actually outdated
-    # (only the final exit code reveals the problem). core gives `consumes` per step (which files produced by
-    # other steps in this plan it consumes); that is the basis for the check here.
+    # Upstream failure ⇒ downstream must be skipped: a previous run's stale objects link fine,
+    # so only the final exit code would reveal it. core's per-step `consumes` drives the check.
     failed_outputs: set[str] = set()
     while index < total:
         step = steps[index]
@@ -294,7 +264,6 @@ def run_steps(
         while index < total and steps[index].get("group") == group:
             batch.append(steps[index])
             index += 1
-        # Upstream failure ⇒ downstream steps: pull them out (do not run) and mark their outputs failed too.
         runnable: list[dict] = []
         skipped: list[StepResult] = []
         for st in batch:
@@ -315,7 +284,6 @@ def run_steps(
                 failed_outputs.add(str(art))
         batch = runnable
 
-        # Only naturally independent steps like "compile" are worth parallelizing; the rest run serially in order.
         parallel = len(batch) > 1 and all(b.get("kind") in ("compile", "hosttest") for b in batch)
         if parallel:
             with ThreadPoolExecutor(max_workers=min(workers, len(batch))) as pool:
@@ -340,7 +308,6 @@ def run_steps(
             results.append(res)
             if not res.ok:
                 ok_all = False
-                # Record "this step produced nothing" so its downstream steps get short-circuited (see consumes above).
                 for step in batch:
                     if str(step.get("label")) == res.label:
                         for art in step.get("outputs") or []:
@@ -354,7 +321,6 @@ def run_steps(
                     print(res.stdout.rstrip("\n"), file=out)
                 continue
             if not res.ok:
-                # Failure context: the head is what matters (the first lines of a compile error tell the truth)
                 head = "\n".join(res.text.splitlines()[:40])
                 print(f"        -- {res.label} output (first 40 lines) --", file=err)
                 print("\n".join(f"        {line}" for line in head.splitlines()), file=err)

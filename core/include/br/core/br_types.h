@@ -1,13 +1,6 @@
 /*
- * brickOS prototype v0.1.0 - core basic types
- *
- * Why not <stdint.h>: this prototype is a freestanding build (-ffreestanding -nostdlib) and
- * depends only on compiler-provided headers. Types are self-contained to avoid dragging the
- * host's glibc headers into the target image.
- *
- * Naming follows the design-side discipline: core owns the `br_` prefix (design doc 1-01 §7.2
- * rule 4). The type table ultimately belongs to `docs/3-os-core/3-01-core-api-list.md` (on the
- * brickOS-Design branch); v0.1.0 takes only the minimal subset used by MainLoop.
+ * Core basic types (br_ prefix). Freestanding build (-ffreestanding -nostdlib): self-contained
+ * so no host glibc headers are dragged into the target image. Widths are asserted below.
  */
 #ifndef BR_CORE_BR_TYPES_H
 #define BR_CORE_BR_TYPES_H
@@ -30,7 +23,7 @@ typedef int                br_bool;
 
 #define BR_NULL   ((void *)0)
 
-/* Compile-time self-check: if a type width is wrong, everything is wrong */
+/* A wrong type width breaks everything downstream. */
 _Static_assert(sizeof(br_u8)  == 1, "br_u8 must be 8-bit");
 _Static_assert(sizeof(br_u16) == 2, "br_u16 must be 16-bit");
 _Static_assert(sizeof(br_u32) == 4, "br_u32 must be 32-bit");
