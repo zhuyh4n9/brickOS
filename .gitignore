@@ -15,9 +15,6 @@
 # The tool's own C++ intermediates (previously swept up by the unanchored `build/`; now listed explicitly)
 /tools/brickie/cxx/build/
 
-# **Download cache** for the external toolchain (rebuilt by tools/fetch-prebuilt.py; derived, GBs in size)
-# ⚠ Distinct from prebuilts/ (**plural**): that one is the **bootstrap seed** committed with the source, and must be versioned.
-/prebuilts/toolchain/
 
 # Python bytecode (created when tool scripts run directly; derived, not versioned)
 __pycache__/
