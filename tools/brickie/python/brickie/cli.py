@@ -186,6 +186,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     _leaf(dep_sub, "closure", "product closure + topological order + budget totals (§7.6)")
 
+    show = sub.add_parser("show", help="readable views: which bricks are in the image, and in what order they boot (ADR-0036)",
+                          description="Presentation views over the composition: the product's closure grouped for reading, and the runtime init flow (the order the plugin manager actually walks).")
+    _add_common(show, with_defaults=False)
+    show_sub = show.add_subparsers(dest="group_cmd", metavar="<subcommand>")
+
+    _leaf(show_sub, "bricks", "the product's closure: bricks, origins, cost and budget (ADR-0036)")
+
+    _leaf(show_sub, "brick-init-flow", "the runtime init order of every plugin (ADR-0036)")
+
     check = _leaf(sub, "check", "composition-time validation (§7.7)",
                   "Composition-time validation: dependency closure / interface / taxonomy / privilege and budget, incl. profile gates (§7.5).")
     check.add_argument("--deps", dest="scope_deps", action="store_true", help="check the dependency domain only")
@@ -1016,6 +1025,16 @@ def _cmd_dep(ns: argparse.Namespace, group: str) -> Result:
     raise UsageError(f"unimplemented command `dep {group}`")
 
 
+def _cmd_show(ns: argparse.Namespace, group: str) -> Result:
+    """``show bricks`` / ``show brick-init-flow``: read-only views (ADR-0036)."""
+    if group == "bricks":
+        return _readonly(ns, "show bricks", "show-bricks", {}, shape=("plugin", "product"))
+    if group == "brick-init-flow":
+        return _readonly(ns, "show brick-init-flow", "show-init-flow", {},
+                         shape=("plugin", "product"))
+    raise UsageError(f"unimplemented command `show {group}`")
+
+
 def _cmd_ver(ns: argparse.Namespace, group: str) -> Result:
     if group == "show":
         return _readonly(ns, "ver show", "ver-show", {"id": ns.id},
@@ -1101,6 +1120,8 @@ def _dispatch(ns: argparse.Namespace) -> Result:
     group = getattr(ns, "group_cmd", None)
     if ns.command == "dep":
         return _cmd_dep(ns, group)
+    if ns.command == "show":
+        return _cmd_show(ns, group)
     if ns.command == "ver":
         return _cmd_ver(ns, group)
     if ns.command == "iface":

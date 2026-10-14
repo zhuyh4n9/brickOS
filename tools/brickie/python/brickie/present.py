@@ -216,7 +216,8 @@ def _render_closure(data: dict, extra: dict) -> list[str]:
 
     order = _as_list(data.get("topo_order"))
     if order:
-        lines.extend(_section("init topological order:", [f"  {' → '.join(str(x) for x in order)}"]))
+        lines.extend(_section("dependency topological order (name tie-break; the runtime order is `show brick-init-flow`):",
+                              [f"  {' → '.join(str(x) for x in order)}"]))
 
     totals = _as_dict(data.get("totals"))
     if totals:
@@ -234,6 +235,97 @@ def _render_closure(data: dict, extra: dict) -> list[str]:
         for cycle in cycles:
             path = cycle if isinstance(cycle, list) else _as_dict(cycle).get("path", cycle)
             lines.append(f"  {' → '.join(str(x) for x in path) if isinstance(path, list) else _fmt(path)}")
+    return _footer(extra, lines)
+
+
+def _render_show_bricks(data: dict, extra: dict) -> list[str]:
+    """``show bricks``: the closure as a reading aid -- grouped by namespace, with origins/cost."""
+    bricks = [b for b in _as_list(data.get("bricks")) if isinstance(b, dict)]
+    totals = _as_dict(data.get("totals"))
+    product = _as_dict(data.get("product"))
+    head = "product bricks"
+    if product:
+        head += (
+            f" ({product.get('name', '?')} {product.get('version', '?')},"
+            f" profile={product.get('profile', 'dev')})"
+        )
+    lines = [
+        f"{head}: {totals.get('plugins', len(bricks))} plugins, {totals.get('roots', 0)} roots",
+        "  origin: root = named in product.toml, dep = pulled in by a [[dep]] closure",
+    ]
+    rows = [
+        [
+            b.get("name", "?"),
+            b.get("plugin_type", "-"),
+            b.get("subkind") or "-",
+            b.get("phase", "-"),
+            b.get("ram_kib", "-"),
+            b.get("stack_kib", "-"),
+            "root:" + str(b.get("root_kind", "")) if b.get("origin") == "root" else "dep",
+        ]
+        for b in bricks
+    ]
+    lines.extend(_table(["plugin", "type", "subkind", "phase", "RAM", "stack", "origin"], rows))
+
+    budget = _as_dict(totals.get("budget"))
+    capacity = _as_dict(totals.get("platform_capacity"))
+    lines.append(
+        f"total: RAM {totals.get('ram_kib', '-')} KiB / stack {totals.get('stack_kib', '-')} KiB"
+        f"   (product budget RAM {budget.get('ram_kib', '-')} / stack {budget.get('stack_kib', '-')};"
+        f" platform capacity RAM {capacity.get('ram_kib', '-')} / stack {capacity.get('stack_kib', '-')})"
+    )
+    by_type = _as_dict(totals.get("by_type"))
+    parts = [f"{k} {v}" for k, v in by_type.items() if v]
+    if parts:
+        lines.append("by type: " + ", ".join(parts))
+    seeds = _as_list(data.get("seeds"))
+    if seeds:
+        lines.extend(_section("closure roots:", ["  " + " → ".join(str(s) for s in seeds)]))
+    return _footer(extra, lines)
+
+
+def _render_show_init_flow(data: dict, extra: dict) -> list[str]:
+    """``show brick-init-flow``: the runtime boot chain, step by step (phase / hook / plugin)."""
+    steps = [s for s in _as_list(data.get("steps")) if isinstance(s, dict)]
+    product = _as_dict(data.get("product"))
+    counts = _as_dict(data.get("counts"))
+    head = "brick init flow (runtime order)"
+    if product:
+        head += (
+            f" -- {product.get('name', '?')} {product.get('version', '?')},"
+            f" profile={product.get('profile', 'dev')}"
+        )
+    lines = [
+        f"{head}: {len(steps)} steps",
+        f"  order basis: {data.get('order_basis', '?')}",
+    ]
+    rows = [
+        [
+            index,
+            s.get("phase", "-"),
+            s.get("hook") or "-",
+            s.get("plugin") or "-",
+            s.get("note", ""),
+        ]
+        for index, s in enumerate(steps)
+    ]
+    lines.extend(_table(["#", "phase", "hook", "plugin", "note"], rows))
+    keys = ("early", "core", "late", "irq", "start", "selftest")
+    parts = [f"{k} {counts.get(k, 0)}" for k in keys if k in counts]
+    if parts:
+        lines.append("per phase: " + ", ".join(parts))
+    lines.append(
+        "selftest pass: "
+        + (
+            "on (after START, before the scheduler takes over)"
+            if data.get("selftest_on")
+            else "off (product switch)"
+        )
+    )
+    unsorted = _as_list(data.get("unsorted"))
+    if unsorted:
+        lines.append(f"UNSCHEDULABLE (init cycle): {len(unsorted)} plugin(s)")
+        lines.extend(f"  {name}" for name in unsorted)
     return _footer(extra, lines)
 
 
@@ -625,6 +717,8 @@ _RENDERERS = {
     "dep why": _render_dep_why,
     "dep index": _render_dep_index,
     "dep closure": _render_closure,
+    "show bricks": _render_show_bricks,
+    "show brick-init-flow": _render_show_init_flow,
     "ver show": _render_ver_show,
     "ver bump": _render_ver_bump,
     "iface list": _render_iface_list,

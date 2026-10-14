@@ -1,0 +1,135 @@
+{
+  "command": "show bricks",
+  "data": {
+    "bricks": [
+      {
+        "api_type": "native",
+        "name": "app/hsm",
+        "namespace": "app",
+        "origin": "root",
+        "phase": "core",
+        "plugin_type": "app",
+        "ram_kib": 0,
+        "root_alias": "",
+        "root_kind": "app",
+        "selftest": false,
+        "stack_kib": 0,
+        "subkind": null,
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "name": "core/c_core",
+        "namespace": "core",
+        "origin": "root",
+        "phase": "early",
+        "plugin_type": "core",
+        "ram_kib": 0,
+        "root_alias": "",
+        "root_kind": "core",
+        "selftest": false,
+        "stack_kib": 0,
+        "subkind": null,
+        "version": "1.0.0.0"
+      },
+      {
+        "api_type": "native",
+        "name": "iface/hsm-api",
+        "namespace": "iface",
+        "origin": "dep",
+        "phase": "late",
+        "plugin_type": "interface",
+        "ram_kib": 0,
+        "root_alias": "",
+        "root_kind": "",
+        "selftest": false,
+        "stack_kib": 0,
+        "subkind": null,
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "name": "platform/qemu-aarch64",
+        "namespace": "platform",
+        "origin": "dep",
+        "phase": "core",
+        "plugin_type": "platform",
+        "ram_kib": 8192,
+        "root_alias": "",
+        "root_kind": "",
+        "selftest": false,
+        "stack_kib": 64,
+        "subkind": null,
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "name": "sched/coop",
+        "namespace": "sched",
+        "origin": "dep",
+        "phase": "core",
+        "plugin_type": "ability",
+        "ram_kib": 0,
+        "root_alias": "",
+        "root_kind": "",
+        "selftest": false,
+        "stack_kib": 0,
+        "subkind": "scheduler",
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "name": "service/crypto",
+        "namespace": "service",
+        "origin": "dep",
+        "phase": "late",
+        "plugin_type": "ability",
+        "ram_kib": 48,
+        "root_alias": "",
+        "root_kind": "",
+        "selftest": false,
+        "stack_kib": 4,
+        "subkind": "service",
+        "version": "0.1.0.0"
+      }
+    ],
+    "has_product": true,
+    "product": {
+      "name": "hsm",
+      "profile": "dev",
+      "stage": "dev",
+      "version": "0.1.0.0"
+    },
+    "seeds": [
+      "app/hsm",
+      "core/c_core"
+    ],
+    "totals": {
+      "budget": {
+        "ram_kib": 512,
+        "stack_kib": 16
+      },
+      "by_type": {
+        "ability": 2,
+        "app": 1,
+        "core": 1,
+        "interface": 1,
+        "platform": 1
+      },
+      "has_platform": true,
+      "platform_capacity": {
+        "ram_kib": 8192,
+        "stack_kib": 64
+      },
+      "plugins": 6,
+      "ram_kib": 48,
+      "roots": 2,
+      "stack_kib": 4
+    }
+  },
+  "diagnostics": [],
+  "exit_code": 0,
+  "protocol": 1,
+  "status": "ok",
+  "written": []
+}

@@ -11,12 +11,12 @@
 
 ## 1. Current state (v0.1 command surface)
 
-**L5 (Python frontend) is fully delivered**: `python/brickie/` has a complete argparse command surface of **29 leaf commands + 2 global switches**, with orchestration / disk writes / presentation / shape validation / exit-code aggregation all implemented. By purpose it splits into **two families + 2 global switches**:
+**L5 (Python frontend) is fully delivered**: `python/brickie/` has a complete argparse command surface of **31 leaf commands + 2 global switches**, with orchestration / disk writes / presentation / shape validation / exit-code aggregation all implemented. By purpose it splits into **two families + 2 global switches**:
 
 | Family | Commands | Purpose |
 |---|---|---|
 | **Scaffold** | `new <ptype> <name>` · `init <product>` · `gen [--check]` | Generate plugin/product skeletons; rebuild `build/gen/**` artifacts |
-| **Dependencies & validation** | `dep {add,rm,tree,graph,why,index,closure}` · `check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release]` | Closure/tree/graph/path/reverse index + four-domain completeness |
+| **Dependencies & validation** | `dep {add,rm,tree,graph,why,index,closure}` · `show {bricks,brick-init-flow}` · `check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release]` | Closure/tree/graph/path/reverse index (machine view) · **readable views**: which bricks are in the image and in what order they boot (ADR-0036) · four-domain completeness |
 | **Version & interface** | `ver {show,bump}` · `iface {list,show,diff,status,publish,freeze,deprecate,undeprecate,unfreeze,refreeze}` | Four-segment version + unit snapshot / freeze-window governance |
 | **Build family (second family)** | `build [--profile\|--jobs\|--backend\|--tag\|--dry-run\|--force\|--emit-backends\|--no-post]` · `clean [--all]` · `run` · `size` · `disasm` · `test [<name>\|--list]` | Declaration-surface-driven build orchestration + execution + gates (build/clean/run/size/disasm/test; core also has `judge`, serving only internal L5 calls) |
 | **Global switches** | `--version [--deps]` · `--json` (also `--root DIR`) | Fingerprint / machine-readable output / root override |
@@ -31,14 +31,15 @@
 | `dep add` / `dep rm` | ✅ | `core dep-add` / `dep-rm` ✅ | **Prints the snippet only, never writes to disk** (ruling R-2) |
 | `check` | ✅ | `core check` ✅ | Four domains `deps/iface/tax/priv` + `summary`/`scope_results`; `--profile` gate |
 | `dep tree/graph/why/index/closure` | ✅ | `core dep-*` / `closure` ✅ | Closure is a **pure function** (cycles report the full structured path; budget totals carry used/capacity/budget) |
+| `show bricks` / `show brick-init-flow` | ✅ | `core show-bricks` / `show-init-flow` ✅ | ADR-0036: the closure as a **reading** view (origin root/dep, cost, budget) and **the runtime boot chain** (platform-first EARLY → category-decided CORE/LATE → IRQ → START with APP last → selftest pass). The flow is derived from the declaration surface and **validated event-for-event against a real run's log**; its tie-break is the runtime's section order, **not** `closure.topo_order` |
 | `ver show` / `ver bump` | ✅ | `core ver-show` / `ver-bump` ✅ | Version carrier = **unit snapshot**; the human-written `brick.toml` is read-only (ruling R-3) |
 | `iface *` (10 commands) | ✅ | `core iface-*` ✅ | IFACE-IR + sha256 + change set + impact report + freeze window (incl. the `unfreezing` transient) |
 | `--version [--deps]` | ✅ | `core version` ✅ | When core is absent, `--version` degrades to printing the frontend version |
 | `build` / `clean` / `run` / `size` / `disasm` / `test` | ✅ | `core build/clean/run/size/disasm/test/judge` ✅ | **Second family** (ADR-0004 / design ADR-0003 S1–S4): declaration-surface-driven build + L5 executor (`runner.py`, concurrency/timeout/logging/progress); tool resolution / incremental / gate criteria all in core (rulings R-14/R-15/R-16) |
 
-> **Which side decides**: all **decisions** and BRV codes live in `rust/` (L0/L1); L5 only does argument parsing, orchestration, disk writes, shape validation, presentation and exit-code aggregation (the V-18c static check catches overreach). The native side's domain self-check: `brickie-core --selftest` — **485 cases** (after `make core`, run `build/host/<triple>/bin/brickie-core --selftest`), it **does not need a Python interpreter** (V-18a). For end-to-end regression see `tests/run.sh`; the blueprint = the V-1…V-19 matrix + build-family §V-B in `tests/ACCEPTANCE.md`.
+> **Which side decides**: all **decisions** and BRV codes live in `rust/` (L0/L1); L5 only does argument parsing, orchestration, disk writes, shape validation, presentation and exit-code aggregation (the V-18c static check catches overreach). The native side's domain self-check: `brickie-core --selftest` — **577 cases** (after `make core`, run `build/host/<triple>/bin/brickie-core --selftest`), it **does not need a Python interpreter** (V-18a). For end-to-end regression see `tests/run.sh`; the blueprint = the V-1…V-20 matrix + build-family §V-B in `tests/ACCEPTANCE.md`.
 
-**Explicitly not done** (none of these names appear in `--help`; reverse acceptance will catch them): `api-dump` / `verify` / `iface check` / `dbg` / `pack`, plus the old names `add` / `show` / `env`. `build` / `test` / `run` were removed from the banned-name list when the second family delivered them, and reverse acceptance (`N-1`/`N-2`) was updated to the new list.
+**Explicitly not done** (none of these names appear in `--help`; reverse acceptance will catch them): `api-dump` / `verify` / `iface check` / `dbg` / `pack`, plus the old names `add` / `env`. `build` / `test` / `run` were removed from the banned-name list when the second family delivered them, and `show` left it in ADR-0036 (its two subcommands answer questions `dep closure`/`ver show` did not: the closure's *origin* and the *runtime* boot order); reverse acceptance (`N-1`/`N-2`) was updated each time.
 
 ## 2. Directory structure
 

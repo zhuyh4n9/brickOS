@@ -11,7 +11,7 @@
 python/brickie/
 ├── __init__.py   version and PROTOCOL (envelope version = 1)
 ├── __main__.py   `python -m brickie` entry point
-├── cli.py        argparse for 23 leaf commands + 2 global switches, and the **orchestration pipeline** (§3)
+├── cli.py        argparse for 31 leaf commands + 2 global switches, and the **orchestration pipeline** (§3)
 ├── native.py     locate and call brickie-core / brickie-gen; envelope assembly and response checks (§2)
 ├── schema.py     built-in minimal JSON-Schema subset → BRV-MF-0001 / exit code 2 (§4)
 ├── writer.py     idempotent write / `--check` byte compare / declaration-surface scan (§4)
@@ -64,6 +64,8 @@ Unified envelope: one JSON line in on **stdin**, one JSON line out on **stdout**
 | `dep why <a> <b>` | `dep-why` | `from,to` | `{found,path,edges}` |
 | `dep index` | `dep-index` | — | `data.dependents` + `files[build/index/dependents.json]` |
 | `dep closure` | `closure` | — | `{plugins,topo_order,totals,cycles,profile,…}` |
+| `show bricks` | `show-bricks` | — | `{product,bricks[],totals{plugins,roots,ram_kib,stack_kib,budget,platform_capacity,by_type},seeds}` (ADR-0036) |
+| `show brick-init-flow` | `show-init-flow` | — | `{product,steps[],counts,order,order_basis,unsorted,selftest_on}` — the **runtime** boot chain |
 | `check` | `check` | `profile,scopes` | `{summary,scope_results}` |
 | `ver show <id>` | `ver-show` | `id` | `{segments,compat_gen_source,freeze_state,…}` |
 | `ver bump <id> --rule` | `ver-bump` | `id,rule` | unit snapshot `files[]` + four version segments |
@@ -107,7 +109,7 @@ Once core is finalized, if it uses templates or writes into `files`, just delete
 
 ## 3. Command Status
 
-**Delivered (full frontend)**: 23 leaf commands + 2 global switches, all visible in `--help` and exercising orchestration/write/presentation/exit codes; `checklist` §5.1 C-01…C-23 and G-01/G-02 land item by item on the **L5 side**.
+**Delivered (full frontend)**: 31 leaf commands + 2 global switches, all visible in `--help` and exercising orchestration/write/presentation/exit codes; `checklist` §5.1 C-01…C-23 and G-01/G-02 land item by item on the **L5 side**.
 
 | Group | Command | L5 frontend | Native side depended on |
 |---|---|---|---|
@@ -118,6 +120,8 @@ Once core is finalized, if it uses templates or writes into `files`, just delete
 | Dependency | `dep tree` / `dep graph` / `dep why` | ✅ | `core dep-tree` / `dep-graph` / `dep-why` |
 | Dependency | `dep index` | ✅ | `core dep-index` |
 | Dependency | `dep closure` | ✅ | `core closure` |
+| Dependency | `show bricks` | ✅ | `core show-bricks` (ADR-0036: reading view) |
+| Dependency | `show brick-init-flow` | ✅ | `core show-init-flow` (ADR-0036: runtime boot chain) |
 | Validation | `check [--deps\|--iface\|--tax\|--priv\|--all] [--profile]` | ✅ | `core check` |
 | Version | `ver show` / `ver bump` | ✅ | `core ver-show` / `ver-bump` |
 | Interface | `iface list/show/diff/status` | ✅ | `core iface-list/show/diff/status` |
@@ -211,7 +215,7 @@ Before `brickie-core` is ready, two **temporary stubs** (fixed JSON replies only
 
 ### 7.2 Real Native Binaries (`build/host/<triple>/bin/{brickie-core,brickie-gen}`)
 
-At delivery one integration pass was run with real core/gen, **34 items all green**: `new` for four types × `c` (6 artifacts each, descriptor first-line marker), repeated `new` conflict red (`BRV-GEN-0002`), `--force` only on generated dirs, real core output passing the L5 shape gate, `gen` idempotence and `--check`, `init` writing 8 files (incl. `brickie.lock`), `dep add/rm` not writing, `--version --deps` fingerprint, `--json` equivalence and envelope shape. After the full core command surface landed, end-to-end regression moved to `tools/brickie/tests/run.sh` (see V-1…V-19 matrix in `tests/ACCEPTANCE.md`).
+At delivery one integration pass was run with real core/gen, **34 items all green**: `new` for four types × `c` (6 artifacts each, descriptor first-line marker), repeated `new` conflict red (`BRV-GEN-0002`), `--force` only on generated dirs, real core output passing the L5 shape gate, `gen` idempotence and `--check`, `init` writing 8 files (incl. `brickie.lock`), `dep add/rm` not writing, `--version --deps` fingerprint, `--json` equivalence and envelope shape. After the full core command surface landed, end-to-end regression moved to `tools/brickie/tests/run.sh` (see V-1…V-20 matrix in `tests/ACCEPTANCE.md`).
 
 ## 8. Running Locally
 

@@ -51,7 +51,8 @@ cargo build --release          # artifact: rust/target/release/brickie-core
 | `solver.rs` | 1282 | ✅ `closure`/`dep-tree`/`dep-graph`/`dep-why`/`dep-index` + **pure-function closure solving** (`solve`: selection roots (`app`/`platform`/`core` records + `[[product.ability]]`) → per-record verdicts (`BRV-TAX-0024` kind vs `plugin_type`, `requires.version` vs the brick) → three edge classes closure → `compat_gen`/`range` → topology + cycles (structured paths) → phase monotonicity → direction prohibitions → budget total → profile verdict) |
 | `check.rs` | 518 | ✅ `check`: aggregates the four domains (`deps`/`iface`/`tax`/`priv`) + `scope_results` + `summary`; reuses `solver::solve` |
 | `iface.rs` | 2331 | ✅ `ver-show`/`ver-bump`/`iface-*`: **IFACE-IR canonicalization + sha256 hash**, change set (append vs modify), impact report, version advance, idempotence, unfreeze window + baseline, machine-file emission |
-| `selftest.rs` | 2034 | `--selftest`: domain cases (no Python involved), 421 entries |
+| `show.rs` | 433 | ADR-0036: `show-bricks` (closure as a reading aid) + `show-init-flow` (**the runtime boot chain**: section-order FIFO Kahn, platform-first EARLY, category-decided CORE/LATE, IRQ hand-off, START with APP last, selftest pass) |
+| `selftest.rs` | 3150 | `--selftest`: domain cases (no Python involved), 577 entries |
 
 ## 3. Command implementation status
 
@@ -66,6 +67,8 @@ cargo build --release          # artifact: rust/target/release/brickie-core
 | `dep-rm` | ✅ | `{snippet,path,span,found}` | same; `found=false` means not located |
 | `check` | ✅ | `{summary:{errors,warnings,infos,profile,closure:{plugins,ram_kib,stack_kib}},scope_results,scopes}` | `args.profile` / `args.scopes[]` / `args.plugin?` (filter by diagnostic target, see S-7) |
 | `closure` | ✅ | all contract §5.1 fields + `cycles:[{path,edges}]` + `selected`/`seeds`/`has_platform` | **does not scan `requires_iface`** (V-10② byte-reproducible, see S-1) |
+| `show-bricks` | ✅ | `{product,has_product,bricks[{name,namespace,plugin_type,api_type,subkind,phase,version,ram_kib,stack_kib,selftest,origin,root_kind,root_alias}],totals{plugins,roots,ram_kib,stack_kib,budget,platform_capacity,has_platform,by_type},seeds}` | ADR-0036 §2.4: a reading view, no new verdicts; `origin` is the product record, not the edge graph |
+| `show-init-flow` | ✅ | `{product,steps[{phase,plugin,plugin_type,subkind,hook,note}],counts,order,order_basis,unsorted,selftest_on}` | **the runtime boot chain** (ADR-0036 §2.1): `order` = section-order FIFO Kahn, **not** `closure.topo_order`; validated event-for-event against a real `build/logs/smoke.log` (88/88) |
 | `dep-tree` | ✅ | `{roots,nodes,kind}` | `args.kind` = init/runtime/type/all; `args.plugin?` |
 | `dep-graph` | ✅ | `{format,nodes,edges,text}` | dot/mermaid/json; with `json`, `text` is a canonical JSON string |
 | `dep-why` | ✅ | `{found,path,edges}` | shortest consumer→provider path; not found ⇒ `found=false` and **exit 0** |
@@ -297,7 +300,7 @@ keys are sorted with `BTreeMap`; edges are built only from **declared** `[[dep]]
 | R-13 | duplicate `[[dep]]` has no code | not reported (second cut unchanged) | optionally add an info-type code |
 | R-14 | code obligation for "code-less usage errors" (G-5) | keep code-less; shape class always `MF-0001` | clarify in BRV-D8 |
 | R-15 | response JSON key order unspecified | serde_json lexicographic order | if byte-exact snapshots are wanted, write it into the contract |
-| R-16 | cross-agent fixture conflicts with the clarified convention (`app` + `phase="late"`) | `model` reports `BRV-MF-0001` (exit 2) | that fixture should be changed to `phase = "app"` |
+| R-16 | cross-agent fixture conflicts with the clarified convention (`app` + `phase="late"`) | `model` reports `BRV-MF-0001` (exit 2) | that fixture should be changed to `phase = "core"` (ADR-0036 §2.3: APP is a boot phase, not an init completion point, so `phase = "app"` is itself illegal now) |
 | **S-1** | where `requires_iface` version validation lives: V-10② requires "closure byte-identical", V-7 requires "`compat_gen` conflict constructible" | `closure` **does not scan** (`scan_iface=false`); `check --deps` scans and reports `VER-0001/0002/0004` | add a sentence to contract §5.1 for `closure`: "does not evaluate interface dependencies" |
 | **S-2** | structural deps (`init/runtime/type`) **do not pin a generation**, so what does V-7's `range` out-of-bounds compare against | compares `MAJOR.MINOR.REVISE` of the **provider plugin's four-segment version** ⇒ `VER-0002` | state in §7.4 that "structural dependency `range` applies to the provider plugin version" |
 | **S-3** | "multiple versions of one plugin coexisting ⇒ `DEP-0011`" is not constructible under "one declaration per plugin" | the construction form is taken as **the intersection of several dependents' range constraints being empty** ⇒ `DEP-0011` | add the "range intersection empty" criterion to §7.4 |
@@ -340,6 +343,8 @@ keys are sorted with `BTreeMap`; edges are built only from **declared** `[[dep]]
 |---|---|---|---|
 | `check` | `data.summary.{errors,warnings,infos,profile,closure{plugins,ram_kib,stack_kib}}`, `data.scope_results` | ✅ same-named fields | aligned |
 | `dep closure` | `data.{plugins[].{name,version,compat_gen,plugin_type,phase,ram_kib,stack_kib,selected}, topo_order, totals{...}, cycles[].path, profile}` | ✅ | aligned |
+| `show bricks` | `data.{bricks[], totals{...}, product}` | ✅ | aligned |
+| `show brick-init-flow` | `data.{steps[], counts, order, order_basis, unsorted, selftest_on}` | ✅ | aligned; `irq` steps carry an empty `plugin` |
 | `dep tree` | `data.{roots, nodes{<n>{deps[{name,kind,range,phase}]}}, kind}` | ✅ | aligned |
 | `dep graph` | `data.{format, nodes, edges, text}` | ✅ | aligned |
 | `dep why` | `data.{found, path, edges[{from,to,kind}]}` | ✅ | aligned |

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# brickie v0.1 end-to-end acceptance regression baseline (V-1…V-19, negative N-1…N-4). Exit code
+# brickie v0.1 end-to-end acceptance regression baseline (V-1…V-20, negative N-1…N-4). Exit code
 # 0 success / 1 validation red / 2 usage or environment error; --json serializes `data`, diagnostics
 # sorted by (code,file,span,target). Every case copies its fixture into a fresh mktemp dir, no case
 # calls a compiler, assertions are never loosened. Usage: bash tests/run.sh [-v] (via make test).
@@ -18,7 +18,7 @@ VERBOSE=0
 
 ENVELOPE_KEYS="command,data,diagnostics,exit_code,protocol,status,written"
 
-printf '=== brickie v0.1 end-to-end acceptance (V-1…V-19 + N-1…N-4) ===\n'
+printf '=== brickie v0.1 end-to-end acceptance (V-1…V-20 + N-1…N-4) ===\n'
 printf 'host triple: %s/%s\n' "$HOST_ARCH" "$HOST_OS"
 printf 'core: %s\n' "$CORE"
 printf 'gen : %s\n' "$GEN"
@@ -721,6 +721,48 @@ W="$(cp_fx priv-platform-p4)"
 run_json "$W" check
 eq "V-19 orthogonality table: map/protect are P4, platform may declare them ⇒ legal, 0" "0" "$RC"
 
+# ---- V-20 show family (ADR-0036): closure view + runtime init flow
+section "V-20 show family (bricks / brick-init-flow)"
+W="$(cp_fx showcase)"
+run_brickie "$W" show bricks
+eq "V-20① show bricks exit code 0" "0" "$RC"
+grep_at_least "V-20① lists the closure" 'product bricks .*6 plugins, 2 roots' "$OUT"
+grep_at_least "V-20① marks a product root" 'app/hsm .*root:app' "$OUT"
+grep_at_least "V-20① marks a closure member" 'platform/qemu-aarch64 .*dep' "$OUT"
+grep_at_least "V-20① reports the budget it spends" 'product budget RAM 512 / stack 16' "$OUT"
+run_json "$W" show bricks
+eqj "V-20① roots counted" "$JQ_RESP" "data.totals.roots" "2"
+eqj "V-20① plugins counted" "$JQ_RESP" "data.totals.plugins" "6"
+eqj "V-20① root origin is recorded" "$JQ_RESP" "data.bricks.0.origin" "root"
+
+run_brickie "$W" show brick-init-flow
+eq "V-20② show brick-init-flow exit code 0" "0" "$RC"
+grep_at_least "V-20② platform early_init is the first step" '0  *early  *early_init  *platform/qemu-aarch64' "$OUT"
+grep_at_least "V-20② APP start is the last start step" 'app/hsm  *APP last: explicit rule' "$OUT"
+grep_at_least "V-20② the IRQ hand-off is a step of its own" 'br_irq_cpu_enable\(\): after LATE, before START' "$OUT"
+grep_at_least "V-20② the order basis names the runtime sort" 'FIFO Kahn over kind=init edges' "$OUT"
+run_json "$W" show brick-init-flow
+eqj "V-20② five early steps (platform + 4)" "$JQ_RESP" "data.counts.early" "5"
+eqj "V-20② exactly one IRQ step" "$JQ_RESP" "data.counts.irq" "1"
+eqj "V-20② the step count matches the phases" "$JQ_RESP" "data.counts.start" "5"
+hasj "V-20② the runtime order is reported" "$JQ_RESP" "data.order"
+eqj "V-20② the first step is the platform's early_init" "$JQ_RESP" "data.steps.0.hook" "early_init"
+eqj "V-20② the first step names the platform" "$JQ_RESP" "data.steps.0.plugin" "platform/qemu-aarch64"
+eqj "V-20② no phase divergence in a consistent tree" "$JQ_RESP" "data.counts.selftest" "0"
+
+# The runtime order is not the name-tie-broken `dep closure` order: for this fixture they differ
+# (section order puts platform before sched/coop, the name order does not), which is exactly why
+# the two views exist separately (ADR-0036 §2.1).
+run_json "$W" dep closure
+eqj "V-20② dep closure keeps its own topological order" "$JQ_RESP" "data.topo_order.0" "app/hsm"
+
+# A declared phase that the runtime would not honour is red, not silently rerouted.
+W="$(cp_fx showcase)"
+sed -i 's/^phase *= *"core"/phase = "late"/' "$W/app/hsm/brick.toml"
+run_json "$W" check
+eq "V-20③ app declaring a phase it does not run in ⇒ exit code 2" "2" "$RC"
+grep_at_least "V-20③ the phase gate says why" 'phase `late` is incompatible with' "$ERR"
+
 # V-B build family: declaration-surface and planning criteria only -- no compiler is called (V-9's
 # discipline binds the tests too); the judge's log arrives as body text in context.log.
 section "V-B build family (criteria that call no compiler)"
@@ -930,9 +972,9 @@ help_commands() { # <help output file> ⇒ comma-separated subcommand names (sor
 W="$(new_work)"
 run_brickie "$W" --help
 eq "N-1 top-level help exit code 0" "0" "$RC"
-eq "N-1 top-level command surface = 13 groups (7 composition + 6 build family)" \
-    "build,check,clean,dep,disasm,gen,iface,init,new,run,size,test,ver" "$(help_commands "$OUT")"
-for c in api-dump verify dbg pack add show env; do
+eq "N-1 top-level command surface = 14 groups (8 composition + 6 build family)" \
+    "build,check,clean,dep,disasm,gen,iface,init,new,run,show,size,test,ver" "$(help_commands "$OUT")"
+for c in api-dump verify dbg pack add env; do
     eq "N-1 top-level help excludes $c" "0" \
         "$(help_commands "$OUT" | tr ',' '\n' | grep -cx "$c" || true)"
 done
@@ -947,14 +989,18 @@ run_brickie "$W" dep --help
 eq "N-1 dep subcommand surface" "add,closure,graph,index,rm,tree,why" "$(help_commands "$OUT")"
 run_brickie "$W" ver --help
 eq "N-1 ver subcommand surface" "bump,show" "$(help_commands "$OUT")"
+run_brickie "$W" show --help
+eq "N-1 show subcommand surface" "brick-init-flow,bricks" "$(help_commands "$OUT")"
 
 # ---- N-2 negative acceptance: undelivered commands
 section "N-2 undelivered §5.4 commands called directly ⇒ exit code 2"
 W="$(new_work)"
-for c in api-dump verify dbg pack add show env; do
+for c in api-dump verify dbg pack add env; do
     run_brickie "$W" "$c"
     eq "N-2 brickie $c ⇒ exit code 2" "2" "$RC"
 done
+run_brickie "$W" show nope
+eq "N-2 brickie show <unknown> ⇒ exit code 2" "2" "$RC"
 run_brickie "$W" iface check service/x#x
 eq "N-2 brickie iface check ⇒ exit code 2" "2" "$RC"
 run_brickie "$W" frobnicate
@@ -990,6 +1036,10 @@ run_json "$W" dep tree
 snapj "dep-tree" "$JQ_RESP"
 run_json "$W" dep closure
 snapj "dep-closure" "$JQ_RESP"
+run_json "$W" show bricks
+snapj "show-bricks" "$JQ_RESP"
+run_json "$W" show brick-init-flow
+snapj "show-init-flow" "$JQ_RESP"
 run_json "$W" iface list
 snapj "iface-list" "$JQ_RESP"
 run_json "$W" iface show service/crypto#crypto

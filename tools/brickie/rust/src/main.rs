@@ -16,6 +16,7 @@ mod plan;
 mod proto;
 mod rules;
 mod selftest;
+mod show;
 mod solver;
 mod version;
 mod build;
@@ -46,7 +47,8 @@ fn print_help() {
          \n\
          Command surface (v0.1 all pass, contract §5):\n\
          \x20 read-only  version / model / check / closure / dep-tree / dep-graph / dep-why /\n\
-         \x20            dep-index / ver-show / iface-list / iface-show / iface-diff / iface-status\n\
+         \x20            dep-index / show-bricks / show-init-flow / ver-show / iface-list /\n\
+         \x20            iface-show / iface-diff / iface-status\n\
          \x20 write      plan-new / plan-init / gen-plan / dep-add / dep-rm / ver-bump /\n\
          \x20            iface-publish / iface-freeze / iface-deprecate / iface-undeprecate /\n\
          \x20            iface-unfreeze / iface-refreeze\n\
@@ -132,6 +134,7 @@ fn dispatch(req: &Request) -> Response {
         "dep-rm" => cmd_dep_rm(req),
         "check" => check::run(req),
         "closure" | "dep-tree" | "dep-graph" | "dep-why" | "dep-index" => solver::run(req),
+        "show-bricks" | "show-init-flow" => show::run(req),
         "ver-show" | "ver-bump" => iface::run(req),
         c if c.starts_with("iface-") => iface::run(req),
         "build" | "clean" | "run" | "size" | "disasm" | "test" | "judge" => build::run(req),

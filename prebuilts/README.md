@@ -148,6 +148,7 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 | 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0033(解散 `adapter/`)**: `brickie-core` 增 `BRV-TAX-0022`(`api_type` 是表面分类 ⇒ `third_party`/`runtime_adapter` 必须伴随 `[[export]]`)与 `BRV-TAX-0023`(来源守卫: 不携带 `third_party/` 代码者不得依赖携带者), 并**修掉 `build.rs` 的 include 顺序缺陷**(去掉末尾 `sort()`, 改为"环境基座 → 自己的 → 依赖闭包"保序去重 —— 原来"自己的 compat 壳优先"只是目录名字典序的巧合); 插件身份 `adapter/uboot-{mmc,fat,erofs}` → `driver/uboot-mmc` / `fs/uboot-{fat,erofs}` ⇒ 三件一起重发并同一次刷新 §5.1。 |
 | 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地**选择面的根分类**: `[product]` 增 `platform` / `ability` 两个一等键(闭包根), solver 以 `app + platform + ability + [select].plugins` 为种子做 `[[dep]]` 闭包; `product.schema.json`、`templates/product/c/product.toml.tmpl` 与 `product.toml` 的 `[select].plugins` 退役为可选兼容面 ⇒ 入口 ELF 负载与 `brickie-core` 都变, 两件重发(`brickie-gen` 逐字节未变)并同一次刷新 §5.1。 |
 | 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0035(根记录形态 + 硬切换)**: 四个根改成记录 `{ brick = "<插件名>", requires = { version? } }`(`[[product.ability]]` + 别名键), `requires.version` 第一次**真的被执法**(不满足 ⇒ `BRV-VER-0002`), 新增 `BRV-TAX-0024`(记录种类 ↔ `brick` 的 `plugin_type`); 旧的裸字符串形式与 `[select]` 表移除(形状错, 退出码 2)⇒ `product.schema.json`(新增 `definitions.selection`)、模板、声明面与三份 `tests/fx` 夹具都变 ⇒ 入口 ELF 负载与 `brickie-core` 两件重发(`brickie-gen` 逐字节未变)并同一次刷新 §5.1。 |
+| 2026-10-13 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0036(`show` 命令族 + `phase = "app"` 收紧)**: 新增 `rust/src/show.rs`(`show-bricks` 闭包阅读视图; `show-init-flow` **运行期启动链** —— 节序 FIFO Kahn + platform 先 EARLY + 类别定 CORE/LATE + IRQ + START 且 APP 最后 + 自检 pass, 与真机日志 88/88 逐事件相同), `rules.rs` 把"非 Service/Interface ⇒ 只能 core/early"写死(APP 是启动相而非 init 完成点); CLI 新增 `show` 组、`present.py` 两个渲染器、`tests/fx/**` 7 份夹具与 `app/hello` 的 `phase` 修正、快照 +2(show-bricks / show-init-flow) ⇒ 入口 ELF 负载与 `brickie-core` 两件重发(`brickie-gen` 逐字节未变)并同一次刷新 §5.1。 |
 
 ### 5.1 当前种子指纹(实测)
 
@@ -157,8 +158,8 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 文件(`prebuilts/seed/brickie/x86-64/linux/bin/`) | 体积 | sha256 |
 |---|---|---|
-| `brickie` | 3 645 576 B(~3.48 MiB) | `7fd07a0f81bd656049ebcc1a63e0215a04523a9073a6ae22be36a196ad2af796` |
-| `brickie-core` | 3 189 440 B(~3.04 MiB) | `d5a14cf195a1a4dbb97fd12d1443974d5fb55e8171f57696b86a95f509e5f38f` |
+| `brickie` | 3 788 936 B(~3.61 MiB) | `599305bc22a274120cf459bdbaaea55ac5f6ebce2ffd6b4d91b193c3694dd142` |
+| `brickie-core` | 3 327 688 B(~3.17 MiB) | `98879382c63e99d41a22da10d54c7f8108fe3ed856a9abb40021f8b0ffd86775` |
 | `brickie-gen` | 167 384 B(~163 KiB) | `a7a433b4b88ccc0d5f2152bbeed090e818c4f0e6adfd98ef0d28e49e9469e673` |
 
 > 这一份由 **rustc 1.99.0**(工作区自带的 `.toolchain`; `make core` 自动采用)编出 ——

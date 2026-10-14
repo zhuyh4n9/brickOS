@@ -279,7 +279,7 @@ fn phase_cases(h: &mut Harness) {
     h.eq(rules::derive_phase("ability", Some("service"), true), "late", "service ⇒ late");
     h.eq(rules::derive_phase("ability", Some("fs"), true), "core", "fs ⇒ core");
     h.eq(rules::derive_phase("interface", None, true), "late", "interface ⇒ late");
-    h.eq(rules::derive_phase("app", None, true), "app", "app ⇒ app");
+    h.eq(rules::derive_phase("app", None, true), "core", "app ⇒ core (APP is a boot phase, not an init completion point)");
     h.eq(rules::derive_phase("ability", Some("service"), false), "early", "no init hook ⇒ early");
 
     h.check(rules::phase_reason("interface", None, "late").is_none(), "interface+late ok");
@@ -289,7 +289,10 @@ fn phase_cases(h: &mut Harness) {
     h.check(rules::phase_reason("platform", None, "core").is_none(), "platform+core ok");
     h.check(rules::phase_reason("platform", None, "late").is_some(), "platform+late ⇒ wrong");
     h.check(rules::phase_reason("ability", Some("scheduler"), "core").is_none(), "scheduler+core ok");
-    h.check(rules::phase_reason("app", None, "app").is_none(), "app+app ok (M0 app/hello case)");
+    h.check(
+        rules::phase_reason("app", None, "app").is_some(),
+        "app+app ⇒ wrong: APP is a boot phase, not an init completion point (ADR-0036)",
+    );
     h.check(rules::phase_reason("app", None, "core").is_none(), "app+core ok");
     h.check(rules::phase_reason("app", None, "late").is_some(), "app+late ⇒ wrong");
     h.check(rules::phase_reason("app", None, "early").is_none(), "early is always legal");
@@ -1078,7 +1081,7 @@ status = "experimental"
 fn plan_cases(h: &mut Harness) {
     // four plan classes x native x c
     let cases = [
-        ("app", "app/hsm", "app", "native/app/c/brick.toml.tmpl"),
+        ("app", "app/hsm", "core", "native/app/c/brick.toml.tmpl"),
         ("interface", "iface/posix", "late", "native/interface/c/brick.toml.tmpl"),
         ("ability", "service/crypto", "late", "native/ability/c/brick.toml.tmpl"),
         ("platform", "platform/qemu-aarch64", "core", "native/platform/c/brick.toml.tmpl"),
@@ -1230,6 +1233,7 @@ fn emit_cases(h: &mut Harness) {
 use crate::check;
 use crate::iface;
 use crate::proto::{Request, Response};
+use crate::show;
 use crate::solver;
 
 fn mk_req(command: &str, root: &Path, args: Value) -> Request {
@@ -1335,7 +1339,8 @@ fn ability_toml(name: &str, subkind: &str, phase: &str, extra: &str) -> String {
 
 /// Minimal valid app plugin text.
 fn app_toml(name: &str, extra: &str) -> String {
-    typed_toml(name, "app", "", "app", extra)
+    // `phase = "core"`: APP is a boot phase, not an init completion point (ADR-0036 §2.3).
+    typed_toml(name, "app", "", "core", extra)
 }
 
 fn platform_toml(name: &str, phase: &str, extra: &str) -> String {
@@ -1616,6 +1621,202 @@ fn product_selection_cases(h: &mut Harness) {
         tree.diags.items().iter().filter(|d| d.code.as_deref() == Some("BRV-MF-0001")).count(),
         0,
         "records: an empty `platform.brick` is not a reference error",
+    );
+}
+
+/// `show` family (ADR-0036): `show-bricks` groups the closure, `show-init-flow` prints the chain
+/// the plugin manager actually walks. The order rule is the one that matters -- the runtime breaks
+/// topological ties by **section order** (FIFO), not by name.
+fn show_cases(h: &mut Harness) {
+    // `runtime_order` is a faithful port of plugin_manager.c's FIFO Kahn sort: with two
+    // independent nodes, section order decides; a name-sorted queue would swap them.
+    let section = vec!["b/x".to_string(), "a/y".to_string()];
+    let (order, cycle) = show::runtime_order(&section, &[]);
+    h.eq(order, section, "show: independent nodes keep section order (FIFO, not name order)");
+    h.check(cycle.is_none(), "show: an edge-free graph has no cycle");
+
+    // Provider first; ties resolved by section order rather than by name (a/y < b/x by name).
+    let section = vec!["b/x".to_string(), "a/y".to_string(), "c/z".to_string()];
+    let edges = vec![("b/x".to_string(), "c/z".to_string())];
+    let (order, _) = show::runtime_order(&section, &edges);
+    h.eq(
+        order,
+        vec!["a/y".to_string(), "c/z".to_string(), "b/x".to_string()],
+        "show: a provider precedes its consumer, ties keep section order",
+    );
+
+    // A cycle leaves the unschedulable nodes out of the order (the runtime panics instead).
+    let section = vec!["a/x".to_string(), "b/y".to_string()];
+    let edges = vec![
+        ("a/x".to_string(), "b/y".to_string()),
+        ("b/y".to_string(), "a/x".to_string()),
+    ];
+    let (order, cycle) = show::runtime_order(&section, &edges);
+    h.check(order.is_empty(), "show: a cycle yields no order");
+    h.eq(
+        cycle,
+        Some(vec!["a/x".to_string(), "b/y".to_string()]),
+        "show: a cycle reports the unschedulable nodes",
+    );
+
+    // The fixture: app -> iface (runtime) and crypto -> coop -> platform (init).
+    let t = tmpdir("show-flow");
+    write(&t, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&t, "platform/qemu-aarch64/brick.toml", &platform_toml("platform/qemu-aarch64", "core", ""));
+    write(
+        &t,
+        "app/hsm/brick.toml",
+        &app_toml(
+            "app/hsm",
+            "\n[[dep]]\nname = \"iface/hsm-api\"\nkind = \"runtime\"\n",
+        ),
+    );
+    write(
+        &t,
+        "iface/hsm-api/brick.toml",
+        &typed_toml(
+            "iface/hsm-api",
+            "interface",
+            "",
+            "late",
+            "\n[[dep]]\nname = \"service/crypto\"\nkind = \"runtime\"\n",
+        ),
+    );
+    write(
+        &t,
+        "service/crypto/brick.toml",
+        &ability_toml(
+            "service/crypto",
+            "service",
+            "late",
+            "\n[[dep]]\nname = \"sched/coop\"\nkind = \"init\"\n",
+        ),
+    );
+    write(
+        &t,
+        "sched/coop/brick.toml",
+        &ability_toml(
+            "sched/coop",
+            "scheduler",
+            "core",
+            "\n[[dep]]\nname = \"platform/qemu-aarch64\"\nkind = \"init\"\n",
+        ),
+    );
+    write(
+        &t,
+        "product.toml",
+        "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/hsm\", requires = {} }\n\
+         core = { brick = \"core/c_core\", requires = {} }\n",
+    );
+    let resp = show::cmd_init_flow(&mk_req("show-init-flow", &t, json!({})));
+    h.eq(resp.exit_code, 0, "show: a consistent tree prints the flow with exit code 0");
+    let steps = resp.data["steps"].as_array().cloned().unwrap_or_default();
+    let seq: Vec<(String, String)> = steps
+        .iter()
+        .map(|s| {
+            (
+                s["phase"].as_str().unwrap_or("").to_string(),
+                s["plugin"].as_str().unwrap_or("").to_string(),
+            )
+        })
+        .collect();
+    h.eq(
+        seq,
+        vec![
+            ("early", "platform/qemu-aarch64"),
+            ("early", "app/hsm"),
+            ("early", "iface/hsm-api"),
+            ("early", "sched/coop"),
+            ("early", "service/crypto"),
+            ("core", "app/hsm"),
+            ("core", "platform/qemu-aarch64"),
+            ("core", "sched/coop"),
+            ("late", "iface/hsm-api"),
+            ("late", "service/crypto"),
+            ("irq", ""),
+            ("start", "iface/hsm-api"),
+            ("start", "platform/qemu-aarch64"),
+            ("start", "sched/coop"),
+            ("start", "service/crypto"),
+            ("start", "app/hsm"),
+        ]
+        .iter()
+        .map(|(p, n)| (p.to_string(), n.to_string()))
+        .collect::<Vec<_>>(),
+        "show: the flow is platform-first EARLY, category-decided CORE/LATE, IRQ, then START with APP last",
+    );
+    h.check(
+        resp.data["counts"]["irq"].as_u64() == Some(1),
+        "show: exactly one IRQ-enable step",
+    );
+    h.check(
+        resp.data["counts"]["selftest"].as_u64() == Some(0),
+        "show: no plugin declares [selftest] ⇒ an empty selftest pass",
+    );
+    h.check(
+        !has_code(&resp, "BRV-MF-0001"),
+        "show: the fixture's declared phases all match the phases they run in",
+    );
+
+    // The same tree with the switch on but a `[selftest]` declared: the pass gains the plugin.
+    write(&t, "sched/coop/brick.toml", &ability_toml(
+        "sched/coop",
+        "scheduler",
+        "core",
+        "\n[[dep]]\nname = \"platform/qemu-aarch64\"\nkind = \"init\"\n[selftest]\ncases = 1\n",
+    ));
+    let resp = show::cmd_init_flow(&mk_req("show-init-flow", &t, json!({})));
+    let last = resp.data["steps"].as_array().and_then(|a| a.last()).cloned().unwrap_or(json!({}));
+    h.eq(last["phase"].as_str().unwrap_or(""), "selftest", "show: the selftest pass is the last phase");
+    h.eq(last["plugin"].as_str().unwrap_or(""), "sched/coop", "show: it names the declaring plugin");
+
+    // `show-bricks`: roots vs closure members, and the budget the closure spends.
+    let resp = show::cmd_bricks(&mk_req("show-bricks", &t, json!({})));
+    h.eq(resp.exit_code, 0, "show: bricks prints with exit code 0");
+    let bricks = resp.data["bricks"].as_array().cloned().unwrap_or_default();
+    h.eq(bricks.len(), 6, "show: bricks lists every plugin in the closure");
+    let origin = |name: &str| {
+        bricks
+            .iter()
+            .find(|b| b["name"] == name)
+            .and_then(|b| b["origin"].as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    h.eq(origin("app/hsm"), "root".to_string(), "show: the app record makes app/hsm a root");
+    h.eq(origin("core/c_core"), "root".to_string(), "show: the core record makes core/c_core a root");
+    h.eq(
+        origin("platform/qemu-aarch64"),
+        "dep".to_string(),
+        "show: a brick reached only through init edges is a closure member, not a root",
+    );
+    h.eq(resp.data["totals"]["roots"].as_u64(), Some(2), "show: two roots are counted");
+    h.eq(resp.data["totals"]["plugins"].as_u64(), Some(6), "show: six bricks are counted");
+
+    // A divergence between the declaration and the phase the init runs in is an error, not a
+    // silent reordering: the printed chain would otherwise be a guess.
+    let bad = tmpdir("show-flow-bad");
+    write(&bad, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
+    write(&bad, "app/hsm/brick.toml", &typed_toml("app/hsm", "app", "", "core", ""));
+    // Bypass the model's phase gate to build the state the flow guard must still catch.
+    let mut tree = model::load_tree(&bad);
+    if let Some(prod) = tree.product.as_mut() {
+        prod.app = "app/hsm".to_string();
+    }
+    if let Some(p) = tree.plugins.iter_mut().find(|p| p.name == "app/hsm") {
+        p.phase = "app".to_string();
+    }
+    let sol = solver::solve(&tree, "dev", false);
+    let flow = show::boot_flow(&tree, &sol.closure, true);
+    h.eq(
+        flow.phase_divergence.len(),
+        1,
+        "show: a declared phase that disagrees with the runtime phase is detected",
+    );
+    h.eq(
+        flow.phase_divergence[0].2,
+        "core",
+        "show: the guard reports the phase the init actually runs in",
     );
 }
 
@@ -2494,6 +2695,7 @@ pub fn run() -> i32 {
     cycle_cases(&mut h);
     core_type_cases(&mut h);
     product_selection_cases(&mut h);
+    show_cases(&mut h);
     phase_check_cases(&mut h);
     version_solver_cases(&mut h);
     iface_crossfile_cases(&mut h);
@@ -2577,7 +2779,7 @@ fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
         root,
         "app/m/brick.toml",
         "schema = 1\n[plugin]\nname = \"app/m\"\nplugin_type = \"app\"\napi_type = \"native\"\n\
-         lang = \"c\"\nphase = \"app\"\nversion = \"1.0.0.0\"\n\
+         lang = \"c\"\nphase = \"core\"\nversion = \"1.0.0.0\"\n\
          [build]\nsources = [\"src/*.c\"]\nincludes = [\"include\"]\n",
     );
 }
@@ -2750,7 +2952,7 @@ fn build_cases(h: &mut Harness) {
         &root5,
         "app/m/brick.toml",
         "schema = 1\n[plugin]\nname = \"app/m\"\nplugin_type = \"app\"\napi_type = \"native\"\n\
-         lang = \"c\"\nphase = \"app\"\nversion = \"1.0.0.0\"\n\
+         lang = \"c\"\nphase = \"core\"\nversion = \"1.0.0.0\"\n\
          [build]\nsources = [\"src/nope.c\"]\n",
     );
     let (d5, _) = build::selftest_plan(&root5, &mk_req_ctx("build", &root5, json!({}), json!({"path": ""})));

@@ -18,7 +18,7 @@
         "api_type": "native",
         "compat_gen": 0,
         "name": "app/hsm",
-        "phase": "app",
+        "phase": "core",
         "plugin_type": "app",
         "ram_kib": 0,
         "selected": true,

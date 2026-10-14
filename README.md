@@ -124,7 +124,7 @@ brickOS/
 ├── README.md                    本文件 · WORKAROUNDS.md WORKAROUND 登记表(欠债清单)
 ├── product.toml                 产品声明: 根记录(app/platform/core/[[product.ability]]) / 预算 / 时钟节拍(HZ) / 构建策略
 ├── mk/host.mk                   宿主三元组 + 宿主产物目录(build/host/… 与 prebuilts/…)
-├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`** / **0034 选择面收敛为闭包根(`[product].platform`/`ability`)** / **0035 根记录形态 `{ brick, requires }` + `[[product.ability]]`(硬切换, BRV-TAX-0024)**
+├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`** / **0034 选择面收敛为闭包根(`[product].platform`/`ability`)** / **0035 根记录形态 `{ brick, requires }` + `[[product.ability]]`(硬切换, BRV-TAX-0024)** / **0036 `show bricks` + `show brick-init-flow`(运行期启动顺序); `phase = "app"` 收紧为非法**
 ├── prebuilts/toolchain/         外部工具链**下载缓存**(派生, 不进库; fetch-prebuilt.py)
 ├── prebuilts/                   宿主工具**自举种子**(进库; 见下, 详见其 README): seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}
 ├── tools/                       host-detect.sh 宿主 arch/os 探测(布局映射的唯一真值) · check-workarounds.sh 源码标记 ↔ 登记表 一致性检查 · check-build.sh 构建接线门禁(宿主产物出树 / 自举种子进库)
@@ -289,6 +289,8 @@ make all                # 编工具 → brickie build(镜像 + 构建后门禁)
 build/host/<triple>/bin/brickie build [--backend make|ninja] [--dry-run] [-j N]
 build/host/<triple>/bin/brickie test [<门禁名>|--list]
 build/host/<triple>/bin/brickie check --profile release
+build/host/<triple>/bin/brickie show bricks              # 闭包阅读视图(来历/类型/相/预算)
+build/host/<triple>/bin/brickie show brick-init-flow     # 运行期启动顺序(逐钩子)
 make check-workarounds  # WORKAROUND 登记一致性
 make check-build        # 构建接线门禁: 缺省目标=工具/无字面源码/委派/零交叉依赖/出树/种子
 make tools-prebuilt     # 发布三件自举种子到 prebuilts/seed/brickie/<arch>/<os>/bin/
