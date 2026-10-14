@@ -39,7 +39,7 @@ APP 只用 POSIX 面(线程/同步/延时: `pthread_*` / `sem_*` / `usleep`), �
 ## 目录
 ```
 brick.toml          人写   ← 插件级唯一真值
-src/main.c           人写   ← 三个钩子(early_init/init/start) + APP 线程体
+src/main.c           人写   ← 两个钩子(init/start; APP 无 early_init, ADR-0037) + APP 线程体
 tests/smoke.toml     人写   ← 用例声明面(与镜像里 [PLGCONF]/[SVCCONF] 的 id 一一对应)
 ```
 

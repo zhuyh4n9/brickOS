@@ -152,15 +152,18 @@ pub fn is_service_like(plugin_type: &str, subkind: Option<&str>) -> bool {
 }
 
 /// Derive `[plugin].phase` = the phase the `init` hook actually runs in, decided by the
-/// **category** (never by the declaration): service-like ⇒ `late`, everything else -- platform,
-/// ability, **app** -- ⇒ `core`; no `init` ⇒ `early`. Mirrors the runtime's `init_phase_of()`
-/// (`core/c_core/src/plugin/plugin_mgr.c`), which `show brick-init-flow` prints.
+/// **category** (never by the declaration): service-like ⇒ `late`, **app ⇒ `app`** (last of all
+/// init, ADR-0037), everything else -- platform, ability -- ⇒ `core`; no `init` ⇒ `early`.
+/// Mirrors the runtime's `init_phase_of()` (`core/c_core/src/plugin/plugin_mgr.c`), which
+/// `show brick-init-flow` prints.
 pub fn derive_phase(plugin_type: &str, subkind: Option<&str>, has_init: bool) -> &'static str {
     if !has_init {
         return "early";
     }
     if is_service_like(plugin_type, subkind) {
         "late"
+    } else if plugin_type == "app" {
+        "app"
     } else {
         "core"
     }
@@ -168,9 +171,8 @@ pub fn derive_phase(plugin_type: &str, subkind: Option<&str>, has_init: bool) ->
 
 /// Whether `phase` is legal for `plugin_type`/`subkind`; `None` = legal. The declaration is the
 /// `init` **completion point**, which the category decides: interface or ability.service ⇒ {early,
-/// late}; platform / other ability subkinds / **app** ⇒ {early, core}. `early` is always legal
-/// (it means "no `init` hook"). APP is a **boot** phase (where `start` runs, APP last), not a
-/// declarable completion point -- the runtime has no APP-phase `init` (§7.2).
+/// late}; platform / other ability subkinds ⇒ {early, core}; **app ⇒ {early, app}** (its init runs
+/// last, in the APP phase -- ADR-0037). `early` is always legal (it means "no `init` hook").
 pub fn phase_reason(plugin_type: &str, subkind: Option<&str>, phase: &str) -> Option<String> {
     if !in_list(PHASES, phase) {
         return Some(format!(
@@ -190,6 +192,8 @@ pub fn phase_reason(plugin_type: &str, subkind: Option<&str>, phase: &str) -> Op
     }
     let allowed: &[&str] = if is_service_like(plugin_type, subkind) {
         &["late"]
+    } else if plugin_type == "app" {
+        &["app"]
     } else {
         &["core"]
     };

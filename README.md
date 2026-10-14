@@ -100,7 +100,7 @@ v0.1.0 交付**声明期**(插件发现/校验/描述符生成 + `brickie` 组�
 
 | 不做 | 理由 |
 |---|---|
-| ~~**插件化(描述符 / manifest / 组合器)**~~ | **已交付**(v0.2.0): 声明期 + 编译编排由 brickie 接管(插件发现/校验/描述符生成/接口发布/版本治理/`brickie build`, 见 [`tools/brickie/README.md`](tools/brickie/README.md)); **运行期**的插件管理器 + `.br_plugins` 段 + 四相驱动由 ADR-0005 落地, 启动链入口由 ADR-0008 收敛为 `br_core_main`, 自检由 ADR-0010 统一驱动。此行的历史留档见 §5 的"已注销" |
+| ~~**插件化(描述符 / manifest / 组合器)**~~ | **已交付**(v0.2.0): 声明期 + 编译编排由 brickie 接管(插件发现/校验/描述符生成/接口发布/版本治理/`brickie build`, 见 [`tools/brickie/README.md`](tools/brickie/README.md)); **运行期**的插件管理器 + `.br_plugins` 段 + 四相驱动由 ADR-0005 落地(APP 无 `early_init`, 且它的 `init`/`start` 都在最后, 见 ADR-0037), 启动链入口由 ADR-0008 收敛为 `br_core_main`, 自检由 ADR-0010 统一驱动。此行的历史留档见 §5 的"已注销" |
 | ~~调度器 / 线程 / `br_sched_ops`~~ | **已交付**: core 的调度框架(ADR-0006)+ `sched/coop`; ADR-0011 追加 `sched/rr`(时间片抢占)与 **IRQ 出口的抢占换栈**。镜像选 `sched/rr`(一次只能装一个调度器: `br_sched_register` 恰一次) |
 | **中断的 Stage 2** —— **分发到 bh 已交付**, 其余仍未做 | 设计 `3-02 §1.1`: Stage 1(无调度器世界)已落地; **`BR_IRQ_F_DISPATCH_BH` 与 SLOW 级联域已在 ADR-0011 落地**(ISR 推迟到下半部, 处理期间 mask 同线)。**仍未做**: `BR_IRQ_F_DISPATCH_THREAD`(线程化 IRQ)、§12.3 动态升级、§13 亲和性/负载均衡/IPI(v2b)、`CAP_NEST` 嵌套、PM save/restore |
 | `br_fault_handler_register`(fault handler 链) | 设计 `3-02 §10.5`: 分槽/分类/extable/panic 属 Stage 1(已做), **注册 API 归 v2** |
@@ -124,7 +124,7 @@ brickOS/
 ├── README.md                    本文件 · WORKAROUNDS.md WORKAROUND 登记表(欠债清单)
 ├── product.toml                 产品声明: 根记录(app/platform/core/[[product.ability]]) / 预算 / 时钟节拍(HZ) / 构建策略
 ├── mk/host.mk                   宿主三元组 + 宿主产物目录(build/host/… 与 prebuilts/…)
-├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`** / **0034 选择面收敛为闭包根(`[product].platform`/`ability`)** / **0035 根记录形态 `{ brick, requires }` + `[[product.ability]]`(硬切换, BRV-TAX-0024)** / **0036 `show bricks` + `show brick-init-flow`(运行期启动顺序); `phase = "app"` 收紧为非法**
+├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`** / **0034 选择面收敛为闭包根(`[product].platform`/`ability`)** / **0035 根记录形态 `{ brick, requires }` + `[[product.ability]]`(硬切换, BRV-TAX-0024)** / **0036 `show bricks` + `show brick-init-flow`(运行期启动顺序); `phase = "app"` 收紧为非法** / **0037 APP 无 `early_init` 且其 init 最后(APP 相, `phase = "app"` 合法; TC-PLUG-004)**
 ├── prebuilts/toolchain/         外部工具链**下载缓存**(派生, 不进库; fetch-prebuilt.py)
 ├── prebuilts/                   宿主工具**自举种子**(进库; 见下, 详见其 README): seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}
 ├── tools/                       host-detect.sh 宿主 arch/os 探测(布局映射的唯一真值) · check-workarounds.sh 源码标记 ↔ 登记表 一致性检查 · check-build.sh 构建接线门禁(宿主产物出树 / 自举种子进库)

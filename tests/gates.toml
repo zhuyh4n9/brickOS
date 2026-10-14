@@ -426,9 +426,9 @@ require_tags = [
 ]
 
 # plugin-test: end-to-end gate for the plugin manager + service registry (on QEMU).
-# Criteria = the two summary families `[PLGCONF]` (section count/topological order/phase monotonicity/cycle
-# negative) and `[SVCCONF]` (registry) all green, plus non-zero `irq_ticks` (proves the timer heartbeat
-# after the START phase really runs — i.e. "the plugin manager did drive platform's start").
+# Criteria = the two summary families `[PLGCONF]` (section count/topological order/phase monotonicity/APP
+# ordering/cycle negative) and `[SVCCONF]` (registry) all green, plus non-zero `irq_ticks` (proves the timer
+# heartbeat after the START phase really runs — i.e. "the plugin manager did drive platform's start").
 # Note: phase names and tag regexes stay inside this file's regex subset (no groups/alternation/anchors);
 # `[PLGCONF] FAIL` and `[PANIC]` are forbidden patterns — a first-failure panic prints [PANIC], matching
 [[gate]]
@@ -455,7 +455,7 @@ forbid    = [
   "\\[PANIC\\]",
 ]
 require_tags = [
-  "TC-PLUG-001", "TC-PLUG-002", "TC-PLUG-003", "TC-PLUG-002b",
+  "TC-PLUG-001", "TC-PLUG-002", "TC-PLUG-003", "TC-PLUG-004", "TC-PLUG-002b",
   "TC-SVC-001", "TC-SVC-002", "TC-SVC-003",
   # File-table cases named individually (trimming one is red too — that is the split from smoke).
   "TC-FT-001", "TC-FT-002", "TC-FT-003", "TC-FT-004", "TC-FT-005", "TC-FT-006",

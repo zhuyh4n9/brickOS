@@ -5,7 +5,7 @@ name        = "app/hsm"
 plugin_type = "app"
 api_type    = "native"
 lang        = "c"
-phase       = "core"
+phase       = "app"
 version     = "0.1.0.0"
 
 [compat]

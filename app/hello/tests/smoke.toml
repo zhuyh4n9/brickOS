@@ -30,13 +30,25 @@ platform = ["qemu-aarch64"]
 
 [[case]]
 id       = "TC-PLUG-003"
-pre      = "同上; 各插件 brick.toml 的 phase 与类别一致(非 Service/Interface ⇒ core, Service/Interface ⇒ late)"
+pre      = "同上; 各插件 brick.toml 的 phase 与类别一致(APP ⇒ app, Service/Interface ⇒ late, 其余 ⇒ core)"
 steps    = [
   "逐条检查 init 边: rank(提供方完成点) <= rank(消费方完成点)",
   "检查 EARLY 相第一步是否为 platform 插件的 early_init",
   "检查 APP 的 start 是否在所有非 APP 的 start 之后",
 ]
 expect   = "相位单调成立; early 相第一步是 platform; APP 最后(非 APP 的 start 全先跑完); 且自检跑在**全部 start 之后**(ADR-0010 换过判据, 见 core/c_core/selftest/plugin_selftest.c)"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-PLUG-004"
+pre      = "同上; APP 是唯一的 app 插件, 且其描述符不带 early_init(ADR-0037)"
+steps    = [
+  "在 .br_plugins 段上核对: 每个 plugin_type=app 的描述符 early_init 均为 NO_HOOK",
+  "核对 init_phase_of(APP) == APP 相(在 CORE/LATE 之后、开中断之前)",
+  "核对最后一次 init 的属主就是 APP(即没有任何插件的 init 晚于它)",
+]
+expect   = "APP 无 early_init(注册靠段扫描); APP 的 init 是全部 init 的最后一个; 若该镜像的 APP 声明 phase=\"early\"(无 init 钩子), 则该规则无主体并如实上报"
 sched    = ["coop"]
 platform = ["qemu-aarch64"]
 

@@ -1,5 +1,14 @@
 # 0036 — `show` 命令族: `show bricks` + `show brick-init-flow`(运行期启动顺序), 且 `phase = "app"` 收紧为非法
 
+> ★ **§2.3 被 [ADR-0037](0037-app-ordering.md) 取代**: 本 ADR 把 `phase = "app"` 判为非法, 理由是
+> "APP 是启动相而非 init 完成点, 运行期 `init_phase_of()` 只返 EARLY/CORE/LATE"。ADR-0037 让
+> `init_phase_of()` **真的**多出 APP 相(APP 的 `init` 必须晚于全部其它 init), 于是那个理由消失,
+> `phase = "app"` 重新成为 APP 的唯一正确取值(`core` 反而非法)。
+> 本 ADR 的**其余部分仍然有效**: `show` 命令族、两处"顺序"的区分(§2.1)、`core` 不在链里(§2.2)、
+> `show bricks` 是阅读视图(§2.4)、以及"声明相 vs 运行相"的守卫(它现在是 ADR-0037 D-3 的守卫)。
+> 本刀同时把 `derive_phase`/`phase_reason`/8 处 `phase` 声明**改回** `app`, 并删掉 APP 的
+> `early_init`(ADR-0037 D-1)。
+
 > 状态: **已落地**(工具侧新模块 `rust/src/show.rs`、`main.rs` 派发、`rules.rs` 相位口径收紧、
 > `python/brickie/cli.py` 的 `show` 组、`present.py` 两个渲染器、`schema/` 无改动;
 > 声明面 `app/hello/brick.toml` 与 7 份 `tests/fx/**/app/*/brick.toml` 的 `phase` 修正)。
@@ -61,6 +70,9 @@ dep closure topo_order  0         1          2              11
 
 ### 2.3 `phase = "app"` 收紧为非法(设计 §7.2 的原文口径)
 
+> ⚠ **本节已被 ADR-0037 取代**(见文首注): APP 现在**是** `init` 的完成点(APP 相), 所以
+> `phase = "app"` 重新合法, 而 `core` 变成非法。下文保留当年的推理与实测。
+
 `phase` 声明的是**第 ② 个完成点**, 而它由**类别**决定: 非 Service/Interface ⇒ CORE,
 Service/Interface ⇒ LATE。APP 是**启动相**(`start` 在那里跑, 且 APP 最后),
 **不是** `init` 的完成点 —— 运行期 `init_phase_of()` 只会返回 EARLY/CORE/LATE。
@@ -93,13 +105,14 @@ Service/Interface ⇒ LATE。APP 是**启动相**(`start` 在那里跑, 且 APP 
 
 ## 4. 判据(本刀怎么算绿)
 
-最硬的一条是"与真机一致", 做法是把本命令的 88 个步骤与一次真实 `smoke` 运行的日志逐事件比对
+最硬的一条是"与真机一致", 做法是把本命令的步骤与一次真实 `smoke` 运行的日志逐事件比对
 (阶段名 + 插件名, 含 `irq=on` 与 `[SELFTEST]` 行):
 
 ```bash
 brickie show brick-init-flow --json | jq -r '.data.steps[] | "\(.phase) \(.plugin)"' > /tmp/flow.txt
 grep -oE '\[PLUGIN\] (phase=[a-z]+ name=[^ ]+|irq=on)|\[SELFTEST\] [^ ]+ rc=' build/logs/smoke.log  # 逐条对齐
-# 实测 88/88 相同(23 early + 15 core + 8 late + 1 irq + 23 start + 18 selftest)
+# 本刀实测 88/88 相同(23 early + 15 core + 8 late + 1 irq + 23 start + 18 selftest);
+# ADR-0037 之后该数是 87/87(App 离开 EARLY/CORE, 多出一条 APP 相的 init)—— 比对方法不变
 ```
 
 ```bash

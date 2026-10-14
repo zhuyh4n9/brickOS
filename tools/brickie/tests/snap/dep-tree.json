@@ -13,7 +13,7 @@
           }
         ],
         "file": "app/hsm/brick.toml",
-        "phase": "core"
+        "phase": "app"
       },
       "core/c_core": {
         "deps": [],

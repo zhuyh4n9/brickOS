@@ -7,7 +7,7 @@
         "name": "app/hsm",
         "namespace": "app",
         "origin": "root",
-        "phase": "core",
+        "phase": "app",
         "plugin_type": "app",
         "ram_kib": 0,
         "root_alias": "",

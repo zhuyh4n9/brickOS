@@ -12,7 +12,9 @@
  *   3. `deps` = one entry per `[[dep]]` (all kinds are emitted, not only init — a declaration-surface product must be faithful),
  *      terminated by `.name = BR_NULL`; plugin_manager only builds edges for `kind == BR_DEP_INIT`;
  *   4. Hook emission rules: `early_init` / `start` for **all plugins** (`1-01` §6.2 table: these two phases
- *      cover every plugin); `init` is emitted only when `phase != "early"`, otherwise `BR_PLUGIN_NO_HOOK`;
+ *      cover every plugin), except that the **APP emits no `early_init`** (ADR-0037: it registers through the
+ *      section scan, so the hook has nothing to do); `init` is emitted only when `phase != "early"`, otherwise
+ *      `BR_PLUGIN_NO_HOOK`;
  *   5. `descriptor_include`: use the plugin's `include/` header when there is **exactly one** public header
  *      (declaration-surface anchor), otherwise fall back to the meta-contract header (multi-header plugins have no machine-decidable "main header").
  *   6. `selftest`: emit the hook only when the plugin declares `[selftest]` **and** `product.toml [selftest]` allows it;

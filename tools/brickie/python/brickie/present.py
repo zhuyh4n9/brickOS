@@ -310,7 +310,7 @@ def _render_show_init_flow(data: dict, extra: dict) -> list[str]:
         for index, s in enumerate(steps)
     ]
     lines.extend(_table(["#", "phase", "hook", "plugin", "note"], rows))
-    keys = ("early", "core", "late", "irq", "start", "selftest")
+    keys = ("early", "core", "late", "app", "irq", "start", "selftest")
     parts = [f"{k} {counts.get(k, 0)}" for k in keys if k in counts]
     if parts:
         lines.append("per phase: " + ", ".join(parts))

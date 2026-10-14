@@ -88,8 +88,8 @@ typedef struct br_plugin {
     const char *abi_id;
     const char *const *api_syms;      /* only Interface plugins own a symbol family (1-01 §7.3) */
     br_res_t    res;
-    int (*early_init)(void);          /* nullable (use BR_PLUGIN_NO_HOOK) */
-    int (*init)(void);
+    int (*early_init)(void);          /* nullable (use BR_PLUGIN_NO_HOOK); **always** NO_HOOK for APP (ADR-0037) */
+    int (*init)(void);                /* runs in the phase its category decides; APP => the APP phase, last */
     int (*start)(void);
     /*
      * Selftest hook, the only entry to interface tests (nullable). Returns the number of failing
@@ -158,8 +158,10 @@ void br_plugin_manager_platform_init(void);
 
 /*
  * 4 Build init edges -> Kahn topological sort (cycle => panic) -> EARLY (early_init of the rest)
- *   -> CORE (category-decided init) -> LATE -> global IRQs on -> START (topological, APP last)
- *   -> SELFTEST pass -> br_sched_run().
+ *   -> CORE (category-decided init) -> LATE -> APP (the APP's init, last of all)
+ *   -> global IRQs on -> START (topological, APP last) -> SELFTEST pass -> br_sched_run().
+ * The APP sits at the tail of both the init and the start sequence, and emits no `early_init`
+ * (ADR-0037): it is the payload, so everything it may consume is up before it acts.
  * Precondition: 1 and 2 have run. Does not return.
  */
 BR_NORETURN void br_plugin_manager_run(void);

@@ -33,6 +33,11 @@ extern const char *s_first_early_name;   /* whose early_init really ran first */
 extern br_bool s_app_start_last_ok;      /* before the first APP start: all non-APP had run */
 extern br_bool s_in_app_start;           /* currently inside an APP's start */
 
+/* ---- APP ordering traces (criteria of TC-PLUG-004, ADR-0037) ---- */
+extern br_u32 s_app_init_index;          /* section index of the APP; (br_u32)-1 = no APP in the image */
+extern br_bool s_app_early_init_ok;      /* every APP descriptor has early_init == NO_HOOK */
+extern const char *s_last_init_name;     /* whose init ran most recently (APP last, when it has one) */
+
 /* ---- algorithms (run by the self-test, so not static) ---- */
 
 /* Which phase `init` falls in -- decided by category. Self-test rechecks phase monotonicity. */

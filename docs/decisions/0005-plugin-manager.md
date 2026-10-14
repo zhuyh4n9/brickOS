@@ -1,5 +1,12 @@
 # 0005 — 插件管理器(plugin_manager)+ 服务注册表: 段机制、相位驱动、生成物契约
 
+> ★ **部分被 [ADR-0037](0037-app-ordering.md) 取代**: 本 ADR 的 **§2.4 规则 6** 与 **§3 裁定 13**
+> 里 "`early_init` 对**全部插件**发射" 这半句不再成立 —— APP 是例外(它靠段扫描注册, 没有
+> `early_init`; 运行期还会重证这一点, TC-PLUG-004)。同时 **§2.2** 描述的启动链多了一相:
+> `EARLY(platform 第一, 无 APP) → CORE → LATE → APP(APP 的 init 最后) → 开中断 → START`,
+> 且 `phase_key`/`plugin_fail` 因为 APP 相的出现改成带相名字符串。本 ADR 其余部分
+> (段与布局、拓扑排序与环、首败即停 G6、日志相名小写)不变。
+
 > 状态: **已落地**(v0.2.0, QEMU virt aarch64; `brickie test plugin-test` 全绿)。
 > 设计出处: `1-01` §9(启动序列)/§6.1(描述符)/§6.2(生命周期四相与"两个完成点")/
 > §6.5(init-DAG 与环)/§13.3(段收集)、`3-05`(plugin_manager)、`3-06`(服务管理)、
@@ -47,17 +54,19 @@ v0.1 的启动链是**替身链**: `start.S` 直调 `br_irq_cpu_init` → `br_pl
   `plugin_type == BR_PLUGIN_TYPE_PLATFORM` 的那一条(显式), 不靠拓扑序的巧合
   (此刻 console/PIC/页表都还没起来, "谁排第一"与"能不能观测"无关)。之后其余插件的
   `early_init` 按拓扑序。
-* **CORE / LATE**: `init` 落在哪一相由**类别**决定(非 Service/Interface ⇒ CORE;
-  Interface 或 `ability.subkind == service` ⇒ LATE)。没有 `init` 钩子 ⇒ 完成点 = EARLY
-  (设计 §6.2 的"② 与 ① 重合")。
-* **全局开中断**: 在 LATE 之后、START 之前(`br_irq_cpu_enable()`, core 的 API)。
+* **CORE / LATE / APP**: `init` 落在哪一相由**类别**决定(其余 ⇒ CORE; Interface 或
+  `ability.subkind == service` ⇒ LATE; **APP ⇒ APP, 最后**, ADR-0037)。没有 `init` 钩子 ⇒
+  完成点 = EARLY(设计 §6.2 的"② 与 ① 重合")。
+* **全局开中断**: 在**全部 init 返回之后**、START 之前(`br_irq_cpu_enable()`, core 的 API)——
+  APP 的 init 也是 init, 所以它同样在这之前。
 * **START**: 复用 **init 拓扑序**, 但 **APP 最后是显式规则**(两趟: 先全部非 APP, 再
   APP)。为什么必须显式: 实测拓扑序里 `app/hello` 排**第一**(init 边为零时按段序),
   靠"拓扑序的巧合"会把 APP 的 MainLoop 放到 platform 的 timer bring-up 之前 —— 那正是
   F3 的 20 ms 超时用例会红的情形。
-* 自检(打在 `[PLGCONF] PASS TC-PLUG-003` 下): ① EARLY 第一个真的跑起来的
+* 自检(打在 `[PLGCONF] PASS TC-PLUG-003` / `TC-PLUG-004` 下): ① EARLY 第一个真的跑起来的
   `early_init` 属于 platform; ② 进第一个 APP 的 `start` 之前, 非 APP 的 `start` 已全
-  跑完; ③ `br_plugin_conformance()` 必须正跑在 APP 的 `start` 里(它就是这么被调的)。
+  跑完; ③ `br_plugin_conformance()` 必须正跑在 APP 的 `start` 里(它就是这么被调的);
+  ④ (TC-PLUG-004, ADR-0037)APP 无 `early_init`, 且它的 `init` 是全部 init 的最后一个。
 
 ### 2.3 拓扑与环: Kahn + 完整环路径 + 负例自证
 
@@ -80,7 +89,7 @@ v0.1 的启动链是**替身链**: `start.S` 直调 `br_irq_cpu_init` → `br_pl
 | 3 | 钩子原型**生成物自证**(`int <prefix>early_init(void);` …) | 钩子名是**生成器**按 `symbol_prefix` 推导的, 插件对外头只声明它自己的 API 面。没有这一条, `dump_init` 会因隐式声明在 `-Werror` 下编不过 |
 | 4 | `plugin_type`/`subkind`/`sched_class` 由 manifest 字符串映射为 `BR_*` 常量; `phase_self` 原样带出(仅呈现) | `1-01` §6.1 的结构里**没有** `plugin_type`/`subkind`/`phase_self`(见裁定 1) |
 | 5 | `deps` = `[[dep]]` **逐条**(全部 kind), 以 `.name = BR_NULL` 结尾 | 声明面产物要忠实; manager 只筛 `BR_DEP_INIT`。`br_dep_t.phase`: init 边用断言, 其余用 `BR_PHASE_NONE` |
-| 6 | 钩子发射规则: `early_init`/`start` 对**全部插件**; `init` 仅在 `phase != "early"` 时发射, 否则 `BR_PLUGIN_NO_HOOK` | `1-01` §6.2 的表: EARLY 与"开中断后的 start"两相覆盖全部插件; "无 init 钩子 ⇔ phase = early"(`rules::derive_phase`) |
+| 6 | 钩子发射规则: `early_init`/`start` 对**全部插件**(**APP 例外: 不发 `early_init`**, ADR-0037); `init` 仅在 `phase != "early"` 时发射, 否则 `BR_PLUGIN_NO_HOOK` | `1-01` §6.2 的表: EARLY 与"开中断后的 start"两相覆盖全部插件 —— APP 的注册由 `.br_plugins` 段扫描承担, 故 EARLY 半条对它无意义; "无 init 钩子 ⇔ phase = early"(`rules::derive_phase`) |
 | 7 | `ver` 四段用 manifest 的真值(不再硬编码 `{0,1,0,0}`); `.res` 用 `[[res]]` 求和; `.abi_id`/`.api_rev` 带出 | v0.1 模板的三处"骨架初值"是欠账, 现在与 manifest 同源 |
 | 8 | 每个生成物给一条**同值的弱定义** `br_plugin_gen_total` | 见 2.8 的口径与局限 |
 | 9 | 不再本地 `#define BR_PLUGIN_SECTION`(用冻结头里的), `aligned(4)` → `aligned(8)` | 见裁定 3 |
@@ -224,7 +233,9 @@ dump 会排到四个服务**之前**(而它要转调它们的 selftest)⇒ "编�
     (a) 生成物按 manifest 的某个"钩子清单"字段决定发不发; (b) 按**相**推导 ——
     `1-01` §6.2 的表把 `early_init` 与"开中断后的 `start`"都写成**全部插件**的相,
     只有 `init` 是相位相关的。**取 (b)**: `early_init`/`start` 对全部插件发射(于是
-    各插件必须给这两个钩子一个定义, 无事可做就是 `return 0`); `init` 在
+    各插件必须给这两个钩子一个定义, 无事可做就是 `return 0`)—— **APP 的 `early_init`
+    后来被 ADR-0037 取消**(那个 `return 0` 桩没有任何行为, 而它的注册靠段扫描);
+    `init` 在
     `phase == "early"`(⇔ 无 init 钩子)时发 `BR_PLUGIN_NO_HOOK`。理由: (a) 要在
     manifest 里新增一个"钩子清单"字段, 而它与 `phase` 表达的信息**重叠**(必然出现
     "phase=early 却有 init 钩子"这种自相矛盾的声明); (b) 不需要改 manifest schema

@@ -42,25 +42,28 @@ impl Step {
     }
 }
 
-/// Whether the plugin gets a lifecycle hook at all: `plugin_type = "core"` emits `NO_HOOK` for
-/// every phase (ADR-0031 -- it drives the phase machine, it does not take part in it).
-fn has_lifecycle(p: &Plugin) -> bool {
-    p.plugin_type != "core"
+/// Whether `early_init` is emitted: all plugins except `core` (no lifecycle at all, ADR-0031) and
+/// the **APP** (ADR-0037: it registers through the section scan, so the hook has nothing to do).
+fn has_early(p: &Plugin) -> bool {
+    p.plugin_type != "core" && p.plugin_type != "app"
 }
 
 /// Whether `init` is emitted: `phase = "early"` means "no `init` hook" (ADR-0005 §2.4 rule 4).
 fn has_init(p: &Plugin) -> bool {
-    has_lifecycle(p) && p.phase != "early"
+    p.plugin_type != "core" && p.phase != "early"
 }
 
 fn service_like(p: &Plugin) -> bool {
     crate::rules::is_service_like(&p.plugin_type, p.subkind.as_deref())
 }
 
-/// The phase a plugin's `init` runs in at runtime: `early` = it has none.
+/// The phase a plugin's `init` runs in at runtime: `early` = it has none. APP ⇒ `app` (last of all
+/// init, ADR-0037).
 fn runtime_init_phase(p: &Plugin) -> &'static str {
     if !has_init(p) {
         "early"
+    } else if p.plugin_type == "app" {
+        "app"
     } else if service_like(p) {
         "late"
     } else {
@@ -173,28 +176,35 @@ pub fn boot_flow(tree: &TreeLoad, closure: &Closure, selftest_on: bool) -> Flow 
     if let Some(p) = &platform {
         push("early", p, "early_init", "first: found by plugin_type, not by topology");
     }
-    // 2. EARLY: every other plugin that emits early_init, in runtime topological order.
+    // 2. EARLY: every plugin that emits early_init, in runtime topological order. The APP is never
+    //    here: it registers through the section scan, so its descriptor carries NO_HOOK (ADR-0037).
     for name in &order {
         if Some(name) == platform.as_ref() {
             continue;
         }
-        if get(name).map(has_lifecycle).unwrap_or(false) {
+        if get(name).map(has_early).unwrap_or(false) {
             push("early", name, "early_init", "");
         }
     }
-    // 3. CORE then LATE: `init`, phase decided by the category (service-like completes LATE).
-    for phase in ["core", "late"] {
+    // 3. CORE, LATE then APP: `init`, phase decided by the category. The APP is last of all init
+    //    (ADR-0037), so it runs after every driver/service/skin, with IRQs still masked.
+    for phase in ["core", "late", "app"] {
         for name in &order {
             if get(name).map(|p| runtime_init_phase(p) == phase).unwrap_or(false) {
-                push(phase, name, "init", "");
+                let note = if phase == "app" {
+                    "APP init last: after every other plugin's init"
+                } else {
+                    ""
+                };
+                push(phase, name, "init", note);
             }
         }
     }
-    // 4. IRQ on: after LATE, before START.
-    push("irq", "", "", "br_irq_cpu_enable(): after LATE, before START");
+    // 4. IRQ on: after every plugin's init returned, before START.
+    push("irq", "", "", "br_irq_cpu_enable(): after all init returned, before START");
     // 5. START: non-APP first, APP last -- an explicit rule, not topological order.
     for name in &order {
-        if get(name).map(|p| has_lifecycle(p) && p.plugin_type != "app").unwrap_or(false) {
+        if get(name).map(|p| p.plugin_type != "app" && p.plugin_type != "core").unwrap_or(false) {
             push("start", name, "start", "");
         }
     }
@@ -249,7 +259,7 @@ fn profile_of(req: &Request, tree: &TreeLoad) -> String {
 
 fn counts(steps: &[Step]) -> Value {
     let mut map = serde_json::Map::new();
-    for phase in ["early", "core", "late", "irq", "start", "selftest"] {
+    for phase in ["early", "core", "late", "app", "irq", "start", "selftest"] {
         map.insert(
             phase.to_string(),
             json!(steps.iter().filter(|s| s.phase == phase).count()),

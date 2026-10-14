@@ -2,8 +2,9 @@
   "command": "show brick-init-flow",
   "data": {
     "counts": {
-      "core": 3,
-      "early": 5,
+      "app": 1,
+      "core": 2,
+      "early": 4,
       "irq": 1,
       "late": 2,
       "selftest": 0,
@@ -38,14 +39,6 @@
         "hook": "early_init",
         "note": "",
         "phase": "early",
-        "plugin": "app/hsm",
-        "plugin_type": "app",
-        "subkind": null
-      },
-      {
-        "hook": "early_init",
-        "note": "",
-        "phase": "early",
         "plugin": "iface/hsm-api",
         "plugin_type": "interface",
         "subkind": null
@@ -65,14 +58,6 @@
         "plugin": "service/crypto",
         "plugin_type": "ability",
         "subkind": "service"
-      },
-      {
-        "hook": "init",
-        "note": "",
-        "phase": "core",
-        "plugin": "app/hsm",
-        "plugin_type": "app",
-        "subkind": null
       },
       {
         "hook": "init",
@@ -107,8 +92,16 @@
         "subkind": "service"
       },
       {
+        "hook": "init",
+        "note": "APP init last: after every other plugin's init",
+        "phase": "app",
+        "plugin": "app/hsm",
+        "plugin_type": "app",
+        "subkind": null
+      },
+      {
         "hook": "",
-        "note": "br_irq_cpu_enable(): after LATE, before START",
+        "note": "br_irq_cpu_enable(): after all init returned, before START",
         "phase": "irq",
         "plugin": "",
         "plugin_type": "",

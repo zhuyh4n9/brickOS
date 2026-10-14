@@ -4,23 +4,20 @@
  * **The descriptor instance is not here** — it lives in the generated build/gen/{{name}}/plugin_desc.c (§8.4).
  *
  * The APP holds the only business logic, exactly one, and is not depended on by any plugin (`1-01` §6.3).
- * v0.1 does not fix the APP entry shape (9-01); the skeleton only provides three lifecycle callbacks for now.
+ * v0.1 does not fix the APP entry shape (9-01); the skeleton only provides the lifecycle callbacks for now.
+ *
+ * No EARLY hook: the APP registers through the `.br_plugins` section scan, so an `early_init` would have
+ * nothing to do; its `init` runs in the APP phase, i.e. after every other plugin's init (ADR-0037).
  */
 #include "{{short}}/{{short}}.h"
 
-/* EARLY phase: no heap / no threads / interrupts off (`1-01` §6.2) */
-int {{symbol_prefix}}early_init(void)
-{
-    return 0;
-}
-
-/* CORE / LATE phase: heap available, scheduler locked, interrupts still off */
+/* APP phase: last of all init -- heap, drivers, filesystems and services are up, interrupts still off */
 int {{symbol_prefix}}init(void)
 {
     return 0;
 }
 
-/* After global interrupt enable: interrupts available, threads can be created */
+/* After global interrupt enable: interrupts available, threads can be created (APP starts last) */
 int {{symbol_prefix}}start(void)
 {
     return 0;

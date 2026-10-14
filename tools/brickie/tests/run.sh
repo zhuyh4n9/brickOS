@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# brickie v0.1 end-to-end acceptance regression baseline (V-1…V-20, negative N-1…N-4). Exit code
+# brickie v0.1 end-to-end acceptance regression baseline (V-1…V-21, negative N-1…N-4). Exit code
 # 0 success / 1 validation red / 2 usage or environment error; --json serializes `data`, diagnostics
 # sorted by (code,file,span,target). Every case copies its fixture into a fresh mktemp dir, no case
 # calls a compiler, assertions are never loosened. Usage: bash tests/run.sh [-v] (via make test).
@@ -18,7 +18,7 @@ VERBOSE=0
 
 ENVELOPE_KEYS="command,data,diagnostics,exit_code,protocol,status,written"
 
-printf '=== brickie v0.1 end-to-end acceptance (V-1…V-20 + N-1…N-4) ===\n'
+printf '=== brickie v0.1 end-to-end acceptance (V-1…V-21 + N-1…N-4) ===\n'
 printf 'host triple: %s/%s\n' "$HOST_ARCH" "$HOST_OS"
 printf 'core: %s\n' "$CORE"
 printf 'gen : %s\n' "$GEN"
@@ -738,13 +738,16 @@ eqj "V-20① root origin is recorded" "$JQ_RESP" "data.bricks.0.origin" "root"
 run_brickie "$W" show brick-init-flow
 eq "V-20② show brick-init-flow exit code 0" "0" "$RC"
 grep_at_least "V-20② platform early_init is the first step" '0  *early  *early_init  *platform/qemu-aarch64' "$OUT"
+grep_none "V-20② no APP early_init step" 'early  *early_init  *app/hsm' "$OUT"
+grep_at_least "V-20② APP init comes after every LATE init" 'app/hsm  *APP init last' "$OUT"
 grep_at_least "V-20② APP start is the last start step" 'app/hsm  *APP last: explicit rule' "$OUT"
-grep_at_least "V-20② the IRQ hand-off is a step of its own" 'br_irq_cpu_enable\(\): after LATE, before START' "$OUT"
+grep_at_least "V-20② the IRQ hand-off is a step of its own" 'br_irq_cpu_enable\(\): after all init returned, before START' "$OUT"
 grep_at_least "V-20② the order basis names the runtime sort" 'FIFO Kahn over kind=init edges' "$OUT"
 run_json "$W" show brick-init-flow
-eqj "V-20② five early steps (platform + 4)" "$JQ_RESP" "data.counts.early" "5"
+eqj "V-20② four early steps (platform + 3, no APP)" "$JQ_RESP" "data.counts.early" "4"
 eqj "V-20② exactly one IRQ step" "$JQ_RESP" "data.counts.irq" "1"
-eqj "V-20② the step count matches the phases" "$JQ_RESP" "data.counts.start" "5"
+eqj "V-20② five start steps" "$JQ_RESP" "data.counts.start" "5"
+eqj "V-20② exactly one APP-phase init" "$JQ_RESP" "data.counts.app" "1"
 hasj "V-20② the runtime order is reported" "$JQ_RESP" "data.order"
 eqj "V-20② the first step is the platform's early_init" "$JQ_RESP" "data.steps.0.hook" "early_init"
 eqj "V-20② the first step names the platform" "$JQ_RESP" "data.steps.0.plugin" "platform/qemu-aarch64"
@@ -758,10 +761,28 @@ eqj "V-20② dep closure keeps its own topological order" "$JQ_RESP" "data.topo_
 
 # A declared phase that the runtime would not honour is red, not silently rerouted.
 W="$(cp_fx showcase)"
-sed -i 's/^phase *= *"core"/phase = "late"/' "$W/app/hsm/brick.toml"
+sed -i 's/^phase *= *"app"/phase = "core"/' "$W/app/hsm/brick.toml"
 run_json "$W" check
 eq "V-20③ app declaring a phase it does not run in ⇒ exit code 2" "2" "$RC"
-grep_at_least "V-20③ the phase gate says why" 'phase `late` is incompatible with' "$ERR"
+grep_at_least "V-20③ the phase gate says why" 'phase `core` is incompatible with' "$ERR"
+
+# ---- V-21 APP ordering (ADR-0037): no early_init, and its init is the last init
+section "V-21 APP ordering (ADR-0037)"
+W="$(cp_fx showcase)"
+run_json "$W" gen
+eq "V-21① gen exit code 0" "0" "$RC"
+grep_none "V-21① the APP descriptor has no early_init hook" '\.early_init  = hello_early_init' "$W/build/gen/app/hsm/plugin_desc.c"
+grep_at_least "V-21① the APP descriptor writes NO_HOOK for it" '\.early_init  = BR_PLUGIN_NO_HOOK' "$W/build/gen/app/hsm/plugin_desc.c"
+grep_none "V-21① no early_init prototype is emitted either" 'int hsm_early_init\(void\);' "$W/build/gen/app/hsm/plugin_desc.c"
+# A non-APP plugin still gets one (the exception is the APP, not a global removal).
+grep_at_least "V-21① a non-APP plugin still emits early_init" '\.early_init  = coop_early_init' "$W/build/gen/sched/coop/plugin_desc.c"
+
+# The APP's init is the last init in the derived runtime flow, and it lands in the APP phase.
+run_json "$W" show brick-init-flow
+eqj "V-21② the APP init is in the APP phase" "$JQ_RESP" "data.counts.app" "1"
+eqj "V-21② the APP phase holds exactly the APP" "$JQ_RESP" "data.steps.8.phase" "app"
+eqj "V-21② and it is the APP" "$JQ_RESP" "data.steps.8.plugin" "app/hsm"
+eqj "V-21② the IRQ hand-off follows the APP init" "$JQ_RESP" "data.steps.9.phase" "irq"
 
 # V-B build family: declaration-surface and planning criteria only -- no compiler is called (V-9's
 # discipline binds the tests too); the judge's log arrives as body text in context.log.

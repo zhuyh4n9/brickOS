@@ -279,7 +279,7 @@ fn phase_cases(h: &mut Harness) {
     h.eq(rules::derive_phase("ability", Some("service"), true), "late", "service ⇒ late");
     h.eq(rules::derive_phase("ability", Some("fs"), true), "core", "fs ⇒ core");
     h.eq(rules::derive_phase("interface", None, true), "late", "interface ⇒ late");
-    h.eq(rules::derive_phase("app", None, true), "core", "app ⇒ core (APP is a boot phase, not an init completion point)");
+    h.eq(rules::derive_phase("app", None, true), "app", "app ⇒ app (last of all init, ADR-0037)");
     h.eq(rules::derive_phase("ability", Some("service"), false), "early", "no init hook ⇒ early");
 
     h.check(rules::phase_reason("interface", None, "late").is_none(), "interface+late ok");
@@ -289,11 +289,11 @@ fn phase_cases(h: &mut Harness) {
     h.check(rules::phase_reason("platform", None, "core").is_none(), "platform+core ok");
     h.check(rules::phase_reason("platform", None, "late").is_some(), "platform+late ⇒ wrong");
     h.check(rules::phase_reason("ability", Some("scheduler"), "core").is_none(), "scheduler+core ok");
+    h.check(rules::phase_reason("app", None, "app").is_none(), "app+app ok (ADR-0037)");
     h.check(
-        rules::phase_reason("app", None, "app").is_some(),
-        "app+app ⇒ wrong: APP is a boot phase, not an init completion point (ADR-0036)",
+        rules::phase_reason("app", None, "core").is_some(),
+        "app+core ⇒ wrong: the APP's init runs in the APP phase, so `core` understates it",
     );
-    h.check(rules::phase_reason("app", None, "core").is_none(), "app+core ok");
     h.check(rules::phase_reason("app", None, "late").is_some(), "app+late ⇒ wrong");
     h.check(rules::phase_reason("app", None, "early").is_none(), "early is always legal");
 }
@@ -1081,7 +1081,7 @@ status = "experimental"
 fn plan_cases(h: &mut Harness) {
     // four plan classes x native x c
     let cases = [
-        ("app", "app/hsm", "core", "native/app/c/brick.toml.tmpl"),
+        ("app", "app/hsm", "app", "native/app/c/brick.toml.tmpl"),
         ("interface", "iface/posix", "late", "native/interface/c/brick.toml.tmpl"),
         ("ability", "service/crypto", "late", "native/ability/c/brick.toml.tmpl"),
         ("platform", "platform/qemu-aarch64", "core", "native/platform/c/brick.toml.tmpl"),
@@ -1208,6 +1208,40 @@ fn plan_cases(h: &mut Harness) {
     let (d, arts) = plan::gen_plan(&empty, &Map::new());
     h.exit_is(&d, 0, "gen-plan empty tree exit code 0");
     h.eq(arts.len(), 0, "gen-plan empty tree has no artifacts");
+
+    // Descriptor hook emission (ADR-0037): the APP emits no `early_init` (and no prototype for it,
+    // else -Wmissing-prototypes would fire on the hand-written hook nobody declares any more); every
+    // other plugin type still does. The runtime re-proves the APP half on the section (TC-PLUG-004).
+    let hooks = tmpdir("gen-hooks");
+    write(&hooks, "app/a/brick.toml", &app_toml("app/a", ""));
+    write(&hooks, "service/s/brick.toml", &ability_toml("service/s", "service", "late", ""));
+    write(&hooks, "platform/p/brick.toml", &platform_toml("platform/p", "core", ""));
+    let (d, arts) = plan::gen_plan(&hooks, &Map::new());
+    h.exit_is(&d, 0, "gen-plan app/ability/platform exit code 0");
+    let var = |path: &str, key: &str| {
+        arts.iter()
+            .find(|a| a.path == path)
+            .and_then(|a| a.vars.get(key).cloned())
+            .unwrap_or_default()
+    };
+    for (path, who) in [
+        ("build/gen/app/a/plugin_desc.c", "app"),
+        ("build/gen/service/s/plugin_desc.c", "ability"),
+        ("build/gen/platform/p/plugin_desc.c", "platform"),
+    ] {
+        let early = var(path, "early_hook");
+        if who == "app" {
+            h.eq(early, "BR_PLUGIN_NO_HOOK".to_string(), "gen: the APP descriptor emits no early_init");
+            h.eq(var(path, "early_proto"), String::new(), "gen: and no early_init prototype either");
+        } else {
+            h.check(
+                early.ends_with("early_init") && !early.starts_with("BR_PLUGIN"),
+                &format!("gen: a {who} descriptor still emits early_init"),
+            );
+        }
+        h.eq(var(path, "start_hook"), format!("{}start", var(path, "symbol_prefix")),
+             "gen: every plugin type emits start");
+    }
 }
 
 fn emit_cases(h: &mut Harness) {
@@ -1339,8 +1373,8 @@ fn ability_toml(name: &str, subkind: &str, phase: &str, extra: &str) -> String {
 
 /// Minimal valid app plugin text.
 fn app_toml(name: &str, extra: &str) -> String {
-    // `phase = "core"`: APP is a boot phase, not an init completion point (ADR-0036 §2.3).
-    typed_toml(name, "app", "", "core", extra)
+    // `phase = "app"`: the APP's init runs last of all, in the APP phase (ADR-0037).
+    typed_toml(name, "app", "", "app", extra)
 }
 
 fn platform_toml(name: &str, phase: &str, extra: &str) -> String {
@@ -1724,15 +1758,14 @@ fn show_cases(h: &mut Harness) {
         seq,
         vec![
             ("early", "platform/qemu-aarch64"),
-            ("early", "app/hsm"),
             ("early", "iface/hsm-api"),
             ("early", "sched/coop"),
             ("early", "service/crypto"),
-            ("core", "app/hsm"),
             ("core", "platform/qemu-aarch64"),
             ("core", "sched/coop"),
             ("late", "iface/hsm-api"),
             ("late", "service/crypto"),
+            ("app", "app/hsm"),
             ("irq", ""),
             ("start", "iface/hsm-api"),
             ("start", "platform/qemu-aarch64"),
@@ -1743,7 +1776,7 @@ fn show_cases(h: &mut Harness) {
         .iter()
         .map(|(p, n)| (p.to_string(), n.to_string()))
         .collect::<Vec<_>>(),
-        "show: the flow is platform-first EARLY, category-decided CORE/LATE, IRQ, then START with APP last",
+        "show: platform-first EARLY (no APP), category-decided CORE/LATE, APP init last, IRQ, then START with APP last",
     );
     h.check(
         resp.data["counts"]["irq"].as_u64() == Some(1),
@@ -1797,14 +1830,14 @@ fn show_cases(h: &mut Harness) {
     // silent reordering: the printed chain would otherwise be a guess.
     let bad = tmpdir("show-flow-bad");
     write(&bad, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
-    write(&bad, "app/hsm/brick.toml", &typed_toml("app/hsm", "app", "", "core", ""));
+    write(&bad, "app/hsm/brick.toml", &typed_toml("app/hsm", "app", "", "app", ""));
     // Bypass the model's phase gate to build the state the flow guard must still catch.
     let mut tree = model::load_tree(&bad);
     if let Some(prod) = tree.product.as_mut() {
         prod.app = "app/hsm".to_string();
     }
     if let Some(p) = tree.plugins.iter_mut().find(|p| p.name == "app/hsm") {
-        p.phase = "app".to_string();
+        p.phase = "core".to_string();
     }
     let sol = solver::solve(&tree, "dev", false);
     let flow = show::boot_flow(&tree, &sol.closure, true);
@@ -1815,7 +1848,7 @@ fn show_cases(h: &mut Harness) {
     );
     h.eq(
         flow.phase_divergence[0].2,
-        "core",
+        "app",
         "show: the guard reports the phase the init actually runs in",
     );
 }
@@ -2779,7 +2812,7 @@ fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
         root,
         "app/m/brick.toml",
         "schema = 1\n[plugin]\nname = \"app/m\"\nplugin_type = \"app\"\napi_type = \"native\"\n\
-         lang = \"c\"\nphase = \"core\"\nversion = \"1.0.0.0\"\n\
+         lang = \"c\"\nphase = \"app\"\nversion = \"1.0.0.0\"\n\
          [build]\nsources = [\"src/*.c\"]\nincludes = [\"include\"]\n",
     );
 }
@@ -2952,7 +2985,7 @@ fn build_cases(h: &mut Harness) {
         &root5,
         "app/m/brick.toml",
         "schema = 1\n[plugin]\nname = \"app/m\"\nplugin_type = \"app\"\napi_type = \"native\"\n\
-         lang = \"c\"\nphase = \"core\"\nversion = \"1.0.0.0\"\n\
+         lang = \"c\"\nphase = \"app\"\nversion = \"1.0.0.0\"\n\
          [build]\nsources = [\"src/nope.c\"]\n",
     );
     let (d5, _) = build::selftest_plan(&root5, &mk_req_ctx("build", &root5, json!({}), json!({"path": ""})));

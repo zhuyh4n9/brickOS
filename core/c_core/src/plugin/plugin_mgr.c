@@ -1,8 +1,11 @@
 /*
  * Plugin manager: scan the `.br_plugins` section into a table + find the platform plugin
  * (boot chain 1), run the platform's early_init (boot chain 2), then topology + phase drive
- * (boot chain 4): build init edges, Kahn sort, EARLY/CORE/LATE init, enable IRQs, START
+ * (boot chain 4): build init edges, Kahn sort, EARLY/CORE/LATE/APP init, enable IRQs, START
  * (non-APP first, APP last by rule), self-test pass, hand off to the scheduler.
+ * APP is the exception in two places (ADR-0037): it emits **no** `early_init` (registration is
+ * section-driven, so the hook has nothing to do), and its `init` runs in the APP phase -- after
+ * every other plugin's init, right before IRQs are enabled. Both are re-proven here, not assumed.
  * A cycle is a compose-time hard error, re-proven at runtime (full path + br_panic); the first
  * failure stops the machine (ruling G6). Clock/logging and heap setup are not here (main.c).
  * Log phase names are lowercase on purpose: tests/gates.toml forbids "EARLY"; the public
@@ -57,6 +60,11 @@ static br_u32  s_non_app_start_done;     /* number of non-APP starts executed */
 static br_u32  s_non_app_start_total;    /* plugins that are non-APP and have a start hook */
 br_bool s_app_start_last_ok;      /* [self-test readable] before calling the first APP start: all non-APP ones already ran */
 br_bool s_in_app_start;           /* [self-test readable] currently inside an APP start */
+/* APP ordering trace (ADR-0037): "app has no early_init" and "app's init ran last" are proven,
+ * not assumed -- see TC-PLUG-004. */
+br_u32  s_app_init_index = (br_u32)-1;   /* [self-test readable] section index of the APP, (br_u32)-1 = none */
+br_bool s_app_early_init_ok = BR_TRUE;   /* [self-test readable] every APP has early_init == NO_HOOK */
+const char *s_last_init_name;            /* [self-test readable] whose init ran most recently */
 
 /* ---- section enumeration ---- */
 
@@ -121,6 +129,7 @@ static const char *phase_key(br_u32 phase)
     case BR_PHASE_EARLY: return "early";
     case BR_PHASE_CORE:  return "core";
     case BR_PHASE_LATE:  return "late";
+    case BR_PHASE_APP:   return "app";
     default:             return "start";
     }
 }
@@ -133,12 +142,16 @@ static br_bool is_service_like(const br_plugin_t *p)
     return (p->plugin_type == BR_PLUGIN_TYPE_ABILITY) && (p->subkind == BR_SUBKIND_SERVICE);
 }
 
-/* Which phase `init` lands in, by category: non Service/Interface => CORE, Service/Interface
- * => LATE; no init hook => EARLY. Non-static so TC-PLUG-003 can recheck phase monotonicity. */
+/* Which phase `init` lands in, by category: APP => APP (last of all init, ADR-0037),
+ * Service/Interface => LATE, everything else => CORE; no init hook => EARLY.
+ * Non-static so TC-PLUG-003 can recheck phase monotonicity. */
 br_u32 init_phase_of(const br_plugin_t *p)
 {
     if (p->init == BR_PLUGIN_NO_HOOK) {
         return BR_PHASE_EARLY;
+    }
+    if (p->plugin_type == BR_PLUGIN_TYPE_APP) {
+        return BR_PHASE_APP;
     }
     return is_service_like(p) ? BR_PHASE_LATE : BR_PHASE_CORE;
 }
@@ -255,13 +268,13 @@ br_bool topo_sort(br_u32 n, const plug_edge_t *edges, br_u32 m,
 
 /* ---- failure stop ---- */
 
-static BR_NORETURN void plugin_fail(const char *name, br_u32 phase, int rc)
+static BR_NORETURN void plugin_fail(const char *name, const char *phase, int rc)
 {
     s_init_failures++;
     br_log_error("[PLUGIN] FAIL %s phase=%s rc=%d",
-                 (name != BR_NULL) ? name : "(null)", phase_key(phase), rc);
+                 (name != BR_NULL) ? name : "(null)", phase, rc);
     br_panic("plugin_manager: first failure stops the machine (ruling G6): %s phase=%s rc=%d",
-             (name != BR_NULL) ? name : "(null)", phase_key(phase), rc);
+             (name != BR_NULL) ? name : "(null)", phase, rc);
 }
 
 /* ---- manager ---- */
@@ -341,6 +354,28 @@ void br_plugin_manager_init(void)
                  "the first step of the EARLY phase cannot happen (design 1-01 §9)");
     }
     s_plat_index = plat;
+
+    /* APP exception (ADR-0037), re-proven on the section rather than trusted from the generator:
+     * the APP registers through this section scan, so it has no `early_init` to do. A composed
+     * image whose APP descriptor carries one is a generation bug, not a runtime condition. */
+    s_app_early_init_ok = BR_TRUE;
+    s_app_init_index    = (br_u32)-1;
+    for (br_u32 i = 0u; i < s_count; i++) {
+        const br_plugin_t *q = s_plugins[i];
+        if (q->plugin_type != BR_PLUGIN_TYPE_APP) {
+            continue;
+        }
+        if (s_app_init_index == (br_u32)-1) {
+            s_app_init_index = i;
+        }
+        if (q->early_init != BR_PLUGIN_NO_HOOK) {
+            s_app_early_init_ok = BR_FALSE;
+        }
+    }
+    if (!s_app_early_init_ok) {
+        br_panic("plugin_manager: the APP plugin must not have an early_init hook "
+                 "(registration is section-driven; ADR-0037)");
+    }
     s_init_done  = BR_TRUE;
 }
 
@@ -366,7 +401,7 @@ void br_plugin_manager_platform_init(void)
     const int rc = p->early_init();
     br_log_info("[PLUGIN] phase=%s name=%s rc=%d", phase_key(BR_PHASE_EARLY), p->name, rc);
     if (rc != 0) {
-        plugin_fail(p->name, BR_PHASE_EARLY, rc);
+        plugin_fail(p->name, phase_key(BR_PHASE_EARLY), rc);
     }
 }
 
@@ -450,12 +485,13 @@ BR_NORETURN void br_plugin_manager_run(void)
         const int rc = p->early_init();
         br_log_info("[PLUGIN] phase=%s name=%s rc=%d", phase_key(BR_PHASE_EARLY), p->name, rc);
         if (rc != 0) {
-            plugin_fail(p->name, BR_PHASE_EARLY, rc);
+            plugin_fail(p->name, phase_key(BR_PHASE_EARLY), rc);
         }
     }
 
-    /* ---- 4 CORE / LATE: category-decided init ---- */
-    for (br_u32 want = BR_PHASE_CORE; want <= BR_PHASE_LATE; want++) {
+    /* ---- 4 CORE / LATE / APP: category-decided init. APP is last of all (ADR-0037): its init
+     * sees every driver/service/skin initialized, and IRQs stay masked until it returns. ---- */
+    for (br_u32 want = BR_PHASE_CORE; want <= BR_PHASE_APP; want++) {
         s_phase_reached = want;
         for (br_u32 k = 0u; k < s_count; k++) {
             const br_u32 i = s_order[k];
@@ -464,16 +500,17 @@ BR_NORETURN void br_plugin_manager_run(void)
                 continue;
             }
             const int rc = p->init();
+            s_last_init_name = p->name;
             br_log_info("[PLUGIN] phase=%s name=%s rc=%d", phase_key(want), p->name, rc);
             if (rc != 0) {
-                plugin_fail(p->name, want, rc);
+                plugin_fail(p->name, phase_key(want), rc);
             }
         }
     }
 
-    /* ---- 5 globally enable IRQs (after LATE, before START) ---- */
+    /* ---- 5 globally enable IRQs (after APP, i.e. after every plugin init returned) ---- */
     br_irq_cpu_enable();
-    br_log_info("[PLUGIN] irq=on (LATE done, all plugin init returned)");
+    br_log_info("[PLUGIN] irq=on (all plugin init returned)");
 
     /* ---- 6 START: non-APP first (topological order), APP after (topological order) ---- */
     s_phase_reached = BR_PHASE_APP;
@@ -513,7 +550,7 @@ BR_NORETURN void br_plugin_manager_run(void)
             }
             br_log_info("[PLUGIN] phase=start name=%s rc=%d", p->name, rc);
             if (rc != 0) {
-                plugin_fail(p->name, BR_PHASE_APP, rc);
+                plugin_fail(p->name, "start", rc);
             }
         }
     }

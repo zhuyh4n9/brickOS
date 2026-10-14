@@ -362,13 +362,15 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     v.insert("res_stack_kib".into(), f.res_stack_kib.max(0).to_string());
     v.insert("gen_total".into(), f.gen_total.to_string());
     // early_init/start for all plugins; init only when phase != "early", else BR_PLUGIN_NO_HOOK.
-    // `core` is the exception: it drives the phase machine instead of taking part in it, so it
-    // defines no lifecycle at all and all three hooks are NO_HOOK (its `[selftest]` hook stays --
-    // self-test is verification, not a phase).
+    // Two exceptions: `core` drives the phase machine instead of taking part in it, so it defines no
+    // lifecycle at all (its `[selftest]` hook stays -- self-test is verification, not a phase); and the
+    // APP emits no `early_init` (ADR-0037: it registers through the section scan, so the hook has
+    // nothing to do -- the runtime re-proves that on the descriptor).
     let has_lifecycle = f.plugin_type != "core";
+    let has_early = has_lifecycle && f.plugin_type != "app";
     v.insert(
         "early_hook".into(),
-        if has_lifecycle {
+        if has_early {
             format!("{sym}early_init")
         } else {
             "BR_PLUGIN_NO_HOOK".into()
@@ -392,7 +394,7 @@ pub fn plugin_vars(f: &PluginFacts<'_>) -> BTreeMap<String, String> {
     );
     v.insert(
         "early_proto".into(),
-        if has_lifecycle {
+        if has_early {
             format!("int {sym}early_init(void);")
         } else {
             String::new()

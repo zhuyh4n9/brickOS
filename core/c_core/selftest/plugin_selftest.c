@@ -145,6 +145,35 @@ int br_plugin_selftest(void)
                   "selftest timing: runs after ALL starts returned (inside no start), and phase already reached APP");
     }
 
+    /* ---- TC-PLUG-004: APP ordering (ADR-0037) ----
+     * Two rules the generator implements but the runtime must not take on trust:
+     * ① the APP has no `early_init` (it registers through the section scan, so the hook has nothing
+     *   to do) -- re-proven on the descriptor above, sampled here;
+     * ② the APP's `init` runs in the APP phase, i.e. **after every other plugin's init**: the
+     *   trace of the last init to run must be the APP, whenever the APP has an init hook at all
+     *   (`phase = "early"` means "no init hook", and then rule ② has no subject). */
+    {
+        const br_plugin_t *app = (s_app_init_index != (br_u32)-1) ? s_plugins[s_app_init_index] : BR_NULL;
+
+        pc_report(s_app_early_init_ok && (s_app_init_index != (br_u32)-1) &&
+                  (app != BR_NULL) && (app->early_init == BR_PLUGIN_NO_HOOK),
+                  "TC-PLUG-004",
+                  "APP has no early_init: its descriptor carries BR_PLUGIN_NO_HOOK (registration is section-driven)");
+
+        if (app != BR_NULL && app->init != BR_PLUGIN_NO_HOOK) {
+            pc_report((s_last_init_name != BR_NULL) && (s_last_init_name == app->name),
+                      "TC-PLUG-004",
+                      "APP init is last: no plugin's init ran after the APP's");
+            pc_report(init_phase_of(app) == BR_PHASE_APP, "TC-PLUG-004",
+                      "APP init lands in the APP phase (after CORE and LATE, before IRQs are enabled)");
+        } else {
+            /* No APP or an APP without an init hook: rule ② is vacuous, so state that instead of
+             * silently passing a check that never had a subject. */
+            pc_report(1, "TC-PLUG-004",
+                      "no APP init hook in this image (`phase = \"early\"`) => the 'APP init last' rule has no subject");
+        }
+    }
+
     /* ---- TC-PLUG-002b: cycle-detection negative case ---- */
     pc_report(cycle_negative_case(), "TC-PLUG-002b",
               "cycle negative case: 3-node cycle detected with full path; same algorithm orders the DAG");

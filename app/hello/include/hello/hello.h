@@ -7,10 +7,11 @@
 #ifndef BR_APP_HELLO_HELLO_H
 #define BR_APP_HELLO_HELLO_H
 
-/* EARLY phase (no heap/threads, interrupts off): APP does nothing, returns 0. */
-int hello_early_init(void);
+/* No EARLY hook: the APP registers through the `.br_plugins` section scan and its descriptor
+ * carries `BR_PLUGIN_NO_HOOK` for `early_init` (ADR-0037). */
 
-/* CORE phase: APP setup (log level etc.). */
+/* APP phase (heap/drivers/services up, interrupts still off): APP setup (log level etc.).
+ * Runs after every other plugin's `init`. */
 int hello_init(void);
 
 /* START phase (interrupts on, last start): selftests + MainLoop. Does not return. */

@@ -653,17 +653,12 @@ static void *hello_mainloop(void *arg)
     return BR_NULL;
 }
 
-/* EARLY phase: no heap/threads/interrupts => APP has nothing to do (hook must be present). */
-int hello_early_init(void)
-{
-    return 0;
-}
-
-/* CORE phase: raise the log level (logging is ready). */
+/* APP phase (last of all init, ADR-0037): raise the log level (logging is ready). No early_init:
+ * the APP registers through the .br_plugins section scan, so the hook has nothing to do. */
 int hello_init(void)
 {
     br_log_set_level(BR_LOG_DEBUG);
-    br_log_info("app: init (CORE phase; POSIX multithreading samples start threads in the start phase)");
+    br_log_info("app: init (APP phase, after every other plugin; POSIX multithreading samples start threads in the start phase)");
     return 0;
 }
 
