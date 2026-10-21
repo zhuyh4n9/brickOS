@@ -19,26 +19,42 @@ typedef struct plug_edge {
     br_u16 to;
 } plug_edge_t;
 
-/* ---- manager state (self-test read-only; defined in plugin_mgr.c) ---- */
-extern const br_plugin_t *s_plugins[BR_PLUGIN_MAX];   /* segment order */
-extern br_u32  s_count;                                /* count in the segment */
-extern plug_edge_t s_edges[];                          /* only kind == BR_DEP_INIT */
-extern br_u32  s_edge_count;
-extern br_u16  s_pos[BR_PLUGIN_MAX];                   /* segment index -> topological position */
-extern br_bool s_sorted;
-extern br_u32  s_plat_index;                           /* segment index of the platform plugin */
+/* ---- section bounds (linker-provided) ---- */
 
-/* ---- execution traces for the "order invariants" (criteria of TC-PLUG-003) ---- */
-extern const char *s_first_early_name;   /* whose early_init really ran first */
-extern br_bool s_app_start_last_ok;      /* before the first APP start: all non-APP had run */
-extern br_bool s_in_app_start;           /* currently inside an APP's start */
+/*
+ * GNU ld does not generate `__start_/__stop_` for a section name containing `.`, so the platform
+ * linker script defines these two labels around `KEEP(*(.br_plugins))`. Declared here, not in the
+ * `.c` that uses them: ADR-0038 / R1 makes a header the only place a cross-translation-unit
+ * declaration may live.
+ */
+extern const br_plugin_t __br_plugins_start[];
+extern const br_plugin_t __br_plugins_stop[];
 
-/* ---- APP ordering traces (criteria of TC-PLUG-004, ADR-0037) ---- */
-extern br_u32 s_app_init_index;          /* section index of the APP; (br_u32)-1 = no APP in the image */
-extern br_bool s_app_early_init_ok;      /* every APP descriptor has early_init == NO_HOOK */
-extern const char *s_last_init_name;     /* whose init ran most recently (APP last, when it has one) */
+/* ---- manager state: one read-only snapshot for the self-test ----
+ *
+ * The state itself is `static` in plugin_mgr.c (ADR-0038 / R2: a global never leaves the plugin).
+ * The conformance suite reads this snapshot instead of the variables, so the internal header holds
+ * no mutable declaration and cannot drift into a second source of truth.
+ */
+typedef struct br_plugin_mgr_view {
+    const br_plugin_t *const *plugins;   /* segment order */
+    br_u32  count;                       /* entries in the segment */
+    const plug_edge_t *edges;            /* only kind == BR_DEP_INIT */
+    br_u32  edge_count;
+    const br_u16 *pos;                   /* segment index -> topological position */
+    br_bool sorted;
+    br_u32  plat_index;                  /* segment index of the platform plugin */
+    /* "ordering invariants" traces (TC-PLUG-003) */
+    const char *first_early_name;        /* whose early_init really ran first */
+    br_bool app_start_last_ok;           /* before the first APP start: all non-APP had run */
+    br_bool in_app_start;                /* currently inside an APP's start */
+    /* APP ordering traces (TC-PLUG-004, ADR-0037) */
+    br_u32  app_init_index;              /* section index of the APP; (br_u32)-1 = no APP in the image */
+    br_bool app_early_init_ok;           /* every APP descriptor has early_init == NO_HOOK */
+    const char *last_init_name;          /* whose init ran most recently (APP last, when it has one) */
+} br_plugin_mgr_view_t;
 
-/* ---- algorithms (run by the self-test, so not static) ---- */
+const br_plugin_mgr_view_t *br_plugin_mgr_view(void);
 
 /* Which phase `init` falls in -- decided by category. Self-test rechecks phase monotonicity. */
 br_u32 init_phase_of(const br_plugin_t *p);

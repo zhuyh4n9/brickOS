@@ -15,10 +15,26 @@
 
 typedef struct br_posix_file FILE;
 
-/* Not auto-opened: BR_NULL until runtime/posix's init installs them (no process model). */
-extern FILE *stdin;
-extern FILE *stdout;
-extern FILE *stderr;
+/*
+ * Standard streams are **accessor calls**, not exported objects (ADR-0038 / R2: a plugin's surface
+ * carries functions, types and macros, never variables). The macro keeps the POSIX spelling that
+ * user code expects while the object stays private to runtime/posix:
+ *
+ *     fputs("x\n", stdout);   =>   fputs("x\n", br_posix_stdout());
+ *
+ * No process model: nothing opens fd 0/1/2, so all three are BR_NULL unless a caller installs a
+ * stream with br_posix_set_std*(FILE *).
+ */
+FILE *br_posix_stdin(void);
+FILE *br_posix_stdout(void);
+FILE *br_posix_stderr(void);
+void  br_posix_set_stdin(FILE *f);
+void  br_posix_set_stdout(FILE *f);
+void  br_posix_set_stderr(FILE *f);
+
+#define stdin  br_posix_stdin()
+#define stdout br_posix_stdout()
+#define stderr br_posix_stderr()
 
 #define EOF  BR_POSIX_EOF
 

@@ -45,10 +45,8 @@ static br_thread_t         *s_joiner[BR_TASK_MAX];  /* target -> its joiner (one
 static volatile br_bool s_need_resched;
 
 /* Host-side idle wait hook (weak): target idle issues wfi; the host test advances a fake clock and
- * calls br_sched_on_tick() here, making the tick timeout scan testable on the host. */
-#if !defined(__aarch64__)
-void br_sched_host_wait(void) __attribute__((weak));
-#endif
+ * calls br_sched_on_tick() here, making the tick timeout scan testable on the host. The weak
+ * declaration lives in sched_internal.h (ADR-0038 / R1). */
 
 /* ---- small helpers ---- */
 

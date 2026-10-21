@@ -226,7 +226,7 @@ fn has_wildcard(pat: &str) -> bool {
 /// Expand a glob relative to `base_dir`, returning root-relative paths (lexicographic). Supports
 /// `*`/`?` (not crossing `/`) and `**` (any number of dirs, including zero): artifact depth follows
 /// plugin-name namespace depth, so a fixed `*/*/` pattern would not be a contract.
-fn expand_glob(root: &Path, base_dir: &str, pattern: &str) -> Vec<String> {
+pub(crate) fn expand_glob(root: &Path, base_dir: &str, pattern: &str) -> Vec<String> {
     let base = if base_dir.is_empty() {
         root.to_path_buf()
     } else {
@@ -299,12 +299,12 @@ fn glob_walk(dir: &Path, comps: &[&str], out: &mut Vec<PathBuf>) {
     }
 }
 
-fn plugin_dir_of(name: &str) -> String {
+pub(crate) fn plugin_dir_of(name: &str) -> String {
     name.to_string()
 }
 
 /// A plugin's include dirs (relative to repo root): `[build].includes` expand relative to the **plugin root**.
-fn plugin_incs(p: &model::Plugin) -> Vec<String> {
+pub(crate) fn plugin_incs(p: &model::Plugin) -> Vec<String> {
     let dir = plugin_dir_of(&p.name);
     p.build
         .as_ref()
@@ -620,20 +620,16 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         }
     }
 
-    // Per-unit include surface = core + self + declared dep closure; no global union, so an
-    // undeclared dep is a hard compile error. The core plugin's headers are the **ambient base** of
-    // every unit (nothing has to declare a dep on core to include `<br/core/**>`); the core unit
+    // Per-unit include surface = self + transitive declared dep closure; no global union, so an
+    // undeclared dep is a hard compile error. **Core is not ambient** (ADR-0038 §6): since core is
+    // a first-class interface provider, a plugin that wants `<br/core/**>` declares
+    // `[[dep]] runtime/core` (or `core/c_core`), and the declaration is the compile prerequisite --
+    // exactly the discipline ADR-0018 introduced for every other provider. The core unit
     // additionally gets the platform headers, because its clock reads the platform timer.
     let platform_incs: Vec<String> = tree
         .plugins
         .iter()
         .filter(|p| p.plugin_type == "platform" && closure.selected.contains(&p.name))
-        .flat_map(plugin_incs)
-        .collect();
-    let core_incs: Vec<String> = tree
-        .plugins
-        .iter()
-        .filter(|p| p.plugin_type == "core" && closure.selected.contains(&p.name))
         .flat_map(plugin_incs)
         .collect();
     let is_core_unit = |u: &Unit| {
@@ -651,13 +647,13 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         // is what used to happen) made the winner an accident of directory naming: it worked only
         // while every consumer's dir sorted before its provider's (ADR-0033 moved `uboot-mmc` to
         // `driver/`, which sorts before `fs/`, and u-boot's `__u64`/`le16_to_cpu` got redefined).
-        let mut incs: Vec<String> = core_incs.clone();
+        let mut incs: Vec<String> = u.includes.clone();
         if is_core_unit(u) {
             incs.extend(platform_incs.clone());
         } else if u.name == "build/gen" {
-            incs.extend(u.includes.clone());
+            // Generated descriptors include each plugin's public header: they see every selected
+            // plugin's include dirs (they are the composition's own artifact, not a plugin).
         } else {
-            incs.extend(u.includes.clone());
             for d in model::dep_closure(&tree, &u.name) {
                 if let Some(dp) = tree.by_name(&d) {
                     incs.extend(plugin_incs(dp));
@@ -684,29 +680,29 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         {
             continue;
         }
-        // A-2: an APP directly including a core header is a build error; others are unrestricted.
-        if u.provider == "core" {
+        // A-2: an APP directly including a core header is a build error. Any other consumer goes
+        // through the ordinary dependency rule below (ADR-0038: core is a provider like any other).
+        if u.provider == "core/c_core" {
             let is_app = tree
                 .plugins
                 .iter()
                 .any(|p| p.name == u.consumer && p.plugin_type == "app");
-            if !is_app {
+            if is_app {
+                d.shape(
+                    CODE_BUILD_SHAPE,
+                    &u.consumer,
+                    &u.file,
+                    "include",
+                    format!(
+                        "`{}` (APP) directly includes core header `{}`: APPs must not depend on interfaces below the iface layer",
+                        u.consumer, u.header
+                    ),
+                    "ADR-0020 / A-2: use the Interface skin (e.g. `<iface/min/min.h>`); add entries to the skin when more of core is needed",
+                );
                 continue;
             }
-            d.shape(
-                CODE_BUILD_SHAPE,
-                &u.consumer,
-                &u.file,
-                "include",
-                format!(
-                    "`{}` (APP) directly includes core header `{}`: APPs must not depend on interfaces below the iface layer",
-                    u.consumer, u.header
-                ),
-                "ADR-0020 / A-2: use the Interface skin (e.g. `<iface/min/min.h>`); add entries to the skin when more of core is needed",
-            );
-            continue;
         }
-        if model::dep_closure(&tree, &u.consumer).contains(&u.provider) {
+        if model::dep_direct_auth(&tree, &u.consumer).contains(&u.provider) {
             continue;
         }
         d.shape(
@@ -715,10 +711,10 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             &u.file,
             "include",
             format!(
-                "`{}` includes `{}`'s header `{}`, but `brick.toml` declares no dependency (direct or transitive)",
-                u.consumer, u.provider, u.header
+                "`{}` includes `{}`'s header `{}`, but `brick.toml` declares no **direct** dependency on `{}`",
+                u.consumer, u.provider, u.header, u.provider
             ),
-            "ADR-0018: compile-time include surface = declared dep closure; add `[[dep]]` or drop this include",
+            "ADR-0038: transitive dependencies do not authorize; add a `[[dep]]` (or a skin that re-exports it), or drop the include",
         );
     }
 
@@ -800,6 +796,16 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         "size".to_string(),
         vec![format!("{cross}size"), "size".to_string()],
     );
+    // Archive + symbol table: the `.a` audit's evidence (ADR-0038 §3). The GNU names come with the
+    // cross prefix; `llvm-ar`/`llvm-nm` cover a clang-only toolchain that ships no GNU binutils.
+    tools.insert(
+        "ar".to_string(),
+        vec![format!("{cross}ar"), "llvm-ar".to_string(), "ar".to_string()],
+    );
+    tools.insert(
+        "nm".to_string(),
+        vec![format!("{cross}nm"), "llvm-nm".to_string(), "nm".to_string()],
+    );
     tools.insert("qemu".to_string(), vec![target.qemu_binary.clone()]);
     tools.insert("make".to_string(), vec!["make".to_string()]);
     tools.insert("ninja".to_string(), vec!["ninja".to_string()]);
@@ -810,6 +816,8 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     tool_what.insert("objdump".into(), "disassembly (for gates)".into());
     tool_what.insert("size".into(), "section sizes".into());
     tool_what.insert("qemu".into(), "target machine emulator".into());
+    tool_what.insert("ar".into(), "static archive of a plugin's objects (symbol audit input)".into());
+    tool_what.insert("nm".into(), "symbol table reader (symbol audit input)".into());
     tool_what.insert("make".into(), "BR-D4 backend A".into());
     tool_what.insert("ninja".into(), "BR-D4 backend B".into());
 
@@ -1058,6 +1066,73 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
     }
 
     let objs: Vec<String> = srcs.iter().map(|(s, _)| ctx.obj_of(s)).collect();
+
+    // ---- per-plugin archives (`build/lib/<plugin>.a`) ----
+    //
+    // The link below still uses the **objects**, not the archives: the generated descriptor is a
+    // `static const` with no external reference, so an archive member would never be pulled in and
+    // `KEEP(*(.br_plugins))` would have nothing to keep. The archive is the audit's evidence, not a
+    // link input (ADR-0038 §3.1) -- link semantics are byte-identical to before.
+    let ar = ctx.tool("ar");
+    let nm = ctx.tool("nm");
+    let mut archives: Vec<(String, String)> = Vec::new(); // (plugin, archive path)
+    for u in &ctx.units {
+        let Some(plugin) = &u.plugin else { continue };
+        let mut members: Vec<String> = u.sources.iter().map(|s| ctx.obj_of(s)).collect();
+        // The descriptor object is compiled from `build/gen/**` but belongs to its plugin.
+        for (s, unit) in &srcs {
+            if unit == "build/gen" && s.starts_with(&format!("build/gen/{plugin}/")) {
+                members.push(ctx.obj_of(s));
+            }
+        }
+        if members.is_empty() {
+            continue;
+        }
+        members.sort();
+        let archive = format!("build/lib/{plugin}.a");
+        let mut argv: Vec<String> = vec![ar.clone(), "rcsD".to_string(), archive.clone()];
+        argv.extend(members.iter().cloned());
+        steps.push(Step {
+            label: format!("ar {archive}"),
+            kind: "archive".to_string(),
+            argv,
+            group: 1,
+            log: None,
+            timeout_s: None,
+            expect_timeout: false,
+            judge: None,
+            stdout_lines: None,
+            outputs: vec![archive.clone()],
+            consumes: members,
+        });
+        archives.push((plugin.clone(), archive));
+    }
+    archives.sort();
+
+    // ---- symbol audit (mandatory) ----
+    //
+    // One `nm -A -g` over every archive; L5 writes the text to the log file below and hands it to
+    // core's `judge` (criteria in core: R2 data symbols, R3 undeclared dependencies). The link
+    // consumes the log, so a failed audit stops the image from being linked.
+    let audit_log = "build/gen/symbol-audit.txt".to_string();
+    if !archives.is_empty() {
+        let mut argv: Vec<String> = vec![nm, "-A".to_string(), "-g".to_string()];
+        argv.extend(archives.iter().map(|(_, a)| a.clone()));
+        steps.push(Step {
+            label: "nm --audit (symbol dependency audit)".to_string(),
+            kind: "audit".to_string(),
+            argv,
+            group: 2,
+            log: Some(audit_log.clone()),
+            timeout_s: None,
+            expect_timeout: false,
+            judge: Some(crate::audit::JUDGE_NAME.to_string()),
+            stdout_lines: None,
+            outputs: vec![audit_log.clone()],
+            consumes: archives.iter().map(|(_, a)| a.clone()).collect(),
+        });
+    }
+
     let mut link_argv: Vec<String> = vec![cc.clone()];
     link_argv.extend(ctx.ldflags.clone());
     if let Some(ld) = &ctx.target.linker_script {
@@ -1071,14 +1146,21 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
         label: format!("ld {}", ctx.elf),
         kind: "link".to_string(),
         argv: link_argv,
-        group: 1,
+        group: 3,
         log: None,
         timeout_s: None,
         expect_timeout: false,
         judge: None,
         stdout_lines: None,
         outputs: vec![ctx.elf.clone(), ctx.map.clone()],
-        consumes: objs.clone(),
+        // The audit log is a guard, not an input: a red audit must prevent the link.
+        consumes: {
+            let mut c = objs.clone();
+            if !archives.is_empty() {
+                c.push(audit_log.clone());
+            }
+            c
+        },
     });
 
     steps.push(Step {
@@ -1091,7 +1173,7 @@ fn all_steps(ctx: &Ctx) -> Vec<Step> {
             ctx.elf.clone(),
             ctx.bin.clone(),
         ],
-        group: 2,
+        group: 4,
         log: None,
         timeout_s: None,
         expect_timeout: false,
@@ -1137,6 +1219,14 @@ fn step_inputs(ctx: &Ctx, step: &Step) -> Vec<String> {
             if step.argv.len() >= 4 {
                 inputs.push(step.argv[3].clone());
             }
+        }
+        "archive" => {
+            // argv = `ar rcsD <archive> <obj>…`
+            inputs.extend(step.argv.iter().skip(3).filter(|a| a.ends_with(".o")).cloned());
+        }
+        "audit" => {
+            // Every archive is an input: a changed plugin re-audits the whole set.
+            inputs.extend(step.argv.iter().filter(|a| a.ends_with(".a")).cloned());
         }
         _ => {}
     }
@@ -1643,7 +1733,7 @@ fn cmd_build(req: &Request) -> Response {
 
     // Tool resolution failed ⇒ environment error (exit code 2).
     if !dry_run && ctx.backend == "direct" && !plan.todo.is_empty() {
-        for name in ["cc", "objcopy"] {
+        for name in ["cc", "objcopy", "ar", "nm"] {
             if !ctx.resolved.contains_key(name) {
                 diags.shape(
                     CODE_TOOL_MISSING,
@@ -2309,6 +2399,12 @@ fn cmd_test(req: &Request) -> Response {
 }
 
 fn cmd_judge(req: &Request) -> Response {
+    // Reserved judge name: the symbol audit over `build/lib/*.a`. It is dispatched here (and not
+    // through `tests/gates.toml`) because its input is `nm` output, and its criteria are model
+    // facts -- keeping both in core keeps L5 an executor (V-18c / R-16).
+    if req.arg_str("name").as_deref() == Some(crate::audit::JUDGE_NAME) {
+        return crate::audit::judge(req);
+    }
     let root = PathBuf::from(&req.root);
     let mut diags = Diags::new();
     let g = load_gates(&root, &mut diags);

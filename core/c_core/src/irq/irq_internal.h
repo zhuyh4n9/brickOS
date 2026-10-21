@@ -5,6 +5,7 @@
 #ifndef BR_IRQ_INTERNAL_H
 #define BR_IRQ_INTERNAL_H
 
+#include <br/core/br_fault.h>   /* br_extable_t (the table bounds below) */
 #include <br/core/br_irq.h>
 #include <br/core/br_pic.h>
 #include <br/core/br_trace.h>
@@ -119,5 +120,11 @@ void br_irq_demux(br_irq_domain_t *dom);
 /* Commit-failure count of the domain owning a SLOW member (direct line => 0); cross-TU read-only
  * accessor for br_irq_stats_get's br_irq_stat_t.drop. */
 br_u32 br_irq_domain_drop_of(const br_irq_desc_t *d);
+
+/* ---- exception table bounds (linker-provided) ----
+ * Collected by the platform linker script (`__br_extable_start`/`__br_extable_stop` around
+ * `KEEP(*(.br_extable))`). Declared here, not in irq_fault.c (ADR-0038 / R1). */
+extern const br_extable_t __br_extable_start[];
+extern const br_extable_t __br_extable_stop[];
 
 #endif /* BR_IRQ_INTERNAL_H */

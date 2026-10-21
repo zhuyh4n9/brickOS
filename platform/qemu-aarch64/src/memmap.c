@@ -12,9 +12,9 @@
 #include <br/platform/br_mmu.h>
 #include <br/platform/br_plat.h>
 
-/* Image/stack bounds from the linker script (single truth: platform/qemu-aarch64/src/link.ld) */
-extern char __image_start[];
-extern char __stack_top[];
+/* Image/stack bounds from the linker script (single truth: platform/qemu-aarch64/src/link.ld);
+ * declared in linker.h (ADR-0038 / R1). */
+#include "linker.h"
 
 #define MEM_ALIGN_UP(v, a)  (((v) + ((br_uintptr_t)(a) - 1ull)) & ~((br_uintptr_t)(a) - 1ull))
 

@@ -21,6 +21,12 @@
         "scope": "priv",
         "warnings": 0
       },
+      "src": {
+        "errors": 0,
+        "infos": 0,
+        "scope": "src",
+        "warnings": 0
+      },
       "tax": {
         "errors": 0,
         "infos": 0,
@@ -32,7 +38,8 @@
       "deps",
       "iface",
       "tax",
-      "priv"
+      "priv",
+      "src"
     ],
     "summary": {
       "closure": {

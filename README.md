@@ -15,7 +15,7 @@ v0.1.0 交付**声明期**(插件发现/校验/描述符生成 + `brickie` 组�
 | 域 | 新增 | ADR |
 |---|---|---|
 | core 启动与调度 | 四阶段启动链 `br_core_main`; 心跳/tick HZ 可配; 中断下半部 + 工作队列 + IRQ 出口抢占换栈; 时间片轮转(抢占)调度器 | 0008/0011/0016/0017 |
-| 组合期 | `brickie build`(声明面驱动, 取代组合段 Makefile); 声明依赖的**包含面**执法; 接口发布/冻结状态 | 0004/0018 |
+| 组合期 | `brickie build`(声明面驱动, 取代组合段 Makefile); 声明依赖的**包含面**执法; 接口发布/冻结状态; **源码纪律 R1/R2/R3**(`check --src` + `.a` 符号审计) | 0004/0018/0038 |
 | 服务与接口 | POSIX 运行时(`runtime/posix`)+ fd 表 + errno 逐值对齐 + `iface/posix` 皮肤; APP 只依赖 Interface | 0012/0014/0015/0019/0020 |
 | 错误码 | **POSIX 错误码的名字归 core**(`br/core/br_errno.h`)—— 有没有 POSIX 运行都拿得到同一套编号; 三方移植件因此不再各自抄映射表 | **0023** |
 | 存储 | VFS 存储栈(四层 ops + 瞬态 inode + 链接族); **bdev 块设备子分类**; 真 eMMC(SDHCI)三方驱动; 第三方 **FAT12/16/32** 与 **EROFS(只读 + LZ4)** 文件系统 | 0009/0013/0021/**0022** |
@@ -124,7 +124,7 @@ brickOS/
 ├── README.md                    本文件 · WORKAROUNDS.md WORKAROUND 登记表(欠债清单)
 ├── product.toml                 产品声明: 根记录(app/platform/core/[[product.ability]]) / 预算 / 时钟节拍(HZ) / 构建策略
 ├── mk/host.mk                   宿主三元组 + 宿主产物目录(build/host/… 与 prebuilts/…)
-├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`** / **0034 选择面收敛为闭包根(`[product].platform`/`ability`)** / **0035 根记录形态 `{ brick, requires }` + `[[product.ability]]`(硬切换, BRV-TAX-0024)** / **0036 `show bricks` + `show brick-init-flow`(运行期启动顺序); `phase = "app"` 收紧为非法** / **0037 APP 无 `early_init` 且其 init 最后(APP 相, `phase = "app"` 合法; TC-PLUG-004)**
+├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`** / **0034 选择面收敛为闭包根(`[product].platform`/`ability`)** / **0035 根记录形态 `{ brick, requires }` + `[[product.ability]]`(硬切换, BRV-TAX-0024)** / **0036 `show bricks` + `show brick-init-flow`(运行期启动顺序); `phase = "app"` 收紧为非法** / **0037 APP 无 `early_init` 且其 init 最后(APP 相, `phase = "app"` 合法; TC-PLUG-004)** / **0038 core 一等接口化(20 个单元, 一头一单位)+ `runtime/core` 规格皮肤 + 三条源码纪律(R1 自包含 / R2 全局不出插件 / R3 显式依赖; `.a` 符号审计强制)**
 ├── prebuilts/toolchain/         外部工具链**下载缓存**(派生, 不进库; fetch-prebuilt.py)
 ├── prebuilts/                   宿主工具**自举种子**(进库; 见下, 详见其 README): seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}
 ├── tools/                       host-detect.sh 宿主 arch/os 探测(布局映射的唯一真值) · check-workarounds.sh 源码标记 ↔ 登记表 一致性检查 · check-build.sh 构建接线门禁(宿主产物出树 / 自举种子进库)
@@ -134,7 +134,8 @@ brickOS/
 │       ├── python/brickie/      L5 前端(子命令 / 输出 / 退出码 / 文件编排) · schema/*.schema.json 声明面形状(机器可读)
 │       └── docs/contract.md     跨语言接口契约(唯一权威) · templates/ 骨架模板(五类 × c) · tests/ 端到端用例
 ├── app/hello/                   【APP 插件】MainLoop(镜像唯一 app; 下层一律经 iface 皮肤): brick.toml 人写 ← 插件级唯一真值([[dep]] iface/posix + iface/min) · src/main.c MainLoop(延时 + 日志 + 读心跳计数; 原 core/c_core/src/startup/main.c)
-├── iface/posix/                 【Interface 插件】POSIX 薄皮肤(ADR-0018): form = "skin", reexport_of = runtime/posix#posix; 零状态(皮肤里没有函数体) · iface/min/ 【Interface 插件】core native 极简别名皮肤(ADR-0020): form = "api" 直通日志/时钟/tick/版本, APP 不再直连 core 头
+├── iface/posix/                 【Interface 插件】POSIX 薄皮肤(ADR-0018): form = "skin", reexport_of = runtime/posix#posix; 零状态(皮肤里没有函数体) · iface/min/ 【Interface 插件】core 极简皮肤(ADR-0020/0038): form = "skin", reexport_of = runtime/core#{log,time,version}, APP 不再直连 core 头
+├── runtime/core/                【能力插件】core 层**规格皮肤**(ADR-0038): form = "skin", 把 core/c_core 的 20 个单元(一头一单位)原样转出, 是 core 层唯一的对外门; README 是 core 层规范正文 · core/c_core/ 【core 插件】20 个 [[export]] 单元 + 实现
 ├── core/c_core/                 【Core 插件】(ADR-0031: plugin_type = "core", **必须有且仅有一个**,
 │                                **不定义生命周期** —— 它是驱动者: br_core_main 四阶段链 + 插件管理器,
 │                                所以不参与它自己驱动的相位机; 它的头 br/core/** 是全体插件的环境包含基座)

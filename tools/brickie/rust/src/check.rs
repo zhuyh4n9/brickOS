@@ -16,7 +16,15 @@ use crate::diag::{Diag, Severity};
 use crate::model::{self, Plugin, TreeLoad};
 use crate::proto::{Request, Response};
 use crate::rules;
-use crate::solver::{self, SCOPE_DEPS, SCOPE_IFACE, SCOPE_PRIV, SCOPE_TAX};
+use crate::solver::{self, SCOPE_DEPS, SCOPE_IFACE, SCOPE_PRIV, SCOPE_SRC, SCOPE_TAX};
+use crate::srcscan;
+
+/// A function prototype (or an `extern` declaration) with no definition in the same `.c`.
+pub const CODE_SRC_DECL: &str = "BRV-SRC-0001";
+/// A file-scope object that is not `static`, or an object exported through a public header.
+pub const CODE_SRC_GLOBAL: &str = "BRV-SRC-0002";
+/// A header of a plugin that is not in the consumer's **direct** dependency set (ADR-0038).
+pub const CODE_DEP_UNDECLARED: &str = "BRV-DEP-0012";
 
 fn err(
     code: &str,
@@ -113,14 +121,18 @@ pub fn run(req: &Request) -> Response {
             SCOPE_IFACE.to_string(),
             SCOPE_TAX.to_string(),
             SCOPE_PRIV.to_string(),
+            SCOPE_SRC.to_string(),
         ];
     }
     for s in &scopes {
-        if !rules::in_list(&[SCOPE_DEPS, SCOPE_IFACE, SCOPE_TAX, SCOPE_PRIV], s) {
+        if !rules::in_list(
+            &[SCOPE_DEPS, SCOPE_IFACE, SCOPE_TAX, SCOPE_PRIV, SCOPE_SRC],
+            s,
+        ) {
             let mut d = base_diags.clone();
             d.usage(
                 format!("unknown check scope `{s}`"),
-                "legal scopes: deps | iface | tax | priv (§7.7)",
+                "legal scopes: deps | iface | tax | priv | src (§7.7, ADR-0038)",
             );
             return Response::ok(d, json!({}));
         }
@@ -143,12 +155,15 @@ pub fn run(req: &Request) -> Response {
     if scopes.iter().any(|s| s == SCOPE_PRIV) {
         scoped.extend(priv_checks(&tree, closure));
     }
+    if scopes.iter().any(|s| s == SCOPE_SRC) {
+        scoped.extend(src_checks(&root, &tree, closure));
+    }
 
     let only = req.arg_str("plugin").filter(|s| !s.is_empty());
 
     let mut summary_diags = base_diags.clone();
     let mut scope_results = serde_json::Map::new();
-    for scope in [SCOPE_DEPS, SCOPE_IFACE, SCOPE_TAX, SCOPE_PRIV] {
+    for scope in [SCOPE_DEPS, SCOPE_IFACE, SCOPE_TAX, SCOPE_PRIV, SCOPE_SRC] {
         if !scopes.iter().any(|s| s == scope) {
             continue;
         }
@@ -211,9 +226,14 @@ pub fn run(req: &Request) -> Response {
     Response::ok(summary_diags, data)
 }
 
-/// An `#include` of another plugin's header with no declared dependency (direct or transitive).
-/// Uses the same scan as `build` (`model::cross_plugin_includes`) -- the two must not diverge. `-I`
-/// narrowing alone is not enough: the target glibc headers shadow common names.
+/// An `#include` of another plugin's header that the consumer did not declare (directly, or
+/// through a directly declared skin). Uses the same scan as `build` (`model::cross_plugin_includes`)
+/// — the two must not diverge.
+///
+/// ADR-0038 tightened the criterion from "transitive dependency closure" to "**direct** dependency
+/// set ∪ the units a directly declared skin re-exports": using C through B is an implicit
+/// dependency on C, which the declaration surface must show. `-I` narrowing alone is not enough:
+/// the target toolchain's glibc headers shadow common names like `unistd.h`.
 fn deps_usage_checks(
     root: &std::path::Path,
     tree: &TreeLoad,
@@ -231,49 +251,221 @@ fn deps_usage_checks(
         {
             continue;
         }
-        // A-2: only an APP consumer of core headers is a violation (others already include them).
-        if u.provider == "core" {
+        // A-2: an APP must not reach below the iface layer. Any *other* consumer is judged by the
+        // ordinary dependency rule below (ADR-0038: core is a provider like any other, so its
+        // headers need `[[dep]] runtime/core` -- no ambient exemption).
+        if u.provider == "core/c_core" {
             let is_app = tree
                 .plugins
                 .iter()
                 .any(|p| p.name == u.consumer && p.plugin_type == "app");
-            if !is_app {
+            if is_app {
+                out.push((
+                    SCOPE_DEPS,
+                    err(
+                        "BRV-MF-0001",
+                        &u.consumer,
+                        &u.file,
+                        "include",
+                        format!(
+                            "`{}` (APP) directly includes core header `{}`: APP must not depend on interfaces below the iface layer",
+                            u.consumer, u.header
+                        ),
+                        "ADR-0020 / A-2: use it via an Interface skin (e.g. `<iface/min/min.h>` re-exporting br_log_*/br_clock_*), or add an entry for this core surface to a skin",
+                    ),
+                ));
                 continue;
             }
-            out.push((
-                SCOPE_DEPS,
-                err(
-                    "BRV-MF-0001",
-                    &u.consumer,
-                    &u.file,
-                    "include",
-                    format!(
-                        "`{}` (APP) directly includes core header `{}`: APP must not depend on interfaces below the iface layer",
-                        u.consumer, u.header
-                    ),
-                    "ADR-0020 / A-2: use it via an Interface skin (e.g. `<iface/min/min.h>` re-exporting br_log_*/br_clock_*), or add an entry for this core surface to a skin",
-                ),
-            ));
-            continue;
         }
-        if model::dep_closure(tree, &u.consumer).contains(&u.provider) {
+        if model::dep_direct_auth(tree, &u.consumer).contains(&u.provider) {
             continue;
         }
         out.push((
             SCOPE_DEPS,
             err(
-                "BRV-MF-0001",
+                CODE_DEP_UNDECLARED,
                 &u.consumer,
                 &u.file,
                 "include",
                 format!(
-                    "`{}` includes `{}`'s header `{}`, but `brick.toml` declares no dependency (direct or transitive)",
-                    u.consumer, u.provider, u.header
+                    "`{}` includes `{}`'s header `{}`, but `brick.toml` declares no **direct** dependency on `{}`",
+                    u.consumer, u.provider, u.header, u.provider
                 ),
-                "ADR-0018: compile-time include surface = declared dependency closure; add a `[[dep]]` or drop this include (gap workaround R-9: no dedicated code)",
+                "ADR-0038: transitive dependencies do not authorize; add `[[dep]] {provider}` (or a skin that re-exports it), or drop the include",
             ),
         ));
     }
+    out
+}
+
+/// The `src` scope (ADR-0038): the two source-text disciplines that the declaration surface cannot
+/// see. Zero compiler dependency (ruling R-13). Skipped for `third_party/**` sources (vendor code
+/// is not this repo's to discipline) and for plugin-private headers that a vendor TU must see; the
+/// precise, compiler-backed counterpart is the `.a` symbol audit in `brickie build`.
+fn src_checks(
+    root: &std::path::Path,
+    tree: &TreeLoad,
+    closure: &solver::Closure,
+) -> Vec<(&'static str, Diag)> {
+    let mut out: Vec<(&'static str, Diag)> = Vec::new();
+    let selftest_on = tree
+        .product
+        .as_ref()
+        .map(|p| p.selftest_on())
+        .unwrap_or(false);
+    let selected: Vec<&Plugin> = tree
+        .plugins
+        .iter()
+        .filter(|p| closure.selected.contains(&p.name))
+        .collect();
+
+    for p in &selected {
+        let dir = p.name.clone();
+        let b = p.build.clone().unwrap_or_default();
+        // A plugin that compiles vendor code shares its translation units' globals on purpose
+        // (`fs/uboot-erofs/glue` must define `sbi` for u-boot's own `namei.c`). The *precise*
+        // criterion — does a data symbol leave the plugin? — is the `.a` audit, so the textual
+        // `static` rule is relaxed only here.
+        let vendor = model::carries_vendor_code(&dir, p.build.as_ref());
+
+        // (1) public headers must not export an object at all
+        for inc in &b.includes {
+            for h in headers_under(root, &format!("{dir}/{inc}")) {
+                if is_vendor_path(&h) || vendor {
+                    continue;
+                }
+                let Ok(text) = std::fs::read_to_string(root.join(&h)) else {
+                    continue;
+                };
+                let sc = srcscan::scan(&text);
+                for d in sc.extern_objects.iter().chain(sc.nonstatic_objects.iter()) {
+                    out.push((
+                        SCOPE_SRC,
+                        err(
+                            CODE_SRC_GLOBAL,
+                            &p.name,
+                            &h,
+                            format!("line {}", d.line),
+                            format!(
+                                "public header exports object `{}` ({}): a plugin's surface may carry functions, types and macros, but not variables",
+                                d.name,
+                                if d.text.starts_with("extern") { "extern object" } else { "tentative definition" }
+                            ),
+                            "ADR-0038 / R2: keep the object `static` in the .c and expose an accessor function, or move the accessor into the header",
+                        ),
+                    ));
+                }
+            }
+        }
+
+        // (2) each compilation unit is self-contained
+        let mut sources: Vec<String> = Vec::new();
+        for pat in &b.sources {
+            sources.extend(crate::build::expand_glob(root, &dir, pat));
+        }
+        if selftest_on && p.plugin_type == "core" {
+            if let Some(pb) = tree.product.as_ref().and_then(|x| x.build.as_ref()) {
+                for pat in &pb.selftest_sources {
+                    sources.extend(crate::build::expand_glob(root, "", pat));
+                }
+            }
+        }
+        sources.sort();
+        sources.dedup();
+        for s in &sources {
+            if !s.ends_with(".c") || is_vendor_path(s) {
+                continue;
+            }
+            let Ok(text) = std::fs::read_to_string(root.join(s)) else {
+                continue;
+            };
+            let sc = srcscan::scan(&text);
+            for d in sc
+                .prototypes
+                .iter()
+                .filter(|d| !sc.defined.contains(&d.name))
+            {
+                out.push((
+                    SCOPE_SRC,
+                    err(
+                        CODE_SRC_DECL,
+                        &p.name,
+                        s,
+                        format!("line {}", d.line),
+                        format!(
+                            "`{}` is declared here but never defined in this file: a `.c` must not carry a declaration it does not implement",
+                            d.name
+                        ),
+                        "ADR-0038 / R1: move the prototype into a header (the declaration surface), or add the definition",
+                    ),
+                ));
+            }
+            for d in sc.externs.iter().filter(|d| !sc.defined.contains(&d.name)) {
+                out.push((
+                    SCOPE_SRC,
+                    err(
+                        CODE_SRC_DECL,
+                        &p.name,
+                        s,
+                        format!("line {}", d.line),
+                        format!(
+                            "`extern` declaration of `{}` with no definition in this file (cross-translation-unit declarations belong in a header)",
+                            d.name
+                        ),
+                        "ADR-0038 / R1: declare it in a header (a private `<plugin>/xxx_internal.h` is enough) and include that",
+                    ),
+                ));
+            }
+            if !vendor {
+                for d in &sc.nonstatic_objects {
+                    out.push((
+                        SCOPE_SRC,
+                        err(
+                            CODE_SRC_GLOBAL,
+                            &p.name,
+                            s,
+                            format!("line {}", d.line),
+                            format!(
+                                "file-scope object `{}` has external linkage: globals must not leave the plugin",
+                                d.name
+                            ),
+                            "ADR-0038 / R2: make it `static` and expose a function when another translation unit genuinely needs it",
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Vendor code is not this repo's to discipline (and its globals are shared with the vendored
+/// translation units on purpose). Accepts un-normalized paths such as
+/// `fs/uboot-erofs/../../third_party/uboot-imx/fs/erofs/erofs_fs.h`.
+fn is_vendor_path(p: &str) -> bool {
+    p.starts_with("third_party/") || p.contains("/third_party/")
+}
+
+/// Headers (`*.h`) under one root-relative include directory, recursively, sorted.
+fn headers_under(root: &std::path::Path, dir: &str) -> Vec<String> {
+    fn walk(root: &std::path::Path, dir: &std::path::Path, out: &mut Vec<String>) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let mut items: Vec<std::path::PathBuf> = entries.flatten().map(|e| e.path()).collect();
+        items.sort();
+        for path in items {
+            if path.is_dir() {
+                walk(root, &path, out);
+            } else if path.extension().and_then(|s| s.to_str()) == Some("h") {
+                if let Ok(rel) = path.strip_prefix(root) {
+                    out.push(rel.to_string_lossy().replace('\\', "/"));
+                }
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(root, &root.join(dir), &mut out);
     out
 }
 
@@ -336,36 +528,33 @@ fn iface_checks(
         }
     }
 
-    let mut by_unit: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
+    // Unit identity is `<provider>#<unit>` (§5.6), and that is what must be unique: a unit file
+    // lives at `api/iface/<provider>/<unit>.toml`, so two providers may each call a unit `trace`.
+    // (ADR-0038 §3 moved this from bare unit names to ids: `core/c_core#trace` and
+    // `service/trace#trace` are different units and now coexist, which "one header = one unit"
+    // naming needs.)
+    let mut by_id: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for p in &selected {
         for e in &p.exports {
-            by_unit
-                .entry(e.name.clone())
-                .or_default()
-                .push(p.name.clone());
-        }
-    }
-    for (unit, providers) in &by_unit {
-        if providers.len() > 1 {
-            let file = tree
-                .by_name(&providers[1])
-                .map(|p| p.file.clone())
-                .unwrap_or_default();
-            out.push((
-                SCOPE_IFACE,
-                err(
-                    "BRV-MF-0001",
-                    &providers[1],
-                    &file,
-                    "export.name",
-                    format!(
-                        "unit name `{unit}` is exported by multiple plugins in the closure: {} (interface unit ids must be unique)",
-                        providers.join(", ")
+            let id = e.unit_id(&p.name);
+            if let Some(first) = by_id.get(&id) {
+                out.push((
+                    SCOPE_IFACE,
+                    err(
+                        "BRV-MF-0001",
+                        &p.name,
+                        &p.file,
+                        "export.name",
+                        format!(
+                            "interface unit id `{id}` is declared twice in the closure: {first} and {} (unit ids must be unique)",
+                            p.file
+                        ),
+                        "§5.6: a unit is identified by `<provider>#<unit>`; two `[[export]]` blocks of one plugin cannot share a name",
                     ),
-                    "gap workaround (R-9): no dedicated code for unit-level collision; §2 item 4 only requires unit-level checking",
-                ),
-            ));
+                ));
+            } else {
+                by_id.insert(id, p.file.clone());
+            }
         }
     }
 

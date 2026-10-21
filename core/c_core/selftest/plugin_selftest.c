@@ -69,6 +69,8 @@ static br_bool cycle_negative_case(void)
 
 int br_plugin_selftest(void)
 {
+    const br_plugin_mgr_view_t *v = br_plugin_mgr_view();
+
     s_pc_pass = 0u;
     s_pc_fail = 0u;
 
@@ -93,34 +95,34 @@ int br_plugin_selftest(void)
 
     /* ---- TC-PLUG-002: topological order satisfies every init edge (per-edge check) ---- */
     {
-        br_bool ok = s_sorted;
+        br_bool ok = v->sorted;
         const char *bad_from = BR_NULL;
         const char *bad_to = BR_NULL;
-        for (br_u32 e = 0u; e < s_edge_count && ok; e++) {
-            const br_u16 f = s_edges[e].from;
-            const br_u16 t = s_edges[e].to;
+        for (br_u32 e = 0u; e < v->edge_count && ok; e++) {
+            const br_u16 f = v->edges[e].from;
+            const br_u16 t = v->edges[e].to;
             /* from depends on to => to must come earlier */
-            if (!(s_pos[t] < s_pos[f])) {
+            if (!(v->pos[t] < v->pos[f])) {
                 ok = BR_FALSE;
-                bad_from = s_plugins[f]->name;
-                bad_to = s_plugins[t]->name;
+                bad_from = v->plugins[f]->name;
+                bad_to = v->plugins[t]->name;
             }
         }
         if (!ok && bad_from != BR_NULL) {
             br_log_info("[PLGCONF] violating edge: %s -> %s", bad_from, bad_to);
         }
-        br_log_info("[PLGCONF] init_edges=%u", s_edge_count);
+        br_log_info("[PLGCONF] init_edges=%u", v->edge_count);
         pc_report(ok, "TC-PLUG-002", "topological order satisfies all init edges (per-edge check)");
     }
 
     /* ---- TC-PLUG-003: phase monotonicity + order invariants (APP last / after all starts) ----
-     * selftest runs after every start returned, so s_in_app_start is always BR_FALSE; reaching
+     * selftest runs after every start returned, so `in_app_start` is always BR_FALSE; reaching
      * BR_PHASE_APP self-witnesses that the START phase finished. */
     {
         br_bool ok = BR_TRUE;
-        for (br_u32 e = 0u; e < s_edge_count; e++) {
-            const br_plugin_t *a = s_plugins[s_edges[e].from];   /* consumer */
-            const br_plugin_t *b = s_plugins[s_edges[e].to];     /* provider */
+        for (br_u32 e = 0u; e < v->edge_count; e++) {
+            const br_plugin_t *a = v->plugins[v->edges[e].from];   /* consumer */
+            const br_plugin_t *b = v->plugins[v->edges[e].to];     /* provider */
             const br_u32 ra = init_phase_of(a);
             const br_u32 rb = init_phase_of(b);
             if (rb > ra) {
@@ -132,15 +134,15 @@ int br_plugin_selftest(void)
         pc_report(ok, "TC-PLUG-003",
                   "phase monotonicity: provider completion rank <= consumer for every init edge");
 
-        pc_report((s_plat_index != (br_u32)-1) && (s_first_early_name != BR_NULL)
-                  && (s_first_early_name == s_plugins[s_plat_index]->name),
+        pc_report((v->plat_index != (br_u32)-1) && (v->first_early_name != BR_NULL)
+                  && (v->first_early_name == v->plugins[v->plat_index]->name),
                   "TC-PLUG-003",
                   "first early-phase step = platform plugin's early_init (explicit plugin_type, not topological order)");
 
-        pc_report(s_app_start_last_ok, "TC-PLUG-003",
+        pc_report(v->app_start_last_ok, "TC-PLUG-003",
                   "APP last: before the first APP start, all non-APP starts had completed");
 
-        pc_report((s_in_app_start == BR_FALSE) &&
+        pc_report((v->in_app_start == BR_FALSE) &&
                   (br_plugin_phase_reached() == BR_PHASE_APP), "TC-PLUG-003",
                   "selftest timing: runs after ALL starts returned (inside no start), and phase already reached APP");
     }
@@ -153,15 +155,15 @@ int br_plugin_selftest(void)
      *   trace of the last init to run must be the APP, whenever the APP has an init hook at all
      *   (`phase = "early"` means "no init hook", and then rule ② has no subject). */
     {
-        const br_plugin_t *app = (s_app_init_index != (br_u32)-1) ? s_plugins[s_app_init_index] : BR_NULL;
+        const br_plugin_t *app = (v->app_init_index != (br_u32)-1) ? v->plugins[v->app_init_index] : BR_NULL;
 
-        pc_report(s_app_early_init_ok && (s_app_init_index != (br_u32)-1) &&
+        pc_report(v->app_early_init_ok && (v->app_init_index != (br_u32)-1) &&
                   (app != BR_NULL) && (app->early_init == BR_PLUGIN_NO_HOOK),
                   "TC-PLUG-004",
                   "APP has no early_init: its descriptor carries BR_PLUGIN_NO_HOOK (registration is section-driven)");
 
         if (app != BR_NULL && app->init != BR_PLUGIN_NO_HOOK) {
-            pc_report((s_last_init_name != BR_NULL) && (s_last_init_name == app->name),
+            pc_report((v->last_init_name != BR_NULL) && (v->last_init_name == app->name),
                       "TC-PLUG-004",
                       "APP init is last: no plugin's init ran after the APP's");
             pc_report(init_phase_of(app) == BR_PHASE_APP, "TC-PLUG-004",

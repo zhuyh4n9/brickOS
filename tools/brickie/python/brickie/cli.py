@@ -201,7 +201,8 @@ def build_parser() -> argparse.ArgumentParser:
     check.add_argument("--iface", dest="scope_iface", action="store_true", help="check the interface domain only")
     check.add_argument("--tax", dest="scope_tax", action="store_true", help="check the taxonomy domain only")
     check.add_argument("--priv", dest="scope_priv", action="store_true", help="check the privilege/resource domain only")
-    check.add_argument("--all", dest="scope_all", action="store_true", help="all four domains (default)")
+    check.add_argument("--src", dest="scope_src", action="store_true", help="check the source-text disciplines only (self-contained .c / globals stay inside the plugin)")
+    check.add_argument("--all", dest="scope_all", action="store_true", help="all five domains (default)")
     check.add_argument("--profile", default="dev", metavar="<profile>", help="dev (default) | release")
 
     ver = sub.add_parser("ver", help="version management (§5 / §7.7)",
@@ -969,9 +970,9 @@ def _cmd_clean(ns: argparse.Namespace) -> Result:
 def _cmd_check(ns: argparse.Namespace) -> Result:
     root = _root_of(ns)
     profile = _enum(ns.profile, ("dev", "release"), "--profile")
-    scopes = [s for s in ("deps", "iface", "tax", "priv") if getattr(ns, f"scope_{s}")]
+    scopes = [s for s in ("deps", "iface", "tax", "priv", "src") if getattr(ns, f"scope_{s}")]
     if ns.scope_all or not scopes:
-        scopes = ["deps", "iface", "tax", "priv"]
+        scopes = ["deps", "iface", "tax", "priv", "src"]
 
     extra = {"profile": profile}
     gate = _shape_gate(root, ("plugin", "product"))

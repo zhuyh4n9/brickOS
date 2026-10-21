@@ -32,6 +32,15 @@ br_u32  = "uint32_t"
 br_u8   = "uint8_t"
 br_bool = "bool"
 
+# core layer (ADR-0038): core is a first-class interface provider and this platform uses it
+# (`br_log_*` during early init, `br_plat_ticks_*` feeds core's clock, `br_fault_enter` on
+# exceptions). The dependency is on `core/c_core` itself, not on the `runtime/core` skin: the
+# direction table makes `platform` the lowest SoC level, so it may not depend on an ability plugin.
+[[dep]]
+name  = "core/c_core"
+range = ">=0.1.0"
+kind  = "runtime"
+
 [[export]]
 name         = "plat"
 api_iface    = "native"

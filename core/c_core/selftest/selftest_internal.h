@@ -1,0 +1,27 @@
+/*
+ * Self-test suite entries of the subsystems (core-private; ADR-0038 / R1).
+ *
+ * These are **not** plugin public capabilities: a test entry in `br_*.h` would make adding a case
+ * look like an interface change. They are declared here — one header, so the aggregator in
+ * `core_selftest.c` carries no cross-translation-unit declaration of its own — and each suite
+ * defines its entry in the same selftest source file that implements the cases.
+ */
+#ifndef BR_CORE_SELFTEST_INTERNAL_H
+#define BR_CORE_SELFTEST_INTERNAL_H
+
+/* Plugin manager (segment scan / topology / phases / APP last). */
+int br_plugin_selftest(void);
+
+/* Service registry (publish / lookup / error codes). */
+int br_service_selftest(void);
+
+/* Scheduling framework + the chosen scheduler (real threads: create/yield/join/sleep). */
+int br_sched_selftest(void);
+
+/* Sync primitives + time (the wait surface of sync.c / sched_core.c). */
+int br_sync_selftest(void);
+
+/* Bottom half / workqueue (ADR-0011: bounded / FIFO / non-reentrant / bh bans). */
+int br_work_selftest(void);
+
+#endif /* BR_CORE_SELFTEST_INTERNAL_H */

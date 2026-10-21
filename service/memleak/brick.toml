@@ -31,6 +31,15 @@ br_size_t    = "size_t"
 br_uintptr_t = "uintptr_t"
 br_owner_t   = "uint16_t"
 
+# core layer (ADR-0038): core is a first-class interface provider. Every consumer declares it --
+# transitively reaching `<br/core/**>` through another plugin no longer authorizes anything. The
+# door is the skin `runtime/core` (one unit per header); `platform` names `core/c_core` directly
+# because the direction table forbids a platform from depending on an ability plugin.
+[[dep]]
+name  = "runtime/core"
+range = ">=0.1.0"
+kind  = "runtime"
+
 [[export]]
 api_iface    = "native"
 form         = "api"

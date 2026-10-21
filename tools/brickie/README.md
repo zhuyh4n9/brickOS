@@ -16,7 +16,8 @@
 | Family | Commands | Purpose |
 |---|---|---|
 | **Scaffold** | `new <ptype> <name>` · `init <product>` · `gen [--check]` | Generate plugin/product skeletons; rebuild `build/gen/**` artifacts |
-| **Dependencies & validation** | `dep {add,rm,tree,graph,why,index,closure}` · `show {bricks,brick-init-flow}` · `check [--deps\|--iface\|--tax\|--priv\|--all] [--profile dev\|release]` | Closure/tree/graph/path/reverse index (machine view) · **readable views**: which bricks are in the image and in what order they boot (ADR-0036) · four-domain completeness |
+| **Source disciplines** | `check --src` (ADR-0038) | R1 "a `.c` implements what it declares", R2 "globals never leave the plugin" -- pure text, zero compiler dependency; the precise symbol half runs inside `brickie build` (`.a` + `nm` audit) |
+| **Dependencies & validation** | `dep {add,rm,tree,graph,why,index,closure}` · `show {bricks,brick-init-flow}` · `check [--deps\|--iface\|--tax\|--priv\|--src\|--all] [--profile dev\|release]` | Closure/tree/graph/path/reverse index (machine view) · **readable views**: which bricks are in the image and in what order they boot (ADR-0036) · five-domain completeness (`src` = the source-text disciplines of ADR-0038) |
 | **Version & interface** | `ver {show,bump}` · `iface {list,show,diff,status,publish,freeze,deprecate,undeprecate,unfreeze,refreeze}` | Four-segment version + unit snapshot / freeze-window governance |
 | **Build family (second family)** | `build [--profile\|--jobs\|--backend\|--tag\|--dry-run\|--force\|--emit-backends\|--no-post]` · `clean [--all]` · `run` · `size` · `disasm` · `test [<name>\|--list]` | Declaration-surface-driven build orchestration + execution + gates (build/clean/run/size/disasm/test; core also has `judge`, serving only internal L5 calls) |
 | **Global switches** | `--version [--deps]` · `--json` (also `--root DIR`) | Fingerprint / machine-readable output / root override |
@@ -132,7 +133,7 @@ make prebuilt-check  # whether the three pieces lag behind the sources (does not
 The image is built by brickie:
 
 ```sh
-build/host/<triple>/bin/brickie build            # image entry: composition-period check → gen → compile → link → [build].post
+build/host/<triple>/bin/brickie build            # image entry: composition-period check → gen → compile → ar → symbol audit → link → [build].post
 build/host/<triple>/bin/brickie build --dry-run  # print the plan only (needs no compiler; use case V-B uses it)
 build/host/<triple>/bin/brickie test             # run all gates in tests/gates.toml
 build/host/<triple>/bin/brickie clean --all      # clean image-side derivatives (leaves build/host tools alone)

@@ -6,13 +6,7 @@
  */
 #include <br/core/br_types.h>
 
-/* Selftest entries of each subsystem, declared here not in public headers: they are not plugin
- * public capabilities (a test surface in br_*.h would make a case edit an interface change). */
-int br_plugin_selftest(void);   /* player: plugin manager (segments/topology/phases/APP last) */
-int br_service_selftest(void);  /* service registry (publish/lookup/error codes) */
-int br_sched_selftest(void);    /* scheduling framework + chosen scheduler (real-thread create/yield/join/sleep) */
-int br_sync_selftest(void);     /* sync primitives + time (the wait surface of sync.c/sched_core.c) */
-int br_work_selftest(void);     /* bottom half / workqueue (ADR-0011: bounded/FIFO/non-reentrant/bh bans) */
+#include "selftest_internal.h"
 
 /* The only public entry; weakly referenced by plugin_mgr (needs -Wmissing-prototypes). */
 int br_core_selftest(void);

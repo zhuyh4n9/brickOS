@@ -5,11 +5,11 @@
 //! reported here for V-18a -- check.rs must not re-report them. `Snapshot` / `Lock` are read-only;
 //! parsing is via `toml::Value` (no serde derive).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::diag::{Diags, Severity};
+use crate::diag::{Diag, Diags, Severity};
 use crate::rules;
 use crate::version::{self, Range, Version};
 
@@ -1431,6 +1431,25 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             if !en.kind.is_empty() {
                 check_enum(d, &p.name, &file, &espan, "kind", &en.kind, rules::ENTRY_KINDS);
             }
+            // R2 (ADR-0038): a plugin's surface carries functions, types and macros -- never an
+            // object. `var` stays in the schema enum so the shape stays parseable; the discipline
+            // reports it here with the code that owns the rule (exit 1, not 2).
+            if en.kind == "var" {
+                d.push(
+                    Diag::new(
+                        Severity::Error,
+                        format!(
+                            "export entry `{}` is a `var`: a plugin must not export a variable (globals stay inside the plugin)",
+                            en.name
+                        ),
+                    )
+                    .code("BRV-SRC-0002")
+                    .target(&p.name)
+                    .file(&file)
+                    .span(&espan)
+                    .hint("ADR-0038 / R2: expose an accessor function (`kind = \"func\"`) instead; the object itself stays `static` in the .c"),
+                );
+            }
             en.name = req_str(et, "name", &p.name, &file, &espan, d).unwrap_or_default();
             en.sig = opt_str(et, "sig", &p.name, &file, &espan, d);
             en.layout = opt_str(et, "layout", &p.name, &file, &espan, d);
@@ -2126,6 +2145,38 @@ pub fn dep_closure(tree: &TreeLoad, name: &str) -> std::collections::BTreeSet<St
     seen
 }
 
+/// The **authorization set** of a plugin (ADR-0038): its direct `[[dep]]` targets, plus -- for a
+/// directly declared *skin* -- the units that skin re-exports, transitively.
+///
+/// Transitive dependencies do **not** authorize: using `C` through `B` needs an explicit
+/// `[[dep]] C` on the consumer. A skin is the one sanctioned indirection (`form = "skin"` declares
+/// "this unit *is* that provider's unit"), which is why `app/hello` reaches POSIX and core through
+/// `iface/*` without declaring either.
+pub fn dep_direct_auth(tree: &TreeLoad, name: &str) -> BTreeSet<String> {
+    let mut out: BTreeSet<String> = BTreeSet::new();
+    let Some(p) = tree.by_name(name) else {
+        return out;
+    };
+    let mut frontier: Vec<String> = p.deps.iter().map(|d| d.name.clone()).collect();
+    while let Some(n) = frontier.pop() {
+        if !out.insert(n.clone()) {
+            continue;
+        }
+        let Some(q) = tree.by_name(&n) else { continue };
+        let all_skin = !q.exports.is_empty() && q.exports.iter().all(|e| e.form == "skin");
+        if all_skin {
+            for e in &q.exports {
+                for r in &e.reexport_of {
+                    if let Some((pn, _)) = r.split_once('#') {
+                        frontier.push(pn.to_string());
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
 /// One cross-plugin `#include` (a header owned by another selected plugin, used in consumer source).
 #[derive(Clone, Debug)]
 pub struct IncludeUse {
@@ -2162,17 +2213,9 @@ pub fn cross_plugin_includes(
         for f in plugin_source_files(root, p) {
             let Ok(text) = fs::read_to_string(root.join(&f)) else { continue };
             for h in scan_include_names(&text) {
-                // core headers: core is not a plugin, so record synthetic provider `"core"`;
-                // the caller judges by consumer class (direct core includes are forbidden, A-2).
-                if h.starts_with("br/core/") {
-                    out.push(IncludeUse {
-                        consumer: p.name.clone(),
-                        provider: "core".to_string(),
-                        header: h.clone(),
-                        file: f.clone(),
-                    });
-                    continue;
-                }
+                // `<br/core/**>` is owned by the core plugin like any other header: since ADR-0038
+                // core is a first-class interface provider, so "who owns this header" needs no
+                // special case -- only the APP rule (A-2) judges by consumer class.
                 for (dir, owner) in &inc_owner {
                     if owner == &p.name {
                         continue; // own header

@@ -31,6 +31,2156 @@ notes    = "静态部分: 中断描述符池/运行期表/域池 ≈ 8.3 KiB + t
 # Self-test is **not** a lifecycle phase: the core plugin declares its suite here like any other
 # plugin, and the generated descriptor emits `.selftest = br_core_selftest` (the suite entry in
 # selftest/). Off ⇒ the product switch writes NO_HOOK and the suite is not compiled.
+
+# `[iface.typedefs]`: the surface hash expands these aliases to their canonical C spelling, so a
+# future non-C core (`runtime/...` implemented in Rust) whose normalised signatures match still
+# produces the same `surface_hash` (iface.rs::canonical_sig).
+[iface.typedefs]
+br_u8       = "unsigned char"
+br_s8       = "signed char"
+br_u16      = "unsigned short"
+br_s16      = "signed short"
+br_u32      = "unsigned int"
+br_s32      = "signed int"
+br_u64      = "unsigned long"
+br_s64      = "signed long"
+br_size_t   = "unsigned long"
+br_uintptr_t = "unsigned long"
+br_intptr_t = "signed long"
+br_bool     = "int"
+br_time_t   = "br_u64"
+br_err_t    = "int"
+
+# ---------------------------------------------------------------- unit `log`: <br/core/br_log.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "log"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "enum"
+name = "br_log_level_t"
+ops = ["BR_LOG_DEBUG", "BR_LOG_INFO", "BR_LOG_WARN", "BR_LOG_ERROR", "BR_LOG_LEVEL_COUNT"]
+[[export.entries]]
+kind = "func"
+name = "br_log_get_level"
+sig = "br_log_level_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_log_init"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_log_set_level"
+sig = "void (br_log_level_t)"
+[[export.entries]]
+kind = "func"
+name = "br_log_write"
+sig = "void (br_log_level_t,const char *,...)"
+
+# ---------------------------------------------------------------- unit `console`: <br/core/br_console.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "console"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_console_init"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_console_putc"
+sig = "void (char)"
+[[export.entries]]
+kind = "func"
+name = "br_console_puts"
+sig = "void (const char *)"
+[[export.entries]]
+kind = "func"
+name = "br_console_write"
+sig = "void (const char *,br_size_t)"
+
+# ---------------------------------------------------------------- unit `mem`: <br/core/br_mem.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "mem"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_dma_buf_t"
+layout = "# {vaddr, dma_addr, size}"
+[[export.entries]]
+kind = "type"
+name = "br_heap_block_t"
+layout = "# {addr, size, block, owner, caller, seq}"
+[[export.entries]]
+kind = "type"
+name = "br_heap_stats_t"
+layout = "# {total, used, free_bytes, max_free_block, high_water, n_alloc, n_free, n_live, n_fail, redzone_hits, canary_hits, double_free, bad_free, owner_count}"
+[[export.entries]]
+kind = "type"
+name = "br_heap_walk_fn"
+[[export.entries]]
+kind = "type"
+name = "br_mem_layout_t"
+layout = "# {heap, contig, page, dma, page_size, page_total}"
+[[export.entries]]
+kind = "type"
+name = "br_owner_t"
+[[export.entries]]
+kind = "type"
+name = "br_page_stats_t"
+layout = "# {total, used, free, fail, max_run}"
+[[export.entries]]
+kind = "type"
+name = "br_pool_t"
+layout = "# {base, size}"
+[[export.entries]]
+kind = "func"
+name = "br_calloc"
+sig = "void * (br_size_t,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_dma_alloc"
+sig = "int (br_size_t,br_u32,br_dma_buf_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_dma_free"
+sig = "int (const br_dma_buf_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_free"
+sig = "void (void *)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_check"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_owner_get"
+sig = "br_owner_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_owner_name"
+sig = "const char * (br_owner_t)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_owner_register"
+sig = "br_owner_t (const char *)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_owner_set"
+sig = "br_owner_t (br_owner_t)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_stats_get"
+sig = "int (br_heap_stats_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_usage"
+sig = "int (br_size_t *,br_size_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_walk"
+sig = "int (br_heap_walk_fn,void *)"
+[[export.entries]]
+kind = "func"
+name = "br_malloc"
+sig = "void * (br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_alloc_contig"
+sig = "int (br_size_t,br_size_t,void **)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_free_contig"
+sig = "void (void *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_init"
+sig = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_layout"
+sig = "int (br_mem_layout_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_ready"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_page_alloc"
+sig = "void * (br_size_t,br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_page_free"
+sig = "void (void *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_page_stats"
+sig = "int (br_page_stats_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_realloc"
+sig = "void * (void *,br_size_t)"
+[[export.entries]]
+kind = "macro"
+name = "BR_DMA_F_ALIGN4K"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DMA_F_CACHED"
+value = "0x0004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DMA_F_ZERO"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MALLOC_ALIGN"
+value = "16u"
+[[export.entries]]
+kind = "macro"
+name = "BR_OWNER_NONE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PAGE_F_CONTIG"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PAGE_F_ZERO"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PAGE_SIZE"
+value = "4096u"
+
+# ---------------------------------------------------------------- unit `mm`: <br/core/br_mm.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "mm"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_mm_ops_t"
+[[export.entries]]
+kind = "type"
+name = "br_mm_region_t"
+layout = "# {base, size, attrs}"
+[[export.entries]]
+kind = "func"
+name = "br_mm_activate"
+sig = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_active"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_cache_flush"
+sig = "int (void *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_cache_invalidate"
+sig = "int (void *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_map"
+sig = "int (const br_mm_region_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_query"
+sig = "int (br_uintptr_t,br_size_t,br_u32 *)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_add"
+sig = "int (const br_mm_region_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_count"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_count_kind"
+sig = "br_u32 (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_find"
+sig = "const br_mm_region_t * (br_uintptr_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_get"
+sig = "const br_mm_region_t * (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_register"
+sig = "int (const br_mm_ops_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_set_attrs"
+sig = "int (br_uintptr_t,br_size_t,br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_unmap"
+sig = "int (br_uintptr_t,br_size_t)"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_CACHED"
+value = "0x0008u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_DEVICE"
+value = "0x0004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_CONTIG"
+value = "4u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_DMA"
+value = "6u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_HEAP"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_IMAGE"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_MASK"
+value = "0x00000F00u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_MMIO"
+value = "7u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_NONE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_PAGE"
+value = "5u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_RESERVED"
+value = "8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_SHIFT"
+value = "8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_STACK"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_MAX_REGIONS"
+value = "24u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_NX"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_RO"
+value = "0x0001u"
+
+# ---------------------------------------------------------------- unit `sched`: <br/core/br_sched.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "sched"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_sched_ops_t"
+[[export.entries]]
+kind = "type"
+name = "br_task_attr_t"
+[[export.entries]]
+kind = "type"
+name = "entry"
+[[export.entries]]
+kind = "func"
+name = "br_sched_block_current"
+sig = "int (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_irq_epilogue"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_on_tick"
+sig = "void (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_ready_count"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_register"
+sig = "void (const br_sched_ops_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_registered"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_request_resched"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_resched_pending"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_run"
+sig = "BR_NORETURN void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_task_count"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_tcb_size"
+sig = "br_size_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_wake"
+sig = "void (br_thread_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_task_exit"
+sig = "BR_NORETURN void (int)"
+[[export.entries]]
+kind = "func"
+name = "br_task_join"
+sig = "int (br_thread_t *,int *)"
+[[export.entries]]
+kind = "func"
+name = "br_task_name"
+sig = "const char * (const br_thread_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_task_self"
+sig = "br_thread_t * (void)"
+[[export.entries]]
+kind = "func"
+name = "br_task_sleep"
+sig = "int (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_task_sleep_until"
+sig = "int (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_task_state"
+sig = "br_u32 (const br_thread_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_task_yield"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_thread_priv"
+sig = "void * (br_thread_t *)"
+[[export.entries]]
+kind = "macro"
+name = "BR_SCHED_KIND_COOP"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SCHED_KIND_PREEMPT"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SCHED_KIND_TT"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_STACK_MIN"
+value = "2048u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_BLOCKED"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_NEW"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_READY"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_RUNNING"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_ZOMBIE"
+value = "4u"
+
+# ---------------------------------------------------------------- unit `sync`: <br/core/br_sync.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "sync"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_cond_t"
+[[export.entries]]
+kind = "type"
+name = "br_mutex_t"
+[[export.entries]]
+kind = "type"
+name = "br_sem_t"
+[[export.entries]]
+kind = "type"
+name = "br_spinlock_t"
+[[export.entries]]
+kind = "func"
+name = "br_cond_broadcast"
+sig = "int (br_cond_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_cond_init"
+sig = "int (br_cond_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_cond_signal"
+sig = "int (br_cond_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_cond_wait"
+sig = "int (br_cond_t *,br_mutex_t *,br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_cond_waiters"
+sig = "br_u32 (const br_cond_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_init"
+sig = "int (br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_is_locked"
+sig = "br_bool (const br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_lock"
+sig = "int (br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_lock_to"
+sig = "int (br_mutex_t *,br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_owner"
+sig = "br_thread_t * (const br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_unlock"
+sig = "int (br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_sem_count"
+sig = "br_u32 (const br_sem_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_sem_give"
+sig = "int (br_sem_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_sem_init"
+sig = "int (br_sem_t *,unsigned initial)"
+[[export.entries]]
+kind = "func"
+name = "br_sem_take"
+sig = "int (br_sem_t *,br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_contention"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_init"
+sig = "int (br_spinlock_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_is_locked"
+sig = "br_bool (const br_spinlock_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_lock"
+sig = "br_irq_state_t (br_spinlock_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_trylock"
+sig = "int (br_spinlock_t *,br_irq_state_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_unlock"
+sig = "void (br_spinlock_t *,br_irq_state_t)"
+[[export.entries]]
+kind = "macro"
+name = "BR_COND_INIT_VALUE"
+value = "{ BR_SYNC_MAGIC_COND, 0u, BR_NULL }"
+[[export.entries]]
+kind = "macro"
+name = "BR_MUTEX_INIT_VALUE"
+value = "{ BR_SYNC_MAGIC_MUTEX, 0u, BR_NULL, 0u, BR_NULL }"
+[[export.entries]]
+kind = "macro"
+name = "BR_SPINLOCK_INIT_VALUE"
+value = "{ BR_SYNC_MAGIC_SPIN, 0u }"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYNC_MAGIC_COND"
+value = "0x434F4E44u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYNC_MAGIC_MUTEX"
+value = "0x4D555458u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYNC_MAGIC_SEM"
+value = "0x53454D41u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYNC_MAGIC_SPIN"
+value = "0x5350494Eu"
+
+# ---------------------------------------------------------------- unit `work`: <br/core/br_work.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "work"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_work_fn_t"
+[[export.entries]]
+kind = "type"
+name = "br_work_stat_t"
+[[export.entries]]
+kind = "func"
+name = "br_work_drain"
+sig = "br_u32 (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_work_in_bh"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_work_stats_get"
+sig = "void (br_work_stat_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_work_submit"
+sig = "int (br_work_fn_t,void *)"
+[[export.entries]]
+kind = "macro"
+name = "BR_WORKQ_DEPTH"
+value = "16u"
+[[export.entries]]
+kind = "macro"
+name = "BR_WORK_BH_BUDGET"
+value = "4u"
+
+# ---------------------------------------------------------------- unit `irq`: <br/core/br_irq.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "irq"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_exc_frame"
+[[export.entries]]
+kind = "type"
+name = "br_irq_attr_t"
+layout = "# {prio, trigger, flags}"
+[[export.entries]]
+kind = "type"
+name = "br_irq_binding_t"
+layout = "# {virq, pic_id, flags, hwirq, dom_id, prio, trigger, dispatch, rsv}"
+[[export.entries]]
+kind = "type"
+name = "br_irq_domain_ops_t"
+[[export.entries]]
+kind = "type"
+name = "br_irq_stat_t"
+layout = "# {count, storm, depth, spurious_owned, spurious_nocap, drop, flags, trigger, bh_deferred, bh_dropped, suppressed_dispatch}"
+[[export.entries]]
+kind = "type"
+name = "br_irq_state_t"
+[[export.entries]]
+kind = "type"
+name = "isr"
+[[export.entries]]
+kind = "func"
+name = "br_irq_bindings_set"
+sig = "int (const br_irq_binding_t *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_cpu_enable"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_cpu_init"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_disable"
+sig = "int (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_disable_child"
+sig = "int (br_irq_domain_t *,br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_domain_create"
+sig = "br_irq_domain_t * (const char *,br_u32,br_u32,br_u32,const br_irq_domain_ops_t *,void *)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_enable"
+sig = "int (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_enable_child"
+sig = "int (br_irq_domain_t *,br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_enter"
+sig = "void (struct br_exc_frame *)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_in_atomic"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_in_isr"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_lock"
+sig = "br_irq_state_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_lock_depth"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_stats_get"
+sig = "void (br_u32,br_irq_stat_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_unlock"
+sig = "void (br_irq_state_t)"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQB_F_ACTIVE_LOW"
+value = "0x02u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQB_F_EXCLUSIVE"
+value = "0x04u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQB_F_PERCPU"
+value = "0x01u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DEMUX_MAX_ROUND"
+value = "8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DISPATCH_BH"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DISPATCH_INLINE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DISPATCH_THREAD"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_BASE"
+value = "56u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_F_FAST"
+value = "0x0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_F_SLOW"
+value = "0x1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_MAX"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_WINDOW"
+value = "(BR_IRQ_MAX - BR_IRQ_DOMAIN_BASE)"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_DISPATCH_BH"
+value = "0x0004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_DISPATCH_THREAD"
+value = "0x0008u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_KNOWN_MASK"
+value = "0x007Fu"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_MIGRATABLE"
+value = "0x0010u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_NO_STORM_GUARD"
+value = "0x0040u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_PERCPU"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_SHARED"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_STATS"
+value = "0x0020u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_INVALID"
+value = "0xFFFFFFFFu"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_IPI_BASE"
+value = "48u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_MAX"
+value = "64u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_NR_IPI"
+value = "8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_PRIO_DEFAULT"
+value = "0x80u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_PRIO_HIGHEST"
+value = "0x00u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_PRIO_LOWEST"
+value = "0xFFu"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_STATS"
+value = "1"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_STORM_GUARD"
+value = "0"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_STORM_LIMIT"
+value = "64u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_STORM_WINDOW"
+value = "256u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_A_MASK"
+value = "0x00000004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_DEPTH_MASK"
+value = "0x0003FFF0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_DEPTH_SHIFT"
+value = "4"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_D_MASK"
+value = "0x00000008u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_F_MASK"
+value = "0x00000002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_I_MASK"
+value = "0x00000001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_DEFAULT"
+value = "0xFFu"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_EDGE_BOTH"
+value = "4u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_EDGE_FALL"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_EDGE_RISE"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_LEVEL_HIGH"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_LEVEL_LOW"
+value = "1u"
+
+# ---------------------------------------------------------------- unit `pic`: <br/core/br_pic.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "pic"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_pic_caps_t"
+layout = "# {prio_bits, nr_irq, caps}"
+[[export.entries]]
+kind = "type"
+name = "br_pic_ops_t"
+[[export.entries]]
+kind = "func"
+name = "br_pic_caps_of"
+sig = "int (br_u32,br_pic_caps_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_pic_register"
+sig = "int (br_pic_t *,const br_pic_ops_t *)"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_AFFINITY"
+value = "0x0020u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_LATCH"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_MASK"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_NEST"
+value = "0x0010u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_PER_CPU"
+value = "0x0200u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_PRIO"
+value = "0x0008u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_READBACK"
+value = "0x0004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_RESYNC"
+value = "0x0400u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_SW_TRIGGER"
+value = "0x0100u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_TRIG_BOTH"
+value = "0x0080u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_TRIG_EDGE"
+value = "0x0040u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_MAX"
+value = "128"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_NO_IRQ"
+value = "0xFFFFFFFFu"
+
+# ---------------------------------------------------------------- unit `fault`: <br/core/br_fault.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "fault"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_extable_t"
+layout = "# {pc, fixup, reg, rsv, errno_val}"
+[[export.entries]]
+kind = "func"
+name = "br_extable_lookup"
+sig = "const br_extable_t * (br_uintptr_t)"
+[[export.entries]]
+kind = "func"
+name = "br_fault_enter"
+sig = "\\ \\ \\ void (br_exc_frame_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_panic"
+sig = "BR_NORETURN void (const char *,...)"
+[[export.entries]]
+kind = "func"
+name = "br_panic_bare"
+sig = "BR_NORETURN void (const char *,...)"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_BRK64"
+value = "0x3Cu"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_DABT_LOWER"
+value = "0x24u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_DABT_SAME"
+value = "0x25u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_FP_SIMD"
+value = "0x07u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_HVC64"
+value = "0x16u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_IABT_LOWER"
+value = "0x20u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_IABT_SAME"
+value = "0x21u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_MSR_MRS"
+value = "0x18u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_SMC64"
+value = "0x17u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_SVC64"
+value = "0x15u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_UNKNOWN"
+value = "0x00u"
+[[export.entries]]
+kind = "macro"
+name = "BR_ESR_EC_MASK"
+value = "0x3Fu"
+[[export.entries]]
+kind = "macro"
+name = "BR_ESR_EC_SHIFT"
+value = "26u"
+[[export.entries]]
+kind = "macro"
+name = "BR_ESR_ISS_MASK"
+value = "0x01FFFFFFu"
+
+# ---------------------------------------------------------------- unit `exc`: <br/core/br_exc.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "exc"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_exc_frame_t"
+[[export.entries]]
+kind = "macro"
+name = "BR_DAIF_A"
+value = "0x100u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DAIF_D"
+value = "0x200u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DAIF_F"
+value = "0x040u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DAIF_I"
+value = "0x080u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_DAIF_OFF"
+value = "0x120u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_ELR_OFF"
+value = "0x100u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_ESR_OFF"
+value = "0x110u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_FAR_OFF"
+value = "0x118u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_PAD_OFF"
+value = "0x130u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_SIZE"
+value = "0x140u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_SPSR_OFF"
+value = "0x108u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_SP_OFF"
+value = "0x0F8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_VECTOR_OFF"
+value = "0x128u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_XCOUNT"
+value = "31u"
+
+# ---------------------------------------------------------------- unit `time`: <br/core/br_time.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "time"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_time_t"
+[[export.entries]]
+kind = "func"
+name = "br_clock_freq_hz"
+sig = "br_u64 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_init"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_now"
+sig = "br_time_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_tick_count"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_tick_hz"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_tick_notify"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_clock_ticks_per_ms"
+sig = "br_u64 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_deadline_from_now"
+sig = "br_time_t (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_delay_ms"
+sig = "void (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_delay_us"
+sig = "void (br_time_t)"
+[[export.entries]]
+kind = "macro"
+name = "BR_CFG_TICK_HZ"
+value = "200u"
+[[export.entries]]
+kind = "macro"
+name = "BR_CFG_TICK_PERIOD_US"
+value = "(1000000u / (BR_CFG_TICK_HZ))"
+[[export.entries]]
+kind = "macro"
+name = "BR_TIMEOUT_INF"
+value = "((br_time_t)~(br_time_t)0u)"
+[[export.entries]]
+kind = "macro"
+name = "BR_TIMEOUT_ZERO"
+value = "((br_time_t)0u)"
+[[export.entries]]
+kind = "macro"
+name = "BR_US_PER_MS"
+value = "1000u"
+[[export.entries]]
+kind = "macro"
+name = "BR_US_PER_SEC"
+value = "1000000u"
+
+# ---------------------------------------------------------------- unit `trace`: <br/core/br_trace.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "trace"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_trace_evt_t"
+layout = "# {id, a, b}"
+[[export.entries]]
+kind = "func"
+name = "br_trace_drain"
+sig = "br_u32 (br_trace_evt_t *,br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_emit"
+sig = "void (br_u32,br_u32,br_u64)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_name"
+sig = "const char * (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_overrun"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_trace_total"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "macro"
+name = "BR_TRACE_RING_SIZE"
+value = "256u"
+
+# ---------------------------------------------------------------- unit `svc`: <br/core/br_svc.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "svc"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_service_count"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_service_lookup"
+sig = "const void * (const char *)"
+[[export.entries]]
+kind = "func"
+name = "br_service_lookup_hits"
+sig = "br_u32 (const char *)"
+[[export.entries]]
+kind = "func"
+name = "br_service_name_at"
+sig = "const char * (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_service_publish"
+sig = "int (const char *,const void *)"
+[[export.entries]]
+kind = "macro"
+name = "BR_SERVICE_MAX"
+value = "32u"
+
+# ---------------------------------------------------------------- unit `plugin`: <br/core/br_plugin.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "plugin"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_dep_t"
+[[export.entries]]
+kind = "type"
+name = "br_mount_plan_t"
+[[export.entries]]
+kind = "type"
+name = "br_plugin_t"
+[[export.entries]]
+kind = "type"
+name = "br_res_t"
+[[export.entries]]
+kind = "type"
+name = "sym"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_at"
+sig = "const br_plugin_t * (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_count"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_find"
+sig = "const br_plugin_t * (const char *)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_init_failures"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_manager_init"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_manager_platform_init"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_manager_run"
+sig = "BR_NORETURN void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_manager_selftest"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_phase_name"
+sig = "const char * (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_phase_reached"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_plugin_phase_self"
+sig = "const char * (const br_plugin_t *)"
+[[export.entries]]
+kind = "macro"
+name = "BR_DEP_INIT"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DEP_RUNTIME"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DEP_TYPE"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PHASE_APP"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PHASE_CORE"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PHASE_EARLY"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PHASE_LATE"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PHASE_NONE"
+value = "0xFFu"
+[[export.entries]]
+kind = "macro"
+name = "BR_PLUGIN_NO_HOOK"
+value = "((int (*)(void))0)"
+[[export.entries]]
+kind = "macro"
+name = "BR_PLUGIN_SECTION"
+value = "__attribute__((used, section(BR_PLUGIN_SECTION_NAME), aligned(8)))"
+[[export.entries]]
+kind = "macro"
+name = "BR_PLUGIN_SECTION_NAME"
+[[export.entries]]
+kind = "macro"
+name = "BR_PLUGIN_TYPE_ABILITY"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PLUGIN_TYPE_APP"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PLUGIN_TYPE_CORE"
+value = "4u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PLUGIN_TYPE_INTERFACE"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PLUGIN_TYPE_PLATFORM"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SCHED_CLASS_COOP_ONLY"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SCHED_CLASS_SAFE_PREEMPT"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SCHED_CLASS_TT_SAFE"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SUBKIND_FRAMEWORK"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SUBKIND_FS"
+value = "4u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SUBKIND_IO"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SUBKIND_NONE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SUBKIND_SCHEDULER"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SUBKIND_SERVICE"
+value = "5u"
+
+# ---------------------------------------------------------------- unit `types`: <br/core/br_types.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "types"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_bool"
+[[export.entries]]
+kind = "type"
+name = "br_intptr_t"
+[[export.entries]]
+kind = "type"
+name = "br_s16"
+[[export.entries]]
+kind = "type"
+name = "br_s32"
+[[export.entries]]
+kind = "type"
+name = "br_s64"
+[[export.entries]]
+kind = "type"
+name = "br_s8"
+[[export.entries]]
+kind = "type"
+name = "br_size_t"
+[[export.entries]]
+kind = "type"
+name = "br_u16"
+[[export.entries]]
+kind = "type"
+name = "br_u32"
+[[export.entries]]
+kind = "type"
+name = "br_u64"
+[[export.entries]]
+kind = "type"
+name = "br_u8"
+[[export.entries]]
+kind = "type"
+name = "br_uintptr_t"
+[[export.entries]]
+kind = "macro"
+name = "BR_FALSE"
+value = "0"
+[[export.entries]]
+kind = "macro"
+name = "BR_NORETURN"
+[[export.entries]]
+kind = "macro"
+name = "BR_NORETURN"
+value = "__attribute__((noreturn))"
+[[export.entries]]
+kind = "macro"
+name = "BR_NULL"
+value = "((void *)0)"
+[[export.entries]]
+kind = "macro"
+name = "BR_PACKED"
+[[export.entries]]
+kind = "macro"
+name = "BR_PACKED"
+value = "__attribute__((packed))"
+[[export.entries]]
+kind = "macro"
+name = "BR_TRUE"
+value = "1"
+[[export.entries]]
+kind = "macro"
+name = "BR_UNUSED"
+[[export.entries]]
+kind = "macro"
+name = "BR_UNUSED"
+value = "__attribute__((unused))"
+
+# ---------------------------------------------------------------- unit `main`: <br/core/br_main.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "main"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "func"
+name = "br_core_main"
+sig = "BR_NORETURN void (void)"
+
+# ---------------------------------------------------------------- unit `error`: <br/core/br_error.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "error"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "macro"
+name = "BR_OK"
+value = "0"
+[[export.entries]]
+kind = "macro"
+name = "E2BIG"
+value = "7"
+[[export.entries]]
+kind = "macro"
+name = "EACCES"
+value = "13"
+[[export.entries]]
+kind = "macro"
+name = "EAGAIN"
+value = "11"
+[[export.entries]]
+kind = "macro"
+name = "EBADF"
+value = "9"
+[[export.entries]]
+kind = "macro"
+name = "EBUSY"
+value = "16"
+[[export.entries]]
+kind = "macro"
+name = "ECANCELED"
+value = "125"
+[[export.entries]]
+kind = "macro"
+name = "ECHILD"
+value = "10"
+[[export.entries]]
+kind = "macro"
+name = "EDEADLK"
+value = "35"
+[[export.entries]]
+kind = "macro"
+name = "EDOM"
+value = "33"
+[[export.entries]]
+kind = "macro"
+name = "EDQUOT"
+value = "122"
+[[export.entries]]
+kind = "macro"
+name = "EEXIST"
+value = "17"
+[[export.entries]]
+kind = "macro"
+name = "EFAULT"
+value = "14"
+[[export.entries]]
+kind = "macro"
+name = "EFBIG"
+value = "27"
+[[export.entries]]
+kind = "macro"
+name = "EINTR"
+value = "4"
+[[export.entries]]
+kind = "macro"
+name = "EINVAL"
+value = "22"
+[[export.entries]]
+kind = "macro"
+name = "EIO"
+value = "5"
+[[export.entries]]
+kind = "macro"
+name = "EISDIR"
+value = "21"
+[[export.entries]]
+kind = "macro"
+name = "ELOOP"
+value = "40"
+[[export.entries]]
+kind = "macro"
+name = "EMFILE"
+value = "24"
+[[export.entries]]
+kind = "macro"
+name = "EMLINK"
+value = "31"
+[[export.entries]]
+kind = "macro"
+name = "ENAMETOOLONG"
+value = "36"
+[[export.entries]]
+kind = "macro"
+name = "ENFILE"
+value = "23"
+[[export.entries]]
+kind = "macro"
+name = "ENODEV"
+value = "19"
+[[export.entries]]
+kind = "macro"
+name = "ENOENT"
+value = "2"
+[[export.entries]]
+kind = "macro"
+name = "ENOEXEC"
+value = "8"
+[[export.entries]]
+kind = "macro"
+name = "ENOLCK"
+value = "37"
+[[export.entries]]
+kind = "macro"
+name = "ENOMEM"
+value = "12"
+[[export.entries]]
+kind = "macro"
+name = "ENOSPC"
+value = "28"
+[[export.entries]]
+kind = "macro"
+name = "ENOSYS"
+value = "38"
+[[export.entries]]
+kind = "macro"
+name = "ENOTBLK"
+value = "15"
+[[export.entries]]
+kind = "macro"
+name = "ENOTDIR"
+value = "20"
+[[export.entries]]
+kind = "macro"
+name = "ENOTEMPTY"
+value = "39"
+[[export.entries]]
+kind = "macro"
+name = "ENOTRECOVERABLE"
+value = "131"
+[[export.entries]]
+kind = "macro"
+name = "ENOTSUP"
+value = "95"
+[[export.entries]]
+kind = "macro"
+name = "ENOTTY"
+value = "25"
+[[export.entries]]
+kind = "macro"
+name = "ENXIO"
+value = "6"
+[[export.entries]]
+kind = "macro"
+name = "EOPNOTSUPP"
+value = "ENOTSUP"
+[[export.entries]]
+kind = "macro"
+name = "EOVERFLOW"
+value = "75"
+[[export.entries]]
+kind = "macro"
+name = "EOWNERDEAD"
+value = "130"
+[[export.entries]]
+kind = "macro"
+name = "EPERM"
+value = "1"
+[[export.entries]]
+kind = "macro"
+name = "EPIPE"
+value = "32"
+[[export.entries]]
+kind = "macro"
+name = "ERANGE"
+value = "34"
+[[export.entries]]
+kind = "macro"
+name = "EROFS"
+value = "30"
+[[export.entries]]
+kind = "macro"
+name = "ESPIPE"
+value = "29"
+[[export.entries]]
+kind = "macro"
+name = "ESRCH"
+value = "3"
+[[export.entries]]
+kind = "macro"
+name = "ETIMEDOUT"
+value = "110"
+[[export.entries]]
+kind = "macro"
+name = "ETXTBSY"
+value = "26"
+[[export.entries]]
+kind = "macro"
+name = "EUCLEAN"
+value = "117"
+[[export.entries]]
+kind = "macro"
+name = "EWOULDBLOCK"
+value = "EAGAIN"
+[[export.entries]]
+kind = "macro"
+name = "EXDEV"
+value = "18"
+
+# ---------------------------------------------------------------- unit `errno`: <br/core/br_errno.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "errno"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "macro"
+name = "BR_OK"
+value = "0"
+[[export.entries]]
+kind = "macro"
+name = "E2BIG"
+value = "7"
+[[export.entries]]
+kind = "macro"
+name = "EACCES"
+value = "13"
+[[export.entries]]
+kind = "macro"
+name = "EAGAIN"
+value = "11"
+[[export.entries]]
+kind = "macro"
+name = "EBADF"
+value = "9"
+[[export.entries]]
+kind = "macro"
+name = "EBUSY"
+value = "16"
+[[export.entries]]
+kind = "macro"
+name = "ECANCELED"
+value = "125"
+[[export.entries]]
+kind = "macro"
+name = "ECHILD"
+value = "10"
+[[export.entries]]
+kind = "macro"
+name = "EDEADLK"
+value = "35"
+[[export.entries]]
+kind = "macro"
+name = "EDOM"
+value = "33"
+[[export.entries]]
+kind = "macro"
+name = "EDQUOT"
+value = "122"
+[[export.entries]]
+kind = "macro"
+name = "EEXIST"
+value = "17"
+[[export.entries]]
+kind = "macro"
+name = "EFAULT"
+value = "14"
+[[export.entries]]
+kind = "macro"
+name = "EFBIG"
+value = "27"
+[[export.entries]]
+kind = "macro"
+name = "EINTR"
+value = "4"
+[[export.entries]]
+kind = "macro"
+name = "EINVAL"
+value = "22"
+[[export.entries]]
+kind = "macro"
+name = "EIO"
+value = "5"
+[[export.entries]]
+kind = "macro"
+name = "EISDIR"
+value = "21"
+[[export.entries]]
+kind = "macro"
+name = "ELOOP"
+value = "40"
+[[export.entries]]
+kind = "macro"
+name = "EMFILE"
+value = "24"
+[[export.entries]]
+kind = "macro"
+name = "EMLINK"
+value = "31"
+[[export.entries]]
+kind = "macro"
+name = "ENAMETOOLONG"
+value = "36"
+[[export.entries]]
+kind = "macro"
+name = "ENFILE"
+value = "23"
+[[export.entries]]
+kind = "macro"
+name = "ENODEV"
+value = "19"
+[[export.entries]]
+kind = "macro"
+name = "ENOENT"
+value = "2"
+[[export.entries]]
+kind = "macro"
+name = "ENOEXEC"
+value = "8"
+[[export.entries]]
+kind = "macro"
+name = "ENOLCK"
+value = "37"
+[[export.entries]]
+kind = "macro"
+name = "ENOMEM"
+value = "12"
+[[export.entries]]
+kind = "macro"
+name = "ENOSPC"
+value = "28"
+[[export.entries]]
+kind = "macro"
+name = "ENOSYS"
+value = "38"
+[[export.entries]]
+kind = "macro"
+name = "ENOTBLK"
+value = "15"
+[[export.entries]]
+kind = "macro"
+name = "ENOTDIR"
+value = "20"
+[[export.entries]]
+kind = "macro"
+name = "ENOTEMPTY"
+value = "39"
+[[export.entries]]
+kind = "macro"
+name = "ENOTRECOVERABLE"
+value = "131"
+[[export.entries]]
+kind = "macro"
+name = "ENOTSUP"
+value = "95"
+[[export.entries]]
+kind = "macro"
+name = "ENOTTY"
+value = "25"
+[[export.entries]]
+kind = "macro"
+name = "ENXIO"
+value = "6"
+[[export.entries]]
+kind = "macro"
+name = "EOPNOTSUPP"
+value = "ENOTSUP"
+[[export.entries]]
+kind = "macro"
+name = "EOVERFLOW"
+value = "75"
+[[export.entries]]
+kind = "macro"
+name = "EOWNERDEAD"
+value = "130"
+[[export.entries]]
+kind = "macro"
+name = "EPERM"
+value = "1"
+[[export.entries]]
+kind = "macro"
+name = "EPIPE"
+value = "32"
+[[export.entries]]
+kind = "macro"
+name = "ERANGE"
+value = "34"
+[[export.entries]]
+kind = "macro"
+name = "EROFS"
+value = "30"
+[[export.entries]]
+kind = "macro"
+name = "ESPIPE"
+value = "29"
+[[export.entries]]
+kind = "macro"
+name = "ESRCH"
+value = "3"
+[[export.entries]]
+kind = "macro"
+name = "ETIMEDOUT"
+value = "110"
+[[export.entries]]
+kind = "macro"
+name = "ETXTBSY"
+value = "26"
+[[export.entries]]
+kind = "macro"
+name = "EUCLEAN"
+value = "117"
+[[export.entries]]
+kind = "macro"
+name = "EWOULDBLOCK"
+value = "EAGAIN"
+[[export.entries]]
+kind = "macro"
+name = "EXDEV"
+value = "18"
+
+# ---------------------------------------------------------------- unit `version`: <br/core/br_version.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "version"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "macro"
+name = "BR_PROTOTYPE_NAME"
+[[export.entries]]
+kind = "macro"
+name = "BR_VERSION_MAJOR"
+value = "0"
+[[export.entries]]
+kind = "macro"
+name = "BR_VERSION_MINOR"
+value = "2"
+[[export.entries]]
+kind = "macro"
+name = "BR_VERSION_PATCH"
+value = "0"
+[[export.entries]]
+kind = "macro"
+name = "BR_VERSION_STRING"
+
 [selftest]
 cases = 42
 

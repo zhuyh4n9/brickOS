@@ -23,6 +23,8 @@ pub const SCOPE_DEPS: &str = "deps";
 pub const SCOPE_IFACE: &str = "iface";
 pub const SCOPE_TAX: &str = "tax";
 pub const SCOPE_PRIV: &str = "priv";
+/// Source-text disciplines (ADR-0038): a `.c` is self-contained, globals stay inside a plugin.
+pub const SCOPE_SRC: &str = "src";
 
 /// One declared structural dependency edge (consumer → provider).
 #[derive(Clone, Debug, Default)]

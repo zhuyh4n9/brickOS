@@ -23,12 +23,9 @@
 
 /* ---- section bounds ---- */
 
-/*
- * Linker boundary symbols: GNU ld does not generate `__start_/__stop_` for a section name
- * containing `.`; `KEEP` stops `--gc-sections` from dropping the descriptors.
- */
-extern const br_plugin_t __br_plugins_start[];
-extern const br_plugin_t __br_plugins_stop[];
+/* `__br_plugins_start` / `__br_plugins_stop` are declared in plugin_mgr_internal.h (ADR-0038 / R1:
+ * a `.c` carries no cross-translation-unit declaration). GNU ld does not generate `__start_/__stop_`
+ * for a section name containing `.`; `KEEP` stops `--gc-sections` from dropping the descriptors. */
 
 /* ---- static bounds ---- */
 
@@ -37,34 +34,58 @@ extern const br_plugin_t __br_plugins_stop[];
 #define BR_PLUGIN_CYCLE_BUF  512u  /* cycle-path text buffer */
 #define BR_DEP_TERM_GUARD    512u  /* hard bound when walking deps (no overrun even if a bad table does not terminate) */
 
-/* ---- state ---- */
-/* `[self-test readable]` entries dropped `static` for plugin_mgr_internal.h's contract and
- * remain core-internal; s_order/s_init_done/start counters stay private. */
+/* ---- state ----
 
-const br_plugin_t *s_plugins[BR_PLUGIN_MAX];           /* [self-test readable] section order */
-br_u32  s_count;                                       /* [self-test readable] entry count in the section */
-plug_edge_t s_edges[BR_PLUGIN_MAX_EDGES];              /* [self-test readable] contains only kind == BR_DEP_INIT */
-br_u32  s_edge_count;                                  /* [self-test readable] */
+ * All of it is `static` (ADR-0038 / R2: a global never leaves the plugin). The self-test used to
+ * read the variables directly through `plugin_mgr_internal.h`; it now takes one read-only snapshot
+ * (`br_plugin_mgr_view()`), which is also what keeps the internal header from becoming a second
+ * declaration surface for mutable state.
+ */
+static const br_plugin_t *s_plugins[BR_PLUGIN_MAX];    /* section order */
+static br_u32  s_count;                                /* entry count in the section */
+static plug_edge_t s_edges[BR_PLUGIN_MAX_EDGES];       /* contains only kind == BR_DEP_INIT */
+static br_u32  s_edge_count;
 static br_u16  s_order[BR_PLUGIN_MAX];                 /* topological order (section indices) */
-br_u16  s_pos[BR_PLUGIN_MAX];                          /* [self-test readable] section index -> topological rank */
-br_bool s_sorted;                                      /* [self-test readable] */
+static br_u16  s_pos[BR_PLUGIN_MAX];                   /* section index -> topological rank */
+static br_bool s_sorted;
 static br_bool s_init_done;                            /* boot chain 1 has run (section scanned) */
 
 static br_u32  s_phase_reached = BR_PHASE_EARLY;
 static br_u32  s_init_failures;
-br_u32  s_plat_index = (br_u32)-1;                     /* [self-test readable] section index of the platform plugin */
+static br_u32  s_plat_index = (br_u32)-1;              /* section index of the platform plugin */
 
 /* ---- self-test: trace of "ordering invariants" ---- */
-const char *s_first_early_name;   /* [self-test readable] who owned the first early_init that actually ran */
+static const char *s_first_early_name;   /* who owned the first early_init that actually ran */
 static br_u32  s_non_app_start_done;     /* number of non-APP starts executed */
 static br_u32  s_non_app_start_total;    /* plugins that are non-APP and have a start hook */
-br_bool s_app_start_last_ok;      /* [self-test readable] before calling the first APP start: all non-APP ones already ran */
-br_bool s_in_app_start;           /* [self-test readable] currently inside an APP start */
+static br_bool s_app_start_last_ok;      /* before calling the first APP start: all non-APP ones already ran */
+static br_bool s_in_app_start;           /* currently inside an APP start */
 /* APP ordering trace (ADR-0037): "app has no early_init" and "app's init ran last" are proven,
  * not assumed -- see TC-PLUG-004. */
-br_u32  s_app_init_index = (br_u32)-1;   /* [self-test readable] section index of the APP, (br_u32)-1 = none */
-br_bool s_app_early_init_ok = BR_TRUE;   /* [self-test readable] every APP has early_init == NO_HOOK */
-const char *s_last_init_name;            /* [self-test readable] whose init ran most recently */
+static br_u32  s_app_init_index = (br_u32)-1;   /* section index of the APP, (br_u32)-1 = none */
+static br_bool s_app_early_init_ok = BR_TRUE;   /* every APP has early_init == NO_HOOK */
+static const char *s_last_init_name;            /* whose init ran most recently */
+
+/* Read-only snapshot for the conformance suite (the state above stays private). */
+const br_plugin_mgr_view_t *br_plugin_mgr_view(void)
+{
+    static br_plugin_mgr_view_t v;
+
+    v.plugins           = s_plugins;
+    v.count             = s_count;
+    v.edges             = s_edges;
+    v.edge_count        = s_edge_count;
+    v.pos               = s_pos;
+    v.sorted            = s_sorted;
+    v.plat_index        = s_plat_index;
+    v.first_early_name  = s_first_early_name;
+    v.app_start_last_ok = s_app_start_last_ok;
+    v.in_app_start      = s_in_app_start;
+    v.app_init_index    = s_app_init_index;
+    v.app_early_init_ok = s_app_early_init_ok;
+    v.last_init_name    = s_last_init_name;
+    return &v;
+}
 
 /* ---- section enumeration ---- */
 

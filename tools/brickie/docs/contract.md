@@ -90,7 +90,17 @@ written per §9's "new defects with unassigned codes are registered in §9"; bac
 | `BRV-BLD-0011` | error | An executed step failed (compile / link / script exited non-zero) — detected by L5, code assigned by core along with the step |
 | `BRV-BLD-0012` | error | A regex in `tests/gates.toml` exceeds the **subset** core supports (reported, not silently unmatched) |
 | `BRV-BLD-0013` | info | A generated artifact belongs to a plugin **not in the closure** ⇒ skipped (not a defect, but it must be visible; exit code unchanged) |
+| `BRV-BLD-0015` | error | The symbol audit produced **no `nm` output**: the `.a` evidence is missing, so the disciplines cannot be proven (the audit fails closed) |
 | `BRV-BLD-0014` | info | A generated artifact under `build/gen/` whose **owner cannot be identified** (stale leftovers after a plugin rename/removal) ⇒ skipped. Keeping it becomes a "ghost plugin": a plugin with the same symbol in the tree is registered twice, and `start` executes a second time ⇒ shutdown at boot (measured: `rc=-28` after renaming `third_party/uboot-mmc` → `driver/uboot-mmc`) |
+
+**Source-discipline codes (ADR-0038)** — the `src` scope of `check`, plus the symbol audit of `build`:
+
+| Code | Severity | Trigger |
+|---|---|---|
+| `BRV-SRC-0001` | error | A function prototype or an `extern` declaration in a `.c` has no definition in that same file (R1: a translation unit is self-contained; cross-TU declarations belong in a header) |
+| `BRV-SRC-0002` | error | A file-scope object without `static` in a `.c`, an object exported through a public header, an `export.entries` entry with `kind = "var"`, or a **data symbol** of a `native` plugin referenced from another plugin (`.a` audit) -- R2: globals never leave their plugin |
+| `BRV-DEP-0012` | error | A header of a plugin that is not in the consumer's **direct** dependency set (text: `#include`; symbol: strong undefined symbol resolved to that plugin) -- R3: dependencies are declared, transitive ones do not authorize |
+
 
 ## 4. File Ownership (§9.1.1 write-path discipline)
 
@@ -118,7 +128,7 @@ Request `args` are optional defaults unless stated otherwise. `id` always means 
 |---|---|---|
 | `version` | `{}` | `{version, protocol, languages:[{name,version}], deps:[]}` (the fingerprint of G-01 `--version --deps`) |
 | `model` | `{plugin?}` | `{plugins:[Plugin], count}` — normalized model |
-| `check` | `{profile:"dev"\|"release", scopes:["deps","iface","tax","priv"], plugin?}` | `{summary:{errors,warnings,infos,profile,closure:{plugins,ram_kib,stack_kib}}, scope_results}` |
+| `check` | `{profile:"dev"\|"release", scopes:["deps","iface","tax","priv","src"], plugin?}` | `{summary:{errors,warnings,infos,profile,closure:{plugins,ram_kib,stack_kib}}, scope_results}` |
 | `closure` | `{profile}` | `{plugins:[{name,version,compat_gen,api_type,plugin_type,phase,ram_kib,stack_kib,selected}], init_edges:[{from,to}], runtime_edges, type_edges, topo_order:[], totals:{ram_kib,stack_kib,platform_capacity:{ram_kib,stack_kib},budget:{ram_kib,stack_kib}}, profile, cycles:[]}` |
 | `dep-tree` | `{kind:"init"\|"runtime"\|"type"\|"all", plugin?}` | `{roots:[], nodes:{name:{deps:[{name,kind,range,phase}]}}, kind}` |
 | `dep-graph` | `{format:"dot"\|"mermaid"\|"json"}` | `{format, nodes:[], edges:[], text}` (for `json`, `text` = normalized JSON string) |
@@ -171,7 +181,7 @@ Exit code 0 all green / 1 any failure; failure details go to stdout.
 | `size` | `{}` | Common summary + `mode:"size"`; two `kind:"print"` steps (`size -A -x` and `size`) | None |
 | `disasm` | `{head}` | Common summary + `mode:"disasm"`; one `kind:"print"` step (`objdump -d`), `stdout_lines=head` | None |
 | `test` | `{name?, list, jobs}` | `list=true` ⇒ `{gates:[names], hosttests:[names], scripts:[names], build_post:[names], file, present}`; otherwise common summary + `mode:"test"` + `gates:{file,gates,hosttests,scripts,build_post}` | None |
-| `judge` | `{name}` + `context.log` (the log **body**, not a path) | `{name, failed, checks:[{kind,pattern,ok}], log_lines, pass_lines, require, forbid, require_tags, file}`; all green ⇒ codeless **info**, `failed>0` ⇒ `BRV-BLD-0009` + exit code 1 | None |
+| `judge` | `{name}` + `context.log` (the log **body**, not a path). Reserved `name = "symbol-audit"` judges `nm -A -g` output over `build/lib/*.a` (ADR-0038: R2 data symbols / R3 undeclared dependencies; non-gate, reads the model) | `{name, failed, checks:[{kind,pattern,ok}], log_lines, pass_lines, require, forbid, require_tags, file}`; all green ⇒ codeless **info**, `failed>0` ⇒ `BRV-BLD-0009` + exit code 1 | None |
 
 **Common summary fields** (shared by `build`/`run`/`size`/`disasm`/`test`):
 
@@ -202,14 +212,14 @@ Exit code 0 all green / 1 any failure; failure details go to stdout.
 | Field | Type | Semantics |
 |---|---|---|
 | `label` | string | Human-readable label (`cc <src>` / `ld <elf>` / `qemu <gate>` …) |
-| `kind` | string | `compile` / `link` / `objcopy` / `run` / `gate` / `script` / `hosttest` / `hostrun` / `print` / `backend` |
+| `kind` | string | `compile` / `archive` / `audit` / `link` / `objcopy` / `run` / `gate` / `script` / `hosttest` / `hostrun` / `print` / `backend` |
 | `argv` | [string] | **The concrete command**; `argv[0]` is already the tool resolved by core (a `@<name>` placeholder when core could not resolve it) |
 | `cwd` | string? | Working directory relative to root. L5 defaults to `"."`; **core v0.1 does not emit this key** (all steps run under root); the key is reserved for the future |
 | `group` | u32 | Scheduling: steps in the same group (and that are `compile`/`hosttest`) may run concurrently; groups run serially |
 | `log` | string? | Log destination (relative to root); `null` = inherit stdio directly |
 | `timeout_s` | u64? | Timeout limit; `null` = no limit |
 | `expect_timeout` | bool | `true` = **expected to end by timeout** (QEMU gates: the image is meant to run until cut off) — a timeout does not count as failure |
-| `judge` | string? | Name of a gate whose judgement needs core (the log body is judged back through the `judge` command) |
+| `judge` | string? | Name of a gate whose judgement needs core (the log body is judged back through the `judge` command). Reserved name **`symbol-audit`** = the `.a` symbol audit (ADR-0038); it is not a `tests/gates.toml` gate |
 | `stdout_lines` | u64? | Max number of stdout lines when rendering (expands `--head`) |
 | `outputs` | [string] | Files written by this step (used for incremental state / `clean`) |
 | `consumes` | [string] | Files this step consumes that are **produced by other steps in this plan**. Sole purpose: when an upstream step fails, L5 uses this to **skip** downstream steps — otherwise `ld` would link successfully against the previous run's stale objects and print `ok ld`, and the log would lie (while humans read the log) |
@@ -515,6 +525,10 @@ silently not matching. "forbid for three kinds of FAIL" must be written as three
 | R-17 | `brick.toml [build]` / `product.toml [build]` have only `sources`/`includes` in `§7.1`, which cannot express the full compilation facts | Add `[build].defines` (plugin level) and, for `product.toml [build]`, `gen_sources`/`selftest_sources`/`cflags`/`asflags`/`ldflags`/`obj_dir`/`[build.release].{cflags,asflags,ldflags}_extra` (`core_sources`/`core_includes` were retired by ADR-0031: the core is a plugin and declares its own sources), plus the whole platform `[build.target]`/`[build.target.qemu]` | "How to compile" must be writable in **one** declaration surface (otherwise we are back to Makefile literals); the shapes are added to `schema/*.schema.json` and §7.1/§7.2, pending back-feed into design §7.1/§7.2 |
 | R-18 | How product-level **semantic configuration** (first item = tick HZ) enters compilation | `product.toml [kernel].hz` (integer, default 200) is turned by `brickie build` into `-DBR_CFG_TICK_HZ=<hz>` and passed to **all** compilation units (core/plugins/generated); this define is separate from generic `cflags` and uses the `config_defines` channel | Do not write bare `-D` into `cflags`: a semantic key can be validated by `schema/product.schema.json` (`integer` + `minimum: 1`), and "how many timer interrupts per second" has only one source of truth (core's jiffies and the platform's reload period read the same macro; ADR-0017) |
 | R-19 | How declared dependencies become **compile-time facts** (previously `-I` was a global union, and undeclared cross-plugin `#include` silently compiled) | The include surface of each `build` unit = the selected core plugin's `[build].includes` + its own + the includes of every plugin in the **transitive closure of declared dependencies** (the core unit additionally gets platform headers; `build/gen` gets the headers of all selected plugins); plus a **declaration ↔ use** cross-check (scan source `#include`s, map to the provider, report if outside the declaration closure); the deps domain of `check` uses the same convention as `build` | Narrowing `-I` alone is not enough: the target toolchain's glibc headers would cover common names like `unistd.h` (not "header not found" but silently switching to the host libc declarations) ⇒ a criterion independent of the compiler search path is required; both places share `model::cross_plugin_includes()` to avoid divergence (ADR-0018) |
+
+| R-20 | What "core is a dependency" means: does using `<br/core/**>` need a declaration? | **Yes.** Since ADR-0038 core is a first-class interface provider (`core/c_core` exports 20 units, one per header) and the outward door is the skin `runtime/core`. Every consumer declares `[[dep]] runtime/core` (platform declares `core/c_core` directly: the direction table forbids a platform from depending on an ability). `brickie build` no longer prepends core's `-I` unconditionally, so a missing declaration fails at compile time | Without it core is "dark matter": its surface is the only one that never has to be declared, and a future split/re-implementation of core has no boundary to move behind |
+| R-21 | Dependency authorization: declared **transitive** closure or **direct** set? | **Direct only**, plus the units a directly declared skin re-exports (transitively: `api → iface/min → runtime/core → core/c_core`). Text (`BRV-DEP-0012` on `#include`) and symbols (`.a` audit) use the same set. `-I` keeps the **transitive** closure (compile surface), so the declaration is the compile prerequisite of *using* it, not of *seeing* it | Using C through B is an implicit dependency on C; supersedes the authorization half of R-19 (its other half — the declaration↔use cross-check shared by check/build — stands) |
+| R-22 | The core plugin is platform-agnostic (`br/platform/**` contract) but the direction table forbids `core → platform` | The exception is explicit and one-sided: core may include `br/platform/**` and use the symbols declared there without naming a platform plugin; the platform side still declares `[[dep]] core/c_core`. Implemented identically in `check --deps`, `-I` surfaces and the symbol audit | The two call each other by design (`platform`'s entry is `bl br_core_main`, core reads `br_plat_ticks_*`); the cycle is broken by the two-step boot chain, not by the topological sort |
 
 > **Supplementary rulings on the Rust side**: implementing the solving/validation/interface engine forced a batch of finer conventions
 > (S-1…S-19: first publish = create the record without advancing segments, `closure` does not scan `requires_iface` while `check` does,

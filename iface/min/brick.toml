@@ -9,13 +9,18 @@ phase         = "late"
 version       = "0.1.0.0"
 
 symbol_prefix = "iface_min_"
-summary       = "core native 极简别名皮肤: 日志 / 时钟 / tick 计数 / 版本标识(APP 只依赖 Interface)"
+summary       = "core 极简别名皮肤: 只把 runtime/core 的 log / time / version 三个单元转出(APP 只依赖 Interface)"
 license       = "WTFPL"
+
+# Why a **skin** and not a copy of core's declarations (ADR-0038 §4): this plugin used to
+# re-declare core's entries by hand (`form = "api"`), i.e. a second source of truth that drifts on
+# every core edit. A skin re-exports instead: `reexport_of` names the units, the declarations stay
+# in core, and `runtime/core` remains the core layer's only outward door.
 
 [[res]]
 kind     = "ram"
 used_kib = 1
-notes    = "皮肤无状态: 三个空钩子 + 一张转出的 core 头"
+notes    = "皮肤无状态: 三个空钩子 + 一张转出的头"
 
 [compat]
 core       = ">=0.1.0"
@@ -25,83 +30,53 @@ truth      = "decl"
 abi_id     = ""
 
 [iface.typedefs]
-br_u64    = "unsigned long"
-br_u32    = "unsigned int"
-br_bool   = "int"
-br_time_t = "br_u64"
+br_u8        = "unsigned char"
+br_u16       = "unsigned short"
+br_u32       = "unsigned int"
+br_u64       = "unsigned long"
+br_size_t    = "unsigned long"
+br_uintptr_t = "unsigned long"
+br_bool      = "int"
+br_time_t    = "br_u64"
+br_err_t     = "int"
 
+[[dep]]
+name  = "runtime/core"
+range = ">=0.1.0"
+kind  = "type"
+
+# The APP-facing core surface: exactly the units `app/hello` needs, and no more. Widening this
+# list widens the APP's compile-time view; it does not widen the dependency rule (the APP still
+# sees only `<iface/min/min.h>`, and A-2 still forbids it `<br/core/**>`).
 [[export]]
-name         = "min"
+name         = "min-log"
 api_iface    = "native"
-form         = "api"
+form         = "skin"
 version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
-hash         = "sha256:b19825c94836048a12d481d508f525d8c0b76f072ff044f4d7659f5f87a2cfa1"
 status       = "experimental"
+reexport_of  = ["runtime/core#log"]
 
-[[export.entries]]
-kind  = "macro"
-name  = "BR_PROTOTYPE_NAME"
-value = "\"brickOS-prototype\""
-[[export.entries]]
-kind  = "macro"
-name  = "BR_VERSION_STRING"
-value = "\"v0.1.0\""
-[[export.entries]]
-kind  = "macro"
-name  = "BR_US_PER_MS"
-value = "1000u"
+[[export]]
+name         = "min-time"
+api_iface    = "native"
+form         = "skin"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+reexport_of  = ["runtime/core#time"]
 
-[[export.entries]]
-kind = "func"
-name = "br_log_set_level"
-sig  = "void (br_log_level_t)"
-[[export.entries]]
-kind = "func"
-name = "br_log_get_level"
-sig  = "br_log_level_t (void)"
-[[export.entries]]
-kind = "func"
-name = "br_log_write"
-sig  = "void (br_log_level_t, const char*, ...)"
-[[export.entries]]
-kind = "macro"
-name = "br_log_debug"
-[[export.entries]]
-kind = "macro"
-name = "br_log_info"
-[[export.entries]]
-kind = "macro"
-name = "br_log_warn"
-[[export.entries]]
-kind = "macro"
-name = "br_log_error"
-
-[[export.entries]]
-kind = "type"
-name = "br_time_t"
-layout = "# = br_u64(微秒; 设计 3-01 CA-1)"
-[[export.entries]]
-kind = "func"
-name = "br_clock_now"
-sig  = "br_time_t (void)"
-[[export.entries]]
-kind = "func"
-name = "br_clock_freq_hz"
-sig  = "br_u64 (void)"
-[[export.entries]]
-kind = "func"
-name = "br_clock_ticks_per_ms"
-sig  = "br_u64 (void)"
-[[export.entries]]
-kind = "func"
-name = "br_clock_tick_hz"
-sig  = "br_u32 (void)"
-[[export.entries]]
-kind = "func"
-name = "br_clock_tick_count"
-sig  = "br_u32 (void)"
+[[export]]
+name         = "min-version"
+api_iface    = "native"
+form         = "skin"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+reexport_of  = ["runtime/core#version"]
 
 [build]
 sources  = ["src/*.c"]

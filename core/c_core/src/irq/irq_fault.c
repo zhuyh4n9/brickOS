@@ -11,10 +11,9 @@
 #include "../panic_internal.h"
 #include "irq_internal.h"
 
-/* Extable section is linker-collected; this prototype's link.ld does not yet collect .br_extable
- * (needs __br_extable_start/__br_extable_stop in the platform linker script). */
-extern const br_extable_t __br_extable_start[];
-extern const br_extable_t __br_extable_stop[];
+/* Extable section bounds are declared in irq_internal.h (ADR-0038 / R1: a `.c` carries no
+ * cross-translation-unit declaration). This prototype's link.ld does not yet collect .br_extable;
+ * that needs __br_extable_start/__br_extable_stop in the platform linker script. */
 
 /* P-IRQ-2: entries are in link order. Runtime sorting is forbidden on the fault path, so lookup is
  * a linear scan; fine for the single-digit entry count. Once entries grow, generate a sorted table

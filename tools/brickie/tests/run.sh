@@ -812,8 +812,8 @@ eqj "V-B① dry_run flag" "$JQ_RESP" "data.dry_run" "true"
 eqj "V-B① unit count = 6 (core + 5 plugins)" "$JQ_RESP" "data.unit_count" "6"
 eqjc "V-B① data.units matches unit_count" "$JQ_RESP" "data.units" "6"
 eqj "V-B① source file count" "$JQ_RESP" "data.source_count" "7"
-eqj "V-B① steps_total = 9 (7 compiles + link + objcopy)" "$JQ_RESP" "data.steps_total" "9"
-eqjc "V-B① dry-run lists all steps" "$JQ_RESP" "data.steps" "9"
+eqj "V-B① steps_total = 16 (7 compiles + 6 archives + 1 symbol audit + link + objcopy)" "$JQ_RESP" "data.steps_total" "16"
+eqjc "V-B① dry-run lists all steps" "$JQ_RESP" "data.steps" "16"
 keysj "V-B① data.units[0] shape" "$JQ_RESP" "data.units.0" \
     "defines,dir,includes,name,plugin,sources,sources_list"
 keysj "V-B① data.steps[0] shape (contract §5.4)" "$JQ_RESP" "data.steps.0" \
@@ -851,16 +851,19 @@ PYX
 eq "V-B① assembly steps compile via asflags (not mixed with C's -std=c11)" "yes" "$(asm_ok "$JQ_RESP")"
 contains "V-B① link output is build/brick.elf" '"build/brick.elf"' "$STEPS_JSON"
 # tool candidate order (ruling R-14): the order is the policy, and core reports the resolution.
-eqjc "V-B① data.tools has seven entries" "$JQ_RESP" "data.tools" "7"
-eqj "V-B① tools[0].name = cc (BTreeMap order)" "$JQ_RESP" "data.tools.0.name" "cc"
+eqjc "V-B① data.tools has nine entries (ar/cc/make/ninja/nm/objcopy/objdump/qemu/size)" "$JQ_RESP" "data.tools" "9"
+eqj "V-B① tools[0].name = ar (BTreeMap order)" "$JQ_RESP" "data.tools.0.name" "ar"
+eqj "V-B① tools[1].name = cc" "$JQ_RESP" "data.tools.1.name" "cc"
+eqj "V-B① tools[4].name = nm" "$JQ_RESP" "data.tools.4.name" "nm"
 keysj "V-B① data.tools[0] shape" "$JQ_RESP" "data.tools.0" "candidates,name,resolved,what"
-eqj "V-B① cc first candidate = <cross>gcc" "$JQ_RESP" "data.tools.0.candidates.0" "aarch64-linux-gnu-gcc"
-eqj "V-B① cc 2nd candidate = gcc-16" "$JQ_RESP" "data.tools.0.candidates.1" "aarch64-linux-gnu-gcc-16"
-eqj "V-B① cc last candidate = host cc" "$JQ_RESP" "data.tools.0.candidates.5" "cc"
-eqj "V-B① tools[3].name = objcopy" "$JQ_RESP" "data.tools.3.name" "objcopy"
-eqj "V-B① objcopy first candidate = cross version" "$JQ_RESP" "data.tools.3.candidates.0" "aarch64-linux-gnu-objcopy"
-eqj "V-B① objcopy last candidate = host version" "$JQ_RESP" "data.tools.3.candidates.1" "objcopy"
-hasj "V-B① tools[0] carries a resolved key (resolution in core)" "$JQ_RESP" "data.tools.0.resolved"
+eqj "V-B① cc first candidate = clang wrapper" "$JQ_RESP" "data.tools.1.candidates.0" "tools/toolchain/aarch64-none-elf-clang"
+eqj "V-B① cc 2nd candidate = <cross>gcc" "$JQ_RESP" "data.tools.1.candidates.1" "aarch64-linux-gnu-gcc"
+eqj "V-B① cc 3rd candidate = gcc-16" "$JQ_RESP" "data.tools.1.candidates.2" "aarch64-linux-gnu-gcc-16"
+eqj "V-B① cc last candidate = host cc" "$JQ_RESP" "data.tools.1.candidates.6" "cc"
+eqj "V-B① tools[5].name = objcopy" "$JQ_RESP" "data.tools.5.name" "objcopy"
+eqj "V-B① objcopy first candidate = cross version" "$JQ_RESP" "data.tools.5.candidates.0" "aarch64-linux-gnu-objcopy"
+eqj "V-B① objcopy last candidate = host version" "$JQ_RESP" "data.tools.5.candidates.1" "objcopy"
+hasj "V-B① tools[1] (cc) carries a resolved key (resolution in core)" "$JQ_RESP" "data.tools.1.resolved"
 eqj "V-B① QEMU machine comes from [build.target.qemu]" "$JQ_RESP" "data.target.qemu.machine" "virt,gic-version=3"
 
 # ---------------------------------------------------------------- ② missing [build]
@@ -983,6 +986,254 @@ grep_at_least "V-B⑨ ninja builddir is pinned under build/gen" '^builddir = bui
     "$W/build/gen/build.ninja"
 eq "V-B⑨ dry-run writes no incremental state (it is derived)" "no" \
     "$([ -f "$W/build/gen/build-state.json" ] && echo yes || echo no)"
+
+# ---- V-22 source disciplines (ADR-0038): self-contained .c / globals stay inside a plugin /
+# declared dependencies only. Pure text + declaration surface: no compiler, no archive (the symbol
+# half is the `.a` audit inside `brickie build`, exercised by V-B⑩ below).
+section "V-22 source disciplines (R1/R2/R3, ADR-0038)"
+mk_discipline_tree() { # mk_discipline_tree <work>: two ability plugins, one provider, one consumer
+    local w="$1"
+    mkdir -p "$w/service/prov/src" "$w/service/prov/include" "$w/service/cons/src" "$w/service/cons/include"
+    cat >"$w/service/prov/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "service/prov"
+plugin_type = "ability"
+api_type = "native"
+subkind = "service"
+lang = "c"
+phase = "late"
+version = "0.1.0.0"
+[[export]]
+name = "prov"
+api_iface = "native"
+form = "api"
+version = "0.1.0.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+[[export.entries]]
+kind = "func"
+name = "prov_ping"
+sig = "int (void)"
+[build]
+sources = ["src/*.c"]
+includes = ["include"]
+TOML
+    cat >"$w/service/prov/include/prov.h" <<'H'
+#ifndef PROV_H
+#define PROV_H
+int prov_ping(void);
+#endif
+H
+    cat >"$w/service/prov/src/prov.c" <<'C'
+#include "prov.h"
+int prov_ping(void) { return 7; }
+C
+    cat >"$w/service/cons/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "service/cons"
+plugin_type = "ability"
+api_type = "native"
+subkind = "service"
+lang = "c"
+phase = "late"
+version = "0.1.0.0"
+[[dep]]
+name = "service/prov"
+range = ">=0.1.0"
+kind = "runtime"
+[build]
+sources = ["src/*.c"]
+includes = ["include"]
+TOML
+    cat >"$w/service/cons/src/cons.c" <<'C'
+#include "prov.h"
+int cons_run(void) { return prov_ping(); }
+C
+}
+
+# ① R1: a prototype with no definition in the same .c
+W="$(new_work)"; mk_discipline_tree "$W"
+printf 'int lonely(void);\n' >>"$W/service/cons/src/cons.c"
+run_json "$W" check --src
+eq "V-22① prototype without definition ⇒ exit code 1" "1" "$RC"
+eqj "V-22① code is BRV-SRC-0001" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0001"
+contains "V-22① message names the symbol" 'lonely' "$(cat "$ERR")"
+
+# ② R1: an `extern` declaration with no definition in the same .c
+W="$(new_work)"; mk_discipline_tree "$W"
+printf 'extern int elsewhere;\n' >>"$W/service/cons/src/cons.c"
+run_json "$W" check --src
+eq "V-22② extern without definition ⇒ exit code 1" "1" "$RC"
+eqj "V-22② code is BRV-SRC-0001" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0001"
+
+# ③ R2: a file-scope object without `static`
+W="$(new_work)"; mk_discipline_tree "$W"
+printf 'int leaked_counter;\n' >>"$W/service/cons/src/cons.c"
+run_json "$W" check --src
+eq "V-22③ non-static global ⇒ exit code 1" "1" "$RC"
+eqj "V-22③ code is BRV-SRC-0002" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0002"
+# …and `static` is accepted (the positive half, so the rule is not "no globals")
+W="$(new_work)"; mk_discipline_tree "$W"
+printf 'static int s_counter;\n' >>"$W/service/cons/src/cons.c"
+run_json "$W" check --src
+eq "V-22③ static global ⇒ exit code 0" "0" "$RC"
+
+# ④ R2: a public header exporting an object
+W="$(new_work)"; mk_discipline_tree "$W"
+printf 'extern int prov_state;\n' >>"$W/service/prov/include/prov.h"
+run_json "$W" check --src
+eq "V-22④ header exports an object ⇒ exit code 1" "1" "$RC"
+eqj "V-22④ code is BRV-SRC-0002" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0002"
+
+# ⑤ R2: `kind = "var"` in the export surface is refused
+W="$(new_work)"; mk_discipline_tree "$W"
+"$PY" - "$W/service/prov/brick.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text() + '[[export.entries]]\nkind = "var"\nname = "prov_state"\n')
+PYX
+run_json "$W" check
+eq "V-22⑤ kind=var export ⇒ exit code 1" "1" "$RC"
+eqj "V-22⑤ code is BRV-SRC-0002" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0002"
+
+# ⑥ R3: an include of a plugin that is only a *transitive* dependency
+W="$(new_work)"; mk_discipline_tree "$W"
+mkdir -p "$W/service/mid/src" "$W/service/mid/include"
+"$PY" - "$W" <<'PYX'
+import pathlib, sys
+w = pathlib.Path(sys.argv[1])
+(w / "service/mid/brick.toml").write_text(
+    'schema = 1\n[plugin]\nname = "service/mid"\nplugin_type = "ability"\n'
+    'api_type = "native"\nsubkind = "service"\nlang = "c"\nphase = "late"\nversion = "0.1.0.0"\n'
+    '[[dep]]\nname = "service/prov"\nrange = ">=0.1.0"\nkind = "runtime"\n'
+    '[build]\nsources = ["src/*.c"]\nincludes = ["include"]\n')
+cons = w / "service/cons/brick.toml"
+cons.write_text(cons.read_text().replace('name = "service/prov"', 'name = "service/mid"'))
+PYX
+run_json "$W" check --deps
+eq "V-22⑥ transitive-only include ⇒ exit code 1" "1" "$RC"
+eqj "V-22⑥ code is BRV-DEP-0012" "$JQ_RESP" "diagnostics.0.code" "BRV-DEP-0012"
+contains "V-22⑥ message says 'direct'" 'no **direct** dependency' "$(cat "$ERR")"
+# …and declaring the dependency directly makes it green again
+"$PY" - "$W/service/cons/brick.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace(
+    "[build]",
+    '[[dep]]\nname = "service/prov"\nrange = ">=0.1.0"\nkind = "runtime"\n\n[build]'))
+PYX
+run_json "$W" check --deps
+eq "V-22⑥ declaring it directly ⇒ exit code 0" "0" "$RC"
+
+# ⑧ the symbol half: the `.a` audit judge (the exact criteria `brickie build` runs)
+W="$(new_work)"; mk_discipline_tree "$W"
+cat >"$TMPROOT/nm-declared.log" <<'NM'
+build/lib/service/cons.a:cons.o:                 U prov_ping
+build/lib/service/prov.a:prov.o:0000000000000000 T prov_ping
+NM
+core_judge "$W" symbol-audit "$TMPROOT/nm-declared.log"
+eqj "V-22⑧ audit: declared dependency ⇒ failed=0" "$JUDGE_RESP" "data.failed" "0"
+"$PY" - "$W/service/cons/brick.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('[[dep]]\nname = "service/prov"\nrange = ">=0.1.0"\nkind = "runtime"\n', ''))
+PYX
+core_judge "$W" symbol-audit "$TMPROOT/nm-declared.log"
+eqj "V-22⑧ audit: undeclared dependency ⇒ failed=1" "$JUDGE_RESP" "data.failed" "1"
+eqj "V-22⑧ audit: code is BRV-DEP-0012" "$JUDGE_RESP" "diagnostics.0.code" "BRV-DEP-0012"
+contains "V-22⑧ audit names the symbol" 'prov_ping' "$(cat "$JUDGE_RESP")"
+
+# ⑨ the symbol half of R2: a data symbol defined by a `native` plugin never crosses a plugin edge,
+# even when the dependency is declared.
+W="$(new_work)"; mk_discipline_tree "$W"
+cat >"$TMPROOT/nm-data.log" <<'NM'
+build/lib/service/cons.a:cons.o:                 U prov_state
+build/lib/service/prov.a:prov.o:0000000000000008 D prov_state
+NM
+core_judge "$W" symbol-audit "$TMPROOT/nm-data.log"
+eqj "V-22⑨ audit: data symbol across plugins ⇒ failed=1" "$JUDGE_RESP" "data.failed" "1"
+eqj "V-22⑨ audit: code is BRV-SRC-0002" "$JUDGE_RESP" "diagnostics.0.code" "BRV-SRC-0002"
+# A weak symbol is not evidence: every descriptor defines `br_plugin_gen_total` weak.
+cat >"$TMPROOT/nm-weak.log" <<'NM'
+build/lib/service/cons.a:cons.o:                 w br_plugin_gen_total
+build/lib/service/prov.a:prov.o:0000000000000000 V br_plugin_gen_total
+NM
+core_judge "$W" symbol-audit "$TMPROOT/nm-weak.log"
+eqj "V-22⑨ audit: weak symbols are ignored ⇒ failed=0" "$JUDGE_RESP" "data.failed" "0"
+
+# ⑩ the pipeline: `brickie build` always plans the archives + the audit, and the link consumes the
+# audit verdict (a red audit must stop the image).
+W="$(cp_fx build)"
+run_json "$W" build --dry-run
+eq "V-22⑩ build dry-run exit code 0" "0" "$RC"
+"$PY" - "$JQ_RESP" <<'PYX'
+import json, sys
+d = json.load(open(sys.argv[1]))["data"]
+steps = d["steps"]
+archives = [s for s in steps if s["kind"] == "archive"]
+audits = [s for s in steps if s["kind"] == "audit"]
+link = [s for s in steps if s["kind"] == "link"]
+assert archives, "no archive steps"
+assert all(a["argv"][1] == "rcsD" and a["argv"][2].startswith("build/lib/") for a in archives), archives
+assert len(audits) == 1, audits
+a = audits[0]
+assert a["judge"] == "symbol-audit", a
+assert "-A" in a["argv"] and "-g" in a["argv"], a
+assert "build/gen/symbol-audit.txt" in link[0]["consumes"], link[0]["consumes"]
+for s in archives:
+    assert s["group"] < a["group"] < link[0]["group"], (s["group"], a["group"], link[0]["group"])
+print("plan ok: %d archives + 1 audit before link" % len(archives))
+PYX
+eq "V-22⑩ plan has archives + audit before link" "0" "$?"
+
+# ⑪ A-2 survives the change: an APP may not include `<br/core/**>` directly, whatever it declares
+# (the APP's only door is the Interface layer). Needs a core plugin in the tree so the header
+# resolves -- the APP rule is about the consumer's class, not about the declaration graph.
+W="$(new_work)"; mk_discipline_tree "$W"
+mkdir -p "$W/core/c_core/src" "$W/core/c_core/include/br/core" "$W/app/hsm/src"
+cat >"$W/core/c_core/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "core/c_core"
+plugin_type = "core"
+api_type = "native"
+lang = "c"
+phase = "early"
+version = "0.2.0.0"
+[build]
+sources = ["src/*.c"]
+includes = ["include"]
+TOML
+printf '#define BR_NULL ((void *)0)\nvoid br_log_write(int level, const char *fmt);\n' \
+    >"$W/core/c_core/include/br/core/br_log.h"
+printf '#include <br/core/br_log.h>\nvoid br_log_write(int level, const char *fmt) { (void)level; (void)fmt; }\n' \
+    >"$W/core/c_core/src/log.c"
+cat >"$W/app/hsm/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "app/hsm"
+plugin_type = "app"
+api_type = "native"
+lang = "c"
+phase = "app"
+version = "0.1.0.0"
+[build]
+sources = ["src/*.c"]
+includes = ["include"]
+TOML
+printf '#include <br/core/br_log.h>\nint hsm_start(void) { return 0; }\n' >"$W/app/hsm/src/main.c"
+run_json "$W" check --deps
+eq "V-22⑪ APP includes a core header ⇒ exit code 1" "1" "$RC"
+eqj "V-22⑪ code is BRV-MF-0001 (A-2)" "$JQ_RESP" "diagnostics.0.code" "BRV-MF-0001"
+contains "V-22⑪ message says the APP must not go below the iface layer" 'iface layer' "$(cat "$ERR")"
+
+# ⑦ the real tree is clean under the new scope (the discipline is enforced, not aspirational)
+run_json "$REPO_ROOT" check --src
+eq "V-22⑦ brickOS tree: src scope exit code 0" "0" "$RC"
+eqj "V-22⑦ brickOS tree: src scope errors=0" "$JQ_RESP" "data.summary.errors" "0"
 
 # ---- N-1 negative acceptance: help surface
 section "N-1 no undelivered §5.4 command appears in --help"

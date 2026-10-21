@@ -6,6 +6,8 @@
 // Reusable primitives for agent-B (rust/README.md), exported ahead of their call sites.
 #![allow(dead_code)]
 
+mod audit;
+mod build;
 mod check;
 mod dep;
 mod diag;
@@ -18,8 +20,8 @@ mod rules;
 mod selftest;
 mod show;
 mod solver;
+mod srcscan;
 mod version;
-mod build;
 
 use std::io::Read;
 use std::path::PathBuf;

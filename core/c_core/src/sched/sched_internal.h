@@ -67,4 +67,9 @@ br_u32 br_thread_pool_used(void);
  * line. */
 const br_sched_ops_t *br_sched_ops_get(void);
 
+/* Host-side idle wait hook: defined by the host test suite, absent in the target image (weak). */
+#if !defined(__aarch64__)
+void br_sched_host_wait(void) __attribute__((weak));
+#endif
+
 #endif /* BR_SCHED_INTERNAL_H */

@@ -2088,8 +2088,8 @@ fn iface_crossfile_cases(h: &mut Harness) {
     write(&root3, "service/two/brick.toml", &ability_toml("service/two", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"dup\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
     let resp = check::run(&mk_req("check", &root3, json!({"profile": "dev"})));
     h.check(
-        msg_of(&resp, "BRV-MF-0001").contains("unit name `dup`"),
-        "§2 item 4: unit-level collision ⇒ reported",
+        !has_code(&resp, "BRV-MF-0001"),
+        "§5.6: unit ids are `<provider>#<unit>` ⇒ two providers may share a unit name (ADR-0038 §2.4)",
     );
 
     let root4 = tmpdir("profile14");
@@ -2886,7 +2886,11 @@ fn build_cases(h: &mut Harness) {
     h.j(&data["unit_count"], json!(3), "build: unit count = core + platform + app");
     h.j(&data["source_count"], json!(4), "build: source count = core 1 + plat 2 + app 1");
     let steps = data["steps"].as_array().cloned().unwrap_or_default();
-    h.j(&json!(steps.len()), json!(6), "build: step count = 4 compiles + link + objcopy");
+    h.j(
+        &json!(steps.len()),
+        json!(10),
+        "build: step count = 4 compiles + 3 archives + 1 symbol audit + link + objcopy",
+    );
     let all: Vec<String> = steps
         .iter()
         .map(|s| {
@@ -3176,8 +3180,8 @@ fn build_cases(h: &mut Harness) {
         "backend: both backends list the objects",
     );
     h.check(
-        data8["steps_total"] == json!(6),
-        "build: backend rendering does not change the plan (still 6 steps)",
+        data8["steps_total"] == json!(10),
+        "build: backend rendering does not change the plan (still 10 steps)",
     );
     let _ = fs::remove_dir_all(&root7);
 }

@@ -1677,10 +1677,20 @@ char *fgets(char *buf, int n, FILE *f)
     return (i > 0) ? buf : BR_NULL;
 }
 
-/* Standard streams: NULL by default (POSIX's 0/1/2 belong to a process model, absent here). */
-FILE *stdin  = BR_NULL;
-FILE *stdout = BR_NULL;
-FILE *stderr = BR_NULL;
+/* Standard streams: private state + accessors (ADR-0038 / R2: a global never leaves the plugin;
+ * `stdio.h` maps the POSIX names onto these calls). NULL by default -- POSIX's 0/1/2 belong to a
+ * process model, absent here. */
+static FILE *s_stdin  = BR_NULL;
+static FILE *s_stdout = BR_NULL;
+static FILE *s_stderr = BR_NULL;
+
+FILE *br_posix_stdin(void)  { return s_stdin; }
+FILE *br_posix_stdout(void) { return s_stdout; }
+FILE *br_posix_stderr(void) { return s_stderr; }
+
+void br_posix_set_stdin(FILE *f)  { s_stdin  = f; }
+void br_posix_set_stdout(FILE *f) { s_stdout = f; }
+void br_posix_set_stderr(FILE *f) { s_stderr = f; }
 
 /* ---- Layer: string: str* is defined here; mem* is not (those are core symbols). ---- */
 
