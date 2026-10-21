@@ -1,0 +1,46 @@
+#!/bin/sh
+# aarch64-none-elf-clang — bare-metal aarch64 C compiler: wrapper around the prebuilt clang
+# (prebuilts/toolchain/clang, installed by `python3 tools/fetch-prebuilt.py clang-18 ...`).
+#
+# Why a wrapper and not a plain `clang` on PATH: three facts cannot be expressed in brickie's
+# generic "resolve a cross compiler" step, but all three belong to the *toolchain*, not to the
+# build rules:
+#   1. `--target=aarch64-none-elf` — clang is a cross compiler by nature; the triple is what makes
+#      it bare metal. Naming it <triple>-clang mirrors how a GNU toolchain bakes the target in.
+#   2. lld — there is no `aarch64-none-elf-ld` on the host, so the driver must be told which linker
+#      to use. `-fuse-ld=lld` also has to be suppressed on compile-only lines: clang rejects it as
+#      an unused argument, which under this repo's -Werror is a build failure.
+#   3. `LD_LIBRARY_PATH` — the distribution packages keep libLLVM/libclang-cpp under
+#      llvm-18/lib and the binaries carry no rpath.
+#
+# brickie's cc candidate list tries this file first and falls back to GNU
+# (WORKAROUND(br-wa-toolchain-001)), so a checkout without the clang prebuilt still builds the image.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+llvm=$here/../../prebuilts/toolchain/clang/usr/lib/llvm-18
+
+if [ ! -x "$llvm/bin/clang" ]; then
+    echo "aarch64-none-elf-clang: prebuilt clang missing at $llvm" >&2
+    echo "  fetch it with: python3 tools/fetch-prebuilt.py clang-18 libclang-cpp18 libllvm18 \\" >&2
+    echo "                   libclang-common-18-dev libclang-rt-18-dev lld-18 llvm-18" >&2
+    exit 2
+fi
+
+LD_LIBRARY_PATH=$llvm/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export LD_LIBRARY_PATH
+
+# Link-only flags must not appear on a compile/preprocess-only invocation.
+linking=1
+for a in "$@"; do
+    case $a in
+    -c | -E | -S | -M | -MM | -MD | -MMD) linking=0 ;;
+    esac
+done
+
+if [ "$linking" -eq 1 ]; then
+    exec "$llvm/bin/clang" --target=aarch64-none-elf -fuse-ld=lld \
+        --ld-path="$llvm/bin/ld.lld" "$@"
+fi
+
+exec "$llvm/bin/clang" --target=aarch64-none-elf "$@"

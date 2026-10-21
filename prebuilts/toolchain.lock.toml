@@ -16,11 +16,13 @@
 version = 1
 
 # ---------------------------------------------------------------- 目标编译器
-# 裸机 aarch64 专用工具链(gcc + binutils + sysroot)。用途: br-wa-toolchain-001 的还债口。
+# 裸机 aarch64 专用工具链(gcc + binutils + sysroot)。用途: WORKAROUND(br-wa-toolchain-001) 的还债口。
 #
 # 选型留痕(ADR-0002 §2): clang 21(LLVM-21.1.8)本可一份顶两用 —— 目标编译器 + libclang
 # (brickie v0.2 的接口依赖扫描要用), 但体积 1925 MB vs 92 MB(20×) ⇒ v0.1 取 Arm。
-# **待复议**: 若以后要求"宿主编译器也自洽", 宿主编译器只能另纳一件 —— clang 那条路正是为此存在。
+# **已复议并改判**: clang 成为**默认**目标编译器(见本文件 §clang), Arm GNU 留作回退。
+# 两份都留着是有意的: brickie 的 cc 候选序先 clang 后 gcc, 所以"没有 clang prebuilt 的宿主"
+# 仍能构建完整镜像 —— 这次改判没有把 br-wa-toolchain-001 变成硬前提, 只是提前了它的还债口。
 [[artifact]]
 id       = "arm-gnu-toolchain"
 version  = "15.2.rel1"
@@ -34,7 +36,119 @@ strip    = 1
 # 不是本地首用信任(TOFU)。上游删除旧版本 ⇒ 取件会失败, 但绝不会静默取到别的东西。
 provenance = "官方 .sha256(GNU Arm Toolchain 15.2.rel1 binrel 目录)"
 license  = "GPL-3.0-or-later WITH GCC-exception-3.1 / GPL-3.0 / LGPL-3.0(组合发行)"
-why      = "目标编译器 + binutils: 裸机 aarch64 构建(br-wa-toolchain-001 的还债口)"
+why      = "目标编译器 + binutils: 裸机 aarch64 构建(WORKAROUND(br-wa-toolchain-001) 的还债口); clang 缺席时的回退"
+
+# ---------------------------------------------------------------- 目标编译器(clang, 默认)
+# Ubuntu noble 的 LLVM 18 组件包, 装进**一个**树 `clang/`, 保留上游 `usr/lib/llvm-18/**` 布局
+# (strip = 0): 包内符号链接(`usr/bin/clang-18 -> ../lib/llvm-18/bin/clang`)按原样落地, 不需要再猜路径。
+#
+# 为什么是**七个**包而不是官方的 LLVM 发布 tarball(约 1.9 GB、一份一个 URL):
+#   实际需要的只有驱动 + libLLVM + libclang-cpp + lld + 资源头, 合计约 70 MB(实测),
+#   比整包小 20 倍以上, 且与 qemu 那条路(`fetch-qemu.sh` 取 deb)同型。
+# 代价(诚实登记): 这七个 `.deb` **动态链接宿主 glibc**, 所以和 make/ninja 一样是"钉住版本"
+# 而非"与环境无关"的自举件。
+#
+# `merge = true`: 七个包叠进同一个 `clang/`; 只有第一条(clang-18)不带, 它负责清掉旧树。
+# 顺序有意义 —— **不要把带 merge 的条目挪到最前**。
+#
+# 校验值来源: 归档 `dists/noble/{main,universe}/binary-amd64/Packages` 的 SHA256 字段
+# (由同目录 InRelease 签名背书), 不是本地首用信任。
+[[artifact]]
+id       = "clang-18"
+version  = "18.1.3-1ubuntu1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/universe/l/llvm-toolchain-18/clang-18_18.1.3-1ubuntu1_amd64.deb"
+filename = "clang-18_18.1.3-1ubuntu1_amd64.deb"
+sha256   = "628b16701014ef7ad648380b20ea74b90dd543857f933b3e34d2fc042783de25"
+into     = "clang"
+strip    = 0
+provenance = "Ubuntu noble universe, llvm-toolchain-18 18.1.3-1ubuntu1; Packages 索引的 SHA256"
+license  = "Apache-2.0 WITH LLVM-exception"
+why      = "clang 驱动(默认目标编译器; 包装器 tools/toolchain/aarch64-none-elf-clang 补三元组 + lld)"
+
+[[artifact]]
+id       = "libclang-cpp18"
+version  = "18.1.3-1ubuntu1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/main/l/llvm-toolchain-18/libclang-cpp18_18.1.3-1ubuntu1_amd64.deb"
+filename = "libclang-cpp18_18.1.3-1ubuntu1_amd64.deb"
+sha256   = "e91eda104813ee0468d145d010a4a4e142401f3f17f9a65596c66d416298d018"
+into     = "clang"
+strip    = 0
+merge    = true
+provenance = "Ubuntu noble main, llvm-toolchain-18 18.1.3-1ubuntu1; Packages 索引的 SHA256"
+license  = "Apache-2.0 WITH LLVM-exception"
+why      = "clang 驱动实际加载的 C++ 前端库"
+
+[[artifact]]
+id       = "libllvm18"
+version  = "18.1.3-1ubuntu1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/main/l/llvm-toolchain-18/libllvm18_18.1.3-1ubuntu1_amd64.deb"
+filename = "libllvm18_18.1.3-1ubuntu1_amd64.deb"
+sha256   = "af6197096ce3b89aab86de59f01c1b5feb008b2ae1514a03906c0664edb8b0b1"
+into     = "clang"
+strip    = 0
+merge    = true
+provenance = "Ubuntu noble main, llvm-toolchain-18 18.1.3-1ubuntu1; Packages 索引的 SHA256"
+license  = "Apache-2.0 WITH LLVM-exception"
+why      = "LLVM 核心库(libLLVM-18.so)"
+
+[[artifact]]
+id       = "libclang-common-18-dev"
+version  = "18.1.3-1ubuntu1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/universe/l/llvm-toolchain-18/libclang-common-18-dev_18.1.3-1ubuntu1_amd64.deb"
+filename = "libclang-common-18-dev_18.1.3-1ubuntu1_amd64.deb"
+sha256   = "d41631bb752815a8196261d1030c096591c59678c8adfbf2e6a740a691b49e80"
+into     = "clang"
+strip    = 0
+merge    = true
+provenance = "Ubuntu noble universe, llvm-toolchain-18 18.1.3-1ubuntu1; Packages 索引的 SHA256"
+license  = "Apache-2.0 WITH LLVM-exception"
+why      = "clang 资源目录(lib/clang/18/include): freestanding 头 + aarch64 内建头"
+
+[[artifact]]
+id       = "libclang-rt-18-dev"
+version  = "18.1.3-1ubuntu1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/universe/l/llvm-toolchain-18/libclang-rt-18-dev_18.1.3-1ubuntu1_amd64.deb"
+filename = "libclang-rt-18-dev_18.1.3-1ubuntu1_amd64.deb"
+sha256   = "82d5d27d12c0abdf4cefbafa6044e7544a4cbbbec9c04784f5ce326979842b2b"
+into     = "clang"
+strip    = 0
+merge    = true
+provenance = "Ubuntu noble universe, llvm-toolchain-18 18.1.3-1ubuntu1; Packages 索引的 SHA256"
+license  = "Apache-2.0 WITH LLVM-exception"
+why      = "compiler-rt(宿主侧 builtins; 目标侧本轮不需要 —— 镜像用 -nostdlib 且不依赖 libgcc)"
+
+[[artifact]]
+id       = "lld-18"
+version  = "18.1.3-1ubuntu1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/universe/l/llvm-toolchain-18/lld-18_18.1.3-1ubuntu1_amd64.deb"
+filename = "lld-18_18.1.3-1ubuntu1_amd64.deb"
+sha256   = "c574594d714bf445f4c2323fa99374c05b79be09a3899edbf9d4b7265c9ccc57"
+into     = "clang"
+strip    = 0
+merge    = true
+provenance = "Ubuntu noble universe, llvm-toolchain-18 18.1.3-1ubuntu1; Packages 索引的 SHA256"
+license  = "Apache-2.0 WITH LLVM-exception"
+why      = "链接器(ld.lld): 裸机 aarch64 没有 <triple>-ld, clang 驱动必须显式指路"
+
+[[artifact]]
+id       = "llvm-18"
+version  = "18.1.3-1ubuntu1"
+kind     = "deb"
+url      = "http://archive.ubuntu.com/ubuntu/pool/universe/l/llvm-toolchain-18/llvm-18_18.1.3-1ubuntu1_amd64.deb"
+filename = "llvm-18_18.1.3-1ubuntu1_amd64.deb"
+sha256   = "139cb82e16e75fcdd4a56562804ff9bfb482b65d0929580d621d28088075a27e"
+into     = "clang"
+strip    = 0
+merge    = true
+provenance = "Ubuntu noble universe, llvm-toolchain-18 18.1.3-1ubuntu1; Packages 索引的 SHA256"
+license  = "Apache-2.0 WITH LLVM-exception"
+why      = "llvm-objdump / llvm-size / llvm-objcopy: clang 路线下的等价 binutils(现用宿主 GNU 版即可, 备件)"
 
 # ---------------------------------------------------------------- 构建后端 make
 # 出处: Ubuntu `make` 4.4.1-3(源码包 make-dfsg)。
@@ -138,6 +252,10 @@ why      = "mcopy/mmd(把测试用的文件与目录放进 FAT 卷; 不需要宿
 [toolchain]
 make  = "make/bin/make"
 ninja = "ninja/bin/ninja"
+# 默认目标编译器。**不是**直接执行的: brickie 走 tools/toolchain/aarch64-none-elf-clang 包装器
+# (它补 --target / lld / LD_LIBRARY_PATH)。这里登记的是被包装的**真身**, 所以它们是否到位
+# 能被 `--check` 看出来。
+cc    = "clang/usr/lib/llvm-18/bin/clang"
 cross = "arm-gnu-toolchain-15.2.rel1/bin/aarch64-none-elf-"
 mkfs-fat   = "dosfstools/sbin/mkfs.fat"
 fsck-fat   = "dosfstools/sbin/fsck.fat"

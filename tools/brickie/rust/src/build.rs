@@ -772,9 +772,17 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     };
 
     // Tool candidates, in resolution order.
+    // Tool candidates, in resolution order.
+    //
+    // `cc` prefers clang. The wrapper `tools/toolchain/aarch64-none-elf-clang` bakes in the
+    // bare-metal triple, lld and the prebuilt's library path, so this side treats it as an
+    // ordinary cross compiler and needs no `is-this-clang` branch. A GNU toolchain stays as the
+    // fallback: the repo must still build on a host that has one but not the clang prebuilt
+    // (WORKAROUND(br-wa-toolchain-001) is not retired by this choice, only paid down earlier).
     let cross = &target.cross;
     let mut tools: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    let mut cc_cands: Vec<String> = vec![format!("{cross}gcc")];
+    let mut cc_cands: Vec<String> = vec!["tools/toolchain/aarch64-none-elf-clang".to_string()];
+    cc_cands.push(format!("{cross}gcc"));
     for v in ["16", "15", "14", "13"] {
         cc_cands.push(format!("{cross}gcc-{v}"));
     }

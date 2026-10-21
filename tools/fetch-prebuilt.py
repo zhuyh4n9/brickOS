@@ -313,7 +313,11 @@ def extract(art: dict, blob: Path) -> None:
     kind = art["kind"]
     dest = PREBUILT / art["into"]
     strip = int(art.get("strip", 0))
-    if dest.exists():
+    # `merge = true`: several artifacts share one `into` and stack into one tree (clang: one
+    # distribution package per component — driver, libLLVM, lld, resource headers). Without it a
+    # later artifact would delete what the earlier ones just unpacked. The first entry for a given
+    # `into` must NOT set merge: it is the one that clears a stale tree.
+    if dest.exists() and not art.get("merge"):
         shutil.rmtree(dest)
     if kind in ("tar.xz", "tar.gz", "tar.zst", "tar.bz2"):
         extract_tar(blob, dest, strip)

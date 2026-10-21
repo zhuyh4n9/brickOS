@@ -9,12 +9,16 @@
  */
 #include "string_internal.h"
 
-#if defined(__GNUC__)
+#if defined(__clang__)
 /*
  * Keep the optimizer from turning this function into a call to memcpy
  * (loop-distribute-patterns does that at -O2: infinite recursion plus a link-time
- * self-reference). GCC-specific attribute, hence wrapped in __GNUC__.
+ * self-reference). `no_builtin` is clang's form; clang defines __GNUC__ too, so this branch
+ * must come first.
  */
+#  define BR_NO_LOOP_PATTERN __attribute__((no_builtin("memcpy", "memmove", "memset")))
+#elif defined(__GNUC__)
+/* GCC form of the same request (clang rejects the `optimize` attribute outright). */
 #  define BR_NO_LOOP_PATTERN __attribute__((optimize("no-tree-loop-distribute-patterns")))
 #else
 #  define BR_NO_LOOP_PATTERN

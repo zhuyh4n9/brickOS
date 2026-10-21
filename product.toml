@@ -14,22 +14,7 @@ platform = { brick = "platform/qemu-aarch64", requires = {} }
 core     = { brick = "core/c_core", requires = { version = ">=0.1.0" } }
 stage    = "dev"                 # dev | release; CLI overrides (§7.5)
 
-# Directly selected abilities. A root pulls in everything it `[[dep]]`s on, so the frameworks
-# (dev-core, cdev-core, bdev-core, vfs-core, file-table, pci-core) and the two interface skins
-# (iface/posix, iface/min) are deliberately **absent**: they enter the closure through their
-# consumers. What is left below is only what no other selected plugin depends on.
-#
-#   app/hello -> iface/posix -> runtime/posix -> framework/{file-table,vfs-core}
-#             -> iface/min (core native pass-through skin: log/clock/tick/version)
-#   service/dump -> service/{trace,backtrace,hexdump,memleak}
-#   fs/devfs  -> framework/{dev-core,cdev-core} + fs/tmpfs (parent FS of the mount points)
-#   driver/uart-pl011 -> framework/{cdev-core,dev-core}
-#   fs/uboot-{fat,erofs} -> driver/uboot-mmc -> framework/{bdev-core,dev-core,pci-core}
-#
-# `fs/devfs`, `driver/uart-pl011` and the eMMC stack stay explicit: the APP mount plan
-# ([[mount]] in app/hello) declares / and /dev, and a mount plan does not generate a
-# selection edge (WORKAROUND br-wa-fs-001), so dropping a line here removes the volume
-# rather than trimming a dependency.
+
 [[product.ability]]
 rr    = { brick = "sched/rr", requires = {} }
 dump  = { brick = "service/dump", requires = {} }

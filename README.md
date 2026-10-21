@@ -259,7 +259,9 @@ make tools-core         # 只编 L0/L1 的 brickie-core(cargo ≥ 1.83; 出树�
 make tools-test         # 工具自身用例: 渲染器自检 + 端到端回归(含 V-1…V-19 / §V-B 构建族)
 ```
 
-**镜像段**的工具链是外部的(内部工具链未就绪, 见 §5 的 `br-wa-toolchain-001`)。需要: `aarch64-linux-gnu-gcc`(或带版本号的 `gcc-16`/`gcc-15`/`gcc-14`/`gcc-13`; **候选序与探测在 `brickie-core`**, 不在 Makefile)、`binutils-aarch64-linux-gnu`、`qemu-system-aarch64`。
+**镜像段**的工具链是外部的(内部工具链未就绪, 见 §5 的 `br-wa-toolchain-001`)。**默认目标编译器是 clang**: `prebuilts/toolchain/clang/`(Ubuntu noble 的 LLVM 18 组件包, 由 `python3 tools/fetch-prebuilt.py clang-18 …` 取件)配包装器 `tools/toolchain/aarch64-none-elf-clang`(它补 `--target=aarch64-none-elf` + `lld` + `LD_LIBRARY_PATH`)。**回退**仍完整可用: 没有 clang prebuilt 时 `brickie` 按候选序退到 `aarch64-linux-gnu-gcc`(或带版本号的 `gcc-16`/`gcc-15`/`gcc-14`/`gcc-13`; **候选序与探测在 `brickie-core`**, 不在 Makefile)。两种情况都还需要 `binutils-aarch64-linux-gnu` 与 `qemu-system-aarch64`。
+>
+> **为什么加 clang**(本轮改判, 选型留痕见 `prebuilts/toolchain.lock.toml`): ① 裸机镜像更小(clang 1.55 MB vs gcc 2.28 MB ELF); ② `-Werror` 下诊断更严(例如 `incompatible-pointer-types` 在 clang 是默认开启的硬错误, 这是后续"禁止隐式类型转换"的执法前提); ③ 带 `libclang`, 为 brickie 将来的接口依赖扫描(C 的 AST 级判据)**留下同一份工具链**。代价如实登记: 这 7 个 `.deb` 动态链接宿主 glibc, 属"钉住版本"而非"与环境无关"。
 
 > ⚠ **QEMU 必须 ≥ 10.2**(不是"随便一个 qemu-system-aarch64")。`platform/qemu-aarch64` 挂了四块 `-device emmc`, 而 eMMC 卡模型虽然 **9.1** 就进了 QEMU, 当时却是 `dc->user_creatable = false`(注释 "Soldered on board"), 直到 **10.2.0** 才成为可插拔设备 —— 更早的版本跑 `make run` 只会得到 `'emmc' is not a valid device model name`。仓库的参考环境是 Ubuntu 26.04 的 **10.2.1**。宿主自带的不够新时, **不用换发行版也不用 root**: `bash tools/fetch-qemu.sh` 会把 10.2.1(Ubuntu 26.04 "resolute" 归档的 11 个包, URL + SHA256 钉在脚本里)**就地解包**到 `prebuilts/toolchain/qemu/`, 并在 `prebuilts/toolchain/bin/` 放一个包装器 —— `brickie` 的工具解析**先看那个目录**(`resolve_tool`), 所以 `make run` / `make emmc-test` 不必改任何配置; `brickie` 自己也会**预检**(步骤里出现 `-device emmc` 而版本 < 10.2 时当场给出上面这段修法)。
 

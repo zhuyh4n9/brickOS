@@ -19,3 +19,11 @@
 # Python bytecode (created when tool scripts run directly; derived, not versioned)
 __pycache__/
 *.pyc
+
+# Fetched toolchain trees (derived; rebuild with `python3 tools/fetch-prebuilt.py <ids>`).
+# The lock file pins versions + SHA256; the trees themselves are hundreds of MB and must never
+# land in a commit. `.cache/` is left alone on purpose (the qemu packages there are committed,
+# for offline reproducibility).
+/prebuilts/toolchain/clang/
+/prebuilts/toolchain/.stamp/
+/prebuilts/toolchain/toolchain.mk
