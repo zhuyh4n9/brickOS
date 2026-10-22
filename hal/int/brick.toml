@@ -1,0 +1,569 @@
+schema = 1
+
+[plugin]
+name        = "hal/int"
+plugin_type = "hal"
+api_type    = "native"
+lang        = "c"
+phase       = "early"
+symbol_prefix = "hal_int_"
+version     = "0.2.0.0"
+summary     = "中断框架(HAL): 描述符池/优先级/三层屏蔽/PIC 注册/级联域/下半部 bh/fault+extable"
+license     = "WTFPL"
+
+[[res]]
+kind     = "ram"
+used_kib = 3
+notes    = "描述符池/运行期表/域池 ≈ 8.3 KiB(设计容量, 静态数组); 不含 PIC 本体(platform)"
+
+# The HAL layer (ADR-0039) sits **below** `ability`: it may use `core/c_core` (base: log/trace/panic),
+# never an ability. `platform` implements the PIC/exception stubs it declares and calls its APIs, so
+# `platform -> hal` is legal while `hal -> ability` is not.
+#
+# The IRQ exit hands control to the scheduler through `br_irq_hooks_t` (installed by `hal/sched`),
+# so this brick does not depend on the scheduler brick -- see br_irq.h.
+[[dep]]
+name  = "core/c_core"
+range = ">=0.1.0"
+kind  = "runtime"
+
+# `[iface.typedefs]`: the surface hash expands these aliases to their canonical C spelling, so a
+# future non-C implementation whose normalised signatures match still produces the same
+# `surface_hash` (iface.rs::canonical_sig).
+[iface.typedefs]
+br_u8       = "unsigned char"
+br_s8       = "signed char"
+br_u16      = "unsigned short"
+br_s16      = "signed short"
+br_u32      = "unsigned int"
+br_s32      = "signed int"
+br_u64      = "unsigned long"
+br_s64      = "signed long"
+br_size_t   = "unsigned long"
+br_uintptr_t = "unsigned long"
+br_intptr_t = "signed long"
+br_bool     = "int"
+br_time_t   = "br_u64"
+br_err_t    = "int"
+
+# ---------------------------------------------------------------- unit `irq`: <br/core/br_irq.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "irq"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_exc_frame"
+[[export.entries]]
+kind = "type"
+name = "br_irq_attr_t"
+layout = "# {prio, trigger, flags}"
+[[export.entries]]
+kind = "type"
+name = "br_irq_binding_t"
+layout = "# {virq, pic_id, flags, hwirq, dom_id, prio, trigger, dispatch, rsv}"
+[[export.entries]]
+kind = "type"
+name = "br_irq_domain_ops_t"
+[[export.entries]]
+kind = "type"
+name = "br_irq_stat_t"
+layout = "# {count, storm, depth, spurious_owned, spurious_nocap, drop, flags, trigger, bh_deferred, bh_dropped, suppressed_dispatch}"
+[[export.entries]]
+kind = "type"
+name = "br_irq_state_t"
+[[export.entries]]
+kind = "type"
+name = "isr"
+[[export.entries]]
+kind = "func"
+name = "br_irq_bindings_set"
+sig = "int (const br_irq_binding_t *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_cpu_enable"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_cpu_init"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_disable"
+sig = "int (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_disable_child"
+sig = "int (br_irq_domain_t *,br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_domain_create"
+sig = "br_irq_domain_t * (const char *,br_u32,br_u32,br_u32,const br_irq_domain_ops_t *,void *)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_enable"
+sig = "int (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_enable_child"
+sig = "int (br_irq_domain_t *,br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_enter"
+sig = "void (struct br_exc_frame *)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_in_atomic"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_in_isr"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_lock"
+sig = "br_irq_state_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_lock_depth"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_stats_get"
+sig = "void (br_u32,br_irq_stat_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_irq_unlock"
+sig = "void (br_irq_state_t)"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQB_F_ACTIVE_LOW"
+value = "0x02u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQB_F_EXCLUSIVE"
+value = "0x04u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQB_F_PERCPU"
+value = "0x01u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DEMUX_MAX_ROUND"
+value = "8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DISPATCH_BH"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DISPATCH_INLINE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DISPATCH_THREAD"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_BASE"
+value = "56u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_F_FAST"
+value = "0x0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_F_SLOW"
+value = "0x1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_MAX"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_DOMAIN_WINDOW"
+value = "(BR_IRQ_MAX - BR_IRQ_DOMAIN_BASE)"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_DISPATCH_BH"
+value = "0x0004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_DISPATCH_THREAD"
+value = "0x0008u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_KNOWN_MASK"
+value = "0x007Fu"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_MIGRATABLE"
+value = "0x0010u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_NO_STORM_GUARD"
+value = "0x0040u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_PERCPU"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_SHARED"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_F_STATS"
+value = "0x0020u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_INVALID"
+value = "0xFFFFFFFFu"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_IPI_BASE"
+value = "48u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_MAX"
+value = "64u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_NR_IPI"
+value = "8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_PRIO_DEFAULT"
+value = "0x80u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_PRIO_HIGHEST"
+value = "0x00u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_PRIO_LOWEST"
+value = "0xFFu"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_STATS"
+value = "1"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_STORM_GUARD"
+value = "0"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_STORM_LIMIT"
+value = "64u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_STORM_WINDOW"
+value = "256u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_A_MASK"
+value = "0x00000004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_DEPTH_MASK"
+value = "0x0003FFF0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_DEPTH_SHIFT"
+value = "4"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_D_MASK"
+value = "0x00000008u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_F_MASK"
+value = "0x00000002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_ST_I_MASK"
+value = "0x00000001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_DEFAULT"
+value = "0xFFu"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_EDGE_BOTH"
+value = "4u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_EDGE_FALL"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_EDGE_RISE"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_LEVEL_HIGH"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_IRQ_TRIG_LEVEL_LOW"
+value = "1u"
+
+# ---------------------------------------------------------------- unit `pic`: <br/core/br_pic.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "pic"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_pic_caps_t"
+layout = "# {prio_bits, nr_irq, caps}"
+[[export.entries]]
+kind = "type"
+name = "br_pic_ops_t"
+[[export.entries]]
+kind = "func"
+name = "br_pic_caps_of"
+sig = "int (br_u32,br_pic_caps_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_pic_register"
+sig = "int (br_pic_t *,const br_pic_ops_t *)"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_AFFINITY"
+value = "0x0020u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_LATCH"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_MASK"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_NEST"
+value = "0x0010u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_PER_CPU"
+value = "0x0200u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_PRIO"
+value = "0x0008u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_READBACK"
+value = "0x0004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_RESYNC"
+value = "0x0400u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_SW_TRIGGER"
+value = "0x0100u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_TRIG_BOTH"
+value = "0x0080u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_CAP_TRIG_EDGE"
+value = "0x0040u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_MAX"
+value = "128"
+[[export.entries]]
+kind = "macro"
+name = "BR_PIC_NO_IRQ"
+value = "0xFFFFFFFFu"
+
+# ---------------------------------------------------------------- unit `fault`: <br/core/br_fault.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "fault"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_extable_t"
+layout = "# {pc, fixup, reg, rsv, errno_val}"
+[[export.entries]]
+kind = "func"
+name = "br_extable_lookup"
+sig = "const br_extable_t * (br_uintptr_t)"
+[[export.entries]]
+kind = "func"
+name = "br_fault_enter"
+sig = "\\ \\ \\ void (br_exc_frame_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_panic"
+sig = "BR_NORETURN void (const char *,...)"
+[[export.entries]]
+kind = "func"
+name = "br_panic_bare"
+sig = "BR_NORETURN void (const char *,...)"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_BRK64"
+value = "0x3Cu"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_DABT_LOWER"
+value = "0x24u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_DABT_SAME"
+value = "0x25u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_FP_SIMD"
+value = "0x07u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_HVC64"
+value = "0x16u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_IABT_LOWER"
+value = "0x20u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_IABT_SAME"
+value = "0x21u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_MSR_MRS"
+value = "0x18u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_SMC64"
+value = "0x17u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_SVC64"
+value = "0x15u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EC_UNKNOWN"
+value = "0x00u"
+[[export.entries]]
+kind = "macro"
+name = "BR_ESR_EC_MASK"
+value = "0x3Fu"
+[[export.entries]]
+kind = "macro"
+name = "BR_ESR_EC_SHIFT"
+value = "26u"
+[[export.entries]]
+kind = "macro"
+name = "BR_ESR_ISS_MASK"
+value = "0x01FFFFFFu"
+
+# ---------------------------------------------------------------- unit `exc`: <br/core/br_exc.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "exc"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_exc_frame_t"
+[[export.entries]]
+kind = "macro"
+name = "BR_DAIF_A"
+value = "0x100u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DAIF_D"
+value = "0x200u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DAIF_F"
+value = "0x040u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DAIF_I"
+value = "0x080u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_DAIF_OFF"
+value = "0x120u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_ELR_OFF"
+value = "0x100u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_ESR_OFF"
+value = "0x110u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_FAR_OFF"
+value = "0x118u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_PAD_OFF"
+value = "0x130u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_SIZE"
+value = "0x140u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_SPSR_OFF"
+value = "0x108u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_SP_OFF"
+value = "0x0F8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_VECTOR_OFF"
+value = "0x128u"
+[[export.entries]]
+kind = "macro"
+name = "BR_EXC_XCOUNT"
+value = "31u"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

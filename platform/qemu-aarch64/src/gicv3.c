@@ -8,8 +8,8 @@
  */
 #include <br/core/br_console.h>
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>      /* BR_IRQ_TRIG_*: shared trigger encoding */
-#include <br/core/br_pic.h>
+#include <br/hal/br_irq.h>      /* BR_IRQ_TRIG_*: shared trigger encoding */
+#include <br/hal/br_pic.h>
 #include <br/platform/br_gicv3.h>
 
 /* ---- 1. GICD (distributor) registers and bitfields (offsets from GICD base) ---- */

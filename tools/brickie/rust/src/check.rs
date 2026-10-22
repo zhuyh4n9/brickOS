@@ -363,10 +363,16 @@ fn src_checks(
         for pat in &b.sources {
             sources.extend(crate::build::expand_glob(root, &dir, pat));
         }
-        if selftest_on && p.plugin_type == "core" {
-            if let Some(pb) = tree.product.as_ref().and_then(|x| x.build.as_ref()) {
-                for pat in &pb.selftest_sources {
-                    sources.extend(crate::build::expand_glob(root, "", pat));
+        if selftest_on {
+            // The plugin's own suite (ADR-0039), plus the product-level default for the core plugin.
+            for pat in &b.selftest_sources {
+                sources.extend(crate::build::expand_glob(root, &dir, pat));
+            }
+            if p.plugin_type == "core" {
+                if let Some(pb) = tree.product.as_ref().and_then(|x| x.build.as_ref()) {
+                    for pat in &pb.selftest_sources {
+                        sources.extend(crate::build::expand_glob(root, "", pat));
+                    }
                 }
             }
         }

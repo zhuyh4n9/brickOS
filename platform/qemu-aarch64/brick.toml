@@ -213,6 +213,26 @@ device_names = ["pl011", "gicv3", "pcie", "sdhci"]
 
 cases = 102
 
+
+# HAL layer (ADR-0039): the SoC layer *implements* the HAL contracts (PIC ops, MMU ops, region table)
+# and *calls* the HAL APIs (`br_irq_enable`, `br_malloc`, `br_sched_on_tick`). `platform -> hal` is
+# the one direction the pre-split rule did not need to name, because the HAL lived inside core.
+[[dep]]
+name  = "hal/int"
+range = ">=0.1.0"
+kind  = "runtime"
+
+[[dep]]
+name  = "hal/mm"
+range = ">=0.1.0"
+kind  = "runtime"
+
+[[dep]]
+name  = "hal/sched"
+range = ">=0.1.0"
+kind  = "runtime"
+
+
 [build]
 sources  = ["src/*.c", "src/*.S"]
 includes = ["include"]

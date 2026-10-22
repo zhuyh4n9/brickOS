@@ -9,7 +9,7 @@ RAM rootfs: 挂 `/` 的管理类 FS —— 节点与文件数据全部出自 cor
 | `api_type` | `native` | 不抛对外头 |
 | `subkind` | `fs` | 管理类 FS |
 | `phase` | `core` | ability 且 subkind ≠ service ⇒ CORE |
-| 依赖(init) | `framework/vfs-core` `>=0.1.0` | 挂载要经 `br_mount_register`; 拓扑序保证"挂载表先能收挂载" |
+| 依赖(init) | `hal/vfs-core` `>=0.1.0` | 挂载要经 `br_mount_register`; 拓扑序保证"挂载表先能收挂载" |
 | 导出面 | **无导出面**(manifest 里没有 `[[export]]`) | 本件没给 tmpfs 任何函数面 —— 能力就是"一个挂载在 `/` 上的 FS" |
 | 资源 | `ram` 4 KiB: 静态部分只有根节点与记账; 文件数据与目录节点在运行期从 core 堆取 | `[[res]]` |
 | `[[mount]]` | `path = "/"`, `order = 1` | 挂载计划第 1 条(工具侧尚不消费, 见欠账) |

@@ -6,9 +6,9 @@
  */
 #include <br/board_irq.h>
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>
+#include <br/hal/br_irq.h>
 /* Timer ISR -> scheduler-side tick driver. */
-#include <br/core/br_sched.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_time.h>
 #include <br/platform/br_gicv3.h>
 #include <br/platform/br_plat.h>

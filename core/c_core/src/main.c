@@ -7,12 +7,12 @@
  *  (br_panic() once console is up). br_irq_cpu_init() must precede the platform binding
  *  table, else every descriptor's pic_id/dom_id is wiped back to -1 (P-IRQ-5).
  */
-#include <br/core/br_fault.h>
-#include <br/core/br_irq.h>
+#include <br/hal/br_fault.h>
+#include <br/hal/br_irq.h>
 #include <br/core/br_log.h>
 #include <br/core/br_main.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_mm.h>
+#include <br/hal/br_mem.h>
+#include <br/hal/br_mm.h>
 #include <br/core/br_plugin.h>
 #include <br/core/br_time.h>
 

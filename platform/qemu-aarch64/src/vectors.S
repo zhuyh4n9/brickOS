@@ -7,7 +7,7 @@
  * DAIF is not written back (no MSR DAIF; eret restores PSTATE from SPSR_EL1). v2: if IRQ exit
  * switches stacks, revisit this premise.
  */
-#include <br/core/br_exc.h>
+#include <br/hal/br_exc.h>
 
 /* WORKAROUND(br-wa-isa-001): in the design this file belongs to the ISA shared library (exception
  * vector entry assembly); the prototype has no such layer, so it sits with the platform plugin -

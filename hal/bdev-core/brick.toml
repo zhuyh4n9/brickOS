@@ -1,0 +1,100 @@
+schema = 1
+
+[plugin]
+name        = "hal/bdev-core"
+plugin_type = "hal"
+api_type    = "native"
+lang        = "c"
+phase       = "core"
+version     = "0.1.0.0"
+summary     = "块设备子分类: br_bdev_ops(扇区 read/write/flush + 几何 + DMA/PIO 标示)+ br_bdev_register/br_bdev_get; raw 文件面留 v2"
+license     = "WTFPL"
+sched_class = "SAFE_PREEMPT"
+
+[[res]]
+kind     = "ram"
+used_kib = 1
+notes    = "bdev 槽 8(约 0.2 KiB); 无每文件状态(open_file 恒 NULL ⇒ 无会话分配)"
+
+[compat]
+core       = ">=0.1.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+br_u32    = "uint32_t"
+br_u64    = "uint64_t"
+br_size_t = "size_t"
+
+[[dep]]
+name  = "hal/dev-core"
+range = ">=0.1.0"
+kind  = "init"
+
+[[dep]]
+name  = "hal/vfs-core"
+range = ">=0.1.0"
+kind  = "type"
+
+# Core layer (ADR-0038/0039): a HAL brick is **inside the trusted base**, below `ability`, so it
+# names `core/c_core` directly -- the `runtime/core` skin exists to keep *ability/interface*
+# consumers from being tied to core's identity, and the direction table forbids `hal -> ability`.
+[[dep]]
+name  = "core/c_core"
+range = ">=0.1.0"
+kind  = "runtime"
+
+[[export]]
+api_iface    = "native"
+form         = "api"
+name         = "bdev"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = "sha256:f195b79af9d3a14797bd05417827b47684d8ab932193f0e1f0cf21c3822f39c3"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_bdev_geom_t"
+layout = "# {sector_size, n_sectors, max_rw, align, flags}"
+[[export.entries]]
+kind = "type"
+name = "br_bdev_ops_t"
+layout = "# {read, write, flush, geometry, ioctl, suspend, resume}"
+
+[[export.entries]]
+kind = "macro"
+name = "BR_BDEV_F_READONLY"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_BDEV_F_STACKED"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_BDEV_F_DMA"
+value = "0x0004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_BDEV_F_PIO"
+value = "0x0008u"
+
+[[export.entries]]
+kind = "func"
+name = "br_bdev_register"
+sig  = "int (const char*, const br_bdev_ops_t*, void*)"
+[[export.entries]]
+kind = "func"
+name = "br_bdev_get"
+sig  = "const br_bdev_ops_t* (const char*, void**)"
+
+[selftest]
+
+cases = 8
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

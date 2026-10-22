@@ -19,22 +19,22 @@ used_kib = 16
 notes    = "4 × struct sdhci_host(静态实例表, 约 1 KiB) + 4 × {信号量, pending, IRQ 计数}; 上游 mmc_create 的 struct mmc(4 × ~1.1 KiB)与 ext_csd(4 × 512 B)走 core 堆, ADMA2 描述符表(4 × 8 B)走 DMA 池, 均不计入本项"
 
 [[dep]]
-name  = "framework/bdev-core"
+name  = "hal/bdev-core"
 range = ">=0.1.0"
 kind  = "init"
 
 [[dep]]
-name  = "framework/pci-core"
+name  = "hal/pci-core"
 range = ">=0.1.0"
 kind  = "init"
 
 [[dep]]
-name  = "framework/dev-core"
+name  = "hal/dev-core"
 range = ">=0.1.0"
 kind  = "type"
 
 [[dep]]
-name  = "framework/vfs-core"
+name  = "hal/vfs-core"
 range = ">=0.1.0"
 kind  = "type"
 

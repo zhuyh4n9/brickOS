@@ -6,6 +6,8 @@
  */
 #include <br/core/br_types.h>
 
+#include <br/hal/selftest.h>
+
 #include "selftest_internal.h"
 
 /* The only public entry; weakly referenced by plugin_mgr (needs -Wmissing-prototypes). */

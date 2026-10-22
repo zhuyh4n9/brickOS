@@ -9,8 +9,8 @@
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>     /* br_malloc / br_free (session allocation) */
-#include <br/core/br_sched.h>   /* br_task_sleep (polling tick of blocking read) */
+#include <br/hal/br_mem.h>     /* br_malloc / br_free (session allocation) */
+#include <br/hal/br_sched.h>   /* br_task_sleep (polling tick of blocking read) */
 #include <br/core/br_time.h>    /* BR_US_PER_MS */
 #include <br/core/br_types.h>
 #include <br/dev/br_cdev.h>     /* br_cdev_ops_t / br_cdev_register (implemented/called here) */

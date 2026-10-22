@@ -5,12 +5,12 @@
 #include "host_sched.h"
 
 #include <br/core/br_error.h>
-#include <br/core/br_fault.h>
-#include <br/core/br_irq.h>
+#include <br/hal/br_fault.h>
+#include <br/hal/br_irq.h>
 #include <br/core/br_log.h>
-#include <br/core/br_sched.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_time.h>
-#include <br/core/br_work.h>
+#include <br/hal/br_work.h>
 
 /* TCB common header and switch-layer internals (core-private surface). */
 #include "sched_internal.h"

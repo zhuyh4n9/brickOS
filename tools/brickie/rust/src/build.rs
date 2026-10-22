@@ -542,18 +542,34 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             continue;
         }
         let mut sources = expand_many(&root, &dir, &b.sources, &p.name, &format!("{dir}/brick.toml"), "build.sources", &mut diags);
-        // Selftest master switch: off ⇒ the core's suite is not compiled at all. The descriptor
-        // writes NO_HOOK for the same switch, so nothing references these symbols either way.
-        if selftest_on && p.plugin_type == "core" {
+        // Selftest master switch: off ⇒ no suite is compiled at all. The descriptor writes NO_HOOK
+        // for the same switch, so nothing references these symbols either way.
+        //
+        // A plugin declares its **own** suite in `[build].selftest_sources` (plugin-relative,
+        // ADR-0039: the split moved `sched/sync/work` suites out of core). The core plugin may also
+        // use the product-level default in `product.toml [build].selftest_sources` -- that key is
+        // the historical home of core's suite and stays supported.
+        if selftest_on {
             sources.extend(expand_many(
                 &root,
-                "",
-                &pb.selftest_sources,
+                &dir,
+                &b.selftest_sources,
                 &p.name,
-                "product.toml",
+                &format!("{dir}/brick.toml"),
                 "build.selftest_sources",
                 &mut diags,
             ));
+            if p.plugin_type == "core" {
+                sources.extend(expand_many(
+                    &root,
+                    "",
+                    &pb.selftest_sources,
+                    &p.name,
+                    "product.toml",
+                    "build.selftest_sources",
+                    &mut diags,
+                ));
+            }
         }
         units.push(Unit {
             name: p.name.clone(),
@@ -648,16 +664,21 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
         // while every consumer's dir sorted before its provider's (ADR-0033 moved `uboot-mmc` to
         // `driver/`, which sorts before `fs/`, and u-boot's `__u64`/`le16_to_cpu` got redefined).
         let mut incs: Vec<String> = u.includes.clone();
-        if is_core_unit(u) {
-            incs.extend(platform_incs.clone());
-        } else if u.name == "build/gen" {
+        if u.name == "build/gen" {
             // Generated descriptors include each plugin's public header: they see every selected
             // plugin's include dirs (they are the composition's own artifact, not a plugin).
         } else {
+            // The declared dep closure, for **every** plugin -- including core, which since
+            // ADR-0039 depends on the `hal/*` bricks (its base headers moved out of `br/core/`).
             for d in model::dep_closure(&tree, &u.name) {
                 if let Some(dp) = tree.by_name(&d) {
                     incs.extend(plugin_incs(dp));
                 }
+            }
+            // Core is platform-agnostic: it reads the platform *contract* without naming a
+            // platform plugin, so the selected platform's headers are ambient for it.
+            if is_core_unit(u) {
+                incs.extend(platform_incs.clone());
             }
         }
         // Dedup keeping the **first** occurrence (order-preserving), and drop empties.

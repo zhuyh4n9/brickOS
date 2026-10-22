@@ -231,7 +231,7 @@ fn name_and_subkind(h: &mut Harness) {
         "iface-min",
         "app/hsm",
         "platform/qemu-aarch64",
-        "framework/cdev-core",
+        "hal/cdev-core",
         "driver/virtio-hsm",
         "fs/tmpfs",
     ] {
@@ -250,7 +250,7 @@ fn name_and_subkind(h: &mut Harness) {
 
     h.eq(rules::derive_subkind("service/crypto"), Some("service"), "subkind: service/⇒service");
     h.eq(rules::derive_subkind("sched/coop"), Some("scheduler"), "subkind: sched/⇒scheduler");
-    h.eq(rules::derive_subkind("framework/dev-core"), Some("framework"), "subkind: framework/");
+    h.eq(rules::derive_subkind("hal/dev-core"), None, "subkind: hal/ has no subkind (ADR-0039: a type, not a subkind)");
     h.eq(rules::derive_subkind("driver/virtio-hsm"), Some("io"), "subkind: driver/⇒io (ADR-0032)");
     h.eq(rules::derive_subkind("fs/tmpfs"), Some("fs"), "subkind: fs/");
     h.eq(rules::derive_subkind("sched-coop"), None, "subkind: bare name cannot be derived");
@@ -264,6 +264,11 @@ fn name_and_subkind(h: &mut Harness) {
     h.eq(rules::namespace_plugin_type("sched"), Some("ability"), "namespace: sched⇒ability");
     h.eq(rules::namespace_plugin_type("platform"), Some("platform"), "namespace: platform");
     h.eq(rules::namespace_plugin_type("runtime"), Some("ability"), "namespace: runtime⇒ability");
+    h.eq(
+        rules::namespace_plugin_type("hal"),
+        Some("hal"),
+        "namespace: hal⇒plugin_type hal (ADR-0039: peer of ability)",
+    );
     h.eq(rules::namespace_subkind("runtime"), Some("service"), "namespace: runtime⇒subkind service");
     h.eq(rules::namespace_plugin_type("nope"), None, "namespace: unknown");
 }
@@ -625,10 +630,10 @@ fn vendor_provenance_cases(h: &mut Harness) {
     );
     write(
         &tree_bad,
-        "framework/fw/brick.toml",
+        "fs/fw/brick.toml",
         &ability_toml(
-            "framework/fw",
-            "framework",
+            "fs/fw",
+            "fs",
             "core",
             "[[dep]]\nname = \"driver/port\"\nrange = \">=0.1.0\"\nkind = \"init\"\n",
         ),
@@ -1426,13 +1431,13 @@ fn product_selection_cases(h: &mut Harness) {
             "service/mem",
             "service",
             "late",
-            "\n[[dep]]\nname = \"framework/f\"\nkind = \"init\"\n",
+            "\n[[dep]]\nname = \"fs/f\"\nkind = \"init\"\n",
         ),
     );
     write(
         &t,
-        "framework/f/brick.toml",
-        &ability_toml("framework/f", "framework", "core", ""),
+        "fs/f/brick.toml",
+        &ability_toml("fs/f", "fs", "core", ""),
     );
     write(
         &t,
@@ -1462,14 +1467,14 @@ fn product_selection_cases(h: &mut Harness) {
     let got = solver::solve(&tree, "dev", false).closure.selected;
     h.eq(
         got.clone(),
-        ["app/m", "core/c_core", "framework/f", "platform/fake", "service/mem"]
+        ["app/m", "core/c_core", "fs/f", "platform/fake", "service/mem"]
             .iter()
             .map(|s| s.to_string())
             .collect(),
         "records: app + platform + core + ability roots derive the closure",
     );
     h.check(
-        got.contains("framework/f"),
+        got.contains("fs/f"),
         "records: a dep of a selected ability joins by closure (the list is not flat)",
     );
     h.check(

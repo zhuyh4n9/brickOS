@@ -18,8 +18,8 @@
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_mm.h>
+#include <br/hal/br_mem.h>
+#include <br/hal/br_mm.h>
 #include <br/core/br_types.h>
 
 int dump_selftest(void);

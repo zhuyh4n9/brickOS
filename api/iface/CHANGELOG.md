@@ -47,15 +47,15 @@
 - hash: sha256:4847d941784c39b7b8efd55aabdfbb445f3eaf0b165e310da2fd20dfb19cdf01
 - 变更: 首次发布(建档)
 
-## framework/vfs-core#vfs v0.1.0.0 (compat_gen=0)
+## hal/vfs-core#vfs v0.1.0.0 (compat_gen=0)
 - hash: sha256:00a441f9bca185f3b756d3a927cba1356838e84aa50dad54212d3033313bd29e
 - 变更: 首次发布(建档)
 
-## framework/dev-core#dev v0.1.0.0 (compat_gen=0)
+## hal/dev-core#dev v0.1.0.0 (compat_gen=0)
 - hash: sha256:2c7a26efe62f6f2198a3e1367bfe85122a0d82a0369409c4bea648e6cab61d68
 - 变更: 首次发布(建档)
 
-## framework/cdev-core#cdev v0.1.0.0 (compat_gen=0)
+## hal/cdev-core#cdev v0.1.0.0 (compat_gen=0)
 - hash: sha256:e29224855425cca172fee8c6c82f86c4d6d43a8b706d0b3ab5d6fe47e3382f5c
 - 变更: 首次发布(建档)
 
@@ -67,15 +67,15 @@
 - hash: sha256:3863fa62c2d559a6b3ca3e81fc5d99f75b188ec0b2203ddacf331cdfb92139a7
 - 变更: REMOVED br_plat_irq_conformance; REMOVED br_plat_mem_conformance
 
-## framework/vfs-core#vfs v0.1.1.0 (compat_gen=0)
+## hal/vfs-core#vfs v0.1.1.0 (compat_gen=0)
 - hash: sha256:fa92ffcd07657624972308e8c2d8a8625f206cd92275306711e8b9d1a33e7ff9
 - 变更: REMOVED br_vfs_conformance
 
-## framework/dev-core#dev v0.1.1.0 (compat_gen=0)
+## hal/dev-core#dev v0.1.1.0 (compat_gen=0)
 - hash: sha256:683df2ce258eb70fb96849760f12e29b976aefbdb56212857ffd7d287c0de952
 - 变更: REMOVED br_dev_conformance
 
-## framework/cdev-core#cdev v0.1.1.0 (compat_gen=0)
+## hal/cdev-core#cdev v0.1.1.0 (compat_gen=0)
 - hash: sha256:46b125d4480ef7d3e1d20fe4528a0504d31e973e9678e65c19e58cbf39a40641
 - 变更: REMOVED br_cdev_conformance
 
@@ -107,11 +107,11 @@
 - hash: sha256:2600c8855085bcf13b334b1a164fe7aa33a12dc7970dc705f12b744c82aa4eb2
 - 变更: 首次发布(建档)
 
-## framework/file-table#filetable v0.1.0.0 (compat_gen=0)
+## hal/file-table#filetable v0.1.0.0 (compat_gen=0)
 - hash: sha256:e02f50ee703d2e2836915efa5fae24f430ddbee029a7ef34a2f7a2fae3bcacac
 - 变更: 首次发布(建档)
 
-## framework/vfs-core#vfs v0.1.2.0 (compat_gen=0)
+## hal/vfs-core#vfs v0.1.2.0 (compat_gen=0)
 - hash: sha256:744bb3605fe427a7ad376dba45600552c14fbe44d8597459b9a0c81fff1ffb57
 - 变更: ADDED BR_INODE_SYMLINK; ADDED BR_O_NOFOLLOW; ADDED BR_STAT_NLINK; ADDED BR_SYMLINK_MAX; ADDED br_fstat; ADDED br_link; ADDED br_lstat; ADDED br_readlink; ADDED br_symlink; CHANGED br_inode_ops_t; CHANGED br_stat_t
 
@@ -135,7 +135,7 @@
 - hash: sha256:b19825c94836048a12d481d508f525d8c0b76f072ff044f4d7659f5f87a2cfa1
 - 变更: 首次发布(建档)
 
-## framework/bdev-core#bdev v0.1.0.0 (compat_gen=0)
+## hal/bdev-core#bdev v0.1.0.0 (compat_gen=0)
 - hash: sha256:f195b79af9d3a14797bd05417827b47684d8ab932193f0e1f0cf21c3822f39c3
 - 变更: 首次发布(建档)
 
@@ -143,7 +143,7 @@
 - hash: sha256:72bb203d912658ac5352460061b1ab35069d8801bd7830b4daca7b48d4a50972
 - 变更: 首次发布(建档)
 
-## framework/pci-core#pci v0.1.0.0 (compat_gen=0)
+## hal/pci-core#pci v0.1.0.0 (compat_gen=0)
 - hash: sha256:70a388148c492ce7df3eaea8781d9eb0be6cd0f614ae07732d6960ab84c3ccd5
 - 变更: 首次发布(建档)
 

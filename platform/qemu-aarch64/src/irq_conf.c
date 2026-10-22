@@ -13,14 +13,14 @@
  *   TC-IRQ-022 in_fault reset after a fixup; TC-IRQ-101 FAST domain orphan child masked
  *   TC-IRQ-102 SLOW domain demux in bh; GIC-* facts: EOImode/PRIbits/lines/binding table
  */
-#include <br/core/br_irq.h>
+#include <br/hal/br_irq.h>
 #include <br/core/br_time.h>
 #include <br/core/br_trace.h>
-#include <br/core/br_fault.h>
+#include <br/hal/br_fault.h>
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 /* BH cases must drive a drain explicitly and assert the handler really runs in bh context. */
-#include <br/core/br_work.h>
+#include <br/hal/br_work.h>
 
 #include <br/platform/br_plat.h>
 #include <br/platform/br_gicv3.h>

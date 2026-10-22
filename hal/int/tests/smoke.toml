@@ -1,0 +1,21 @@
+# hal/int — 用例声明面(人写; v0.2 不消费)
+#
+# 判据是**行为**的, 在 QEMU 门禁里: `irq-test`(逐线/优先级/风暴/SLOW 域)与 `smoke` 的
+# `[IRQCONF] SUMMARY pass=N fail=0`。本文件只记录"这个砖该被哪些用例覆盖"。
+schema = 1
+
+[[case]]
+id       = "TC-HAL-INT-001"
+pre      = "镜像起来了, 中断已开; hal/sched 的 early_init 已装好 br_irq_hooks"
+steps    = ["注册一条线并触发", "ISR 里 submit 一个 bh 项", "IRQ 出口 drain"]
+expect   = "ISR 在中断上下文跑; bh 项在出口(中断关闭)跑一次; 两次上下文由 br_irq_in_isr/in_atomic 区分"
+sched    = ["preempt"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-HAL-INT-002"
+pre      = "同上; hooks 未安装(或 BR_IRQ_HAVE_BH=0)"
+steps    = ["创建 BR_IRQ_DOMAIN_F_SLOW 域"]
+expect   = "无 bh 时建域被拒并留 trace; 不会出现'接受了却永不被 demux'"
+sched    = ["preempt"]
+platform = ["qemu-aarch64"]

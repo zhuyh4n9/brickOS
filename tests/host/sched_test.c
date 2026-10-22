@@ -6,7 +6,7 @@
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
-#include <br/core/br_sched.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 

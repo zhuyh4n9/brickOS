@@ -19,11 +19,11 @@
 #define BR_THIRD_PARTY_UBOOT_MMC_COMPAT_H
 
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>
+#include <br/hal/br_irq.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_mm.h>
-#include <br/core/br_sync.h>
+#include <br/hal/br_mem.h>
+#include <br/hal/br_mm.h>
+#include <br/hal/br_sync.h>
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 

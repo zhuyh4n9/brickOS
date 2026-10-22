@@ -21,7 +21,7 @@
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
+#include <br/hal/br_mem.h>
 #include <br/core/br_types.h>
 /* Block-device contract: upstream gets it from `blk.h`. Only this header (the adapter entry)
  * may include `<br/...>`; upstream-derived files under `src/` take their environment through it. */

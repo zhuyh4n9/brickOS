@@ -4,10 +4,10 @@
 
 ## 1. 它是什么
 
-把 u-boot 的 **FAT12/16/32 读写实现**接进 brickOS, 出口是 **VFS 契约**(`framework/vfs-core/include/br/vfs/br_vfs.h`), 挂三个卷。上游原件直接参与编译, 插件里没有一份副本:
+把 u-boot 的 **FAT12/16/32 读写实现**接进 brickOS, 出口是 **VFS 契约**(`hal/vfs-core/include/br/vfs/br_vfs.h`), 挂三个卷。上游原件直接参与编译, 插件里没有一份副本:
 
 ```
-framework/vfs-core(br_vfs.h)  br_open / br_stat / br_opendir / …(路径走查在 vfs-core)
+hal/vfs-core(br_vfs.h)  br_open / br_stat / br_opendir / …(路径走查在 vfs-core)
         │  br_fs_ops / br_inode_ops / br_file_ops
 glue/fat_vfs.c   瞬态路径包装 inode; 目录 read br_dirent_t
         │  上游的**路径风格 API**(fat_read_file / …)
@@ -15,7 +15,7 @@ third_party/uboot-imx/fs/fat/fat_write.c   ★ 原件, 逐字节上游(它第 23
         │
 glue/fat_blk.c   blk_dread/blk_dwrite(切块 + 越界拒绝)+ 卷表 + BPB 观测(挂载判据)+ 环境的那几个实现
         │
-framework/bdev-core  br_bdev_ops_t(read/write/flush/geometry)
+hal/bdev-core  br_bdev_ops_t(read/write/flush/geometry)
         │  emmc0 / emmc1 / emmc2
 driver/uboot-mmc(它在自己的 start 相注册三块块设备)
 ```
@@ -143,8 +143,8 @@ struct uboot_fat_ino {          /* 每次 lookup/create 造一个, free_inode �
 
 | 边 | kind | 理由 |
 |---|---|---|
-| `framework/vfs-core` | init | 实现并注册 `br_fs_ops`/`br_inode_ops`/`br_file_ops` |
-| `framework/bdev-core` | init | `br_bdev_get` 取三块块设备 |
+| `hal/vfs-core` | init | 实现并注册 `br_fs_ops`/`br_inode_ops`/`br_file_ops` |
+| `hal/bdev-core` | init | `br_bdev_get` 取三块块设备 |
 | `driver/uboot-mmc` | init | 三块块设备由它在自己的 start 相注册 |
 
 ```

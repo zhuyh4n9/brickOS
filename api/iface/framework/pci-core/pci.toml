@@ -1,9 +1,9 @@
 # brickie:generated
-# api/iface 快照 api/iface/framework/pci-core/pci.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+# api/iface 快照 api/iface/hal/pci-core/pci.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
 
 schema = 1
-unit = "framework/pci-core#pci"
-provider = "framework/pci-core"
+unit = "hal/pci-core#pci"
+provider = "hal/pci-core"
 NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 
 [unit_meta]

@@ -8,8 +8,8 @@
  * in the ISR and reads only br_task_self()/br_task_state() and the private tail.
  */
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>
-#include <br/core/br_sched.h>
+#include <br/hal/br_irq.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_types.h>
 
 #include <br/sched/rr.h>

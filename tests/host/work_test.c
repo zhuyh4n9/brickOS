@@ -5,13 +5,13 @@
  * br_work_drain returns 0 and stack depth does not grow with queue length.
  */
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>
+#include <br/hal/br_irq.h>
 #include <br/core/br_log.h>
-#include <br/core/br_sched.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_time.h>
 #include <br/core/br_trace.h>
 #include <br/core/br_types.h>
-#include <br/core/br_work.h>
+#include <br/hal/br_work.h>
 
 #include <br/sched/rr.h>
 

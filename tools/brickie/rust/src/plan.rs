@@ -669,7 +669,7 @@ pub fn plan_new(args: &serde_json::Map<String, Value>, context: &serde_json::Map
                     "",
                     "args.subkind",
                     format!("ability plugin `{name}` must give `subkind` explicitly (a bare name gives nothing to derive from)"),
-                    &format!("valid values: {}; or use a derivable name (service/ sched/ framework/ io/ fs/) (§8.4)", rules::list_of(rules::SUBKINDS)),
+                    &format!("valid values: {}; or use a derivable name (service/ sched/ hal/ io/ fs/) (§8.4)", rules::list_of(rules::SUBKINDS)),
                 );
                 return (d, Vec::new());
             }

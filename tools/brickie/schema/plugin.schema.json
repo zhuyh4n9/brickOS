@@ -37,9 +37,11 @@
       "app",
       "interface",
       "ability",
+      "hal",
       "platform",
       "core"
-     ]
+     ],
+     "description": "Plugin layer. `core` is the single boot/phase driver, `platform` the SoC layer, `hal` the infrastructure layer (peer of `ability`, ADR-0039), `ability` a concrete implementation, `interface` a skin, `app` the product's application."
     },
     "api_type": {
      "type": "string",
@@ -53,7 +55,6 @@
      "type": "string",
      "enum": [
       "scheduler",
-      "framework",
       "io",
       "fs",
       "service"
@@ -588,6 +589,13 @@
        }
       }
      }
+    },
+    "selftest_sources": {
+     "type": "array",
+     "items": {
+      "type": "string"
+     },
+     "description": "Selftest sources of **this** plugin (ADR-0010/0039), relative to the plugin root and compiled into this plugin's unit only while the product selftest switch is on. `core/c_core` may keep using product.toml [build].selftest_sources; every other plugin (including hal bricks) declares its own suite here."
     }
    }
   },

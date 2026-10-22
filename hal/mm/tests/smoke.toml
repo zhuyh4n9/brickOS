@@ -1,0 +1,20 @@
+# hal/mm — 用例声明面(人写; v0.2 不消费)
+#
+# 判据是**行为**的: 宿主 `mem-test`(TLSF 分界/红区/归属/页池)与 `smoke` 的 `[MEMCONF]`。
+schema = 1
+
+[[case]]
+id       = "TC-HAL-MM-001"
+pre      = "br_mem_init() 已按 platform 的 region 表领到三池"
+steps    = ["malloc/free 多轮(含 realloc/calloc)", "查 br_heap_stats_get() 与 owner 标签"]
+expect   = "无泄漏(used 回到基线); 红区未被踩; 双 free 被拒(-EINVAL)并计数"
+sched    = ["coop", "preempt"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-HAL-MM-002"
+pre      = "同上"
+steps    = ["br_mm_region_add 一条非法 region(未对齐/重叠/越窗)", "br_mm_activate 之后再查 br_mm_query"]
+expect   = "非法 region 被拒(-EINVAL); 激活后恒等映射覆盖当前 PC/SP; cache 维护经 ops 表"
+sched    = ["preempt"]
+platform = ["qemu-aarch64"]

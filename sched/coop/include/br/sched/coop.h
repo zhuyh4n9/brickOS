@@ -7,7 +7,7 @@
 #ifndef BR_SCHED_COOP_H
 #define BR_SCHED_COOP_H
 
-#include <br/core/br_sched.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_types.h>
 
 /* EARLY: fill the ops table and call br_sched_register() exactly once. Registration

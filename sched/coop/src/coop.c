@@ -7,8 +7,8 @@
  * enqueue a woken thread in br_sched_on_tick() while a thread is mid-pick_next.
  */
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>
-#include <br/core/br_sched.h>
+#include <br/hal/br_irq.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_types.h>
 
 #include <br/sched/coop.h>

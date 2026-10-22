@@ -18,17 +18,17 @@ used_kib = 2
 notes    = "静态部分只有根 inode + iops/fops 表; 设备节点 inode 在 lookup 时从 core 堆现造(约 48 B/次)"
 
 [[dep]]
-name  = "framework/dev-core"
+name  = "hal/dev-core"
 range = ">=0.1.0"
 kind  = "init"
 
 [[dep]]
-name  = "framework/cdev-core"
+name  = "hal/cdev-core"
 range = ">=0.1.0"
 kind  = "init"
 
 [[dep]]
-name  = "framework/vfs-core"
+name  = "hal/vfs-core"
 range = ">=0.1.0"
 kind  = "init"
 
@@ -38,13 +38,13 @@ range = ">=0.1.0"
 kind  = "init"
 
 [[dep]]
-name   = "framework/dev-core"
+name   = "hal/dev-core"
 range  = ">=0.1.0"
 kind   = "runtime"
 symbol = "br_dev_count"
 
 [[dep]]
-name   = "framework/vfs-core"
+name   = "hal/vfs-core"
 range  = ">=0.1.0"
 kind   = "runtime"
 symbol = "br_mount_register"

@@ -8,9 +8,9 @@ QEMU virt 的 PL011 UART 作为 **cdev** 注册 ⇒ 设备出现在 `/dev/uart0`
 | `api_type` | `native` | 消费者是 native 插件 |
 | `subkind` | `io` | 器件插件 |
 | `phase` | `core` | ability 且 subkind ≠ service ⇒ CORE |
-| 依赖(init) | `framework/cdev-core` `>=0.1.0` | 注册点 `br_cdev_register` 属 cdev-core;拓扑序保证框架件先于消费者初始化 |
-| 依赖(type) | `framework/dev-core` `>=0.1.0` | 头文件用它的 ioctl 编码宏(`BR_IOR/IOW/IO`)与 `br_dev_name_valid` |
-| 依赖(runtime) | `framework/vfs-core`(symbol `br_open_err`) | 器件一致性用例与真实消费者都经 vfs 的公开文件面访问, 本件**不开后门** |
+| 依赖(init) | `hal/cdev-core` `>=0.1.0` | 注册点 `br_cdev_register` 属 cdev-core;拓扑序保证框架件先于消费者初始化 |
+| 依赖(type) | `hal/dev-core` `>=0.1.0` | 头文件用它的 ioctl 编码宏(`BR_IOR/IOW/IO`)与 `br_dev_name_valid` |
+| 依赖(runtime) | `hal/vfs-core`(symbol `br_open_err`) | 器件一致性用例与真实消费者都经 vfs 的公开文件面访问, 本件**不开后门** |
 | 导出面 | 单元 `uart-pl011`(`sha256:d893563c…`, `unfrozen`/`experimental`): **5 宏 + 1 类型布局**(自检入口已移出 `[[export]]`, 故无函数) | 器件契约: ioctl 编码 + info 结构 |
 | `[selftest]` | `cases = 12`;钩子 `uart_pl011_selftest()` 在描述符里, 由 core 在全部 `start()` 之后驱动 | `brick.toml` `[selftest]` |
 | 资源 | `ram` 1 KiB: 每会话 `cdev_file_t` + session ≈ 32 B(core 堆);静态部分只有 ops 表与器件记录;**不声明 `stack`** | `[[res]]`: 平台的栈容量是给**插件自己的线程**的预算, 不开线程的驱动不该占 |

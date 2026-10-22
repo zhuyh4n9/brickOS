@@ -1,7 +1,7 @@
 /*
  * POSIX runtime (runtime/posix): a translation layer over core/vfs, not a second kernel. Core and
  * vfs error codes are the kernel numbers, so syscalls set errno = -ret with no conversion table,
- * pthread_* returns the error number directly. The fd table is owned by framework/file-table;
+ * pthread_* returns the error number directly. The fd table is owned by hal/file-table;
  * access-mode enforcement (write on a read-only fd => EBADF) lives here. Per-thread errno, lazy
  * reclamation of detached threads, no wall clock, no printf family, st_ino/st_uid/st_*time = 0.
  */
@@ -24,10 +24,10 @@
 #include <stdarg.h>
 
 #include <br/core/br_error.h>
-#include <br/core/br_fault.h>
+#include <br/hal/br_fault.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_sched.h>
+#include <br/hal/br_mem.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 #include <br/ft/br_ft.h>
@@ -3169,7 +3169,7 @@ gid_t getegid(void) { return 0; }
 
 int posix_early_init(void)
 {
-    /* EARLY: zero static state only; the fd table belongs to framework/file-table. */
+    /* EARLY: zero static state only; the fd table belongs to hal/file-table. */
     errno   = 0;
     s_umask = 0u;
     (void)svc_copy(s_cwd, "/", (size_t)sizeof(s_cwd));
@@ -3190,7 +3190,7 @@ int posix_init(void)
 }
 
 /* ---- Layer: mounts: mount plans belong to the consumer (the APP); the FS plugin only
- * registers drivers. Pure forwarding -- mount semantics live in framework/vfs-core. ---- */
+ * registers drivers. Pure forwarding -- mount semantics live in hal/vfs-core. ---- */
 int mount(const char *source, const char *target, const char *filesystemtype,
           unsigned long mountflags, const void *data)
 {
@@ -3217,7 +3217,7 @@ int umount(const char *target)
 
 int posix_start(void)
 {
-    br_log_info("runtime/posix: POSIX runtime ready (fd table owned by framework/file-table, cwd=%s)", s_cwd);
+    br_log_info("runtime/posix: POSIX runtime ready (fd table owned by hal/file-table, cwd=%s)", s_cwd);
     br_log_info("runtime/posix: covers TR-A/TR-B; not-done items in docs/11-service/11-02-svc-posix-subset.md");
     return 0;
 }

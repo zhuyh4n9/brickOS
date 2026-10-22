@@ -9,7 +9,7 @@ lang          = "c"
 phase         = "late"
 version       = "0.1.0.0"
 symbol_prefix = "runtime_core_"
-summary       = "core 层规格皮肤: 把 core/c_core 的 20 个单元(一头一单位)原样转出, 是 core 层唯一的对外入口"
+summary       = "core 层规格皮肤: 把 core 层的 20 个单元(一头一单位; core/c_core 12 + hal/{int,mm,sched} 8, ADR-0039)原样转出, 是 core 层唯一的对外入口"
 license       = "WTFPL"
 
 # Why a **skin** and not a wrapper (ADR-0038 §3):
@@ -28,7 +28,8 @@ notes    = "皮肤无状态: 三个空钩子 + 一张转出的头文件面"
 
 # WORKAROUND(br-wa-rel-001): the core surface is **not frozen** in the prototype phase, so
 # `check --profile release` reports BRV-VER-0004 for every unit re-exported here (dev: info).
-# Repaying it is a publish+freeze of core/c_core's 20 units -- see WORKAROUNDS.md.
+# Repaying it is a publish+freeze of core's 20 units (core/c_core + hal/{int,mm,sched}) -- see
+# WORKAROUNDS.md.
 
 [compat]
 core       = ">=0.1.0"
@@ -55,11 +56,31 @@ br_bool      = "int"
 br_time_t    = "br_u64"
 br_err_t     = "int"
 
-# Compile-time edge only: the skin adds no init step, so no phase assertion is created and no
+# Compile-time edges only: the skin adds no init step, so no phase assertion is created and no
 # boot-chain edge appears (the units it re-exports are declarations, not runtime services).
+#
+# Since ADR-0039 core's surface is split across four providers, and the skin re-exports a unit from
+# each: core keeps base + plugin manager, and `hal/{int,mm,sched}` hold the interrupt / memory /
+# scheduling mechanisms. Consumers still declare **this** skin only -- the split is invisible to
+# them, which is the whole point of the door.
 [[dep]]
 name  = "core/c_core"
 range = ">=0.1.0"
+kind  = "type"
+
+[[dep]]
+name  = "hal/int"
+range = ">=0.1.0"
+kind  = "type"
+
+[[dep]]
+name  = "hal/mm"
+range  = ">=0.1.0"
+kind  = "type"
+
+[[dep]]
+name  = "hal/sched"
+range  = ">=0.1.0"
 kind  = "type"
 
 # ---- unit `log`: re-exports <br/core/br_log.h> ----
@@ -93,7 +114,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["core/c_core#mem"]
+reexport_of  = ["hal/mm#mem"]
 
 # ---- unit `mm`: re-exports <br/core/br_mm.h> ----
 [[export]]
@@ -104,7 +125,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["core/c_core#mm"]
+reexport_of  = ["hal/mm#mm"]
 
 # ---- unit `sched`: re-exports <br/core/br_sched.h> ----
 [[export]]
@@ -115,7 +136,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["core/c_core#sched"]
+reexport_of  = ["hal/sched#sched"]
 
 # ---- unit `sync`: re-exports <br/core/br_sync.h> ----
 [[export]]
@@ -126,7 +147,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["core/c_core#sync"]
+reexport_of  = ["hal/sched#sync"]
 
 # ---- unit `work`: re-exports <br/core/br_work.h> ----
 [[export]]
@@ -137,7 +158,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["core/c_core#work"]
+reexport_of  = ["hal/sched#work"]
 
 # ---- unit `irq`: re-exports <br/core/br_irq.h> ----
 [[export]]
@@ -148,7 +169,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["core/c_core#irq"]
+reexport_of  = ["hal/int#irq"]
 
 # ---- unit `pic`: re-exports <br/core/br_pic.h> ----
 [[export]]
@@ -159,7 +180,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["core/c_core#pic"]
+reexport_of  = ["hal/int#pic"]
 
 # ---- unit `fault`: re-exports <br/core/br_fault.h> ----
 [[export]]
@@ -170,7 +191,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["core/c_core#fault"]
+reexport_of  = ["hal/int#fault"]
 
 # ---- unit `exc`: re-exports <br/core/br_exc.h> ----
 [[export]]
@@ -181,7 +202,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["core/c_core#exc"]
+reexport_of  = ["hal/int#exc"]
 
 # ---- unit `time`: re-exports <br/core/br_time.h> ----
 [[export]]

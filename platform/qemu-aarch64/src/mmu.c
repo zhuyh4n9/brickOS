@@ -6,7 +6,7 @@
  * this prototype has none, so it sits in the platform plugin, with layering kept by file boundary.
  * Page tables live in .bss, so the identity map must cover the tables themselves.
  */
-#include <br/core/br_mm.h>
+#include <br/hal/br_mm.h>
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 

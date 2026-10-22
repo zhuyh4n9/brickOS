@@ -1,9 +1,9 @@
 # brickie:generated
-# api/iface 快照 api/iface/framework/file-table/filetable.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+# api/iface 快照 api/iface/hal/file-table/filetable.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
 
 schema = 1
-unit = "framework/file-table#filetable"
-provider = "framework/file-table"
+unit = "hal/file-table#filetable"
+provider = "hal/file-table"
 NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 
 [unit_meta]

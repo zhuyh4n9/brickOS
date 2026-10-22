@@ -1,9 +1,9 @@
 # brickie:generated
-# api/iface 快照 api/iface/framework/cdev-core/cdev.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+# api/iface 快照 api/iface/hal/cdev-core/cdev.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
 
 schema = 1
-unit = "framework/cdev-core#cdev"
-provider = "framework/cdev-core"
+unit = "hal/cdev-core#cdev"
+provider = "hal/cdev-core"
 NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
 
 [unit_meta]

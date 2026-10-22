@@ -1,5 +1,5 @@
 # fs/devfs
-设备文件系统: 把 `framework/dev-core` 的注册表**投影**为 `/dev/<name>` 节点(实时枚举, `open` 经条目自带的 `open_file` 钩子拿 `{fops, fpriv}`)。**只投影, 不拥有设备。**
+设备文件系统: 把 `hal/dev-core` 的注册表**投影**为 `/dev/<name>` 节点(实时枚举, `open` 经条目自带的 `open_file` 钩子拿 `{fops, fpriv}`)。**只投影, 不拥有设备。**
 
 ## 声明面(`brick.toml` 是唯一真值)
 
@@ -9,8 +9,8 @@
 | `api_type` | `native` | 不抛对外头 |
 | `subkind` | `fs` | 管理类 FS |
 | `phase` | `core` | ability 且 subkind ≠ service ⇒ CORE |
-| 依赖(init) | `framework/dev-core`, `framework/cdev-core`, `framework/vfs-core`, `fs/tmpfs` | 前三条是设备节点/会话适配/挂载的需要; **第四条 `fs/tmpfs` 是挂载点 `/dev` 的父 FS** —— `br_mount_register` 的自动 mkdir 走"父挂载", 而 `/dev` 由 tmpfs 的 CORE init 预建, 故 tmpfs 必须先挂上 |
-| 依赖(runtime) | `framework/dev-core`(symbol `br_dev_count`)、`framework/vfs-core`(symbol `br_mount_register`) | 只让"谁调谁"在声明面可见, **不参与拓扑**(kind = runtime) |
+| 依赖(init) | `hal/dev-core`, `hal/cdev-core`, `hal/vfs-core`, `fs/tmpfs` | 前三条是设备节点/会话适配/挂载的需要; **第四条 `fs/tmpfs` 是挂载点 `/dev` 的父 FS** —— `br_mount_register` 的自动 mkdir 走"父挂载", 而 `/dev` 由 tmpfs 的 CORE init 预建, 故 tmpfs 必须先挂上 |
+| 依赖(runtime) | `hal/dev-core`(symbol `br_dev_count`)、`hal/vfs-core`(symbol `br_mount_register`) | 只让"谁调谁"在声明面可见, **不参与拓扑**(kind = runtime) |
 | 导出面 | **无导出面**(manifest 里没有 `[[export]]`) | 本件的行为经 vfs-core 的公开 API 被观测 |
 | 资源 | `ram` 2 KiB: 静态部分只有根 inode + iops/fops 表; 设备节点 inode 在 `lookup` 时从 core 堆现造(约 48 B/次) | `[[res]]` |
 | `[[mount]]` | `path = "/dev"`, `order = 2` | 挂载计划第 2 条(工具侧尚不消费, 见欠账) |
@@ -28,7 +28,7 @@
 ## 边界纪律 / 不做什么
 - **不拥有设备**: devfs 没有"设备表", 也没有生命周期 API —— 设备的存在与否由驱动注册决定; 节点的上线/下线归驱动注册, **不归文件系统**。
 - **不认识任何子分类的 ops 形状**: 本文件**不 include** `br_cdev.h`、不出现 `br_cdev_ops`; 打开设备只经条目里的 `open_file` 钩子拿 `{fops, fpriv}`。若把 cdev 适配放进 devfs, devfs 就得认识 `br_cdev_ops`, 那正是被撤销的那条依赖。
-- **不提供文件面本身**: 会话的建立/销毁、`read`/`write`/`ioctl`/`poll` 的语义全在 `framework/cdev-core` 的通用适配层与驱动 ops 里; devfs 只管把二元组塞进 inode。
+- **不提供文件面本身**: 会话的建立/销毁、`read`/`write`/`ioctl`/`poll` 的语义全在 `hal/cdev-core` 的通用适配层与驱动 ops 里; devfs 只管把二元组塞进 inode。
 - **不做持久化**: 无介质、无缓存; 掉电即空(节点是注册表的投影)。
 - **只有一层目录**: 任何 `dir` 都被当成根; `.` / `..` 返回根指针本身(非瞬态, 特判不释放)。
 - **无注销 ⇒ 游标迭代安全**: v1 注册表只增不减, 所以 readdir 用"注册表下标游标"不会漏项也不会重项; 若将来有注销, 这里必须改成"按名字续读"(届时注册表要给出稳定的迭代键)—— 源码注释已写明。

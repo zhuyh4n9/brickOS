@@ -35,33 +35,33 @@ cflags = [
 name     = "sync-test"
 # Main criterion for sync primitives: under test = sync.c (+ time.c's br_deadline_from_now + string.c),
 # stubs = ucontext fake scheduler in sync_test.c (really runs block/wake/timeout) + host_stubs.c.
-# The selftest suite (`core/c_core/selftest/sync_selftest.c`, ADR-0010) must be listed: the host exit code is
+# The selftest suite (`hal/sched/selftest/sync_selftest.c`, ADR-0010) must be listed: the host exit code is
 # sched/sync's **main criterion**; omitting the suite (moved out of the production .c) both breaks the
 # link and drops the whole case set. On host, selftest is **always on** — host tests run only in dev/CI,
 sources  = [
-  "core/c_core/src/sync/sync.c", "core/c_core/src/time.c", "core/c_core/src/string.c",
-  "core/c_core/selftest/sync_selftest.c",
+  "hal/sched/src/sync.c", "core/c_core/src/base/time.c", "core/c_core/src/base/string.c",
+  "hal/sched/selftest/sync_selftest.c",
   "tests/host/sync_test.c", "tests/host/host_stubs.c",
 ]
 includes = [
-  "core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "tests/host",
-  "platform/qemu-aarch64/include",
+  "core/c_core/include", "core/c_core/src", "hal/int/include", "hal/int/src", "hal/sched/include", "hal/sched/src",
+  "tests/host", "platform/qemu-aarch64/include",
 ]
 
 [[hosttest]]
 name     = "string-test"
-sources  = ["core/c_core/src/string.c", "tests/host/string_test.c"]
-includes = ["core/c_core/include", "core/c_core/src", "tests/host"]
+sources  = ["core/c_core/src/base/string.c", "tests/host/string_test.c"]
+includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/base", "tests/host"]
 
 [[hosttest]]
 name     = "mem-test"
 # Same as the old Makefile's `mem-test: string-test`: run the support-routine case before the mem gate.
 depends  = ["string-test"]
 sources  = [
-  "core/c_core/src/mem/tlsf.c", "core/c_core/src/mem/mem.c", "core/c_core/src/mem/page.c",
-  "core/c_core/src/mm/mm.c", "tests/host/mem_test.c", "tests/host/host_stubs.c",
+  "hal/mm/src/tlsf.c", "hal/mm/src/mem.c", "hal/mm/src/page.c",
+  "hal/mm/src/mm.c", "tests/host/mem_test.c", "tests/host/host_stubs.c",
 ]
-includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/mem", "core/c_core/src/mm", "tests/host"]
+includes = ["core/c_core/include", "core/c_core/src", "hal/mm/include", "hal/mm/src", "tests/host"]
 
 # sched-test (host): semantic gate for the scheduler framework + **coop**.
 # The switch layer `core/c_core/src/sched/switch.S` builds **only on aarch64** (host is x86-64) => the case brings
@@ -75,19 +75,19 @@ includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/mem", "co
 name     = "sched-test"
 # Same support-routine prerequisite as the mem gate (the compiler may lower a block clear to memset).
 depends  = ["string-test"]
-# The `core/c_core/selftest/sched_selftest.c` suite is listed for the same reason as sync-test above (host is the
+# The `hal/sched/selftest/sched_selftest.c` suite is listed for the same reason as sync-test above (host is the
 # main criterion; the suite moved out of sched_core.c; selftest is always on host).
-# `core/c_core/src/work/work_core.c` must be compiled too: sched_core.c's bh ban and host_sched.c's
+# `hal/sched/src/work_core.c` must be compiled too: sched_core.c's bh ban and host_sched.c's
 # `br_irq_in_atomic()` both reference `br_work_in_bh()`.
-# Same for `core/c_core/src/trace.c`: after ADR-0011 sched_core.c's preempt/bh bans leave traces.
+# Same for `core/c_core/src/base/trace.c`: after ADR-0011 sched_core.c's preempt/bh bans leave traces.
 sources  = [
-  "core/c_core/src/sched/sched_core.c", "core/c_core/src/work/work_core.c",
-  "core/c_core/src/trace.c", "core/c_core/src/string.c",
-  "core/c_core/selftest/sched_selftest.c",
+  "hal/sched/src/sched_core.c", "hal/sched/src/work_core.c",
+  "core/c_core/src/base/trace.c", "core/c_core/src/base/string.c",
+  "hal/sched/selftest/sched_selftest.c",
   "sched/coop/src/coop.c",
   "tests/host/host_sched.c", "tests/host/sched_test.c",
 ]
-includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "sched/coop/include", "tests/host"]
+includes = ["core/c_core/include", "core/c_core/src", "hal/int/include", "hal/sched/include", "hal/sched/src", "hal/mm/include", "sched/coop/include", "tests/host"]
 
 # rr-test (host): semantic gate for **sched/rr** (round-robin preemption) (ADR-0011).
 # Shares the rig with sched-test; criteria are the "tick-driven preemption" family: AABB alternation / no
@@ -97,30 +97,30 @@ includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "
 name     = "rr-test"
 depends  = ["string-test"]
 sources  = [
-  "core/c_core/src/sched/sched_core.c", "core/c_core/src/work/work_core.c",
-  "core/c_core/src/trace.c", "core/c_core/src/string.c",
-  "core/c_core/selftest/sched_selftest.c",
+  "hal/sched/src/sched_core.c", "hal/sched/src/work_core.c",
+  "core/c_core/src/base/trace.c", "core/c_core/src/base/string.c",
+  "hal/sched/selftest/sched_selftest.c",
   "sched/rr/src/rr.c",
   "tests/host/host_sched.c", "tests/host/rr_test.c",
 ]
-includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "sched/rr/include", "tests/host"]
+includes = ["core/c_core/include", "core/c_core/src", "hal/int/include", "hal/sched/include", "hal/sched/src", "hal/mm/include", "sched/rr/include", "tests/host"]
 
 # work-test (host): semantic gate for bottom halves / work queues (ADR-0011).
-# Under test = `core/c_core/src/work/work_core.c` (+ trace ring, to observe bh-ban traces);
+# Under test = `hal/sched/src/work_core.c` (+ trace ring, to observe bh-ban traces);
 # queue bounded/FIFO/budget/non-reentrant/bh context and bans — on target a full queue needs an IRQ storm.
 # Include sched_core.c + trace.c: the former gives the real ban path for blocking/yielding in bh, the latter
 [[hosttest]]
 name     = "work-test"
 depends  = ["string-test"]
 sources  = [
-  "core/c_core/src/work/work_core.c", "core/c_core/src/sched/sched_core.c", "core/c_core/src/trace.c",
-  "core/c_core/src/string.c",
+  "hal/sched/src/work_core.c", "hal/sched/src/sched_core.c", "core/c_core/src/base/trace.c",
+  "core/c_core/src/base/string.c",
   "sched/rr/src/rr.c",
   "tests/host/host_sched.c", "tests/host/work_test.c",
 ]
-includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "sched/rr/include", "tests/host"]
+includes = ["core/c_core/include", "core/c_core/src", "hal/int/include", "hal/sched/include", "hal/sched/src", "hal/mm/include", "sched/rr/include", "tests/host"]
 
-# ft-test (host): gate for the **file table (framework/file-table) + errno value range** (ADR-0012).
+# ft-test (host): gate for the **file table (hal/file-table) + errno value range** (ADR-0012).
 # Why a host case is worthwhile: the table is a **pure algorithm** (contract header says "never dereferences
 # br_file_t") — table full / dup2 replacement / last reference / extreme fd are boundaries only real load
 # reaches, and the host covers them in milliseconds without QEMU (same split as mem-test / sync-test).
@@ -132,11 +132,11 @@ includes = ["core/c_core/include", "core/c_core/src", "core/c_core/src/sched", "
 [[hosttest]]
 name     = "ft-test"
 sources  = [
-  "framework/file-table/src/file_table.c",
-  "framework/file-table/src/ft_selftest.c",
+  "hal/file-table/src/file_table.c",
+  "hal/file-table/src/ft_selftest.c",
   "tests/host/ft_test.c",
 ]
-includes = ["core/c_core/include", "framework/file-table/include", "tests/host"]
+includes = ["core/c_core/include", "hal/int/include", "hal/file-table/include", "tests/host"]
 
 # ! **Duplicate names are deliberate**: `sync-test` / `sched-test` appear in both `[[hosttest]]` and `[[gate]]`.
 #   One name means "two ways to run one case set" — host side (seconds, real blocking via ucontext) and
@@ -305,7 +305,7 @@ require_tags = [
 # build wiring); the logic *is* a script — that brickie orchestrates it (not the Makefile) is the point.
 [[script]]
 name    = "check-string"
-argv    = ["bash", "tools/check-string.sh", "build/obj/core/c_core/src/string.o"]
+argv    = ["bash", "tools/check-string.sh", "build/obj/core/c_core/src/base/string.o"]
 require = ["ok   compiler support routines have no self-recursion"]
 
 [[script]]
@@ -499,8 +499,8 @@ require_tags = [
 # fs-test: storage/device domain end-to-end gate (ADR-0009).
 # Criteria = four new suite summaries all green + mount evidence + devices really projected:
 #   [VFSCONF] storage-domain suite (mount table/walk chain/file surface/dir surface, called by APP start)
-#   [DEVCONF] generic device registry (framework/dev-core start)
-#   [CDEVCONF] char-device subclass and adaptation layer (framework/cdev-core start)
+#   [DEVCONF] generic device registry (hal/dev-core start)
+#   [CDEVCONF] char-device subclass and adaptation layer (hal/cdev-core start)
 #   [IOCONF]  full PL011 round-trip through /dev/uart0 (driver/uart-pl011 start)
 # `vfs: mount /` and `vfs: mount /dev` evidence "the mount plan really executed" (not just summaries);
 # non-zero `irq_ticks` ensures all this happens after the START phase with IRQs enabled.

@@ -7,7 +7,7 @@
 #ifndef BR_SCHED_RR_H
 #define BR_SCHED_RR_H
 
-#include <br/core/br_sched.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_types.h>
 
 /* Slice in platform ticks (tick = 1/HZ, `product.toml [kernel].hz`, default 200 => 5 ms); value 2

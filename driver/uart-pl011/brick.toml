@@ -18,17 +18,17 @@ used_kib = 1
 notes    = "每会话 cdev_file_t + session 约 32 B(core 堆); 静态部分只有 ops 表与器件记录"
 
 [[dep]]
-name  = "framework/cdev-core"
+name  = "hal/cdev-core"
 range = ">=0.1.0"
 kind  = "init"
 
 [[dep]]
-name  = "framework/dev-core"
+name  = "hal/dev-core"
 range = ">=0.1.0"
 kind  = "type"
 
 [[dep]]
-name   = "framework/vfs-core"
+name   = "hal/vfs-core"
 range  = ">=0.1.0"
 kind   = "runtime"
 symbol = "br_open_err"

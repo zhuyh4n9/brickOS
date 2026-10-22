@@ -16,7 +16,7 @@
 #include <br/core/br_error.h>
 #include <br/core/br_errno.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
+#include <br/hal/br_mem.h>
 #include <br/core/br_types.h>
 /* Block device contract (upstream gets it from <blk.h>/<part.h>). Only this header includes
  * <br/...>; upstream .c and glue reach core through it. */

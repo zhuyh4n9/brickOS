@@ -3,10 +3,10 @@
 
 use crate::diag::{Diag, Severity};
 
-pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "platform", "core"];
+pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "hal", "platform", "core"];
 pub const API_TYPES: &[&str] = &["native", "runtime_adapter", "third_party"];
-pub const SUBKINDS: &[&str] = &["scheduler", "framework", "io", "fs", "service"];
-pub const NAMESPACES: &[&str] = &["app", "iface", "platform", "core", "sched", "framework", "driver", "fs", "service", "runtime"];
+pub const SUBKINDS: &[&str] = &["scheduler", "io", "fs", "service"];
+pub const NAMESPACES: &[&str] = &["app", "iface", "platform", "core", "hal", "sched", "driver", "fs", "service", "runtime"];
 pub const PHASES: &[&str] = &["early", "core", "late", "app"];
 pub const SCHED_CLASSES: &[&str] = &["SAFE_PREEMPT", "COOP_ONLY", "TT_SAFE"];
 pub const SCHED_KINDS: &[&str] = &["coop", "preempt", "tt"];
@@ -97,7 +97,10 @@ pub fn namespace_plugin_type(ns: &str) -> Option<&'static str> {
         // `core` is a namespace of implementations (`core/c_core`, future `core/r_core`), not a
         // language marker: the type is the same and exactly one of them is in an image.
         "core" => Some("core"),
-        "sched" | "framework" | "driver" | "fs" | "service" => Some("ability"),
+        // `hal/` is the infrastructure layer: a **peer of `ability`**, not a subkind of it. An
+        // ability is a concrete implementation and selects the HAL bricks it runs on (ADR-0039).
+        "hal" => Some("hal"),
+        "sched" | "driver" | "fs" | "service" => Some("ability"),
         // `runtime` is an ability plugin; it differs from `service` in size and role, not taxonomy.
         "runtime" => Some("ability"),
         _ => None,
@@ -107,7 +110,6 @@ pub fn namespace_plugin_type(ns: &str) -> Option<&'static str> {
 pub fn namespace_subkind(ns: &str) -> Option<&'static str> {
     match ns {
         "sched" => Some("scheduler"),
-        "framework" => Some("framework"),
         // `driver/` = where this repo's **own** (native) device drivers live; the capability they
         // provide is still `subkind = "io"` -- namespace says where it lives, subkind what it is.
         // A ported driver keeps `subkind = "io"` too: it *is* an I/O driver; only its provenance
@@ -452,18 +454,26 @@ pub fn dep_direction_ok(consumer_pt: &str, provider_pt: &str, provider_is_third_
         return true;
     }
     match consumer_pt {
-        // platform: nothing allowed (lowest SoC level, depends on no plugin)
-        "platform" => false,
-        // core: no plugin-level dependency except the platform contract / ability mechanisms
-        "core" => !provider_is_third_party && matches!(provider_pt, "platform" | "ability"),
-        // ability: platform, ability (one-way) and third_party allowed / interface forbidden
+        // platform: core (above) + **hal** -- the HAL is below the SoC layer: platform implements
+        // the HAL contracts it declares (`br_hal/*`, the mmu/pic ops tables) and calls HAL APIs
+        // (`br_irq_enable`, `br_malloc`, `br_sched_on_tick`). Before ADR-0039 the HAL lived inside
+        // `core`, where this row never had to name it.
+        "platform" => !provider_is_third_party && matches!(provider_pt, "hal"),
+        // hal: below `ability` -- it may use core (base) and platform (implements its contracts)
+        // and lower HAL bricks (`bdev` -> `dev`, `cdev` -> `dev`), never an ability/interface.
+        "hal" => !provider_is_third_party && matches!(provider_pt, "platform" | "hal"),
+        // core: the platform contract + the HAL it boots (`br_mem_init`, `br_mm_activate`,
+        // `br_sched_run`). Boot order is hard-coded in `br_core_main`, not derived from init edges.
+        "core" => !provider_is_third_party && matches!(provider_pt, "platform" | "hal" | "ability"),
+        // ability: a concrete implementation selects HAL (+ platform, peer ability, third_party)
         "ability" => {
             provider_is_third_party
-                || matches!(provider_pt, "platform" | "ability")
+                || matches!(provider_pt, "platform" | "hal" | "ability")
         }
-        // interface: platform/ability/interface allowed (re-export only) / third_party forbidden
+        // interface: platform/hal/ability/interface allowed (re-export only) / third_party forbidden
         "interface" => {
-            !provider_is_third_party && matches!(provider_pt, "platform" | "ability" | "interface")
+            !provider_is_third_party
+                && matches!(provider_pt, "platform" | "hal" | "ability" | "interface")
         }
         // app: interface only; exception: ability with `api_type = third_party`.
         "app" => provider_pt == "interface" || provider_is_third_party,
@@ -481,7 +491,7 @@ pub fn api_type_edge_reason(
 ) -> Option<String> {
     // Pure consumers (app/interface) are exempt from api_type prohibitions. `core` is a provider
     // with a surface, so a `native` core must not reach into `runtime_adapter`/`third_party`.
-    if !matches!(consumer_pt, "ability" | "platform" | "core") {
+    if !matches!(consumer_pt, "ability" | "hal" | "platform" | "core") {
         return None;
     }
     if consumer_api == "native" && provider_api == "runtime_adapter" {

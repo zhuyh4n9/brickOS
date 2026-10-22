@@ -2,14 +2,19 @@
 
 ## 它是什么
 
-core 层**唯一的对外门**。它把 `core/c_core` 的 20 个接口单元（**一头一单位**）原样转出，并承载
+core 层**唯一的对外门**。它把 core 层的 20 个接口单元（**一头一单位**）原样转出，并承载
 core 层的**规范正文**（本文）。它没有实现、没有状态：三个空钩子 + 一张转出的头文件面。
 
+> **ADR-0039 之后**这 20 个单元来自 **4 个提供者**：`core/c_core` 12 个（base + plugin manager）与
+> `hal/int` 4 个 / `hal/mm` 2 个 / `hal/sched` 3 个（中断、内存、调度机制）。拆分对消费者
+> **不可见** —— 它们仍然只声明 `[[dep]] runtime/core`。
+
 ```
-core/c_core   ──[[dep]] kind="type"──▶  runtime/core  ──[[dep]]──▶  其余 21 个插件
-   (20 个 [[export]] 单元)                (20 条 reexport_of)
-                                                ▲
-                                     iface/min ─┘ (再转出 log / time / version 给 APP)
+core/c_core (12 units) ─┐
+hal/int     (4 units)  ─┼─[[dep]] kind="type"─▶ runtime/core ──[[dep]]──▶ 其余 21 个插件
+hal/mm      (2 units)  ─┤                        (20 条 reexport_of)
+hal/sched   (3 units)  ─┘                              ▲
+                                            iface/min ─┘ (再转出 log / time / version 给 APP)
 ```
 
 ## 为什么是“皮肤”，不是包装层
@@ -24,18 +29,18 @@ core/c_core   ──[[dep]] kind="type"──▶  runtime/core  ──[[dep]]─
 
 ## 单元表（一头一单位）
 
-| 单元 | 头 | 单元 | 头 |
-|---|---|---|---|
-| `log` | `br_log.h` | `fault` | `br_fault.h` |
-| `console` | `br_console.h` | `exc` | `br_exc.h` |
-| `mem` | `br_mem.h` | `time` | `br_time.h` |
-| `mm` | `br_mm.h` | `trace` | `br_trace.h` |
-| `sched` | `br_sched.h` | `svc` | `br_svc.h` |
-| `sync` | `br_sync.h` | `plugin` | `br_plugin.h` |
-| `work` | `br_work.h` | `types` | `br_types.h` |
-| `irq` | `br_irq.h` | `main` | `br_main.h` |
-| `pic` | `br_pic.h` | `error` / `errno` | `br_error.h` / `br_errno.h` |
-|  |  | `version` | `br_version.h` |
+| 单元 | 头 | 提供者 | 单元 | 头 | 提供者 |
+|---|---|---|---|---|---|
+| `log` | `br_log.h` | core | `fault` | `br/hal/br_fault.h` | hal/int |
+| `console` | `br_console.h` | core | `exc` | `br/hal/br_exc.h` | hal/int |
+| `mem` | `br/hal/br_mem.h` | hal/mm | `time` | `br_time.h` | core |
+| `mm` | `br/hal/br_mm.h` | hal/mm | `trace` | `br_trace.h` | core |
+| `sched` | `br/hal/br_sched.h` | hal/sched | `svc` | `br_svc.h` | core |
+| `sync` | `br/hal/br_sync.h` | hal/sched | `plugin` | `br_plugin.h` | core |
+| `work` | `br/hal/br_work.h` | hal/sched | `types` | `br_types.h` | core |
+| `irq` | `br/hal/br_irq.h` | hal/int | `main` | `br_main.h` | core |
+| `pic` | `br/hal/br_pic.h` | hal/int | `error`/`errno` | `br_error.h` | core |
+| | | | `version` | `br_version.h` | core |
 
 粒度是刻意的：冻结/版本按**头**走，所以 `br_log.h` 加一个函数不会把 `br_mm.h` 的
 `compat_gen` 一起顶上去。

@@ -18,7 +18,7 @@ used_kib = 4
 notes    = "静态部分只有根节点与记账; 文件数据与目录节点在运行期从 core 堆取(配额见 src/tmpfs.c 的 TMPFS_* 上界)"
 
 [[dep]]
-name  = "framework/vfs-core"
+name  = "hal/vfs-core"
 range = ">=0.1.0"
 kind  = "init"
 

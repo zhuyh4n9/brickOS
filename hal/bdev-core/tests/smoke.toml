@@ -1,0 +1,112 @@
+# hal/bdev-core — conformance 用例(人写)
+#
+# 与 `bdev_core_selftest()`(src/bdev_selftest.c)里的 TC-BDEV-001..008 一一对应:
+# 红绿由 in-image 套件打 `[BDEVCONF] PASS/FAIL`, 末尾 SUMMARY; 该钩子在描述符里, 由
+# **core** 在全部 start() 之后统一驱动(ADR-0010); 门禁 `smoke`/`fs-test` 要求
+# `[BDEVCONF] SUMMARY pass=N fail=0`。本文件是同一批用例的**声明面骨架**,
+# 不是可执行形式(in-image 套件才是), 形状照 `6-01` §2 的字段契约。
+# 设计出处: `docs/7-storage/7-02-bdev.md` §1~§4 + `docs/8-device/8-01-device.md` §1.3/§3;
+# 裁定见 ADR-0021(含 BR_BDEV_F_DMA/PIO 两位与"注册期调 geometry"的来历)。
+schema = 1
+
+[[case]]
+id       = "TC-BDEV-001"
+pre      = "注册表已就绪(记录 br_dev_count())"
+steps    = [
+    "br_bdev_register(NULL, <合法 ops>, &geom) == -EINVAL",
+    "br_bdev_register('', <合法 ops>, &geom) == -EINVAL",
+    "br_bdev_register('Bdev0', <合法 ops>, &geom) == -EINVAL(大写开头)",
+    "br_bdev_register('b/dev', <合法 ops>, &geom) == -EINVAL(含斜杠)",
+    "br_bdev_register('b_dev', <合法 ops>, &geom) == -EINVAL(含下划线)",
+    "br_dev_count() 不变(拒绝发生在入表之前)",
+]
+expect   = "[BDEVCONF] PASS TC-BDEV-001 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-BDEV-002"
+pre      = "注册表已就绪; 'bdevtest0' 未被占用"
+steps    = [
+    "br_bdev_register('bdevtest0', NULL, &geom) == -EINVAL(ops 为空)",
+    "缺 read 的 ops ⇒ -EINVAL; 缺 write ⇒ -EINVAL; 缺 flush ⇒ -EINVAL; 缺 geometry ⇒ -EINVAL",
+    "br_dev_count() 不变; br_bdev_get('bdevtest0', NULL) == NULL(名字仍空闲)",
+]
+expect   = "[BDEVCONF] PASS TC-BDEV-002 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-BDEV-003"
+pre      = "注册表已就绪; 'bdevtest1' 未被占用"
+steps    = [
+    "sector_size = 0 ⇒ -EINVAL; sector_size = 500(非 2 的幂)⇒ -EINVAL",
+    "n_sectors = 0 ⇒ -EINVAL",
+    "max_rw = 0 ⇒ -EINVAL; max_rw > n_sectors ⇒ -EINVAL",
+    "align = 3(非 2 的幂)⇒ -EINVAL",
+    "flags = BR_BDEV_F_DMA | BR_BDEV_F_PIO ⇒ -EINVAL(自相矛盾)",
+    "br_dev_count() 不变",
+]
+expect   = "[BDEVCONF] PASS TC-BDEV-003 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-BDEV-004"
+pre      = "注册表里没有 'nosuchbdev'"
+steps    = [
+    "出参 priv 预置为哨兵值(非 NULL)",
+    "br_bdev_get('nosuchbdev', &priv) == NULL 且 priv 仍是哨兵(不改写出参)",
+    "br_bdev_get(NULL, NULL) == NULL",
+]
+expect   = "[BDEVCONF] PASS TC-BDEV-004 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-BDEV-005"
+pre      = "注册表可观测(可能为空 —— 空表时该用例平凡成立)"
+steps    = [
+    "遍历注册表; 对 class_id == BR_CLASS_BDEV 的条目: 断言 entry->open_file == NULL",
+    "语义: v1 的 raw 块访问属 v2(D21)⇒ /dev/<bdev> 出现但 br_open 得 -ENOTSUP(看得见打不开)",
+]
+expect   = "[BDEVCONF] PASS TC-BDEV-005 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-BDEV-006"
+pre      = "组合含至少一个 bdev(如 driver/uboot-mmc 登记的 emmc0); 无 bdev 时只走'不适用'分支"
+steps    = [
+    "取第一个 BR_CLASS_BDEV 条目的名字",
+    "br_bdev_get(name, &priv) 非 NULL 且 == 条目的 class_priv; geometry(priv, &g) == 0",
+    "几何自洽: sector_size > 0, n_sectors > 0, 0 < max_rw <= n_sectors",
+    "br_bdev_register(name, 该 ops, 该 priv) == -EEXIST(唯一性由 dev-core 执法, 本件透传)",
+]
+expect   = "[BDEVCONF] PASS TC-BDEV-006 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-BDEV-007"
+pre      = "无(直接检查本件的静态池与注册表簿记)"
+steps    = [
+    "bdev_internal_capacity() >= 1",
+    "bdev_internal_slot_count() <= capacity(表满 ⇒ -ENOSPC 的结构性前提)",
+    "bdev_internal_slot_count() == 注册表里 BR_CLASS_BDEV 的条目数(簿记不漂)",
+]
+expect   = "[BDEVCONF] PASS TC-BDEV-007 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]
+
+[[case]]
+id       = "TC-BDEV-008"
+pre      = "组合含至少一个 bdev; 无 bdev 时只走'不适用'分支"
+steps    = [
+    "取第一个 bdev 的 geometry",
+    "flags & ~(READONLY|STACKED|DMA|PIO) == 0(不认识的位 ⇒ 红)",
+    "flags 不同时含 DMA 与 PIO(数据通路至多一个)",
+]
+expect   = "[BDEVCONF] PASS TC-BDEV-008 ..."
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

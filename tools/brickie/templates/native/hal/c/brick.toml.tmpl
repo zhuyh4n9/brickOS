@@ -1,0 +1,35 @@
+schema = {{schema}}
+
+[plugin]
+name        = "{{name}}"
+plugin_type = "hal"
+api_type    = "{{api_type}}"
+lang        = "{{lang}}"
+phase       = "{{phase}}"
+version     = "{{version}}"
+summary     = "{{summary}}"
+license     = "{{license}}"
+sched_class = "{{sched_class}}"
+
+[compat]
+core       = ">=1.0.0"
+api_rev    = 1
+hash_scope = "decl"
+truth      = "decl"
+abi_id     = ""
+
+[iface.typedefs]
+
+[[export]]
+api_iface    = "{{export_api_iface}}"
+form         = "{{export_form}}"
+name         = "{{export_name}}"
+version      = "{{version}}"
+compat_gen   = 0
+freeze_state = "unfrozen"
+hash         = ""
+status       = "experimental"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

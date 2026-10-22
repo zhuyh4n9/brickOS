@@ -6,8 +6,8 @@
  * br_mm_region_add(), then br_mem_init() claims the three pools.
  */
 #include <br/core/br_error.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_mm.h>
+#include <br/hal/br_mem.h>
+#include <br/hal/br_mm.h>
 #include <br/core/br_types.h>
 
 #include "tlsf_internal.h"

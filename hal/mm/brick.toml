@@ -1,0 +1,355 @@
+schema = 1
+
+[plugin]
+name        = "hal/mm"
+plugin_type = "hal"
+api_type    = "native"
+lang        = "c"
+phase       = "early"
+symbol_prefix = "hal_mm_"
+version     = "0.2.0.0"
+summary     = "内存(HAL): 三池(heap/contig/page/DMA)+ TLSF + 地址映射 mm(ops 表由 platform 注册)"
+license     = "WTFPL"
+
+[[res]]
+kind     = "ram"
+used_kib = 2
+notes    = "池本体在 platform 的 region 表里, 本项只含堆控制块/TLSF 位图/页位图/映射表 ≈ 2 KiB(静态上界)"
+
+# HAL layer (ADR-0039): memory mechanisms only. The three pool *sizes* come from the platform region
+# table; the page-table ops come from `platform` (registered via `br_mm_register`), so this brick
+# never names a platform plugin. `ability` bricks select it; it never depends upward.
+[[dep]]
+name  = "core/c_core"
+range = ">=0.1.0"
+kind  = "runtime"
+
+# `[iface.typedefs]`: the surface hash expands these aliases to their canonical C spelling, so a
+# future non-C implementation whose normalised signatures match still produces the same
+# `surface_hash` (iface.rs::canonical_sig).
+[iface.typedefs]
+br_u8       = "unsigned char"
+br_s8       = "signed char"
+br_u16      = "unsigned short"
+br_s16      = "signed short"
+br_u32      = "unsigned int"
+br_s32      = "signed int"
+br_u64      = "unsigned long"
+br_s64      = "signed long"
+br_size_t   = "unsigned long"
+br_uintptr_t = "unsigned long"
+br_intptr_t = "signed long"
+br_bool     = "int"
+br_time_t   = "br_u64"
+br_err_t    = "int"
+
+# ---------------------------------------------------------------- unit `mem`: <br/core/br_mem.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "mem"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_dma_buf_t"
+layout = "# {vaddr, dma_addr, size}"
+[[export.entries]]
+kind = "type"
+name = "br_heap_block_t"
+layout = "# {addr, size, block, owner, caller, seq}"
+[[export.entries]]
+kind = "type"
+name = "br_heap_stats_t"
+layout = "# {total, used, free_bytes, max_free_block, high_water, n_alloc, n_free, n_live, n_fail, redzone_hits, canary_hits, double_free, bad_free, owner_count}"
+[[export.entries]]
+kind = "type"
+name = "br_heap_walk_fn"
+[[export.entries]]
+kind = "type"
+name = "br_mem_layout_t"
+layout = "# {heap, contig, page, dma, page_size, page_total}"
+[[export.entries]]
+kind = "type"
+name = "br_owner_t"
+[[export.entries]]
+kind = "type"
+name = "br_page_stats_t"
+layout = "# {total, used, free, fail, max_run}"
+[[export.entries]]
+kind = "type"
+name = "br_pool_t"
+layout = "# {base, size}"
+[[export.entries]]
+kind = "func"
+name = "br_calloc"
+sig = "void * (br_size_t,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_dma_alloc"
+sig = "int (br_size_t,br_u32,br_dma_buf_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_dma_free"
+sig = "int (const br_dma_buf_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_free"
+sig = "void (void *)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_check"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_owner_get"
+sig = "br_owner_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_owner_name"
+sig = "const char * (br_owner_t)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_owner_register"
+sig = "br_owner_t (const char *)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_owner_set"
+sig = "br_owner_t (br_owner_t)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_stats_get"
+sig = "int (br_heap_stats_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_usage"
+sig = "int (br_size_t *,br_size_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_heap_walk"
+sig = "int (br_heap_walk_fn,void *)"
+[[export.entries]]
+kind = "func"
+name = "br_malloc"
+sig = "void * (br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_alloc_contig"
+sig = "int (br_size_t,br_size_t,void **)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_free_contig"
+sig = "void (void *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_init"
+sig = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_layout"
+sig = "int (br_mem_layout_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mem_ready"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_page_alloc"
+sig = "void * (br_size_t,br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_page_free"
+sig = "void (void *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_page_stats"
+sig = "int (br_page_stats_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_realloc"
+sig = "void * (void *,br_size_t)"
+[[export.entries]]
+kind = "macro"
+name = "BR_DMA_F_ALIGN4K"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DMA_F_CACHED"
+value = "0x0004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_DMA_F_ZERO"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MALLOC_ALIGN"
+value = "16u"
+[[export.entries]]
+kind = "macro"
+name = "BR_OWNER_NONE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PAGE_F_CONTIG"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PAGE_F_ZERO"
+value = "0x0001u"
+[[export.entries]]
+kind = "macro"
+name = "BR_PAGE_SIZE"
+value = "4096u"
+
+# ---------------------------------------------------------------- unit `mm`: <br/core/br_mm.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "mm"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_mm_ops_t"
+[[export.entries]]
+kind = "type"
+name = "br_mm_region_t"
+layout = "# {base, size, attrs}"
+[[export.entries]]
+kind = "func"
+name = "br_mm_activate"
+sig = "int (void)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_active"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_cache_flush"
+sig = "int (void *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_cache_invalidate"
+sig = "int (void *,br_size_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_map"
+sig = "int (const br_mm_region_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_query"
+sig = "int (br_uintptr_t,br_size_t,br_u32 *)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_add"
+sig = "int (const br_mm_region_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_count"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_count_kind"
+sig = "br_u32 (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_find"
+sig = "const br_mm_region_t * (br_uintptr_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_region_get"
+sig = "const br_mm_region_t * (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_register"
+sig = "int (const br_mm_ops_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_set_attrs"
+sig = "int (br_uintptr_t,br_size_t,br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_mm_unmap"
+sig = "int (br_uintptr_t,br_size_t)"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_CACHED"
+value = "0x0008u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_DEVICE"
+value = "0x0004u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_CONTIG"
+value = "4u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_DMA"
+value = "6u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_HEAP"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_IMAGE"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_MASK"
+value = "0x00000F00u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_MMIO"
+value = "7u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_NONE"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_PAGE"
+value = "5u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_RESERVED"
+value = "8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_SHIFT"
+value = "8u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_KIND_STACK"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_MAX_REGIONS"
+value = "24u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_NX"
+value = "0x0002u"
+[[export.entries]]
+kind = "macro"
+name = "BR_MM_RO"
+value = "0x0001u"
+
+[build]
+sources  = ["src/*.c"]
+includes = ["include"]

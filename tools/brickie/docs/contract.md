@@ -90,6 +90,7 @@ written per §9's "new defects with unassigned codes are registered in §9"; bac
 | `BRV-BLD-0011` | error | An executed step failed (compile / link / script exited non-zero) — detected by L5, code assigned by core along with the step |
 | `BRV-BLD-0012` | error | A regex in `tests/gates.toml` exceeds the **subset** core supports (reported, not silently unmatched) |
 | `BRV-BLD-0013` | info | A generated artifact belongs to a plugin **not in the closure** ⇒ skipped (not a defect, but it must be visible; exit code unchanged) |
+| `BRV-TAX-0025` | error | A plugin's namespace and `plugin_type` disagree (`hal/` ⇒ `hal`, `service/` ⇒ `ability`, …). The namespace is not decoration: the direction table and the phase derivation read `plugin_type`, so a brick in the wrong layer would be judged as the wrong kind of consumer (ADR-0039) |
 | `BRV-BLD-0015` | error | The symbol audit produced **no `nm` output**: the `.a` evidence is missing, so the disciplines cannot be proven (the audit fails closed) |
 | `BRV-BLD-0014` | info | A generated artifact under `build/gen/` whose **owner cannot be identified** (stale leftovers after a plugin rename/removal) ⇒ skipped. Keeping it becomes a "ghost plugin": a plugin with the same symbol in the tree is registered twice, and `start` executes a second time ⇒ shutdown at boot (measured: `rc=-28` after renaming `third_party/uboot-mmc` → `driver/uboot-mmc`) |
 
@@ -282,9 +283,9 @@ Field shapes are described by `schema/*.schema.json` (BRV-D2: only expresses **s
 schema = 1
 [plugin]
 name        = "service/crypto"    # ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$  globally unique
-plugin_type = "ability"           # app | interface | ability | platform | core
+plugin_type = "ability"           # app | interface | ability | hal | platform | core (ADR-0039)
 api_type    = "native"            # native | runtime_adapter | third_party
-subkind     = "service"           # scheduler | framework | io | fs | service (ability only)
+subkind     = "service"           # scheduler | io | fs | service (ability only; `framework` was removed by ADR-0039)
 lang        = "c"                 # c | cxx | rust
 phase       = "late"              # early | core | late | app (the ② completion point, §7.2)
 sched_class = "SAFE_PREEMPT"      # SAFE_PREEMPT | COOP_ONLY | TT_SAFE (default SAFE_PREEMPT)
@@ -311,7 +312,7 @@ truth      = "decl"                # v0.1 only allows decl (paired with hash_sco
 abi_id     = ""                    # optional placeholder
 
 [[compat.requires_iface]]          # v0.1 only validates schema, does not participate in solving (V-10)
-id = "framework/vfs-core#file"
+id = "hal/vfs-core#file"
 api_iface = "native"
 compat_gen = 3
 range = ">=1.2.0"
@@ -405,7 +406,7 @@ ram_kib = 512
 stack_kib = 16
 [lint]
 frozen_deps = "inherit"            # inherit | allow | deny
-allow_edges = [["framework/cdev-core","framework/dev-core"]]
+allow_edges = [["hal/cdev-core","hal/dev-core"]]
 [kernel]
 hz = 200                           # tick frequency (Hz; cf. Linux CONFIG_HZ); default (absent) = 200
                                    # ⇒ 5 ms per tick. brickie build turns it into -DBR_CFG_TICK_HZ and passes it to all compilation units (ADR-0017)
@@ -526,9 +527,12 @@ silently not matching. "forbid for three kinds of FAIL" must be written as three
 | R-18 | How product-level **semantic configuration** (first item = tick HZ) enters compilation | `product.toml [kernel].hz` (integer, default 200) is turned by `brickie build` into `-DBR_CFG_TICK_HZ=<hz>` and passed to **all** compilation units (core/plugins/generated); this define is separate from generic `cflags` and uses the `config_defines` channel | Do not write bare `-D` into `cflags`: a semantic key can be validated by `schema/product.schema.json` (`integer` + `minimum: 1`), and "how many timer interrupts per second" has only one source of truth (core's jiffies and the platform's reload period read the same macro; ADR-0017) |
 | R-19 | How declared dependencies become **compile-time facts** (previously `-I` was a global union, and undeclared cross-plugin `#include` silently compiled) | The include surface of each `build` unit = the selected core plugin's `[build].includes` + its own + the includes of every plugin in the **transitive closure of declared dependencies** (the core unit additionally gets platform headers; `build/gen` gets the headers of all selected plugins); plus a **declaration ↔ use** cross-check (scan source `#include`s, map to the provider, report if outside the declaration closure); the deps domain of `check` uses the same convention as `build` | Narrowing `-I` alone is not enough: the target toolchain's glibc headers would cover common names like `unistd.h` (not "header not found" but silently switching to the host libc declarations) ⇒ a criterion independent of the compiler search path is required; both places share `model::cross_plugin_includes()` to avoid divergence (ADR-0018) |
 
-| R-20 | What "core is a dependency" means: does using `<br/core/**>` need a declaration? | **Yes.** Since ADR-0038 core is a first-class interface provider (`core/c_core` exports 20 units, one per header) and the outward door is the skin `runtime/core`. Every consumer declares `[[dep]] runtime/core` (platform declares `core/c_core` directly: the direction table forbids a platform from depending on an ability). `brickie build` no longer prepends core's `-I` unconditionally, so a missing declaration fails at compile time | Without it core is "dark matter": its surface is the only one that never has to be declared, and a future split/re-implementation of core has no boundary to move behind |
+| R-20 | What "core is a dependency" means: does using `<br/core/**>` need a declaration? | **Yes.** Since ADR-0038 core is a first-class interface provider (20 units, one per header: `core/c_core` 12 + `hal/{int,mm,sched}` 8 since ADR-0039) and the outward door is the skin `runtime/core`. Every consumer declares `[[dep]] runtime/core` (platform declares `core/c_core` directly: the direction table forbids a platform from depending on an ability). `brickie build` no longer prepends core's `-I` unconditionally, so a missing declaration fails at compile time | Without it core is "dark matter": its surface is the only one that never has to be declared, and a future split/re-implementation of core has no boundary to move behind |
 | R-21 | Dependency authorization: declared **transitive** closure or **direct** set? | **Direct only**, plus the units a directly declared skin re-exports (transitively: `api → iface/min → runtime/core → core/c_core`). Text (`BRV-DEP-0012` on `#include`) and symbols (`.a` audit) use the same set. `-I` keeps the **transitive** closure (compile surface), so the declaration is the compile prerequisite of *using* it, not of *seeing* it | Using C through B is an implicit dependency on C; supersedes the authorization half of R-19 (its other half — the declaration↔use cross-check shared by check/build — stands) |
 | R-22 | The core plugin is platform-agnostic (`br/platform/**` contract) but the direction table forbids `core → platform` | The exception is explicit and one-sided: core may include `br/platform/**` and use the symbols declared there without naming a platform plugin; the platform side still declares `[[dep]] core/c_core`. Implemented identically in `check --deps`, `-I` surfaces and the symbol audit | The two call each other by design (`platform`'s entry is `bl br_core_main`, core reads `br_plat_ticks_*`); the cycle is broken by the two-step boot chain, not by the topological sort |
+
+| R-23 | Is the infrastructure layer a `subkind` of `ability` or a `plugin_type` of its own? | **A `plugin_type` of its own (`hal`)**, peer of `ability` and below it: `ability` selects HAL, `platform` implements the HAL contracts it declares, and **`hal → ability` is forbidden**. `framework/` is renamed `hal/` and the `framework` subkind is retired (ADR-0039) | The direction table and the phase derivation key on `plugin_type`, never on `subkind`; leaving HAL as an ability subkind would force an "platform may depend on ability" hole and would give the infrastructure the implementation layer's lifecycle contract |
+| R-24 | Where does a plugin's selftest source set live? | `[build].selftest_sources`, **per plugin** (plugin-relative), compiled into that plugin's unit only while the product switch is on. `product.toml [build].selftest_sources` remains as the **core** plugin's default (compatibility). The suite *entry* is called by core's aggregator, so the image keeps one selftest driver (ADR-0010) | ADR-0039 moved the scheduling suites into `hal/sched`; a product-level key cannot say "this brick's tests belong to this brick" once mechanisms are split across bricks |
 
 > **Supplementary rulings on the Rust side**: implementing the solving/validation/interface engine forced a batch of finer conventions
 > (S-1…S-19: first publish = create the record without advancing segments, `closure` does not scan `requires_iface` while `check` does,

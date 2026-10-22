@@ -1,0 +1,390 @@
+schema = 1
+
+[plugin]
+name        = "hal/sched"
+plugin_type = "hal"
+api_type    = "native"
+lang        = "c"
+phase       = "early"
+symbol_prefix = "hal_sched_"
+version     = "0.2.0.0"
+summary     = "调度框架(HAL): TCB 池/上下文切换 switch.S/就绪队列/超时扫描/同步原语/下半部工作队列"
+license     = "WTFPL"
+
+[[res]]
+kind     = "ram"
+used_kib = 3
+notes    = "TCB 池 8 × (头 + 插件尾) + 就绪/等待链 + 工作队列 16 项 ≈ 3 KiB; 栈本体归 platform 与调用方"
+
+# HAL layer (ADR-0039): the scheduling *framework* (mechanism). The concrete policy is an `ability`
+# brick (`sched/rr`, `sched/coop`) that registers through `br_sched_register()`; this brick boots it
+# with `br_sched_run()` and installs `br_irq_hooks_t` so the IRQ exit can reschedule.
+#
+# `switch.S` and the TCB layout (`sched_internal.h` / `sched_ctx.h`) are one artifact: keeping them
+# in the same brick is what makes "the assembly reads the C struct offsets" checkable.
+[[dep]]
+name  = "core/c_core"
+range = ">=0.1.0"
+kind  = "runtime"
+
+[[dep]]
+name  = "hal/int"
+range = ">=0.1.0"
+kind  = "runtime"
+
+# `[iface.typedefs]`: the surface hash expands these aliases to their canonical C spelling, so a
+# future non-C implementation whose normalised signatures match still produces the same
+# `surface_hash` (iface.rs::canonical_sig).
+[iface.typedefs]
+br_u8       = "unsigned char"
+br_s8       = "signed char"
+br_u16      = "unsigned short"
+br_s16      = "signed short"
+br_u32      = "unsigned int"
+br_s32      = "signed int"
+br_u64      = "unsigned long"
+br_s64      = "signed long"
+br_size_t   = "unsigned long"
+br_uintptr_t = "unsigned long"
+br_intptr_t = "signed long"
+br_bool     = "int"
+br_time_t   = "br_u64"
+br_err_t    = "int"
+
+# ---------------------------------------------------------------- unit `sched`: <br/core/br_sched.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "sched"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_sched_ops_t"
+[[export.entries]]
+kind = "type"
+name = "br_task_attr_t"
+[[export.entries]]
+kind = "type"
+name = "entry"
+[[export.entries]]
+kind = "func"
+name = "br_sched_block_current"
+sig = "int (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_irq_epilogue"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_on_tick"
+sig = "void (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_ready_count"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_register"
+sig = "void (const br_sched_ops_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_registered"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_request_resched"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_resched_pending"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_run"
+sig = "BR_NORETURN void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_task_count"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_tcb_size"
+sig = "br_size_t (void)"
+[[export.entries]]
+kind = "func"
+name = "br_sched_wake"
+sig = "void (br_thread_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_task_exit"
+sig = "BR_NORETURN void (int)"
+[[export.entries]]
+kind = "func"
+name = "br_task_join"
+sig = "int (br_thread_t *,int *)"
+[[export.entries]]
+kind = "func"
+name = "br_task_name"
+sig = "const char * (const br_thread_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_task_self"
+sig = "br_thread_t * (void)"
+[[export.entries]]
+kind = "func"
+name = "br_task_sleep"
+sig = "int (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_task_sleep_until"
+sig = "int (br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_task_state"
+sig = "br_u32 (const br_thread_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_task_yield"
+sig = "void (void)"
+[[export.entries]]
+kind = "func"
+name = "br_thread_priv"
+sig = "void * (br_thread_t *)"
+[[export.entries]]
+kind = "macro"
+name = "BR_SCHED_KIND_COOP"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SCHED_KIND_PREEMPT"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SCHED_KIND_TT"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_STACK_MIN"
+value = "2048u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_BLOCKED"
+value = "3u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_NEW"
+value = "0u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_READY"
+value = "1u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_RUNNING"
+value = "2u"
+[[export.entries]]
+kind = "macro"
+name = "BR_TASK_ZOMBIE"
+value = "4u"
+
+# ---------------------------------------------------------------- unit `sync`: <br/core/br_sync.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "sync"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_cond_t"
+[[export.entries]]
+kind = "type"
+name = "br_mutex_t"
+[[export.entries]]
+kind = "type"
+name = "br_sem_t"
+[[export.entries]]
+kind = "type"
+name = "br_spinlock_t"
+[[export.entries]]
+kind = "func"
+name = "br_cond_broadcast"
+sig = "int (br_cond_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_cond_init"
+sig = "int (br_cond_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_cond_signal"
+sig = "int (br_cond_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_cond_wait"
+sig = "int (br_cond_t *,br_mutex_t *,br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_cond_waiters"
+sig = "br_u32 (const br_cond_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_init"
+sig = "int (br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_is_locked"
+sig = "br_bool (const br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_lock"
+sig = "int (br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_lock_to"
+sig = "int (br_mutex_t *,br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_owner"
+sig = "br_thread_t * (const br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_mutex_unlock"
+sig = "int (br_mutex_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_sem_count"
+sig = "br_u32 (const br_sem_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_sem_give"
+sig = "int (br_sem_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_sem_init"
+sig = "int (br_sem_t *,unsigned initial)"
+[[export.entries]]
+kind = "func"
+name = "br_sem_take"
+sig = "int (br_sem_t *,br_time_t)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_contention"
+sig = "br_u32 (void)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_init"
+sig = "int (br_spinlock_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_is_locked"
+sig = "br_bool (const br_spinlock_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_lock"
+sig = "br_irq_state_t (br_spinlock_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_trylock"
+sig = "int (br_spinlock_t *,br_irq_state_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_spinlock_unlock"
+sig = "void (br_spinlock_t *,br_irq_state_t)"
+[[export.entries]]
+kind = "macro"
+name = "BR_COND_INIT_VALUE"
+value = "{ BR_SYNC_MAGIC_COND, 0u, BR_NULL }"
+[[export.entries]]
+kind = "macro"
+name = "BR_MUTEX_INIT_VALUE"
+value = "{ BR_SYNC_MAGIC_MUTEX, 0u, BR_NULL, 0u, BR_NULL }"
+[[export.entries]]
+kind = "macro"
+name = "BR_SPINLOCK_INIT_VALUE"
+value = "{ BR_SYNC_MAGIC_SPIN, 0u }"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYNC_MAGIC_COND"
+value = "0x434F4E44u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYNC_MAGIC_MUTEX"
+value = "0x4D555458u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYNC_MAGIC_SEM"
+value = "0x53454D41u"
+[[export.entries]]
+kind = "macro"
+name = "BR_SYNC_MAGIC_SPIN"
+value = "0x5350494Eu"
+
+# ---------------------------------------------------------------- unit `work`: <br/core/br_work.h>
+#
+# One header = one unit (ADR-0038 §2). Freezing/versioning happens per header, so a change to
+# br_log.h cannot move br_mm.h's `compat_gen`. Entries are the header's whole public surface:
+# functions with their normalised signature, the types it publishes, and its macros.
+[[export]]
+name         = "work"
+api_iface    = "native"
+form         = "api"
+version      = "0.1.0.0"
+compat_gen   = 0
+freeze_state = "unfrozen"
+status       = "experimental"
+
+[[export.entries]]
+kind = "type"
+name = "br_work_fn_t"
+[[export.entries]]
+kind = "type"
+name = "br_work_stat_t"
+[[export.entries]]
+kind = "func"
+name = "br_work_drain"
+sig = "br_u32 (br_u32)"
+[[export.entries]]
+kind = "func"
+name = "br_work_in_bh"
+sig = "br_bool (void)"
+[[export.entries]]
+kind = "func"
+name = "br_work_stats_get"
+sig = "void (br_work_stat_t *)"
+[[export.entries]]
+kind = "func"
+name = "br_work_submit"
+sig = "int (br_work_fn_t,void *)"
+[[export.entries]]
+kind = "macro"
+name = "BR_WORKQ_DEPTH"
+value = "16u"
+[[export.entries]]
+kind = "macro"
+name = "BR_WORK_BH_BUDGET"
+value = "4u"
+
+# No `[selftest]` block on purpose: this brick has no suite *entry*. Its three suites
+# (`br_sched_selftest` / `br_sync_selftest` / `br_work_selftest`) are compiled through
+# `[build].selftest_sources` and called by core's aggregator, so the image keeps **one** selftest
+# driver (ADR-0010) and no suite runs twice.
+
+[build]
+sources        = ["src/*.c", "src/*.S"]
+selftest_sources = ["selftest/*.c"]
+includes       = ["include"]

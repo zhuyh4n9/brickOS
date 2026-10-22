@@ -292,7 +292,9 @@ pub fn cmd_bricks(req: &Request) -> Response {
         })
         .unwrap_or_default();
 
-    let groups = ["app", "platform", "core", "interface", "ability"];
+    // Every `plugin_type`, in layer order (ADR-0039 added `hal`); a type missing here would be
+    // silently absent from the totals line.
+    let groups = ["app", "platform", "core", "hal", "interface", "ability"];
     let mut rows: Vec<(String, Value)> = Vec::new();
     for name in &c.selected {
         let Some(p) = tree.by_name(name) else { continue };

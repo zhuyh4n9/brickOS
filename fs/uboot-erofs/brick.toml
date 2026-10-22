@@ -18,12 +18,12 @@ used_kib = 16
 notes    = "超级块/映射/解压的静态缓冲(4 KiB 块缓冲 + LZ4 输出缓冲); 运行期 inode 与目录流走 core 堆"
 
 [[dep]]
-name  = "framework/vfs-core"
+name  = "hal/vfs-core"
 range = ">=0.1.0"
 kind  = "init"
 
 [[dep]]
-name  = "framework/bdev-core"
+name  = "hal/bdev-core"
 range = ">=0.1.0"
 kind  = "init"
 

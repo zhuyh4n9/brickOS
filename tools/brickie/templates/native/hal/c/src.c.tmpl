@@ -1,0 +1,27 @@
+/* {{name}} — implementation skeleton
+ *
+ * Human-written file: generated once by `brickie new`, then maintained by hand (brickie never overwrites).
+ * **The descriptor instance is not here** — it lives in the generated build/gen/{{name}}/plugin_desc.c (§8.4).
+ *
+ * A HAL brick is infrastructure: it provides mechanisms (an ops table, an allocator, an object
+ * model) that `ability` bricks select. It never implements a concrete policy or a device.
+ */
+#include "{{short}}/{{short}}.h"
+
+/* EARLY phase: no heap / no threads / interrupts off (`1-01` §6.2) */
+int {{symbol_prefix}}early_init(void)
+{
+    return 0;
+}
+
+/* CORE / LATE phase: heap available, scheduler locked, interrupts still off */
+int {{symbol_prefix}}init(void)
+{
+    return 0;
+}
+
+/* After global interrupt enable: interrupts available, threads can be created */
+int {{symbol_prefix}}start(void)
+{
+    return 0;
+}

@@ -18,8 +18,8 @@
 
 #include <sys/types.h>
 #include <time.h>
-#include <br/core/br_sched.h>
-#include <br/core/br_sync.h>
+#include <br/hal/br_sched.h>
+#include <br/hal/br_sync.h>
 #include <br/core/br_time.h>
 
 /* ---- thread ---- */

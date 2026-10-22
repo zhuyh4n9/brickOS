@@ -6,10 +6,10 @@
  * Coverage: MM-ACTIVE/IDENT/POOLS/REGION/RO/NXDESC/DEVBLK/UNMAP, TC-MEM-001..007, TC-MM-001..003.
  */
 #include <br/core/br_error.h>
-#include <br/core/br_fault.h>
+#include <br/hal/br_fault.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_mm.h>
+#include <br/hal/br_mem.h>
+#include <br/hal/br_mm.h>
 
 #include <br/platform/br_mmu.h>
 #include <br/platform/br_plat.h>

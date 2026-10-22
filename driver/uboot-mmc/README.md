@@ -10,7 +10,7 @@
 QEMU virt ── PCIe(GPEX) ── sdhci-pci(1b36:0007) ── emmc
                                    │ BAR0(寄存器窗口) + INTx virq
                                    ▼
-        framework/pci-core ──枚举/BAR 分配/INTx swizzle──► glue 的 br_pci_dev_at() 遍历
+        hal/pci-core ──枚举/BAR 分配/INTx swizzle──► glue 的 br_pci_dev_at() 遍历
                                    ▼
         third_party/uboot-imx/drivers/mmc/sdhci.c        ★ 上游原件
              寄存器/命令/数据(ADMA2 或 PIO)/时钟/复位    ◄── glue 的 ISR + bh 唤醒
@@ -24,7 +24,7 @@ QEMU virt ── PCIe(GPEX) ── sdhci-pci(1b36:0007) ── emmc
                                    ▼
         glue/emmc_bdev.c   实现 br_bdev_ops → br_bdev_register("emmc0")
                                    ▼
-        framework/bdev-core → dev-core → /dev/emmc0(看得见、打不开: raw 面属 v2)
+        hal/bdev-core → dev-core → /dev/emmc0(看得见、打不开: raw 面属 v2)
 ```
 
 **三层分目录**:
@@ -106,9 +106,9 @@ QEMU virt ── PCIe(GPEX) ── sdhci-pci(1b36:0007) ── emmc
 
 | 边 | kind | 理由 |
 |---|---|---|
-| `framework/bdev-core` | init | 实现并注册 `br_bdev_ops` |
-| `framework/pci-core` | init | 取 sdhci-pci 的 BAR0 与 INTx virq |
-| `framework/dev-core` / `framework/vfs-core` | type | ioctl 编码宏 / `br_dev.h` 的类型引用 |
+| `hal/bdev-core` | init | 实现并注册 `br_bdev_ops` |
+| `hal/pci-core` | init | 取 sdhci-pci 的 BAR0 与 INTx virq |
+| `hal/dev-core` / `hal/vfs-core` | type | ioctl 编码宏 / `br_dev.h` 的类型引用 |
 
 ```
 sources = ["../../third_party/uboot-imx/drivers/mmc/{mmc,mmc_write,mmc_legacy,sdhci,sdhci-adma}.c",

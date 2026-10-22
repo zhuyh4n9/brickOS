@@ -6,8 +6,8 @@
  * Region table constraints: base/size 4 KiB aligned and page-granular; no overlap.
  */
 #include <br/core/br_error.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_mm.h>
+#include <br/hal/br_mem.h>
+#include <br/hal/br_mm.h>
 
 #include <br/platform/br_mmu.h>
 #include <br/platform/br_plat.h>

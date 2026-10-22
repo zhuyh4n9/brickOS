@@ -166,7 +166,7 @@
      "items": {
       "type": "string"
      },
-     "description": "Selftest sources of the core plugin (ADR-0010), appended to the core plugin's unit; not compiled at all when selftest is off. Product-level because the selftest switch is product policy."
+     "description": "Default selftest sources for the **core** plugin (ADR-0010), relative to the repo root: pre-ADR-0039 home of the core suite. A plugin's own suite now lives in its `[build].selftest_sources` (plugin-relative); this product-level key remains the core default for compatibility."
     }
    }
   },

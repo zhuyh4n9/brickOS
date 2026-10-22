@@ -1235,6 +1235,165 @@ run_json "$REPO_ROOT" check --src
 eq "V-22⑦ brickOS tree: src scope exit code 0" "0" "$RC"
 eqj "V-22⑦ brickOS tree: src scope errors=0" "$JQ_RESP" "data.summary.errors" "0"
 
+# ---- V-23 HAL layer (ADR-0039): `hal` is a peer of `ability`, `ability` selects it
+section "V-23 hal layer (BRV-TAX-0025 + direction table)"
+mk_layers() { # mk_layers <work>: core + platform + one ability + one hal brick
+    local w="$1"
+    mkdir -p "$w"/{core/c_core,platform/soc,service/impl,hal/iface}/src
+    cat >"$w/core/c_core/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "core/c_core"
+plugin_type = "core"
+api_type = "native"
+lang = "c"
+phase = "early"
+version = "0.1.0.0"
+[build]
+sources = ["src/*.c"]
+TOML
+    printf 'int core_probe(void);\nint core_probe(void){return 0;}\n' >"$w/core/c_core/src/a.c"
+    cat >"$w/platform/soc/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "platform/soc"
+plugin_type = "platform"
+api_type = "native"
+lang = "c"
+phase = "core"
+version = "0.1.0.0"
+[[dep]]
+name = "core/c_core"
+range = ">=0.1.0"
+kind = "runtime"
+[[dep]]
+name = "hal/iface"
+range = ">=0.1.0"
+kind = "runtime"
+[build]
+sources = ["src/*.c"]
+TOML
+    printf 'int plat_probe(void);\nint plat_probe(void){return 0;}\n' >"$w/platform/soc/src/a.c"
+    cat >"$w/hal/iface/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "hal/iface"
+plugin_type = "hal"
+api_type = "native"
+lang = "c"
+phase = "early"
+version = "0.1.0.0"
+[[dep]]
+name = "core/c_core"
+range = ">=0.1.0"
+kind = "runtime"
+[build]
+sources = ["src/*.c"]
+TOML
+    printf 'int hal_probe(void);\nint hal_probe(void){return 0;}\n' >"$w/hal/iface/src/a.c"
+    cat >"$w/service/impl/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "service/impl"
+plugin_type = "ability"
+api_type = "native"
+subkind = "service"
+lang = "c"
+phase = "late"
+version = "0.1.0.0"
+[[dep]]
+name = "core/c_core"
+range = ">=0.1.0"
+kind = "runtime"
+[[dep]]
+name = "hal/iface"
+range = ">=0.1.0"
+kind = "runtime"
+[build]
+sources = ["src/*.c"]
+TOML
+    printf 'int impl_probe(void);\nint impl_probe(void){return 0;}\n' >"$w/service/impl/src/a.c"
+    cat >"$w/product.toml" <<'TOML'
+schema = 1
+[product]
+name = "t"
+version = "0.1.0.0"
+stage = "dev"
+app = { brick = "", requires = {} }
+platform = { brick = "platform/soc", requires = {} }
+core = { brick = "core/c_core", requires = {} }
+[[product.ability]]
+a = { brick = "service/impl", requires = {} }
+TOML
+}
+
+# ① the happy path: platform -> hal and ability -> hal are both legal
+W="$(new_work)"; mk_layers "$W"
+run_json "$W" check
+eq "V-23① platform→hal and ability→hal ⇒ exit code 0" "0" "$RC"
+eqj "V-23① summary errors=0" "$JQ_RESP" "data.summary.errors" "0"
+
+# ② `hal -> ability` is forbidden (the infrastructure must not depend on an implementation)
+W="$(new_work)"; mk_layers "$W"
+"$PY" - "$W/hal/iface/brick.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace("[build]",
+    '[[dep]]\nname = "service/impl"\nrange = ">=0.1.0"\nkind = "runtime"\n\n[build]'))
+PYX
+run_json "$W" check --deps
+eq "V-23② hal→ability ⇒ exit code 1" "1" "$RC"
+contains "V-23② message names the hal row" 'plugin_type = hal' "$(cat "$ERR")"
+
+# ③ namespace and plugin_type must agree (BRV-TAX-0025): `hal/` cannot be an ability
+W="$(new_work)"; mk_layers "$W"
+"$PY" - "$W/hal/iface/brick.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('plugin_type = "hal"', 'plugin_type = "ability"')
+                              .replace('phase = "early"', 'subkind = "service"\nphase = "late"'))
+PYX
+run_json "$W" check
+eq "V-23③ hal/ declared as ability ⇒ exit code 1" "1" "$RC"
+grep_at_least "V-23③ code is BRV-TAX-0025" 'BRV-TAX-0025' "$ERR"
+# …and the reverse: a `service/` name declaring plugin_type = "hal"
+W="$(new_work)"; mk_layers "$W"
+"$PY" - "$W/service/impl/brick.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('plugin_type = "ability"', 'plugin_type = "hal"')
+                              .replace('subkind = "service"\n', ''))
+PYX
+run_json "$W" check
+# A shape error outranks a red verdict (BRV-D9: exit 2 > 1): the phase/subkind combination is
+# shape-invalid for the new type, so the aggregate exit code is 2 even though BRV-TAX-0025 is also
+# reported (the grep below proves the semantic code is there, not just the shape one).
+eq "V-23③ service/ declared as hal ⇒ exit code 2 (shape outranks red)" "2" "$RC"
+grep_at_least "V-23③ code is BRV-TAX-0025 (reverse)" 'BRV-TAX-0025' "$ERR"
+
+# ④ the `framework` subkind is retired: it is a shape error now
+W="$(new_work)"; mk_layers "$W"
+"$PY" - "$W/service/impl/brick.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('subkind = "service"', 'subkind = "framework"'))
+PYX
+run_json "$W" check
+eq "V-23④ subkind=framework ⇒ exit code 2 (shape)" "2" "$RC"
+contains "V-23④ message lists the legal subkinds" "scheduler', 'io', 'fs', 'service'" "$(cat "$ERR")"
+grep_none "V-23④ 'framework' is no longer in the legal subkind list" "'scheduler', 'framework'" "$ERR"
+
+# ⑤ the real tree: the HAL layer exists and every brick declares the type its namespace implies
+run_json "$REPO_ROOT" show bricks
+eq "V-23⑤ brickOS closure exit code 0" "0" "$RC"
+EQ_HAL="$(jqget "$JQ_RESP" 'data.totals.by_type.hal')"
+eq "V-23⑤ the closure has HAL bricks" "9" "$EQ_HAL"
+EQ_CORE_UNITS="$(grep -c '^\[\[export\]\]' "$REPO_ROOT/core/c_core/brick.toml")"
+eq "V-23⑤ core keeps 11 units after the split" "11" "$EQ_CORE_UNITS"
+eq "V-23⑤ hal/int exports the interrupt units" "4" "$(grep -c '^\[\[export\]\]' "$REPO_ROOT/hal/int/brick.toml")"
+eq "V-23⑤ hal/mm exports the memory units" "2" "$(grep -c '^\[\[export\]\]' "$REPO_ROOT/hal/mm/brick.toml")"
+eq "V-23⑤ hal/sched exports the scheduling units" "3" "$(grep -c '^\[\[export\]\]' "$REPO_ROOT/hal/sched/brick.toml")"
+
 # ---- N-1 negative acceptance: help surface
 section "N-1 no undelivered §5.4 command appears in --help"
 help_commands() { # <help output file> ⇒ comma-separated subcommand names (sorted, deduped)

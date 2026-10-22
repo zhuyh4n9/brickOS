@@ -175,6 +175,7 @@ Diagnostics the delivered paths can emit (all codes taken from the design BRV-D8
 | `BRV-TAX-0013` | warning | plugin name does not match the recommended form `<namespace>/<short>` (§8.3; new plugins only) |
 | `BRV-TAX-0014` | info | selected `api_type` template not delivered in v0.1 (`runtime_adapter` / `third_party`) |
 | `BRV-TAX-0015` | error | `--subkind` conflicts with the namespace-derived value (§8.4) |
+| `BRV-TAX-0025` | error | namespace and `plugin_type` disagree (`hal/` ⇒ `hal`, …; ADR-0039) |
 | `BRV-GEN-0002` | error | generation target already exists and is not an artifact directory, or the target is a **human-written file** (§8.4) |
 | `BRV-MF-0001` | error | declaration-surface required field missing / field shape does not match schema (shape gate, exit code 2) |
 | `BRV-BLD-0001..0014` | error (the all-green criterion is a **code-less info**) | Build family: missing `[build]` / empty sources / missing `[build.target]` / ambiguous target / tool missing (exit code 2) / unit missing `[build]` / literal source does not exist / unknown gate name / gate red / `[build]` shape / step failure / regex beyond subset / artifact belongs to a non-closure plugin (info) / artifact is a **stale leftover** (info, ghost plugin). See contract §3 for each |
@@ -203,7 +204,7 @@ Diagnostics the delivered paths can emit (all codes taken from the design BRV-D8
 
 - **Decisions belong only to L0/L1 (`rust/`), rendering only to L2 (`cxx/`), orchestration only to L5 (`python/`).** Do not add business rules in Python, and do not add conditional decisions in the C++ renderer; the "glue-layer purity check" and reverse acceptance cases enforce this.
 - **Never hand-edit artifacts.** After changing `brick.toml`, rebuild (`brickie gen`); artifacts follow the same discipline as goldens.
-- **Templates are data.** To differentiate the five skeleton kinds (`app`/`interface`/`ability`/`platform`/`core`), change `templates/`, do not add conditional syntax to the renderer — the template language is replaced by "directories by `api_type`/`plugin_type`/`lang`".
+- **Templates are data.** To differentiate the six skeleton kinds (`app`/`interface`/`ability`/`hal`/`platform`/`core`), change `templates/`, do not add conditional syntax to the renderer — the template language is replaced by "directories by `api_type`/`plugin_type`/`lang`".
 - **After changing `python/**`, `templates/**`, `schema/**` or a native tool, remember to republish the seed.** They are all embedded into the entry ELF by `freeze.py` (`PAYLOAD_ROOTS = ("python","templates","schema")`), so `make prebuilt` is not just "recompiling C++" — if the payload changes, `brickie` changes; the "seed byte-for-byte identical" checks in `make prebuilt-check` and the end-to-end cases will catch an omission.
 - **The launcher does not touch business logic.** `cxx/launcher.cpp` only does "locate/unpack/set up environment/forward"; not one line of Python semantics may be added; the code in the payload is still the same `python/brickie/`.
 - **After a change first run `make selftest && make test`** (to verify together with the entry ELF, then run `make prebuilt`).

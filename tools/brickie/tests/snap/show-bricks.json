@@ -113,6 +113,7 @@
         "ability": 2,
         "app": 1,
         "core": 1,
+        "hal": 0,
         "interface": 1,
         "platform": 1
       },

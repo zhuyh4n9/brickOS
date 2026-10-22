@@ -21,8 +21,8 @@
 
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_mm.h>
+#include <br/hal/br_mem.h>
+#include <br/hal/br_mm.h>
 
 /* Helpers: libc-free fixed-size string append, plus region attribute decode. Attributes render as
  * "flag string + kind", e.g. `RO|CACHED|kind=heap`; if no attribute bit is set they render as `RW`

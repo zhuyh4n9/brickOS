@@ -9,7 +9,7 @@
 #include <br/core/br_svc.h>
 #include <br/core/br_types.h>
 
-#include "../src/svc/svc_internal.h"
+#include "../src/plugin/svc_internal.h"
 
 int br_service_selftest(void);
 

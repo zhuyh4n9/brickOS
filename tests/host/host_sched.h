@@ -6,7 +6,7 @@
 #ifndef BR_TESTS_HOST_SCHED_H
 #define BR_TESTS_HOST_SCHED_H
 
-#include <br/core/br_sched.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 

@@ -1,7 +1,7 @@
 /*
  * PCIe platform facts for QEMU virt (aarch64), exported by the platform plugin.
  * Board-level facts (ECAM base, MMIO window, INTx start line) stay here; generic PCI machinery
- * (ECAM access/enumeration/BAR allocation/device table) is in framework/pci-core.
+ * (ECAM access/enumeration/BAR allocation/device table) is in hal/pci-core.
  * highmem=off is a prerequisite: with default highmem ECAM sits above 4 GiB, which the two-segment
  * MMU cannot express; highmem=off puts it at 0x3f000000, inside the low 1 GiB Device background.
  */

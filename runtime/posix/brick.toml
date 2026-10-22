@@ -34,12 +34,12 @@ br_bool      = "int"
 br_uintptr_t = "uintptr_t"
 
 [[dep]]
-name  = "framework/file-table"
+name  = "hal/file-table"
 range = ">=0.1.0"
 kind  = "init"
 
 [[dep]]
-name  = "framework/vfs-core"
+name  = "hal/vfs-core"
 range = ">=0.1.0"
 kind  = "init"
 

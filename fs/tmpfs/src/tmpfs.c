@@ -14,7 +14,7 @@
  */
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
+#include <br/hal/br_mem.h>
 #include <br/core/br_types.h>
 #include <br/vfs/br_vfs.h>
 

@@ -142,6 +142,10 @@ pub struct MountDecl {
 pub struct BuildDecl {
     /// Globs relative to the plugin root (`src/*.c`; expansion rules in `build.rs`).
     pub sources: Vec<String>,
+    /// Selftest globs relative to the plugin root, compiled into **this plugin's** unit only while
+    /// the product selftest switch is on (ADR-0039; before it, only the core plugin had a suite and
+    /// the glob lived in `product.toml`).
+    pub selftest_sources: Vec<String>,
     /// Include directories relative to the plugin root.
     pub includes: Vec<String>,
     /// Extra `-D<name>` (optional; the product-level `[build]` has the same key).
@@ -1267,6 +1271,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
 
     // subkind derivation and conflicts (BRV-TAX-0015)
     validate_subkind(&mut p, d);
+    // namespace ⇒ plugin_type consistency (BRV-TAX-0025)
+    validate_namespace_type(&p, d);
 
     // Namespace ⇔ provenance: `driver/` holds **own** drivers (BRV-TAX-0021).
     validate_driver_namespace(&p, d);
@@ -1547,6 +1553,7 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     if let Some(bt) = opt_table(top, "build") {
         p.build = Some(BuildDecl {
             sources: str_array(bt, "sources", &p.name, &file, "build", d),
+            selftest_sources: str_array(bt, "selftest_sources", &p.name, &file, "build", d),
             includes: str_array(bt, "includes", &p.name, &file, "build", d),
             defines: str_array(bt, "defines", &p.name, &file, "build", d),
             cflags: str_array(bt, "cflags", &p.name, &file, "build", d),
@@ -1676,6 +1683,34 @@ fn resolves_under_third_party(dir: &str, rel: &str) -> bool {
     segs.first() == Some(&"third_party")
 }
 
+/// Namespace ↔ `plugin_type` consistency (`BRV-TAX-0025`, ADR-0039). The namespace is not
+/// decoration: `hal/` means "infrastructure brick", `ability/`-family means "concrete
+/// implementation". Without this check a `hal/` brick could declare `plugin_type = "ability"`
+/// and silently sit in the wrong layer (the direction table would then judge it as an ability).
+fn validate_namespace_type(p: &Plugin, d: &mut Diags) {
+    if p.name.is_empty() || p.plugin_type.is_empty() {
+        return;
+    }
+    let ns = rules::name_namespace(&p.name);
+    let Some(expected) = rules::namespace_plugin_type(ns) else {
+        return; // bare name / unknown namespace: BRV-TAX-0013 already warns about the form
+    };
+    if expected != p.plugin_type {
+        d.coded(
+            "BRV-TAX-0025",
+            Severity::Error,
+            &p.name,
+            &p.file,
+            "plugin.plugin_type",
+            format!(
+                "namespace `{ns}/` means `plugin_type = \"{expected}\"`, but `{}` declares `{}`",
+                p.name, p.plugin_type
+            ),
+            "§8.3 / ADR-0039: `hal/` = infrastructure (peer of ability), `ability/` family = concrete implementation; a brick must declare the type its namespace implies",
+        );
+    }
+}
+
 /// `subkind` derivation and conflicts (§8.4 / `BRV-TAX-0015`; error ⇒ exit code 1).
 fn validate_subkind(p: &mut Plugin, d: &mut Diags) {
     if p.plugin_type.is_empty() {
@@ -1725,7 +1760,7 @@ fn validate_subkind(p: &mut Plugin, d: &mut Diags) {
                     "ability plugin `{}` has no name-derivable `subkind`; it must be declared explicitly",
                     p.name
                 ),
-                format!("allowed values: {}; or use a derivable name (service/ sched/ framework/ io/ fs/)", rules::list_of(rules::SUBKINDS)),
+                format!("allowed values: {}; or use a derivable name (service/ sched/ hal/ io/ fs/)", rules::list_of(rules::SUBKINDS)),
             );
         }
         (None, Some(_)) => {}

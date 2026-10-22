@@ -93,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     new = _leaf(sub, "new", "generate a plugin skeleton (§8.4)",
                 "Generate a plugin skeleton: brick.toml + impl/headers/tests/author notes + descriptor artifacts.")
     new.add_argument("plugin_type", metavar="<plugin_type>",
-                     help="app | interface | ability | platform | core")
+                     help="app | interface | ability | hal | platform | core")
     new.add_argument("name", metavar="<name>", help="plugin name, recommended <namespace>/<short> (§8.3)")
     new.add_argument("--api", default="native", metavar="<api_type>",
                      help="native (default) | runtime_adapter | third_party")

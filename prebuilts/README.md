@@ -153,6 +153,8 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 2026-10-21 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0038(core 一等接口化 + 三条源码纪律)**: `core/c_core` 增 20 个接口单元(一头一单位)与 `[iface.typedefs]`、新增 `runtime/core` 规格皮肤(20 条 `reexport_of`)、`iface/min` 改 `form = "skin"`、22 份插件补 `[[dep]]`; `check` 增 `src` 域(`BRV-SRC-0001/0002`)、`BRV-DEP-0012` 改为直接依赖授权、`kind = "var"` 拒绝; `build` 删 core 无条件 `-I`、新增 `ar`/`nm` 工具与 `archive`/`audit` 步骤(`symbol-audit` 保留 judge 名) ⇒ 入口 ELF 负载与 `brickie-core` 两件重发(`brickie-gen` 逐字节未变)并同一次刷新 §5.1。 |
 
+| 2026-10-22 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0039(`hal` 一等类型 + core 拆分)**: `plugin_type` 增 `hal`(与 ability 平级, `framework` subkind 退役), 新增 `BRV-TAX-0025`(命名空间↔类型一致); `framework/` → `hal/`; core 拆出 `hal/{int,mm,sched}`(9 个单元随机制搬走, `<br/core/*.h>` → `<br/hal/*.h>`); IRQ 出口改钩子表 `br_irq_hooks_t`; `[build].selftest_sources` 支持按插件声明; `templates/native/hal/c/` 骨架 ⇒ 入口 ELF 负载与 `brickie-core` 两件重发(`brickie-gen` 逐字节未变)并同一次刷新 §5.1。 |
+
 ### 5.1 当前种子指纹(实测)
 
 体积与 sha256 取自工作区里**正在库中的**这一份种子(`sha256sum prebuilts/seed/brickie/*/*/bin/*`;
@@ -161,8 +163,8 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 文件(`prebuilts/seed/brickie/x86-64/linux/bin/`) | 体积 | sha256 |
 |---|---|---|
-| `brickie` | 3,891,336 B(~3.71 MiB) | `1395793870cb2bf8afc9bc057f743a4598174c7bef57aa48e9c558087f1f2546` |
-| `brickie-core` | 3,429,464 B(~3.27 MiB) | `4bb9c32b7ed8f536dee267a7f73435be4c43a7d3960e671a53b96a3e626aab74` |
+| `brickie` | 3,903,624 B(~3.72 MiB) | `e65d62eb831b3280782805792d0531cce62d4a13d6913224179941142278a236` |
+| `brickie-core` | 3,432,464 B(~3.27 MiB) | `ce3deb1df792cf67d0ffaff2925b19eaa4e91ce609e1d3dfc18ae15845d87785` |
 | `brickie-gen` | 167,384 B(~163 KiB) | `a7a433b4b88ccc0d5f2152bbeed090e818c4f0e6adfd98ef0d28e49e9469e673` |
 
 > 这一份由 **rustc 1.99.0**(工作区自带的 `.toolchain`; `make core` 自动采用)编出 ——

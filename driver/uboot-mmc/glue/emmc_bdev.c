@@ -13,13 +13,13 @@
  * IRQ channel (no global singleton).
  */
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>
+#include <br/hal/br_irq.h>
 #include <br/core/br_log.h>
-#include <br/core/br_sched.h>
-#include <br/core/br_sync.h>
+#include <br/hal/br_sched.h>
+#include <br/hal/br_sync.h>
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
-#include <br/core/br_work.h>
+#include <br/hal/br_work.h>
 #include <br/dev/br_bdev.h>
 #include <br/dev/br_dev.h>
 #include <br/pci/br_pci.h>

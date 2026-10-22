@@ -9,8 +9,8 @@
 #define BR_PLATFORM_BR_GICV3_H
 
 #include <br/core/br_types.h>
-#include <br/core/br_irq.h>
-#include <br/core/br_pic.h>
+#include <br/hal/br_irq.h>
+#include <br/hal/br_pic.h>
 
 /* GICv3 INTID boundaries (architectural, board-independent); 1020-1023 are special. */
 #define BR_GICV3_INTID_SGI_MAX   15u

@@ -15,13 +15,9 @@ int br_plugin_selftest(void);
 /* Service registry (publish / lookup / error codes). */
 int br_service_selftest(void);
 
-/* Scheduling framework + the chosen scheduler (real threads: create/yield/join/sleep). */
-int br_sched_selftest(void);
-
-/* Sync primitives + time (the wait surface of sync.c / sched_core.c). */
-int br_sync_selftest(void);
-
-/* Bottom half / workqueue (ADR-0011: bounded / FIFO / non-reentrant / bh bans). */
-int br_work_selftest(void);
+/* The scheduling framework's suites moved to `hal/sched` with the framework itself (ADR-0039):
+ * `br_sched_selftest` / `br_sync_selftest` / `br_work_selftest` are declared in
+ * `<br/hal/selftest.h>` and compiled into that brick's unit. The aggregator below calls them, so
+ * the core plugin declares a dependency on `hal/sched` (it already boots it). */
 
 #endif /* BR_CORE_SELFTEST_INTERNAL_H */

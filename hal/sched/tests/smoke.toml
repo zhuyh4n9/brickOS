@@ -1,0 +1,21 @@
+# hal/sched — 用例声明面(人写; v0.2 不消费)
+#
+# 判据是**行为**的, 已在门禁里: 宿主 `sched-test`/`rr-test`/`work-test`(真线程, ucontext 切换)
+# 与 QEMU `sched-test`; 套件本体在本砖 `selftest/`, 由 core 的聚合器驱动。
+schema = 1
+
+[[case]]
+id       = "TC-HAL-SCHED-001"
+pre      = "sched/rr 或 sched/coop 已 br_sched_register; 框架已 br_sched_run"
+steps    = ["建线程 A/B", "A yield / B 跑 / join 取退出码", "tick 到期唤醒睡眠线程"]
+expect   = "就绪队列 FIFO; 退出码正确; 睡眠不早醒; 抢占只在 tick 边界发生(策略侧判据)"
+sched    = ["coop", "preempt"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-HAL-SCHED-002"
+pre      = "同上; 工作队列 16 项"
+steps    = ["ISR 里 submit 到满", "再 submit 一次", "在 bh 里调阻塞原语"]
+expect   = "-EAGAIN(不静默丢弃); bh 里阻塞被拒(-EPERM)并留 trace; drain 不重入"
+sched    = ["preempt"]
+platform = ["qemu-aarch64"]

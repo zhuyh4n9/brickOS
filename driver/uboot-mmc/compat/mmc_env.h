@@ -15,10 +15,10 @@
 
 #include <br/core/br_error.h>   /* errno names and values (ADR-0027: names = POSIX originals) */
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
-#include <br/core/br_mm.h>
-#include <br/core/br_sched.h>
-#include <br/core/br_sync.h>
+#include <br/hal/br_mem.h>
+#include <br/hal/br_mm.h>
+#include <br/hal/br_sched.h>
+#include <br/hal/br_sync.h>
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 

@@ -1,5 +1,5 @@
 # runtime/posix
-**POSIX 运行时**(设计 D18 的 `svc-posix`;本树的插件名是 `runtime/posix`): `open/read/write/stat/opendir/symlink/pthread/sem/stdio…` 的一面 POSIX 名字, 下面是 core + `framework/{vfs-core, file-table}`。
+**POSIX 运行时**(设计 D18 的 `svc-posix`;本树的插件名是 `runtime/posix`): `open/read/write/stat/opendir/symlink/pthread/sem/stdio…` 的一面 POSIX 名字, 下面是 core + `hal/{vfs-core, file-table}`。
 
 ## 它是什么, 不是什么
 | | |
@@ -7,7 +7,7 @@
 | **是** | 一层**翻译**: ① 零转换委托 ② 形状转换 ③ 本服务自己的状态(cwd / errno / FILE* / 线程记录 / 记录锁) |
 | **不是** | 第二个内核。它没有自己的文件系统、没有自己的线程、**没有自己的 fd 表** |
 
-fd 表项 = `br_file_t*`, 唯一主人在 **`framework/file-table`**。本件只 **消费** 它 —— 于是 "共享状态单一主人"这条规则可以被 grep 出来: `br_ft_alloc` 在全树只出现在本件源码里。
+fd 表项 = `br_file_t*`, 唯一主人在 **`hal/file-table`**。本件只 **消费** 它 —— 于是 "共享状态单一主人"这条规则可以被 grep 出来: `br_ft_alloc` 在全树只出现在本件源码里。
 
 ## 覆盖范围
 | 族 | 已实现 |

@@ -11,7 +11,7 @@
 #ifndef BR_DEBUG_BR_MEMLEAK_H
 #define BR_DEBUG_BR_MEMLEAK_H
 
-#include <br/core/br_mem.h>
+#include <br/hal/br_mem.h>
 #include <br/core/br_types.h>
 
 /* Max detail blocks listed per owner tag in the report (beyond that, only a count) */

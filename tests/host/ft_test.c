@@ -1,5 +1,5 @@
 /*
- * Host gate for the file table (framework/file-table), a pure algorithm: fd bounds, table full,
+ * Host gate for the file table (hal/file-table), a pure algorithm: fd bounds, table full,
  * dup replacement and last-reference paths all run here without QEMU. It compares every BR_E* with
  * the host <errno.h> macro of the same name, re-runs file_table_selftest() (TC-FT-001..011, same
  * source as the target leg), and adds host-only boundary cases. Criterion = exit code.
@@ -123,7 +123,7 @@ static const int s_host_errno[] = {
 
 
 #include <br/core/br_error.h>
-#include <br/core/br_irq.h>
+#include <br/hal/br_irq.h>
 #include <br/core/br_log.h>
 #include <br/core/br_types.h>
 #include <br/ft/br_ft.h>
@@ -131,7 +131,7 @@ static const int s_host_errno[] = {
 #include <stdarg.h>
 #include <stdio.h>
 
-/* In-image self-test suite (framework/file-table/src/ft_selftest.c); compiled in the same
+/* In-image self-test suite (hal/file-table/src/ft_selftest.c); compiled in the same
  * translation-unit set, so the host runs the same cases, not a rewritten copy. */
 int file_table_selftest(void);
 
@@ -287,7 +287,7 @@ static void host_only_cases(void)
 
 int main(void)
 {
-    printf("=== ft-test: framework/file-table (host) ===\n");
+    printf("=== ft-test: hal/file-table (host) ===\n");
 
     /* errno compared code by code with the kernel */
     BR_ERRNO_NAMES(BR_ERRNO_CMP);

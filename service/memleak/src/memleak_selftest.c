@@ -9,7 +9,7 @@
  * symbol_prefix; it is not this plugin's public API.
  */
 #include <br/core/br_log.h>
-#include <br/core/br_mem.h>
+#include <br/hal/br_mem.h>
 #include <br/core/br_types.h>
 #include <br/debug/br_memleak.h>
 

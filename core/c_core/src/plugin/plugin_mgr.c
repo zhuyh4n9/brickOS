@@ -12,11 +12,11 @@
  * br_plugin_phase_name() keeps the uppercase form.
  */
 #include <br/core/br_error.h>
-#include <br/core/br_fault.h>
-#include <br/core/br_irq.h>
+#include <br/hal/br_fault.h>
+#include <br/hal/br_irq.h>
 #include <br/core/br_log.h>
 #include <br/core/br_plugin.h>
-#include <br/core/br_sched.h>
+#include <br/hal/br_sched.h>
 #include <br/core/br_types.h>
 
 #include "plugin_mgr_internal.h"

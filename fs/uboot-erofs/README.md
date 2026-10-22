@@ -4,7 +4,7 @@
 
 ## 1. 它是什么
 
-把 u-boot(NXP 分支)的 **EROFS 只读压缩文件系统**接进 brickOS, 出口是 `framework/vfs-core` 的
+把 u-boot(NXP 分支)的 **EROFS 只读压缩文件系统**接进 brickOS, 出口是 `hal/vfs-core` 的
 `br_fs_ops` / `br_inode_ops` / `br_file_ops` 契约。上游 `.c` **原样参与编译, 没有副本**:
 [brick.toml](brick.toml) 的 `[build].sources` 直指 `third_party/uboot-imx/` 下的原件; 本件只提供
 `compat/`(上游依赖的**运行环境**)与 `glue/`(**块层与 VFS 出口**)。本目录**没有 `src/`**。
@@ -26,7 +26,7 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 driver/uboot-mmc 注册
         ▼
   glue/erofs_vfs.c §②  br_fs_ops.mount → 根 inode; lookup → 瞬态路径包装; read → erofs_pread
         ▼
-  framework/vfs-core  /assets/hello.txt 等路径对 APP 可见
+  hal/vfs-core  /assets/hello.txt 等路径对 APP 可见
 ```
 
 `compat/erofs_env.h` 是运行环境的**唯一实现**(类型/宏/日志/字符串/分配器接地);
@@ -113,8 +113,8 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 driver/uboot-mmc 注册
 
 | 边 | kind | 理由 |
 |---|---|---|
-| `framework/vfs-core` | init | 实现并注册 `br_fs_ops`/`br_inode_ops`/`br_file_ops` |
-| `framework/bdev-core` | init | `br_bdev_get("emmc3")` 取块设备 |
+| `hal/vfs-core` | init | 实现并注册 `br_fs_ops`/`br_inode_ops`/`br_file_ops` |
+| `hal/bdev-core` | init | `br_bdev_get("emmc3")` 取块设备 |
 | `driver/uboot-mmc` | init | 它注册 `emmc3`; 这条**init 边**保证拓扑序在本插件之前 |
 
 [brick.toml](brick.toml) 的编译面: `[build].sources` = vendor 的

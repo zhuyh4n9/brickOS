@@ -10,7 +10,7 @@ schema = 1
 [[case]]
 id       = "TC-RUNTIME-CORE-001"
 pre      = "product 闭包含任一消费者插件"
-steps    = ["读 runtime/core 的 [[export]]", "核对全部 form = \"skin\" 且 reexport_of 指向 core/c_core 的 20 个单元", "核对 entries/ hash 都不手写(面由 provider 派生)"]
+steps    = ["读 runtime/core 的 [[export]]", "核对全部 form = \"skin\" 且 reexport_of 指向 20 个单元(core/c_core 12 + hal/{int,mm,sched} 8, ADR-0039)", "核对 entries/ hash 都不手写(面由 provider 派生)"]
 expect   = "皮肤无条目 = 没有第二份真值; 单元 id `runtime/core#<unit>` 与 provider 单元一对一"
 sched    = ["coop", "preempt"]
 platform = ["qemu-aarch64"]
