@@ -179,13 +179,13 @@ fn cmd_model(req: &Request) -> Response {
         .filter(|p| only.as_deref().map(|n| n == p.name).unwrap_or(true))
         .map(|p| p.to_json())
         .collect();
-    let (cap_ram, cap_stack) = tree.platform_capacity();
+    let (cap_ram, cap_stack) = tree.runtime_capacity();
     let data = json!({
         "plugins": plugins,
         "count": plugins.len(),
         "product": tree.product.as_ref().map(|p| p.to_json()),
         "has_product": tree.has_product,
-        "platform_capacity": {"ram_kib": cap_ram, "stack_kib": cap_stack},
+        "runtime_capacity": {"ram_kib": cap_ram, "stack_kib": cap_stack},
     });
     Response::ok(tree.diags, data)
 }

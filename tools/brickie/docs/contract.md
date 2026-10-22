@@ -79,8 +79,8 @@ written per §9's "new defects with unassigned codes are registered in §9"; bac
 |---|---|---|
 | `BRV-BLD-0001` | error | `product.toml` missing, or it lacks `[build]` (building needs a product-level declaration) |
 | `BRV-BLD-0002` | error | `[build].sources` expands to empty (declared, yet matched no file) |
-| `BRV-BLD-0003` | error | No platform plugin declares `[build.target]` (no way to know arch / cross prefix / linker script) |
-| `BRV-BLD-0004` | error | Multiple platform plugins declare `[build.target]` (which one is the truth is unclear) |
+| `BRV-BLD-0003` | error | No runtime plugin declares `[build.target]` (no way to know arch / cross prefix / linker script) |
+| `BRV-BLD-0004` | error | Multiple runtime plugins declare `[build.target]` (which one is the truth is unclear) |
 | `BRV-BLD-0005` | error | Tool resolution failed (cross compiler / objcopy / objdump / size / qemu absent) — **environment error**, exit code 2 |
 | `BRV-BLD-0006` | error | A plugin in the closure has no `[build].sources` (it gets composed, yet does not say how to compile) |
 | `BRV-BLD-0007` | error | A **literal** path in `[build].sources` does not exist (a glob matching nothing is **not** an error, see 0002) |
@@ -130,12 +130,12 @@ Request `args` are optional defaults unless stated otherwise. `id` always means 
 | `version` | `{}` | `{version, protocol, languages:[{name,version}], deps:[]}` (the fingerprint of G-01 `--version --deps`) |
 | `model` | `{plugin?}` | `{plugins:[Plugin], count}` — normalized model |
 | `check` | `{profile:"dev"\|"release", scopes:["deps","iface","tax","priv","src"], plugin?}` | `{summary:{errors,warnings,infos,profile,closure:{plugins,ram_kib,stack_kib}}, scope_results}` |
-| `closure` | `{profile}` | `{plugins:[{name,version,compat_gen,api_type,plugin_type,phase,ram_kib,stack_kib,selected}], init_edges:[{from,to}], runtime_edges, type_edges, topo_order:[], totals:{ram_kib,stack_kib,platform_capacity:{ram_kib,stack_kib},budget:{ram_kib,stack_kib}}, profile, cycles:[]}` |
+| `closure` | `{profile}` | `{plugins:[{name,version,compat_gen,api_type,plugin_type,phase,ram_kib,stack_kib,selected}], init_edges:[{from,to}], runtime_edges, type_edges, topo_order:[], totals:{ram_kib,stack_kib,runtime_capacity:{ram_kib,stack_kib},budget:{ram_kib,stack_kib}}, profile, cycles:[]}` |
 | `dep-tree` | `{kind:"init"\|"runtime"\|"type"\|"all", plugin?}` | `{roots:[], nodes:{name:{deps:[{name,kind,range,phase}]}}, kind}` |
 | `dep-graph` | `{format:"dot"\|"mermaid"\|"json"}` | `{format, nodes:[], edges:[], text}` (for `json`, `text` = normalized JSON string) |
 | `dep-why` | `{from, to}` | `{found, path:[name], edges:[{from,to,kind}]}` |
 | `dep-index` | `{}` | `{dependents:{<plugin>:[{from,kind}]}}` + `files:[build/index/dependents.json]` |
-| `show-bricks` | `{profile}` | `{product:{name,version,stage,profile}, has_product, bricks:[{name,namespace,plugin_type,api_type,subkind,phase,version,ram_kib,stack_kib,selftest,origin:"root"\|"dep",root_kind,root_alias}], totals:{plugins,roots,ram_kib,stack_kib,budget,platform_capacity,has_platform,by_type}, seeds:[]}` — the closure as a reading aid; re-decides nothing (ADR-0036) |
+| `show-bricks` | `{profile}` | `{product:{name,version,stage,profile}, has_product, bricks:[{name,namespace,plugin_type,api_type,subkind,phase,version,ram_kib,stack_kib,selftest,origin:"root"\|"dep",root_kind,root_alias}], totals:{plugins,roots,ram_kib,stack_kib,budget,runtime_capacity,has_runtime,by_type}, seeds:[]}` — the closure as a reading aid; re-decides nothing (ADR-0036) |
 | `show-init-flow` | `{profile}` | `{product, steps:[{phase:"early"\|"core"\|"late"\|"app"\|"irq"\|"start"\|"selftest",plugin,plugin_type,subkind,hook,note}], counts:{<phase>:n}, order:[], order_basis, unsorted:null\|[name], selftest_on:bool}` — **the runtime boot chain** (ADR-0036). `order` is the runtime's `s_order`: section order + FIFO Kahn over `kind="init"` edges (a different tie-break from `closure.topo_order`); the `irq` step carries an empty `plugin` and follows **all** init (ADR-0037: the APP's init is the last init, in the `app` phase); `unsorted` is non-null only for an init cycle, which the runtime panics on |
 | `ver-show` | `{id}` | `{id, plugin, version, compat_gen, segments:{compat_gen,major,minor,revise}, freeze_state, status, source:"snapshot"\|"declaration", compat_gen_source:{kind,note?}, published:bool}` |
 | `iface-list` | `{}` | `{units:[{id,provider,unit,api_iface,form,version,compat_gen,freeze_state,status,published,hash}]}` |
@@ -189,10 +189,10 @@ Exit code 0 all green / 1 any failure; failure details go to stdout.
 ```json
 {
   "profile": "dev",            "backend": "direct",   "tag": "",
-  "target": {"owner": "platform/qemu-aarch64", "arch": "aarch64",
+  "target": {"owner": "runtime/qemu-aarch64", "arch": "aarch64",
              "cross": "aarch64-linux-gnu-",
              "arch_flags": ["-march=armv8-a", "…"],
-             "linker_script": "platform/qemu-aarch64/src/link.ld",
+             "linker_script": "runtime/qemu-aarch64/src/link.ld",
              "qemu": {"binary": "qemu-system-aarch64", "machine": "virt,gic-version=3",
                       "cpu": "cortex-a53", "memory": "128M", "extra": ["-nographic"]}},
   "outputs": {"obj_dir": "build/obj", "elf": "build/brick.elf",
@@ -231,8 +231,8 @@ Exit code 0 all green / 1 any failure; failure details go to stdout.
 > `steps[i].{argv,outputs,log,state_path,elf/bin/map,obj_dir}` **are relative to root** (the repository root). Whereas paths in the declaration surface `brick.toml [build].sources/includes` and
 > `[build.target].linker_script` are **relative to the plugin root** — core expands/joins them to be relative to root before
 > they appear in `data`. So "the assembly source in the plan" is
-> `platform/qemu-aarch64/src/start.S`, not `src/start.S`; the linker script is
-> `platform/qemu-aarch64/src/link.ld`. These are two different things; write criteria according to the **shape of `data`**.
+> `runtime/qemu-aarch64/src/start.S`, not `src/start.S`; the linker script is
+> `runtime/qemu-aarch64/src/link.ld`. These are two different things; write criteria according to the **shape of `data`**.
 
 **Fields of `data.tools[i]` and "tool resolution is in core" (ruling R-14)**:
 
@@ -283,7 +283,7 @@ Field shapes are described by `schema/*.schema.json` (BRV-D2: only expresses **s
 schema = 1
 [plugin]
 name        = "service/crypto"    # ^[a-z][a-z0-9]*(?:[-_/][a-z0-9]+)*$  globally unique
-plugin_type = "ability"           # app | interface | ability | hal | platform | core (ADR-0039)
+plugin_type = "ability"           # app | interface | ability | hal | runtime | core (ADR-0039/0040)
 api_type    = "native"            # native | runtime_adapter | third_party
 subkind     = "service"           # scheduler | io | fs | service (ability only; `framework` was removed by ADR-0039)
 lang        = "c"                 # c | cxx | rust
@@ -322,7 +322,7 @@ mode = "decl"
 u32 = "uint32_t"
 
 [[dep]]
-name  = "platform/qemu-aarch64"
+name  = "runtime/qemu-aarch64"
 range = ">=0.1.0"                  # init/runtime/type all **do not carry compat_gen** (F3)
 kind  = "init"                     # init | runtime | type
 phase = "early"                    # optional assertion (only kind=init)
@@ -366,7 +366,7 @@ sources  = ["src/*.c"]             # glob relative to the plugin root (`*` does 
 includes = ["include"]             # include directories relative to the plugin root
 defines  = ["BR_FOO=1"]            # optional: appends -D<name> (field added in this cut, ruling R-17)
 
-[build.target]                     # ★ only plugin_type = "platform" may declare this (exactly one per image, §8.3 ④)
+[build.target]                     # ★ only plugin_type = "runtime" may declare this (exactly one per image, §8.3 ④)
 arch          = "aarch64"          # target architecture name (for rendering and artifact naming)
 cross         = "aarch64-linux-gnu-"   # cross prefix (transitional form of WORKAROUND br-wa-toolchain-001)
 arch_flags    = ["-march=armv8-a", "-mgeneral-regs-only", "-mstrict-align"]  # flags determined by the target
@@ -391,10 +391,10 @@ schema = 1
 [product]
 name = "hsm"; version = "0.1.0.0"; stage = "dev"    # dev | release (profile default, overridden by CLI)
 # Every root is a record (ADR-0035): `brick` = plugin name, `requires` = that brick's own version
-# requirement (`{}` = none). app/platform/core are singletons; `[[product.ability]]` is the list
+# requirement (`{}` = none). app/runtime/core are singletons; `[[product.ability]]` is the list
 # (one `<alias> = { ... }` per plugin, the alias being a label only).
 app      = { brick = "app/hsm", requires = {} }
-platform = { brick = "platform/qemu-aarch64", requires = {} }
+runtime = { brick = "runtime/qemu-aarch64", requires = {} }
 core     = { brick = "core/c_core", requires = { version = ">=1.0.0" } }
 [[product.ability]]
 crypto = { brick = "service/crypto", requires = {} }
@@ -480,7 +480,7 @@ post = ["check-string", "check-headers"]   # short list run automatically after 
 ```
 
 > **Why `check-headers` deserves a gate**: a stray `*/` in a comment **closes the comment early**,
-> and the most common source of that mistake is path globs — `core/c_core/src/sched/*.c`, `platform/*/src/link.ld`,
+> and the most common source of that mistake is path globs — `core/c_core/src/base/*.c`, `runtime/*/src/link.ld`,
 > `core/c_core/src/sync/**` all contain `*/` (this repo has stepped on it three times). Such an error "compiles" as an illusion:
 > a header included by no `.c` file is never compiled at all, and the error only explodes when the first consumer appears ⇒ we must proactively run
 > `-fsyntax-only` on every header (alone / all together / double-include).
@@ -512,7 +512,7 @@ silently not matching. "forbid for three kinds of FAIL" must be written as three
 | R-3 | `ver bump <plugin>` (§7.7) vs the version carrier being the **unit snapshot** (§9.1.1 rule 2) | The argument accepts **a plugin name or `<provider>#<unit>`**; a plugin name requires exactly one `[[export]]`; writes the snapshot and reports "what should be changed in `brick.toml`" as info | The semantics of human-written vs publication record do not mix |
 | R-4 | The concrete shapes of §6.1 `value`/`ops` for `macro`/`var`/`enum`/`service` | `value` = string or string array; `ops` = string array | Both must enter the hash (rule 9) |
 | R-5 | The scheduler policy class `sched_kind` has no field, while §2 item 3 requires judging `COOP_ONLY` conflicts | Add optional `[plugin].sched_kind` (only `subkind=scheduler`); default inferred from the name (`sched-coop`/`sched-preempt`/`sched-tt`) | Otherwise that item cannot be enforced; gap registered |
-| R-6 | `platform provisioned amount` (§8.1 note) has no field | For a `plugin_type="platform"` plugin, its `[[res]]` is treated as **capacity** | No new field; gap registered |
+| R-6 | `provisioned amount` of the target runtime (§8.1 note) has no field | For a `plugin_type="runtime"` plugin, its `[[res]]` is treated as **capacity** | No new field; gap registered |
 | R-7 | Within the unfreeze window there is no baseline for "were frozen entries changed/deleted" | `unfreeze` writes a `baseline` (surface hash + entry table) into the snapshot; `refreeze` compares against it | Without a baseline that decision has no input (gap registered) |
 | R-8 | Semantics of `publish`'s `--set` (in `§6.5` only for `ver`?) | `iface-publish --set <4 segments>` overrides **the unit version to be written this time** (still subject to monotonicity) | — |
 | R-9 | Resource exclusivity conflicts / budget overruns / scheduling conflicts have no dedicated code | Use `BRV-MF-0001` (declaration-surface error; the message names **both conflicting parties / the delta**) | Code unassigned by BRV-D8; gap registered, code pending |
@@ -523,20 +523,22 @@ silently not matching. "forbid for three kinds of FAIL" must be written as three
 | R-14 | Tool candidate order (`gcc` → `gcc-16` → …) and "which compiler to use" — who decides | **Both the candidate order and resolution are in core** (`data.tools[i].candidates/resolved`); L5 only does the final executability check and does not re-select | The make / ninja backend files are **generated artifacts** and must **bake in** the resolution result — if L5 or the generated artifact each resolved once, "who is compiling" would have two answers |
 | R-15 | Incremental criteria: "content stamp of the input set" or "argv fingerprint + input mtime" | **argv fingerprint + input (size, mtime)**, two criteria (same family as make / ninja); an upstream needing rebuild ⇒ explicitly passes the rebuild downstream | `.d` dependency files are a **product of the build** (they exist only after the first compile) ⇒ stamping the "input set" would make header dependencies recompile one extra round forever (measured); the timestamp criterion has no such self-reference |
 | R-16 | Who owns the red/green criteria of gate logs (require / forbid / PASS tag) | **The criteria are in core** (the `judge` command judges by the regexes in `tests/gates.toml`), L5 only collects the log body and executes | "Red/green" can have only one source of truth; otherwise text output, `--json` and the CI exit code would each judge once |
-| R-17 | `brick.toml [build]` / `product.toml [build]` have only `sources`/`includes` in `§7.1`, which cannot express the full compilation facts | Add `[build].defines` (plugin level) and, for `product.toml [build]`, `gen_sources`/`selftest_sources`/`cflags`/`asflags`/`ldflags`/`obj_dir`/`[build.release].{cflags,asflags,ldflags}_extra` (`core_sources`/`core_includes` were retired by ADR-0031: the core is a plugin and declares its own sources), plus the whole platform `[build.target]`/`[build.target.qemu]` | "How to compile" must be writable in **one** declaration surface (otherwise we are back to Makefile literals); the shapes are added to `schema/*.schema.json` and §7.1/§7.2, pending back-feed into design §7.1/§7.2 |
-| R-18 | How product-level **semantic configuration** (first item = tick HZ) enters compilation | `product.toml [kernel].hz` (integer, default 200) is turned by `brickie build` into `-DBR_CFG_TICK_HZ=<hz>` and passed to **all** compilation units (core/plugins/generated); this define is separate from generic `cflags` and uses the `config_defines` channel | Do not write bare `-D` into `cflags`: a semantic key can be validated by `schema/product.schema.json` (`integer` + `minimum: 1`), and "how many timer interrupts per second" has only one source of truth (core's jiffies and the platform's reload period read the same macro; ADR-0017) |
-| R-19 | How declared dependencies become **compile-time facts** (previously `-I` was a global union, and undeclared cross-plugin `#include` silently compiled) | The include surface of each `build` unit = the selected core plugin's `[build].includes` + its own + the includes of every plugin in the **transitive closure of declared dependencies** (the core unit additionally gets platform headers; `build/gen` gets the headers of all selected plugins); plus a **declaration ↔ use** cross-check (scan source `#include`s, map to the provider, report if outside the declaration closure); the deps domain of `check` uses the same convention as `build` | Narrowing `-I` alone is not enough: the target toolchain's glibc headers would cover common names like `unistd.h` (not "header not found" but silently switching to the host libc declarations) ⇒ a criterion independent of the compiler search path is required; both places share `model::cross_plugin_includes()` to avoid divergence (ADR-0018) |
+| R-17 | `brick.toml [build]` / `product.toml [build]` have only `sources`/`includes` in `§7.1`, which cannot express the full compilation facts | Add `[build].defines` (plugin level) and, for `product.toml [build]`, `gen_sources`/`selftest_sources`/`cflags`/`asflags`/`ldflags`/`obj_dir`/`[build.release].{cflags,asflags,ldflags}_extra` (`core_sources`/`core_includes` were retired by ADR-0031: the core is a plugin and declares its own sources), plus the whole runtime `[build.target]`/`[build.target.qemu]` | "How to compile" must be writable in **one** declaration surface (otherwise we are back to Makefile literals); the shapes are added to `schema/*.schema.json` and §7.1/§7.2, pending back-feed into design §7.1/§7.2 |
+| R-18 | How product-level **semantic configuration** (first item = tick HZ) enters compilation | `product.toml [kernel].hz` (integer, default 200) is turned by `brickie build` into `-DBR_CFG_TICK_HZ=<hz>` and passed to **all** compilation units (core/plugins/generated); this define is separate from generic `cflags` and uses the `config_defines` channel | Do not write bare `-D` into `cflags`: a semantic key can be validated by `schema/product.schema.json` (`integer` + `minimum: 1`), and "how many timer interrupts per second" has only one source of truth (core's jiffies and the runtime plugin's reload period read the same macro; ADR-0017) |
+| R-19 | How declared dependencies become **compile-time facts** (previously `-I` was a global union, and undeclared cross-plugin `#include` silently compiled) | The include surface of each `build` unit = the selected core plugin's `[build].includes` + its own + the includes of every plugin in the **transitive closure of declared dependencies** (the core unit additionally gets the runtime plugin's headers; `build/gen` gets the headers of all selected plugins); plus a **declaration ↔ use** cross-check (scan source `#include`s, map to the provider, report if outside the declaration closure); the deps domain of `check` uses the same convention as `build` | Narrowing `-I` alone is not enough: the target toolchain's glibc headers would cover common names like `unistd.h` (not "header not found" but silently switching to the host libc declarations) ⇒ a criterion independent of the compiler search path is required; both places share `model::cross_plugin_includes()` to avoid divergence (ADR-0018) |
 
-| R-20 | What "core is a dependency" means: does using `<br/core/**>` need a declaration? | **Yes.** Since ADR-0038 core is a first-class interface provider (20 units, one per header: `core/c_core` 12 + `hal/{int,mm,sched}` 8 since ADR-0039) and the outward door is the skin `runtime/core`. Every consumer declares `[[dep]] runtime/core` (platform declares `core/c_core` directly: the direction table forbids a platform from depending on an ability). `brickie build` no longer prepends core's `-I` unconditionally, so a missing declaration fails at compile time | Without it core is "dark matter": its surface is the only one that never has to be declared, and a future split/re-implementation of core has no boundary to move behind |
+| R-20 | What "core is a dependency" means: does using `<br/core/**>` need a declaration? | **Yes.** Since ADR-0038 core is a first-class interface provider (20 units, one per header: `core/c_core` 12 + `hal/{int,mm,sched}` 8 since ADR-0039) and the outward door is the skin `runtime/core`. Every consumer declares `[[dep]] runtime/core` (the runtime plugin declares `core/c_core` directly: it is below `ability` in the direction table). `brickie build` no longer prepends core's `-I` unconditionally, so a missing declaration fails at compile time | Without it core is "dark matter": its surface is the only one that never has to be declared, and a future split/re-implementation of core has no boundary to move behind |
 | R-21 | Dependency authorization: declared **transitive** closure or **direct** set? | **Direct only**, plus the units a directly declared skin re-exports (transitively: `api → iface/min → runtime/core → core/c_core`). Text (`BRV-DEP-0012` on `#include`) and symbols (`.a` audit) use the same set. `-I` keeps the **transitive** closure (compile surface), so the declaration is the compile prerequisite of *using* it, not of *seeing* it | Using C through B is an implicit dependency on C; supersedes the authorization half of R-19 (its other half — the declaration↔use cross-check shared by check/build — stands) |
-| R-22 | The core plugin is platform-agnostic (`br/platform/**` contract) but the direction table forbids `core → platform` | The exception is explicit and one-sided: core may include `br/platform/**` and use the symbols declared there without naming a platform plugin; the platform side still declares `[[dep]] core/c_core`. Implemented identically in `check --deps`, `-I` surfaces and the symbol audit | The two call each other by design (`platform`'s entry is `bl br_core_main`, core reads `br_plat_ticks_*`); the cycle is broken by the two-step boot chain, not by the topological sort |
+| R-22 | The core plugin is runtime-agnostic (`br/runtime/**` contract) but the direction table forbids `core → runtime`... (superseded) | **Superseded by ADR-0040**: core *does* declare `[[dep]]` on the runtime plugin (it calls `br_plat_ticks_*` and the boot entry `br_core_main` comes from it), and the contract headers moved to `br/runtime/**`. The exception is now a normal declared edge | The old rule existed because `platform` could not be named in a declaration; after ADR-0040 the runtime is an ordinary provider and the edge is explicit |
 
-| R-23 | Is the infrastructure layer a `subkind` of `ability` or a `plugin_type` of its own? | **A `plugin_type` of its own (`hal`)**, peer of `ability` and below it: `ability` selects HAL, `platform` implements the HAL contracts it declares, and **`hal → ability` is forbidden**. `framework/` is renamed `hal/` and the `framework` subkind is retired (ADR-0039) | The direction table and the phase derivation key on `plugin_type`, never on `subkind`; leaving HAL as an ability subkind would force an "platform may depend on ability" hole and would give the infrastructure the implementation layer's lifecycle contract |
+| R-23 | Is the infrastructure layer a `subkind` of `ability` or a `plugin_type` of its own? | **A `plugin_type` of its own (`hal`)**, peer of `ability` and below it: `ability` selects HAL, the runtime plugin implements the HAL contracts it declares, and **`hal → ability` is forbidden**. `framework/` is renamed `hal/` and the `framework` subkind is retired (ADR-0039) | The direction table and the phase derivation key on `plugin_type`, never on `subkind`; leaving HAL as an ability subkind would force a "runtime may depend on ability" hole and would give the infrastructure the implementation layer's lifecycle contract |
 | R-24 | Where does a plugin's selftest source set live? | `[build].selftest_sources`, **per plugin** (plugin-relative), compiled into that plugin's unit only while the product switch is on. `product.toml [build].selftest_sources` remains as the **core** plugin's default (compatibility). The suite *entry* is called by core's aggregator, so the image keeps one selftest driver (ADR-0010) | ADR-0039 moved the scheduling suites into `hal/sched`; a product-level key cannot say "this brick's tests belong to this brick" once mechanisms are split across bricks |
+
+| R-25 | Layer naming: what is `runtime` and what is `provider`? | **ADR-0040**: `plugin_type = "runtime"` (was `platform`) names the target runtime — the SoC/board port that `br_core_main` enters through and that implements the HAL contracts. The namespace `runtime/` belongs to it. `provider/` is the namespace of **concrete implementations** (`ability` + `subkind = service`), absorbing the old `service/` and `runtime/posix`/`runtime/core`. The `service` *subkind* survives (`provider/` ⇒ `ability` + `service`) because it still drives phase derivation (LATE) | Two axes were fighting over one word: "where it runs" (platform) and "what it supplies" (service). Renaming the type frees `runtime`, and one provider namespace removes the `service/` vs `runtime/` distinction that carried no rule |
 
 > **Supplementary rulings on the Rust side**: implementing the solving/validation/interface engine forced a batch of finer conventions
 > (S-1…S-19: first publish = create the record without advancing segments, `closure` does not scan `requires_iface` while `check` does,
-> platform's `[[res]]` as capacity does not enter the consumer Σ, the criteria of `DEP-0011`, the value convention of R2,
+> the runtime plugin's `[[res]]` as capacity does not enter the consumer Σ, the criteria of `DEP-0011`, the value convention of R2,
 > the `app → third_party ability` exception, publish inside the window consuming the baseline to avoid a double bump, etc.),
 > and the build family has **S-B1…S-B6** (tool resolution in core / incremental criteria / mapping of the three backends to BR-D4 /
 > rejecting the regex subset rather than silently matching / ownership of gate criteria / ownership of `build/gen/**` artifacts).

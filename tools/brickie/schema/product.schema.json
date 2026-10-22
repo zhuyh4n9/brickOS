@@ -35,8 +35,9 @@
     "core": {
      "$ref": "#/definitions/selection"
     },
-    "platform": {
-     "$ref": "#/definitions/selection"
+    "runtime": {
+     "$ref": "#/definitions/selection",
+     "description": "The image's target runtime (the SoC/board port). Renamed from `platform` by ADR-0040."
     },
     "ability": {
      "description": "`[[product.ability]]`: one array element per block, each `<alias> = { brick = ..., requires = ... }`. The alias is a label only -- the plugin identity is always `brick`.",

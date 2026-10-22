@@ -3,7 +3,7 @@
  * -ffreestanding -fno-builtin disables builtin recognition, not GCC's lowering of whole-block
  * moves into mem* libcalls, so this file is a precondition for linking at all.
  * Core owns them because it needs memset in EARLY (heap bring-up, before the MMU is on) while
- * runtime/posix is a LATE service; the exported set is deliberately minimal.
+ * provider/posix is a LATE service; the exported set is deliberately minimal.
  * Pre-MMU memory is Device-nGnRnE, where unaligned wide access raises an Alignment fault: use
  * wide access only when the pointer is 8-byte aligned, byte by byte otherwise.
  */

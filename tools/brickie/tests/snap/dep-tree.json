@@ -24,7 +24,7 @@
         "deps": [
           {
             "kind": "runtime",
-            "name": "service/crypto",
+            "name": "provider/crypto",
             "phase": null,
             "range": "*"
           }
@@ -32,24 +32,7 @@
         "file": "iface/hsm-api/brick.toml",
         "phase": "late"
       },
-      "platform/qemu-aarch64": {
-        "deps": [],
-        "file": "platform/qemu-aarch64/brick.toml",
-        "phase": "core"
-      },
-      "sched/coop": {
-        "deps": [
-          {
-            "kind": "init",
-            "name": "platform/qemu-aarch64",
-            "phase": null,
-            "range": "*"
-          }
-        ],
-        "file": "sched/coop/brick.toml",
-        "phase": "core"
-      },
-      "service/crypto": {
+      "provider/crypto": {
         "deps": [
           {
             "kind": "init",
@@ -58,8 +41,25 @@
             "range": "*"
           }
         ],
-        "file": "service/crypto/brick.toml",
+        "file": "provider/crypto/brick.toml",
         "phase": "late"
+      },
+      "runtime/qemu-aarch64": {
+        "deps": [],
+        "file": "runtime/qemu-aarch64/brick.toml",
+        "phase": "core"
+      },
+      "sched/coop": {
+        "deps": [
+          {
+            "kind": "init",
+            "name": "runtime/qemu-aarch64",
+            "phase": null,
+            "range": "*"
+          }
+        ],
+        "file": "sched/coop/brick.toml",
+        "phase": "core"
       }
     },
     "roots": [

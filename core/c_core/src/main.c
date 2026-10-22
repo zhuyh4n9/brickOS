@@ -53,7 +53,7 @@ BR_NORETURN void br_core_main(void)
     core_init_platform_agnostic();
 
     /* 2: platform plugin init (early console/PIC and binding table/region table/page-table ops) */
-    br_plugin_manager_platform_init();
+    br_plugin_manager_runtime_init();
 
     /* 3: core modules depending on the platform implementation (memory + address map setup) */
     core_init_platform_dependent();

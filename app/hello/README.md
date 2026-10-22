@@ -29,7 +29,7 @@ APP 只用 POSIX 面(线程/同步/延时: `pthread_*` / `sem_*` / `usleep`), �
 |---|---|
 | `br_plat_timer_ticks()`(MainLoop 的 `irq_ticks=` 取值) | **core**: platform 的 timer ISR 每拍调 `br_clock_tick_notify()`, 计数由 core 持有, APP 经 `iface/min` 的 `br_clock_tick_count()` 读 |
 | `br_plat_name()` / `br_plat_isa()`(启动横幅) | **platform 自己**: `qemu_aarch64_start()` 打同格式的 `platform: …` 一行 |
-| `#include <unistd.h>` / `<pthread.h>` / `<stdio.h>`(POSIX) | **`iface/posix` 皮肤**: APP 只 `#include <iface/posix/posix.h>` 并声明 `[[dep]] iface/posix` —— 设计 D18 的**正解边**(`app → interface`); 皮肤零状态, 它再导出 `runtime/posix#posix` |
+| `#include <unistd.h>` / `<pthread.h>` / `<stdio.h>`(POSIX) | **`iface/posix` 皮肤**: APP 只 `#include <iface/posix/posix.h>` 并声明 `[[dep]] iface/posix` —— 设计 D18 的**正解边**(`app → interface`); 皮肤零状态, 它再导出 `provider/posix#posix` |
 | `#include <br/core/br_log.h>` / `<br/core/br_time.h>` / `<br/core/br_version.h>`(core native) | **`iface/min` 皮肤**: APP 只 `#include <iface/min/min.h>` 并声明 `[[dep]] iface/min`; 皮肤 `form = "api"` 直通 core 头 —— 于是 **APP 源码里不出现 `<br/core/...>`**, "APP 不依赖 iface 层以下"由 `brickie check`/`build` 判红 |
 
 ⇒ `product.toml [lint].allow_edges` **保持空表**: APP 的边都是方向表里的合法边, 不需要豁免 (原先那条 `app → platform` 的 M0 引导例外已删除)。声明与使用的对齐由 "包含面 = 声明依赖闭包"与"APP 直连 core 头 = 红"两条纪律在 `brickie check`/`brickie build` 两侧执法。

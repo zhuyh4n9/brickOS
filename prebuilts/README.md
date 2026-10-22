@@ -155,6 +155,8 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 2026-10-22 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0039(`hal` 一等类型 + core 拆分)**: `plugin_type` 增 `hal`(与 ability 平级, `framework` subkind 退役), 新增 `BRV-TAX-0025`(命名空间↔类型一致); `framework/` → `hal/`; core 拆出 `hal/{int,mm,sched}`(9 个单元随机制搬走, `<br/core/*.h>` → `<br/hal/*.h>`); IRQ 出口改钩子表 `br_irq_hooks_t`; `[build].selftest_sources` 支持按插件声明; `templates/native/hal/c/` 骨架 ⇒ 入口 ELF 负载与 `brickie-core` 两件重发(`brickie-gen` 逐字节未变)并同一次刷新 §5.1。 |
 
+| 2026-10-22 | 0.1.0 | `x86-64/linux` | 重发以落地 **ADR-0040(命名收敛)**: `plugin_type` `platform` → `runtime`(`BR_PLUGIN_TYPE_RUNTIME`、`br_plugin_manager_runtime_init()`、契约头 `br/runtime/**`、产品根键 `[product].runtime`、JSON `runtime_capacity`/`has_runtime`), 命名空间 `service/` 与 `runtime/` 合并为 `provider/`(`api/iface/**` 同步) ⇒ 入口 ELF 负载与 `brickie-core` 两件重发(`brickie-gen` 逐字节未变)并同一次刷新 §5.1。 |
+
 ### 5.1 当前种子指纹(实测)
 
 体积与 sha256 取自工作区里**正在库中的**这一份种子(`sha256sum prebuilts/seed/brickie/*/*/bin/*`;
@@ -163,8 +165,8 @@ PYTHONPATH=tools/brickie/python python3 -m brickie new ability service/crypto --
 
 | 文件(`prebuilts/seed/brickie/x86-64/linux/bin/`) | 体积 | sha256 |
 |---|---|---|
-| `brickie` | 3,903,624 B(~3.72 MiB) | `e65d62eb831b3280782805792d0531cce62d4a13d6913224179941142278a236` |
-| `brickie-core` | 3,432,464 B(~3.27 MiB) | `ce3deb1df792cf67d0ffaff2925b19eaa4e91ce609e1d3dfc18ae15845d87785` |
+| `brickie` | 3,903,624 B(~3.72 MiB) | `a801434e3f3de87a94e526ff0192faef16de8e860609e1dd93125a9665c82ced` |
+| `brickie-core` | 3,433,816 B(~3.27 MiB) | `7d67962e6b6b2b67b046d43b8eab19bc27e5cf08d66f1e013540846205c1348a` |
 | `brickie-gen` | 167,384 B(~163 KiB) | `a7a433b4b88ccc0d5f2152bbeed090e818c4f0e6adfd98ef0d28e49e9469e673` |
 
 > 这一份由 **rustc 1.99.0**(工作区自带的 `.toolchain`; `make core` 自动采用)编出 ——

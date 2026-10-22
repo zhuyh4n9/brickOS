@@ -56,10 +56,10 @@
   "diagnostics": [
     {
       "code": "BRV-MF-0001",
-      "file": "service/a/brick.toml",
+      "file": "provider/a/brick.toml",
       "severity": "error",
       "span": "dep",
-      "target": "service/a"
+      "target": "provider/a"
     }
   ],
   "exit_code": 1,

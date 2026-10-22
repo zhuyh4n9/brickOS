@@ -62,8 +62,8 @@ pub struct Closure {
     pub totals_stack: i64,
     pub capacity_ram: i64,
     pub capacity_stack: i64,
-    /// Tree has `plugin_type = "platform"` ⇒ capacity is meaningful.
-    pub has_platform: bool,
+    /// Tree has `plugin_type = "runtime"` ⇒ capacity is meaningful.
+    pub has_runtime: bool,
 }
 
 impl Closure {
@@ -138,7 +138,7 @@ fn sev_for_profile(profile: &str) -> Severity {
 /// interface skins (a product may select a skin explicitly) but never app / platform / core.
 fn sel_kind_matches(kind: &str, plugin_type: &str) -> bool {
     match kind {
-        "app" | "platform" | "core" => kind == plugin_type,
+        "app" | "runtime" | "core" => kind == plugin_type,
         _ => plugin_type == "ability" || plugin_type == "interface",
     }
 }
@@ -157,7 +157,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         // Closure roots (ADR-0035): the selection records of `[product]` -- app, platform, core
         // and every `[[product.ability]]` entry. Everything else enters via `[[dep]]`.
         let roots: Vec<&str> = std::iter::once(prod.app.as_str())
-            .chain(prod.platform.iter().map(String::as_str))
+            .chain(prod.runtime.iter().map(String::as_str))
             .chain(prod.core_brick.iter().map(String::as_str))
             .chain(prod.ability.iter().map(String::as_str))
             .collect();
@@ -639,12 +639,12 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
         }
     }
 
-    // Budget totals: platform `[[res]]` is capacity, not counted into the consumer-side Σ.
+    // Budget totals: the runtime plugin's `[[res]]` is capacity, not counted into the consumer-side Σ.
     let mut used_ram = 0i64;
     let mut used_stack = 0i64;
     for name in &closure.selected {
         let p = by_name[name.as_str()];
-        if p.plugin_type == "platform" {
+        if p.plugin_type == "runtime" {
             continue;
         }
         let (r, s) = p.res_totals();
@@ -653,14 +653,14 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
     }
     closure.totals_ram = used_ram;
     closure.totals_stack = used_stack;
-    let (cap_ram, cap_stack) = tree.platform_capacity();
+    let (cap_ram, cap_stack) = tree.runtime_capacity();
     closure.capacity_ram = cap_ram;
     closure.capacity_stack = cap_stack;
-    closure.has_platform = tree.plugins.iter().any(|p| p.plugin_type == "platform");
+    closure.has_runtime = tree.plugins.iter().any(|p| p.plugin_type == "runtime");
 
     // Exactly one `core` per image, and a product must select one: core owns the boot chain and
     // drives every other plugin, so an image without it cannot start and an image with two cannot
-    // decide which one does. Product-level count (like app/platform), so per ruling R-1 it is only
+    // decide which one does. Product-level count (like app/runtime), so per ruling R-1 it is only
     // enforced when a `product.toml` exists — a bare plugin tree is validated on its own.
     if let Some(prod) = &tree.product {
         let cores: Vec<String> = closure
@@ -700,11 +700,11 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
     let platform_file = tree
         .plugins
         .iter()
-        .find(|p| p.plugin_type == "platform")
+        .find(|p| p.plugin_type == "runtime")
         .map(|p| p.file.clone())
         .unwrap_or_else(|| "product.toml".to_string());
 
-    if closure.has_platform {
+    if closure.has_runtime {
         if used_ram > cap_ram {
             diags.push((
                 SCOPE_PRIV,
@@ -714,7 +714,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     &platform_file,
                     "res",
                     format!(
-                        "Σ ram_kib = {used_ram} exceeds the platform capacity {cap_ram}, delta {} KiB (physical limit, no exemption)",
+                        "Σ ram_kib = {used_ram} exceeds the runtime capacity {cap_ram}, delta {} KiB (physical limit, no exemption)",
                         used_ram - cap_ram
                     ),
                     "§8.1: Σ [[res]] ≤ what platform provides; gap substitute (R-9)",
@@ -730,7 +730,7 @@ pub fn solve(tree: &TreeLoad, profile: &str, scan_iface: bool) -> SolveResult {
                     &platform_file,
                     "res",
                     format!(
-                        "Σ stack_kib = {used_stack} exceeds the platform capacity {cap_stack}, delta {} KiB",
+                        "Σ stack_kib = {used_stack} exceeds the runtime capacity {cap_stack}, delta {} KiB",
                         used_stack - cap_stack
                     ),
                     "§8.1: Σ [[res]] ≤ what platform provides; gap substitute (R-9)",
@@ -1005,7 +1005,7 @@ pub fn closure_json(tree: &TreeLoad, c: &Closure, profile: &str) -> Value {
         "totals": {
             "ram_kib": c.totals_ram,
             "stack_kib": c.totals_stack,
-            "platform_capacity": {"ram_kib": c.capacity_ram, "stack_kib": c.capacity_stack},
+            "runtime_capacity": {"ram_kib": c.capacity_ram, "stack_kib": c.capacity_stack},
             "budget": {
                 "ram_kib": tree.product.as_ref().and_then(|p| p.budget_ram_kib),
                 "stack_kib": tree.product.as_ref().and_then(|p| p.budget_stack_kib),
@@ -1015,7 +1015,7 @@ pub fn closure_json(tree: &TreeLoad, c: &Closure, profile: &str) -> Value {
         "cycles": cycles,
         "selected": c.selected.iter().cloned().collect::<Vec<_>>(),
         "seeds": c.seeds,
-        "has_platform": c.has_platform,
+        "has_runtime": c.has_runtime,
     })
 }
 

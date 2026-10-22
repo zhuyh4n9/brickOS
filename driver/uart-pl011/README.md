@@ -27,11 +27,11 @@ QEMU virt 的 PL011 UART 作为 **cdev** 注册 ⇒ 设备出现在 `/dev/uart0`
 - **`rx_available` 的诚实上限**: PL011 的 FR 没有 FIFO 水位字段(只有 RXFE/RXFF)⇒ 只报下界 `0`(空)/ `16`(满, FIFO 深 16)/ 其余 `1`(至少 1 个)。
 - **只复用不 bring-up**: 本驱动不重写 `LCR_H`(8N1 + FIFO 使能是 console 的线路设置), `CR` 也只在 `SET_BAUD` 里"回读 → 清 → 写除数 → **原样写回回读值**", 不自己拼 `UARTEN|TXE|RXE`。`SET_BAUD` 因此会**连带改变内核日志/panic 通道的速率**(两个形态共用同一条 PL011)——风险写在头文件与 workaround 条目里, 套件用完后一定把 115200 写回。
 
-**与 platform 早期 console 的关系**: `platform/qemu-aarch64/src/console_pl011.c` 是 M0 早期 console(轮询 putc, 形态 C standalone, **不注册设备**)——内核日志与 panic 通道, panic 路径不许依赖插件栈;本件是 M2 形态 A 侧。本驱动对寄存器**只读** DR/FR/RSR/回读 IBRD/FBRD/CR, **只写** DR/IBRD/FBRD/CR(SET_BAUD)/ICR(清源), 绝不动 `LCR_H` 与探测期的 `CR`。反过来 (让本件拥有初始化、console 调它)会让 panic 通道依赖一个可能没被组合进来的插件, 故不采。
+**与 platform 早期 console 的关系**: `runtime/qemu-aarch64/src/console_pl011.c` 是 M0 早期 console(轮询 putc, 形态 C standalone, **不注册设备**)——内核日志与 panic 通道, panic 路径不许依赖插件栈;本件是 M2 形态 A 侧。本驱动对寄存器**只读** DR/FR/RSR/回读 IBRD/FBRD/CR, **只写** DR/IBRD/FBRD/CR(SET_BAUD)/ICR(清源), 绝不动 `LCR_H` 与探测期的 `CR`。反过来 (让本件拥有初始化、console 调它)会让 panic 通道依赖一个可能没被组合进来的插件, 故不采。
 
 ## 边界纪律 / 不做什么
 - **v1 不开 UART 中断**(`br-wa-io-001`): 不写 `IMSC`、不注册 ISR(绑定表里的 `BR_IRQ_UART0` 无人注册)、没有 RX 中断驱动的唤醒;阻塞 read 靠 `br_task_sleep(1ms)` 轮询, `poll` 只回答 "当前就绪位"、不做等待。也因此 v1 没有并发、不需要锁。M2 后半段落地中断 tty 时, 本件的 **ops 形状不用改** —— 变的只是 read 的等待机制与 `IMSC`/ISR 的加入。
-- **没有 tty 层**: 不做 line discipline / 行缓冲 / 回显;若需要 tty 语义, 设计上另起 `driver/tty` 或 `service/tty`, **不塞进驱动**(`br-wa-io-001` 的还债动作 ②)。设备 `write` 字节透明, 不做 `\n` → CRLF 转换(那是 console 的策略)。
+- **没有 tty 层**: 不做 line discipline / 行缓冲 / 回显;若需要 tty 语义, 设计上另起 `driver/tty` 或 `provider/tty`, **不塞进驱动**(`br-wa-io-001` 的还债动作 ②)。设备 `write` 字节透明, 不做 `\n` → CRLF 转换(那是 console 的策略)。
 - **不带自己的线程/栈**: 不声明 `[[res]].stack` —— ops 全部运行在**调用者的**栈上(消费者线程或 main 线程)。
 - **不拥有线路设置**: 见上, `LCR_H` 绝不写、`CR` 用回读值恢复;真产品应经 termios 层协调 (console 是线路的主人)。
 - **全部函数 thread-only**: 会 `br_malloc`/`br_free`/`br_task_sleep`、会自旋等 TX —— ISR 禁令(设备/存储域 API 白名单为空)在本件成立。
@@ -59,6 +59,6 @@ tests/smoke.toml                   ← 声明面用例骨架(与 in-image TC-IO-
 ```
 
 ## 已知欠账(不在本插件目录可修)
-- `br-wa-io-001`: **v1 是"轮询 cdev", 不是设计写的"M2: 中断 tty"** —— 不开 UART 中断、没有 RX 中断唤醒、没有 tty 层;另外 `SET_BAUD` 会连带改变内核日志速率(与 platform 的早期 console 共用同一个 PL011)。还债动作: ① 注册 `BR_IRQ_UART0` 的 ISR + ISR→RX 环形缓冲 →`br_sched_wake` 唤醒等待者, 把 read 从"轮询 sleep"改成"阻塞在等待队列上";② 若需要 tty 语义则另起 `driver/tty` 或 `service/tty`(line discipline 归它)。判据 = 无数据时 read 不占 CPU、有数据时被中断唤醒, 且日志里能看到 UART 中断计数。登记表见根目录 `WORKAROUNDS.md`。
+- `br-wa-io-001`: **v1 是"轮询 cdev", 不是设计写的"M2: 中断 tty"** —— 不开 UART 中断、没有 RX 中断唤醒、没有 tty 层;另外 `SET_BAUD` 会连带改变内核日志速率(与 platform 的早期 console 共用同一个 PL011)。还债动作: ① 注册 `BR_IRQ_UART0` 的 ISR + ISR→RX 环形缓冲 →`br_sched_wake` 唤醒等待者, 把 read 从"轮询 sleep"改成"阻塞在等待队列上";② 若需要 tty 语义则另起 `driver/tty` 或 `provider/tty`(line discipline 归它)。判据 = 无数据时 read 不占 CPU、有数据时被中断唤醒, 且日志里能看到 UART 中断计数。登记表见根目录 `WORKAROUNDS.md`。
 - `br-wa-test-001`: `TC-IO-001..012` 是**自编号** —— 设计用例表里设备域整组不存在。还债动作: 先补出设备域用例组, 再把自编号改回正式编号。
 - 平台数据(基址/时钟/除数)直写常量;`BR_IRQ_UART0` 已在 platform 的绑定表里但本件不用它 (见上)。

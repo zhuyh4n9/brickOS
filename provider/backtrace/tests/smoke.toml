@@ -1,0 +1,55 @@
+# provider/backtrace — conformance 用例(人写)
+#
+# 与 `backtrace_selftest()`(src/backtrace_selftest.c)里的 TC-DBG-010/011 一一对应:
+# v0.1 的红绿由 in-image 自检打 `[DBGCONF] PASS/FAIL`(make dbg-test 的
+# DBGCONF_REQUIRED 名单);该钩子在描述符里, 由 **core** 在全部 start() 之后统一驱动
+# (ADR-0010);本文件是同一批用例的声明面形状(照 `6-01` §2 的字段契约)。
+# 设计出处: `docs/5-debug/5-01-debug.md` §3;编译期前提 `-fno-omit-frame-pointer`。
+schema = 1
+
+[[case]]
+id       = "TC-DBG-010"
+pre      = "已启动到 MainLoop; 镜像以 -fno-omit-frame-pointer 编译; 当前栈可用"
+steps    = [
+    "调用 noinline 探针 bt_probe(): 它在内部调 br_bt_capture(frames, BR_BT_MAX_FRAMES)",
+    "断言帧数 n >= 2(至少跨过探针与它的调用者)",
+    "断言 frames[0].depth == 0",
+    "对每帧断言 pc != 0、fp % 16 == 0;对 i>0 断言 fp[i] > fp[i-1](严格递增)",
+    "断言存在某帧 pc 落在 [&bt_probe, &bt_probe + 512)(链真的穿过了调用点)",
+]
+expect   = "[DBGCONF] PASS TC-DBG-010 ..."
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+[[case]]
+id       = "TC-DBG-011"
+pre      = "TC-DBG-010 已跑过; 栈边界可能是 platform 已设置过的合法值, 也可能是 0/0(未设置)"
+steps    = [
+    "断言 br_bt_capture_from(0, 0, buf, 8) == 0(无现场 ⇒ 0 帧)",
+    "断言 br_bt_capture_from(0x1234, 0x40080000, buf, 8) == 0(fp 未 16 对齐被拒)且不死",
+    "断言 br_bt_set_stack_bounds(0, 0x1000) == -EINVAL, br_bt_set_stack_bounds(0x2000, 0x1000) == -EINVAL(非法输入不改状态)",
+    "br_bt_set_stack_bounds(0x1000, 0x2000) 后断言 br_bt_capture(buf, 4) == 0(窄边界把当前栈掐断)",
+    "把边界复位到用例前的值(白盒恢复), 断言 br_bt_capture(buf, 1) == 1(max 生效)",
+    "收尾: 不残留用例里设的窄边界(保留/恢复合法值)",
+]
+expect   = "[DBGCONF] PASS TC-DBG-011 ..."
+sched    = ["coop"]
+platform = ["host", "qemu-aarch64"]
+
+# ---- 插件生命周期钩子(v0.2 起由 core 的 plugin_manager 按相位驱动)----
+#
+# 名字 = `symbol_prefix(short)` + 相 ⇒ `backtrace_early_init` / `backtrace_init` /
+# `backtrace_start`(生成物引用)。钩子是组合期契约, 不进 [[export]]。
+# ★ 栈边界由 platform 在**它的** early_init 里设置; 本插件的 EARLY 钩子刻意什么都不做
+#   (LATE 的 init 也不清边界 —— 否则会把那次设置抹掉, 见 br_bt.c 的 init 注释)。
+[[case]]
+id       = "bt-late-init"
+pre      = "plugin_manager 已扫 .br_plugins 段并完成拓扑排序; EARLY 相已过"
+steps    = [
+    "EARLY 相: backtrace_early_init()(不碰栈边界)",
+    "LATE 相(Service 类别 ⇒ ② 完成点): backtrace_init() → br_bt_init()",
+    "START 相: backtrace_start()(本插件无动作)",
+]
+expect   = "三步都返回 0; 日志出现 [PLUGIN] phase=early/late/start name=provider/backtrace rc=0"
+sched    = ["coop"]
+platform = ["qemu-aarch64"]

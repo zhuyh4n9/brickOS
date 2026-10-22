@@ -122,7 +122,7 @@ cflags   = ["-Idriver/uboot-mmc/compat/std-names",  ← 标准头名的单元级
 
 ## 7. 移植过程中踩到并修掉的平台缺陷(仍然有效)
 
-**GIC 只把私有线设成 Group1NS, SPI 段仍是 Group0** ⇒ 任何 SPI 都不会被投递(Group1 使能而 SPI 留 Group0)。原型此前没有真 SPI 源(timer 是 PPI、UART 只被绑定不产生中断), 所以这个缺口一直没暴露; eMMC 的 PCIe INTx 是第一个真消费者。修法 = `platform/qemu-aarch64/src/gicv3.c` 步 5b 把 `GICD_IGROUPR`/`IGRPMODR` 的 SPI 段(按 `nr_irq` 覆盖)设为 Group1NS。症状特征: **`INT_STATUS` 硬件已置位、`br_irq` 的 `count` 恒 0**(handler 一次没进)。
+**GIC 只把私有线设成 Group1NS, SPI 段仍是 Group0** ⇒ 任何 SPI 都不会被投递(Group1 使能而 SPI 留 Group0)。原型此前没有真 SPI 源(timer 是 PPI、UART 只被绑定不产生中断), 所以这个缺口一直没暴露; eMMC 的 PCIe INTx 是第一个真消费者。修法 = `runtime/qemu-aarch64/src/gicv3.c` 步 5b 把 `GICD_IGROUPR`/`IGRPMODR` 的 SPI 段(按 `nr_irq` 覆盖)设为 Group1NS。症状特征: **`INT_STATUS` 硬件已置位、`br_irq` 的 `count` 恒 0**(handler 一次没进)。
 
 ## 8. 上游升到新 commit 时要做什么
 

@@ -52,4 +52,4 @@ void br_irq_set_hooks(const br_irq_hooks_t *hooks);   /* hal/sched 的 early_ini
 
 `platform`（实现 PIC/异常向量并调用其 API）、`hal/sched`（IRQ 出口钩子）、
 `hal/file-table`（`br_irq_lock`）、`core/c_core`（启动链阶段 1）、
-以及经皮肤 `runtime/core#irq` 的所有消费者。
+以及经皮肤 `provider/core#irq` 的所有消费者。

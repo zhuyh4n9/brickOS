@@ -3,10 +3,10 @@
 
 use crate::diag::{Diag, Severity};
 
-pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "hal", "platform", "core"];
+pub const PLUGIN_TYPES: &[&str] = &["app", "interface", "ability", "hal", "runtime", "core"];
 pub const API_TYPES: &[&str] = &["native", "runtime_adapter", "third_party"];
 pub const SUBKINDS: &[&str] = &["scheduler", "io", "fs", "service"];
-pub const NAMESPACES: &[&str] = &["app", "iface", "platform", "core", "hal", "sched", "driver", "fs", "service", "runtime"];
+pub const NAMESPACES: &[&str] = &["app", "iface", "runtime", "core", "hal", "provider", "sched", "driver", "fs"];
 pub const PHASES: &[&str] = &["early", "core", "late", "app"];
 pub const SCHED_CLASSES: &[&str] = &["SAFE_PREEMPT", "COOP_ONLY", "TT_SAFE"];
 pub const SCHED_KINDS: &[&str] = &["coop", "preempt", "tt"];
@@ -93,16 +93,17 @@ pub fn namespace_plugin_type(ns: &str) -> Option<&'static str> {
     match ns {
         "app" => Some("app"),
         "iface" => Some("interface"),
-        "platform" => Some("platform"),
+        // `runtime/` is the target runtime environment (the SoC/board port). Renamed from
+        // `platform/` by ADR-0040; the word "runtime" was freed when `runtime/posix` moved to
+        // `provider/` (the namespace of concrete implementations).
+        "runtime" => Some("runtime"),
         // `core` is a namespace of implementations (`core/c_core`, future `core/r_core`), not a
         // language marker: the type is the same and exactly one of them is in an image.
         "core" => Some("core"),
         // `hal/` is the infrastructure layer: a **peer of `ability`**, not a subkind of it. An
         // ability is a concrete implementation and selects the HAL bricks it runs on (ADR-0039).
         "hal" => Some("hal"),
-        "sched" | "driver" | "fs" | "service" => Some("ability"),
-        // `runtime` is an ability plugin; it differs from `service` in size and role, not taxonomy.
-        "runtime" => Some("ability"),
+        "provider" | "sched" | "driver" | "fs" => Some("ability"),
         _ => None,
     }
 }
@@ -116,9 +117,10 @@ pub fn namespace_subkind(ns: &str) -> Option<&'static str> {
         // and its `api_type` (surface, ADR-0033) differ from a self-written one.
         "driver" => Some("io"),
         "fs" => Some("fs"),
-        "service" => Some("service"),
-        // `runtime/posix` is `service`, so phase derivation (ability + service ⇒ LATE) holds.
-        "runtime" => Some("service"),
+        // `provider/` is the generic namespace of concrete implementations (ADR-0040: it absorbed
+        // the old `provider/` and `runtime/`): service-shaped, so `ability + service ⇒ LATE` holds
+        // for `provider/posix`, `provider/core`, `provider/trace` …
+        "provider" => Some("service"),
         _ => None,
     }
 }
@@ -155,7 +157,7 @@ pub fn is_service_like(plugin_type: &str, subkind: Option<&str>) -> bool {
 
 /// Derive `[plugin].phase` = the phase the `init` hook actually runs in, decided by the
 /// **category** (never by the declaration): service-like ⇒ `late`, **app ⇒ `app`** (last of all
-/// init, ADR-0037), everything else -- platform, ability -- ⇒ `core`; no `init` ⇒ `early`.
+/// init, ADR-0037), everything else -- runtime, ability -- ⇒ `core`; no `init` ⇒ `early`.
 /// Mirrors the runtime's `init_phase_of()` (`core/c_core/src/plugin/plugin_mgr.c`), which
 /// `show brick-init-flow` prints.
 pub fn derive_phase(plugin_type: &str, subkind: Option<&str>, has_init: bool) -> &'static str {
@@ -173,7 +175,7 @@ pub fn derive_phase(plugin_type: &str, subkind: Option<&str>, has_init: bool) ->
 
 /// Whether `phase` is legal for `plugin_type`/`subkind`; `None` = legal. The declaration is the
 /// `init` **completion point**, which the category decides: interface or ability.service ⇒ {early,
-/// late}; platform / other ability subkinds ⇒ {early, core}; **app ⇒ {early, app}** (its init runs
+/// late}; runtime / other ability subkinds ⇒ {early, core}; **app ⇒ {early, app}** (its init runs
 /// last, in the APP phase -- ADR-0037). `early` is always legal (it means "no `init` hook").
 pub fn phase_reason(plugin_type: &str, subkind: Option<&str>, phase: &str) -> Option<String> {
     if !in_list(PHASES, phase) {
@@ -225,7 +227,7 @@ pub fn level_name(rank: u8) -> &'static str {
 pub fn max_privilege_level(plugin_type: &str, subkind: Option<&str>) -> &'static str {
     match plugin_type {
         "app" | "interface" => "P0",
-        "platform" => "P4",
+        "runtime" => "P4",
         // core owns the boot chain: page tables + MMU activation are machine-level (§3.4 P4).
         "core" => "P4",
         "ability" => {
@@ -445,7 +447,7 @@ pub fn check_privileged(input: &PrivInput<'_>) -> Vec<Diag> {
 /// entry is not permitted (`platform` is exactly one per image, so self-dependency is impossible).
 /// `core` is the base every other plugin is written against, so depending on it is always permitted.
 /// `core` → `core` stays forbidden (exactly one core, same reason as platform). Core reaches the
-/// platform through the platform *contract* (`br/platform/**`) and registered ops, so a
+/// platform through the platform *contract* (`br/runtime/**`) and registered ops, so a
 /// `core → platform` edge is legal but neither side may turn it into an `init` edge: the two call
 /// each other (platform's entry `bl br_core_main`, core's `br_plat_ticks_*`), and that cycle is
 /// broken by the hard two-step boot chain, not by the topological sort.
@@ -454,26 +456,27 @@ pub fn dep_direction_ok(consumer_pt: &str, provider_pt: &str, provider_is_third_
         return true;
     }
     match consumer_pt {
-        // platform: core (above) + **hal** -- the HAL is below the SoC layer: platform implements
-        // the HAL contracts it declares (`br_hal/*`, the mmu/pic ops tables) and calls HAL APIs
-        // (`br_irq_enable`, `br_malloc`, `br_sched_on_tick`). Before ADR-0039 the HAL lived inside
-        // `core`, where this row never had to name it.
-        "platform" => !provider_is_third_party && matches!(provider_pt, "hal"),
+        // runtime: core (above) + **hal** -- the HAL is below the target-runtime layer: the runtime
+        // plugin implements the HAL contracts it declares (the mmu/pic ops tables) and calls HAL
+        // APIs (`br_irq_enable`, `br_malloc`, `br_sched_on_tick`). Before ADR-0039 the HAL lived
+        // inside `core`, where this row never had to name it.
+        "runtime" => !provider_is_third_party && matches!(provider_pt, "hal"),
         // hal: below `ability` -- it may use core (base) and platform (implements its contracts)
         // and lower HAL bricks (`bdev` -> `dev`, `cdev` -> `dev`), never an ability/interface.
-        "hal" => !provider_is_third_party && matches!(provider_pt, "platform" | "hal"),
-        // core: the platform contract + the HAL it boots (`br_mem_init`, `br_mm_activate`,
-        // `br_sched_run`). Boot order is hard-coded in `br_core_main`, not derived from init edges.
-        "core" => !provider_is_third_party && matches!(provider_pt, "platform" | "hal" | "ability"),
-        // ability: a concrete implementation selects HAL (+ platform, peer ability, third_party)
+        "hal" => !provider_is_third_party && matches!(provider_pt, "runtime" | "hal"),
+        // core: the runtime contract (`br/runtime/**`) + the HAL it boots (`br_mem_init`,
+        // `br_mm_activate`, `br_sched_run`). Boot order is hard-coded in `br_core_main`, not
+        // derived from init edges.
+        "core" => !provider_is_third_party && matches!(provider_pt, "runtime" | "hal" | "ability"),
+        // ability: a concrete implementation selects HAL (+ runtime, peer ability, third_party)
         "ability" => {
             provider_is_third_party
-                || matches!(provider_pt, "platform" | "hal" | "ability")
+                || matches!(provider_pt, "runtime" | "hal" | "ability")
         }
-        // interface: platform/hal/ability/interface allowed (re-export only) / third_party forbidden
+        // interface: runtime/hal/ability/interface allowed (re-export only) / third_party forbidden
         "interface" => {
             !provider_is_third_party
-                && matches!(provider_pt, "platform" | "hal" | "ability" | "interface")
+                && matches!(provider_pt, "runtime" | "hal" | "ability" | "interface")
         }
         // app: interface only; exception: ability with `api_type = third_party`.
         "app" => provider_pt == "interface" || provider_is_third_party,
@@ -491,7 +494,7 @@ pub fn api_type_edge_reason(
 ) -> Option<String> {
     // Pure consumers (app/interface) are exempt from api_type prohibitions. `core` is a provider
     // with a surface, so a `native` core must not reach into `runtime_adapter`/`third_party`.
-    if !matches!(consumer_pt, "ability" | "hal" | "platform" | "core") {
+    if !matches!(consumer_pt, "ability" | "hal" | "runtime" | "core") {
         return None;
     }
     if consumer_api == "native" && provider_api == "runtime_adapter" {

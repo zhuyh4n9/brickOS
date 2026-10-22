@@ -9,7 +9,7 @@
 #include <br/core/br_log.h>
 #include <br/core/br_types.h>
 #include <br/pci/br_pci.h>
-#include <br/platform/br_plat_pci.h>
+#include <br/runtime/br_plat_pci.h>
 
 /* Lifecycle hooks referenced by generated plugin_desc.c (not exported). */
 int pci_core_early_init(void);

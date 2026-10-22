@@ -106,7 +106,7 @@ static inline u32 uboot_fat_get_unaligned_le32(const void *p)
 
 /* ---- memory ---- */
 /* Names forwarded to core's allocator; macros rather than a prototype, which would make this
- * media FS link against the runtime/posix surface. br_malloc aligns to >= 16 B (BR_MALLOC_ALIGN),
+ * media FS link against the provider/posix surface. br_malloc aligns to >= 16 B (BR_MALLOC_ALIGN),
  * above the 8-byte max natural alignment, so the cache-aligned/memalign variants add nothing. */
 #define malloc(n)             br_malloc(n)
 #define calloc(n, s)          br_calloc((n), (s))
@@ -297,7 +297,7 @@ static inline u64 uboot_fat_div_u64_rem(u64 dividend, u32 divisor, u32 *remainde
 #define printf(fmt, ...)    br_log_write(BR_LOG_ERROR, "uboot-fat: " fmt, ##__VA_ARGS__)
 
 /* ---- strings (hand-rolled) ---- */
-/* static inline with a uboot_fat_ prefix (no dependency on runtime/posix); the macros below
+/* static inline with a uboot_fat_ prefix (no dependency on provider/posix); the macros below
  * forward upstream's bare names. Each is bounded by the caller's n, except strcpy (upstream's
  * own 256-byte targets, see below). */
 #define UB_FAT_STRCPY_CAP   256u   /* upstream's two strcpy targets are 256 B buffers */

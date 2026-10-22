@@ -29,7 +29,7 @@
 
 /* One dependency edge. `deps` ends at `.name == BR_NULL` (not by length). */
 typedef struct br_dep {
-    const char *name;      /* full name of the dependency (`platform/qemu-aarch64`) */
+    const char *name;      /* full name of the dependency (`runtime/qemu-aarch64`) */
     br_u8       kind;      /* BR_DEP_* */
     br_u8       phase;     /* assertion: provider's completion point (meaningful only for kind=INIT) */
     br_u16      compat_gen;
@@ -45,11 +45,12 @@ typedef struct br_dep {
 /* ---- plugin type ---- */
 
 /* plugin_type / subkind go into the descriptor: the manager does not guess the category from
- * naming conventions, and knowing who is platform is required to run its early_init first. */
+ * naming conventions, and knowing who is the target runtime is required to run its early_init
+ * first (ADR-0040: the type used to be called `platform`). */
 #define BR_PLUGIN_TYPE_APP       0u
 #define BR_PLUGIN_TYPE_INTERFACE 1u
 #define BR_PLUGIN_TYPE_ABILITY   2u
-#define BR_PLUGIN_TYPE_PLATFORM  3u
+#define BR_PLUGIN_TYPE_RUNTIME   3u
 /* The core: mandatory and singular (exactly one per image). It defines no lifecycle -- it is the
  * plugin that drives the others (boot chain + plugin manager), so early_init/init/start are all
  * BR_PLUGIN_NO_HOOK in its descriptor and it never enters the phase machine it runs. */
@@ -135,26 +136,26 @@ typedef struct br_plugin {
 /* ---- manager ---- */
 
 /*
- * The manager's three entries = the boot chain's slots: init (core platform-independent),
- * platform_init (platform plugin), run (topology + phase drive). They are separate because
- * "scan the section / find platform" must precede any C code, platform early_init is the second
- * bootstrap slot, and the phase drive waits for core's heap and address mapping.
+ * The manager's three entries = the boot chain's slots: init (core, runtime-independent),
+ * runtime_init (the runtime plugin), run (topology + phase drive). They are separate because
+ * "scan the section / find the runtime" must precede any C code, the runtime's early_init is the
+ * second bootstrap slot, and the phase drive waits for core's heap and address mapping.
  */
 
 /*
- * 1 Platform-independent static preparation: scan `.br_plugins` into a table and find the platform
- * plugin. Silent throughout (console comes up in platform early_init; earlier PL011 writes are
- * dropped). Empty section / over the static bound / no platform plugin => panic.
+ * 1 Runtime-independent static preparation: scan `.br_plugins` into a table and find the runtime
+ * plugin. Silent throughout (console comes up in that plugin's early_init; earlier PL011 writes are
+ * dropped). Empty section / over the static bound / no runtime plugin => panic.
  */
 void br_plugin_manager_init(void);
 
 /*
- * 2 Platform plugin init: take the entry with plugin_type == BR_PLUGIN_TYPE_PLATFORM and run its
+ * 2 Runtime plugin init: take the entry with plugin_type == BR_PLUGIN_TYPE_RUNTIME and run its
  * early_init (early console / PIC / region table / page table ops). By field, not by topological
  * luck: PIC, page tables and console are not ready yet (TC-PLUG-003). Precondition:
  * br_plugin_manager_init() has run. First failure halts.
  */
-void br_plugin_manager_platform_init(void);
+void br_plugin_manager_runtime_init(void);
 
 /*
  * 4 Build init edges -> Kahn topological sort (cycle => panic) -> EARLY (early_init of the rest)

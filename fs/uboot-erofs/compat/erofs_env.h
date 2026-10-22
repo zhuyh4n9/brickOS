@@ -494,7 +494,7 @@ static inline bool IS_ERR_OR_NULL(const void *ptr)
 
 #define EFSCORRUPTED  EUCLEAN
 
-/* ---- string helpers: all static inline with the uboot_erofs_ prefix (no runtime/posix
+/* ---- string helpers: all static inline with the uboot_erofs_ prefix (no provider/posix
  * dependency); macros below wire upstream's plain names over them, so call sites such as
  * strnlen(de_name, n) stay as upstream wrote them. Length-bound discipline (as fs/tmpfs's
  * tmpfs_name_ok): honour only the caller's n, never read one byte beyond it. */

@@ -397,7 +397,7 @@ pub struct Sel {
     /// `""` for the typed singletons (`app` / `platform` / `core`); the TOML key for an
     /// `[[ability]]` entry. A label only -- the plugin identity is always `brick`.
     pub alias: String,
-    /// `"app"` | `"platform"` | `"core"` | `"ability"`.
+    /// `"app"` | `"runtime"` | `"core"` | `"ability"`.
     pub kind: String,
     /// Plugin name this record selects (`""` = the optional root is declared but unset).
     pub brick: String,
@@ -434,8 +434,8 @@ pub struct Product {
     pub app: String,
     /// Brick of the optional `[product].core` record.
     pub core_brick: Option<String>,
-    /// Bricks of the optional `[product].platform` record (0 or 1).
-    pub platform: Vec<String>,
+    /// Bricks of the optional `[product].runtime` record (0 or 1).
+    pub runtime: Vec<String>,
     /// Bricks of the `[[ability]]` records (closure roots).
     pub ability: Vec<String>,
     /// Every selection record in declaration order (app, platform, core, abilities) -- the
@@ -511,7 +511,7 @@ impl Product {
             "version": self.version.to_string(),
             "app": sel("app"),
             "core": sel("core"),
-            "platform": sel("platform"),
+            "runtime": sel("runtime"),
             "ability": abilities,
             "selection": self.roots.iter().map(Sel::to_json).collect::<Vec<_>>(),
             "stage": self.stage,
@@ -562,11 +562,11 @@ impl TreeLoad {
     }
 
     /// Ruling R-6: platform `[[res]]` is also platform capacity; `(ram_kib, stack_kib)`, summed.
-    pub fn platform_capacity(&self) -> (i64, i64) {
+    pub fn runtime_capacity(&self) -> (i64, i64) {
         let mut ram = 0;
         let mut stack = 0;
         for p in &self.plugins {
-            if p.plugin_type == "platform" {
+            if p.plugin_type == "runtime" {
                 let (r, s) = p.res_totals();
                 ram += r;
                 stack += s;
@@ -1273,6 +1273,8 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
     validate_subkind(&mut p, d);
     // namespace ⇒ plugin_type consistency (BRV-TAX-0025)
     validate_namespace_type(&p, d);
+    // a name outside the recommended namespaces (BRV-TAX-0013, warning)
+    validate_recommended_form(&p, d);
 
     // Namespace ⇔ provenance: `driver/` holds **own** drivers (BRV-TAX-0021).
     validate_driver_namespace(&p, d);
@@ -1559,17 +1561,17 @@ pub fn load_plugin_file(root: &Path, abs: &Path, d: &mut Diags) -> Option<Plugin
             cflags: str_array(bt, "cflags", &p.name, &file, "build", d),
         });
         if let Some(tt) = opt_table(bt, "target") {
-            if p.plugin_type != "platform" {
+            if p.plugin_type != "runtime" {
                 d.shape(
                     "BRV-MF-0001",
                     &p.name,
                     &file,
                     "build.target",
                     format!(
-                        "`[build.target]` may only be declared by `plugin_type = \"platform\"`, this plugin is `{}`",
+                        "`[build.target]` may only be declared by `plugin_type = \"runtime\"`, this plugin is `{}`",
                         p.plugin_type
                     ),
-                    "target facts are part of \"what the platform is\"; exactly one platform per image (§8.3 ④)",
+                    "target facts are part of \"what the image runs on\"; exactly one runtime plugin per image (§8.3 ④)",
                 );
             }
             let qemu = opt_table(tt, "qemu");
@@ -1683,6 +1685,32 @@ fn resolves_under_third_party(dir: &str, rel: &str) -> bool {
     segs.first() == Some(&"third_party")
 }
 
+/// A name that does not use a recommended namespace (`BRV-TAX-0013`, warning). `brickie new` already
+/// warns; `check` did not, so a hand-written manifest could keep a namespace that no longer exists
+/// (`service/`, `platform/`, `framework/`) and still pass silently. Warning, not error: the
+/// namespace is a layout convention, and the load-bearing rules (type, direction, phase) are
+/// enforced separately (§8.3).
+fn validate_recommended_form(p: &Plugin, d: &mut Diags) {
+    if p.name.is_empty() || rules::is_recommended_form(&p.name) {
+        return;
+    }
+    d.coded(
+        "BRV-TAX-0013",
+        Severity::Warning,
+        &p.name,
+        &p.file,
+        "plugin.name",
+        format!(
+            "`{}` does not use a recommended namespace; the retired ones (`service/`, `platform/`, `framework/`) no longer mean anything",
+            p.name
+        ),
+        format!(
+            "recommended namespaces: {} (§8.3, ADR-0040)",
+            rules::list_of(rules::NAMESPACES)
+        ),
+    );
+}
+
 /// Namespace ↔ `plugin_type` consistency (`BRV-TAX-0025`, ADR-0039). The namespace is not
 /// decoration: `hal/` means "infrastructure brick", `ability/`-family means "concrete
 /// implementation". Without this check a `hal/` brick could declare `plugin_type = "ability"`
@@ -1760,7 +1788,7 @@ fn validate_subkind(p: &mut Plugin, d: &mut Diags) {
                     "ability plugin `{}` has no name-derivable `subkind`; it must be declared explicitly",
                     p.name
                 ),
-                format!("allowed values: {}; or use a derivable name (service/ sched/ hal/ io/ fs/)", rules::list_of(rules::SUBKINDS)),
+                format!("allowed values: {}; or use a derivable name (provider/ sched/ hal/ io/ fs/)", rules::list_of(rules::SUBKINDS)),
             );
         }
         (None, Some(_)) => {}
@@ -1980,7 +2008,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
             }
         }
     }
-    for kind in ["platform", "core"] {
+    for kind in ["runtime", "core"] {
         let Some(v) = product.get(kind) else { continue };
         let span = format!("product.{kind}");
         let Some(s) = parse_sel(kind, "", &span, v, false, &file, d) else {
@@ -1990,8 +2018,8 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
         if s.brick.is_empty() {
             continue;
         }
-        if kind == "platform" {
-            prod.platform.push(s.brick.clone());
+        if kind == "runtime" {
+            prod.runtime.push(s.brick.clone());
         } else {
             prod.core_brick = Some(s.brick.clone());
         }
@@ -2037,7 +2065,7 @@ pub fn load_product(root: &Path, d: &mut Diags) -> (bool, Option<Product>) {
             &file,
             &file,
             "select",
-            "the `[select]` table was removed: roots are now `[product].app` / `[product].platform` / `[product].core` / `[[product.ability]]`",
+            "the `[select]` table was removed: roots are now `[product].app` / `[product].runtime` / `[product].core` / `[[product.ability]]`",
             "ADR-0035 (hard switch): the flat `[select].plugins` list no longer selects anything",
         );
     }

@@ -52,7 +52,7 @@ static br_bool s_init_done;                            /* boot chain 1 has run (
 
 static br_u32  s_phase_reached = BR_PHASE_EARLY;
 static br_u32  s_init_failures;
-static br_u32  s_plat_index = (br_u32)-1;              /* section index of the platform plugin */
+static br_u32  s_rt_index = (br_u32)-1;                /* section index of the runtime plugin */
 
 /* ---- self-test: trace of "ordering invariants" ---- */
 static const char *s_first_early_name;   /* who owned the first early_init that actually ran */
@@ -77,7 +77,7 @@ const br_plugin_mgr_view_t *br_plugin_mgr_view(void)
     v.edge_count        = s_edge_count;
     v.pos               = s_pos;
     v.sorted            = s_sorted;
-    v.plat_index        = s_plat_index;
+    v.rt_index          = s_rt_index;
     v.first_early_name  = s_first_early_name;
     v.app_start_last_ok = s_app_start_last_ok;
     v.in_app_start      = s_in_app_start;
@@ -362,10 +362,10 @@ void br_plugin_manager_init(void)
     /* No output: the early console belongs to boot chain 2 (QEMU drops PL011 DR now). */
     scan();
 
-    /* Find platform via plugin_type, not topology: page tables/console are not ready. */
+    /* Find the runtime plugin via plugin_type, not topology: page tables/console are not ready. */
     br_u32 plat = (br_u32)-1;
     for (br_u32 i = 0u; i < s_count; i++) {
-        if (s_plugins[i]->plugin_type == BR_PLUGIN_TYPE_PLATFORM) {
+        if (s_plugins[i]->plugin_type == BR_PLUGIN_TYPE_RUNTIME) {
             plat = i;
             break;
         }
@@ -374,7 +374,7 @@ void br_plugin_manager_init(void)
         br_panic("plugin_manager: no plugin with plugin_type = platform in the section; "
                  "the first step of the EARLY phase cannot happen (design 1-01 §9)");
     }
-    s_plat_index = plat;
+    s_rt_index = plat;
 
     /* APP exception (ADR-0037), re-proven on the section rather than trusted from the generator:
      * the APP registers through this section scan, so it has no `early_init` to do. A composed
@@ -402,14 +402,14 @@ void br_plugin_manager_init(void)
 
 /* ---- boot chain 2 ---- */
 
-void br_plugin_manager_platform_init(void)
+void br_plugin_manager_runtime_init(void)
 {
-    if (s_init_done == BR_FALSE || s_plat_index == (br_u32)-1) {
+    if (s_init_done == BR_FALSE || s_rt_index == (br_u32)-1) {
         /* Dropped by QEMU too (console not up), but worse to run on with an unscanned section. */
-        br_panic("plugin_manager: br_plugin_manager_init() must be called before platform_init()");
+        br_panic("plugin_manager: br_plugin_manager_init() must be called before runtime_init()");
     }
 
-    const br_plugin_t *p = s_plugins[s_plat_index];
+    const br_plugin_t *p = s_plugins[s_rt_index];
     if (p->early_init == BR_PLUGIN_NO_HOOK) {
         br_panic("plugin_manager: platform plugin `%s` has no early_init hook; "
                  "console/PIC/page tables must be built by it first (design 1-01 §9)", p->name);
@@ -497,7 +497,7 @@ BR_NORETURN void br_plugin_manager_run(void)
     for (br_u32 k = 0u; k < s_count; k++) {
         const br_u32 i = s_order[k];
         const br_plugin_t *p = s_plugins[i];
-        if (i == s_plat_index || p->early_init == BR_PLUGIN_NO_HOOK) {
+        if (i == s_rt_index || p->early_init == BR_PLUGIN_NO_HOOK) {
             continue;
         }
         if (s_first_early_name == BR_NULL) {
@@ -511,7 +511,7 @@ BR_NORETURN void br_plugin_manager_run(void)
     }
 
     /* ---- 4 CORE / LATE / APP: category-decided init. APP is last of all (ADR-0037): its init
-     * sees every driver/service/skin initialized, and IRQs stay masked until it returns. ---- */
+     * sees every driver/provider/skin initialized, and IRQs stay masked until it returns. ---- */
     for (br_u32 want = BR_PHASE_CORE; want <= BR_PHASE_APP; want++) {
         s_phase_reached = want;
         for (br_u32 k = 0u; k < s_count; k++) {

@@ -12,7 +12,7 @@
 | ③ | **BAR 尺寸探测与分配** | 写全 1 读回算尺寸 → 从平台 MMIO 窗口切 → 写回;再开 Memory Space + Bus Master |
 | ④ | **INTx swizzle** | QEMU GPEX:`(pin_index + slot) % 4` ⇒ 由平台给的"INTx A virq"推出实际 virq |
 
-**边界**:板级事实(ECAM 在哪 / MMIO 窗口多大 / INTx 起始线)**只在 `platform/qemu-aarch64`**(`br_plat_pci_host`);换一台有 PCIe 的板子,变的只有那几个数,本件不动。反过来(platform 调 `br_pci_register_host`)会让 platform 依赖插件 —— 方向表不允许。
+**边界**:板级事实(ECAM 在哪 / MMIO 窗口多大 / INTx 起始线)**只在 `runtime/qemu-aarch64`**(`br_plat_pci_host`);换一台有 PCIe 的板子,变的只有那几个数,本件不动。反过来(platform 调 `br_pci_register_host`)会让 platform 依赖插件 —— 方向表不允许。
 
 ## 2. 为什么 BAR 分配是本件的活
 本镜像是 `-kernel` 直启,**没有固件**;PCIe 端点的 BAR 出厂为 0 且未映射(实测 `info pci` 显示 `BAR0: 32 bit memory (not mapped)`)。不分配 BAR 就没有寄存器窗口可写。两个**实测踩到过**的坑(写在代码注释里,因为它们是"看起来对"的写法):
@@ -51,7 +51,7 @@ $ qemu-system-aarch64 -M virt,gic-version=3,highmem=off ... -device sdhci-pci,ad
 
 | 边 | kind | 理由 |
 |---|---|---|
-| `platform/qemu-aarch64` | `init` | 读 `br_plat_pci_host`(ECAM/MMIO/总线范围/INTx 起始 virq) |
+| `runtime/qemu-aarch64` | `init` | 读 `br_plat_pci_host`(ECAM/MMIO/总线范围/INTx 起始 virq) |
 
 `src/pci_core.c` = 生产;`src/pci_selftest.c` = 自检(`[selftest].cases = 8`)。
 

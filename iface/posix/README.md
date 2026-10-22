@@ -5,25 +5,25 @@
 
 | 做 | 不做 |
 |---|---|
-| 把 `runtime/posix#posix` 的 POSIX 头**原样转出**(`include/iface/posix/posix.h`) | 不自己声明/实现任何 POSIX 函数(两份声明 = 同一符号两种真值) |
-| 声明级再导出: `form = "skin"` + `reexport_of = ["runtime/posix#posix"]` | 不拥有状态、不碰 fd 表、不做 errno 转换(那些是 runtime/posix 的事) |
-| 给 APP 一个**合法**的依赖对象(方向表: `app → interface` ✅) | 不让 APP 直连 `runtime/posix`(那是 `app ✗ ability`, 设计禁则) |
+| 把 `provider/posix#posix` 的 POSIX 头**原样转出**(`include/iface/posix/posix.h`) | 不自己声明/实现任何 POSIX 函数(两份声明 = 同一符号两种真值) |
+| 声明级再导出: `form = "skin"` + `reexport_of = ["provider/posix#posix"]` | 不拥有状态、不碰 fd 表、不做 errno 转换(那些是 provider/posix 的事) |
+| 给 APP 一个**合法**的依赖对象(方向表: `app → interface` ✅) | 不让 APP 直连 `provider/posix`(那是 `app ✗ ability`, 设计禁则) |
 
 ## 依赖与相位
 
 ```
-app/hello ──[[dep]] runtime──▶ iface/posix(interface) ──[[dep]] init(late)──▶ runtime/posix(薄皮肤, 无状态 / 唯一实现)
+app/hello ──[[dep]] runtime──▶ iface/posix(interface) ──[[dep]] init(late)──▶ provider/posix(薄皮肤, 无状态 / 唯一实现)
 ```
 
 * `plugin_type = "interface"` ⇒ 完成点在 **LATE**, 所以 `phase = "late"`;
-* `api_type = "runtime_adapter"` 不是自选: 不变量 1(`api_iface == api_type`)与不变量 3(`api_iface` 必须等于被再导出单元的分类)把它钉死 —— `runtime/posix#posix` 就是这个分类;
-* 单元名取 **`posix-skin`**(不叫 `posix`): 单元 id 在闭包内必须唯一, 而 `runtime/posix#posix` 已经占用了 `posix`。
+* `api_type = "runtime_adapter"` 不是自选: 不变量 1(`api_iface == api_type`)与不变量 3(`api_iface` 必须等于被再导出单元的分类)把它钉死 —— `provider/posix#posix` 就是这个分类;
+* 单元名取 **`posix-skin`**(不叫 `posix`): 单元 id 在闭包内必须唯一, 而 `provider/posix#posix` 已经占用了 `posix`。
 
-## 与 `runtime/posix` 同名(`posix`)的处理
-命名空间形态让本件与 `runtime/posix` **共享 `name_short = posix`**。缺省的钩子符号前缀由 short 推导(会撞成同一个 `posix_early_init/init/start` ⇒ 链接期重复定义), 因此本件在 `brick.toml` 里**显式覆盖**: `[plugin]` 段 `symbol_prefix = "iface_posix_"`(钩子/描述符用 `iface_posix_*`, 不是 `posix_*`)。
+## 与 `provider/posix` 同名(`posix`)的处理
+命名空间形态让本件与 `provider/posix` **共享 `name_short = posix`**。缺省的钩子符号前缀由 short 推导(会撞成同一个 `posix_early_init/init/start` ⇒ 链接期重复定义), 因此本件在 `brick.toml` 里**显式覆盖**: `[plugin]` 段 `symbol_prefix = "iface_posix_"`(钩子/描述符用 `iface_posix_*`, 不是 `posix_*`)。
 
 ## 为什么值得存在(而不是让 APP 直连)
-`runtime/posix` 是 **ability**;方向表里 `app ✗ ability` —— APP 只许经 Interface。没有本件时, APP 想用 `usleep`/`pthread_*` 只有两条路: 直连(非法边, 要 `allow_edges` 豁免)或不用 POSIX。本件把第二条路变成正解: 一个**零状态**的皮肤(皮肤里没有一行代码)。
+`provider/posix` 是 **ability**;方向表里 `app ✗ ability` —— APP 只许经 Interface。没有本件时, APP 想用 `usleep`/`pthread_*` 只有两条路: 直连(非法边, 要 `allow_edges` 豁免)或不用 POSIX。本件把第二条路变成正解: 一个**零状态**的皮肤(皮肤里没有一行代码)。
 
 ## 目录
 

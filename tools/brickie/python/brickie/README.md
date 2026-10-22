@@ -222,7 +222,7 @@ At delivery one integration pass was run with real core/gen, **34 items all gree
 ```sh
 cd prototype/tools/brickie
 PYTHONPATH=python python3 -m brickie --help
-PYTHONPATH=python python3 -m brickie new ability service/crypto --subkind service --root /tmp/repo
+PYTHONPATH=python python3 -m brickie new ability provider/crypto --subkind service --root /tmp/repo
 PYTHONPATH=python python3 -m brickie check --root /tmp/repo
 ```
 

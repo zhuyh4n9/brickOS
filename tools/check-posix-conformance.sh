@@ -5,7 +5,7 @@
 #       same name (host headers alone; our prototype cast to a function pointer and assigned);
 #   (4) POSIX-required members of struct stat / struct dirent are present with the right width --
 #       field offsets are not compared, since POSIX does not prescribe member order.
-# iface/posix is the surface the APP sees (it re-exports the runtime/posix headers verbatim); a
+# iface/posix is the surface the APP sees (it re-exports the provider/posix headers verbatim); a
 # divergence does not fail the build but is worse: mismatched widths/constants mean the same code
 # sees different values on the two sides, and a missing required name breaks ported code.
 # Whitelisted constants carry their reason in the table below.
@@ -18,9 +18,9 @@ exec python3 - "$@" <<'PY'
 import re, subprocess, pathlib, sys, tempfile
 
 ROOT = pathlib.Path.cwd()
-INC = ROOT/"runtime/posix/include"
+INC = ROOT/"provider/posix/include"
 CORE_INC = ROOT/"core/c_core/include"
-PLAT_INC = ROOT/"platform/qemu-aarch64/include"
+PLAT_INC = ROOT/"runtime/qemu-aarch64/include"
 
 # ---- whitelist of intentional deviations: name -> reason ("why it may differ") ----
 ALLOW = {

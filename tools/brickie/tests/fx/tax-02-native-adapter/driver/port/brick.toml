@@ -15,7 +15,7 @@ hash_scope = "decl"
 truth      = "decl"
 
 [[dep]]
-name  = "service/posix"
+name  = "provider/posix"
 range = "*"
 kind  = "runtime"
 

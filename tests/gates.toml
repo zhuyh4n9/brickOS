@@ -45,7 +45,7 @@ sources  = [
 ]
 includes = [
   "core/c_core/include", "core/c_core/src", "hal/int/include", "hal/int/src", "hal/sched/include", "hal/sched/src",
-  "tests/host", "platform/qemu-aarch64/include",
+  "tests/host", "runtime/qemu-aarch64/include",
 ]
 
 [[hosttest]]
@@ -191,7 +191,7 @@ require   = [
   #   command register with MEM/BUS_MASTER set, INTx swizzle correct).
   "\\[PCICONF\\] SUMMARY pass=[0-9]* fail=0 ",
   # * ADR-0019: APP-side POSIX multithreading sample (through the iface/posix skin). It proves threads
-  #   really ran on a real image with all green, not just runtime/posix's own selftest.
+  #   really ran on a real image with all green, not just provider/posix's own selftest.
   "\\[APPCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   # * ADR-0022: suite summary of the two **media-class filesystem** ports (FAT12/16/32 volumes + EROFS image).
   #   Split vs. the entries above: here is the **coarse criterion** "volumes mounted and cases green";
@@ -274,10 +274,10 @@ require   = [
   # behalf of four LATE inits; now plugin_manager drives init, so the fact lives in **the manager's log** —
   # the criterion pins the manager's own lines: each of the four plugins was driven and init returned 0.
   # Stronger: it proves "was driven" (DBG-INIT only proved "dump called it").
-  "\\[PLUGIN\\] phase=late name=service/trace rc=0",
-  "\\[PLUGIN\\] phase=late name=service/backtrace rc=0",
-  "\\[PLUGIN\\] phase=late name=service/hexdump rc=0",
-  "\\[PLUGIN\\] phase=late name=service/memleak rc=0",
+  "\\[PLUGIN\\] phase=late name=provider/trace rc=0",
+  "\\[PLUGIN\\] phase=late name=provider/backtrace rc=0",
+  "\\[PLUGIN\\] phase=late name=provider/hexdump rc=0",
+  "\\[PLUGIN\\] phase=late name=provider/memleak rc=0",
   # ADR-0010: selftest pass present and all green. * Not "no FAIL string means pass", but the
   # SUMMARY line must exist (ran >= 1) with fails=0/errors=0 — proving two things at once:
   # selftest was driven, and the switch is on (that line does not exist in an image with selftest off).
@@ -315,7 +315,7 @@ require = ["ok   [0-9]* public headers"]
 
 # check-errno: errno single-source-of-truth gate (ADR-0023).
 # * It guards a rule established this cut: **POSIX error-code names belong to core** (`br/core/br_errno.h`),
-#   so (1) POSIX numbers exist with or without `runtime/posix`; (2) third-party ports need not each copy a
+#   so (1) POSIX numbers exist with or without `provider/posix`; (2) third-party ports need not each copy a
 #   mapping (a second truth and a needless upstream edit). Three criteria: name/value pairing / full coverage
 [[script]]
 name    = "check-errno"
@@ -643,7 +643,7 @@ require_tags = [
   "TC-EROFS-005", "TC-EROFS-006", "TC-EROFS-007", "TC-EROFS-008",
 ]
 
-# posix-test: end-to-end gate for **runtime/posix's POSIX surface** (ADR-0014/0015).
+# posix-test: end-to-end gate for **provider/posix's POSIX surface** (ADR-0014/0015).
 # Criteria = `[POSIXCONF]` summary all green + 20 tags named individually + boot evidence lines. This gate
 # differs from fs-test: fs-test tests the **framework contract** (VFSCONF via native API only), this one
 # tests the **POSIX surface itself** (cases include POSIX headers only, no br_* calls) — names/signatures/
@@ -655,7 +655,7 @@ log       = "build/logs/posix.log"
 require   = [
   # ADR-0010: selftest pass present and all green (proves both "selftest was driven" and "switch is on").
   "\\[SELFTEST\\] SUMMARY plugins=[0-9]+ ran=[1-9][0-9]* skipped=[0-9]+ fails=0 errors=0",
-  "runtime/posix: POSIX runtime ready",
+  "provider/posix: POSIX runtime ready",
   "\\[POSIXCONF\\] SUMMARY pass=[0-9]* fail=0 ",
   "irq_ticks=[1-9]",
 ]

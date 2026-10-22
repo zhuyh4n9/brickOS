@@ -14,7 +14,7 @@
 #include <br/core/br_time.h>
 #include <br/core/br_types.h>
 
-#include <br/platform/br_plat.h>
+#include <br/runtime/br_plat.h>
 
 #include "sched_internal.h"
 

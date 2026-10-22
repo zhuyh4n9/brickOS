@@ -43,7 +43,7 @@ typedef struct br_plugin_mgr_view {
     br_u32  edge_count;
     const br_u16 *pos;                   /* segment index -> topological position */
     br_bool sorted;
-    br_u32  plat_index;                  /* segment index of the platform plugin */
+    br_u32  rt_index;                    /* segment index of the runtime plugin */
     /* "ordering invariants" traces (TC-PLUG-003) */
     const char *first_early_name;        /* whose early_init really ran first */
     br_bool app_start_last_ok;           /* before the first APP start: all non-APP had run */

@@ -28,10 +28,10 @@ same artifacts and cannot drift apart.
 | Fixture | Content | Purpose |
 |---|---|---|
 | `fx/empty/` | single-plugin empty tree | check baseline |
-| `fx/cycle/` | service/a→b→c→a init cycle | V-3 |
+| `fx/cycle/` | provider/a→b→c→a init cycle | V-3 |
 | `fx/phase-bad/` | provider late after dependent core | V-8 (R1) |
 | `fx/phase-assert/` | `[[dep]].phase=early` × provider late | V-8 (R2) |
-| `fx/phase-ok/` | `sched/coop → platform/qemu-aarch64` (core on both sides) | V-8 **positive case not falsely rejected** |
+| `fx/phase-ok/` | `sched/coop → runtime/qemu-aarch64` (core on both sides) | V-8 **positive case not falsely rejected** |
 | `fx/tax-01-app-ability/` `tax-02-native-adapter/` `tax-03-iface-leaf/` | counterexamples for the three hard prohibitions | V-8 |
 | `fx/tax-ok/` | app→interface→ability | V-8 positive case |
 | `fx/export-tax16|17|18|19/` | four violations of export-surface invariants | V-12 |
@@ -52,7 +52,7 @@ same artifacts and cannot drift apart.
 | `fx/truth/` | single unit (case seds `hash_scope`/`truth`) | V-11② |
 | `fx/ver-badstr/` `fx/ver-badrange/` `fx/ver-pad/` | version string / range shapes | V-13 |
 | `fx/showcase/` | platform+sched+service+interface+app+product all-green combination | full command-surface coverage + snapshots |
-| `fx/build/` | minimal **buildable** tree (app/hello → iface/hello-api → service/echo → sched/coop → platform/qemu-aarch64; each plugin has real `src/*.c` (+ one `.S`), platform has `[build.target]`/`[build.target.qemu]`, product has `[build]`/`[build.release]`; also contains `tests/gates.toml` with four gates + two hosttests + one script) | all of V-B (`build --dry-run` / `--emit-backends` / `test --list` / `clean`; judge calls core directly) |
+| `fx/build/` | minimal **buildable** tree (app/hello → iface/hello-api → provider/echo → sched/coop → runtime/qemu-aarch64; each plugin has real `src/*.c` (+ one `.S`), platform has `[build.target]`/`[build.target.qemu]`, product has `[build]`/`[build.release]`; also contains `tests/gates.toml` with four gates + two hosttests + one script) | all of V-B (`build --dry-run` / `--emit-backends` / `test --list` / `clean`; judge calls core directly) |
 | `fx/gates-regex/` | contains only a `tests/gates.toml` whose `require` uses `(A|B)` outside the subset | V-B⑦ (`BRV-BLD-0012`) |
 
 ## 1. Item-by-item acceptance
@@ -61,10 +61,10 @@ same artifacts and cannot drift apart.
 |---|---|---|---|---|
 | V-1 | one set per `new` class × `c`, `check` has 0 errors right after generation | `V-1` section: 6 artifacts per class + `check --json`; four classes in one tree | exit 0; `summary.errors==0`; 6/6 artifacts | ✅ |
 | V-2 | repeated `gen` has no diff; `--check` is byte-identical; **stale descriptors** (leftovers from plugin rename/delete) must go red first and then be cleaned up | `V-2` section | second `gen` reports "already up to date" + identical tree fingerprint; `--check` exit 0; after tampering exit 1 with a code-less diagnostic; create a `build/gen/third_party/uboot-mmc/` ⇒ `gen --check` exit 1 naming "belongs to no plugin in the plugin tree" ⇒ `gen` deletes the directory and leaves a trace ⇒ `--check` again exit 0 | ✅ |
-| V-3 | create a cycle ⇒ report the **full cycle path** (structured edge list) + exit 1 | `V-3` section (fx/cycle) | `check` exit 1 + text `service/a → b → c → a`; `closure --json` `data.cycles[0].path/edges`; code `BRV-MF-0001` (see §3) | ✅ |
+| V-3 | create a cycle ⇒ report the **full cycle path** (structured edge list) + exit 1 | `V-3` section (fx/cycle) | `check` exit 1 + text `provider/a → b → c → a`; `closure --json` `data.cycles[0].path/edges`; code `BRV-MF-0001` (see §3) | ✅ |
 | V-4 | advance the table row by row; (a)(c) verify `COMPAT_GEN`/`MAJOR` do not affect each other | `V-4` section (fx/ver-matrix) | (a) `1.1.0.0`; (b) `1.1.1.0`; (c) `1.2.0.0`; (d) `1.2.1.0`; (e) `1.2.1.1`; (f) `0.1.0.0` unchanged; `--rule compat_gen` ⇒ exit 2 | ✅ |
 | V-5 | `publish` produces snapshot+lock+CHANGELOG+impact report; unchanged surface = no-op; `--check` recomputes independently and agrees | `V-5` section (fx/publish) | first run `written=3`; second run `noop=true, written=0` and byte-identical; `status --check` exit 0; change snapshot hash ⇒ exit 1 | ✅ |
-| V-6 | when a frozen entry changes, list all direct/transitive dependents + flag unsatisfied ones; missing `--note` ⇒ exit 1 | `V-6` section (fx/dependents) | `changes[0].kind=CHANGED`; `direct=2/transitive=3/unsatisfied=1` and names `service/consumer`; missing `--note` ⇒ exit 1; nonexistent `--note` ⇒ exit 2 | ✅ |
+| V-6 | when a frozen entry changes, list all direct/transitive dependents + flag unsatisfied ones; missing `--note` ⇒ exit 1 | `V-6` section (fx/dependents) | `changes[0].kind=CHANGED`; `direct=2/transitive=3/unsatisfied=1` and names `provider/consumer`; missing `--note` ⇒ exit 1; nonexistent `--note` ⇒ exit 2 | ✅ |
 | V-7 | single-version closure correct; `compat_gen` conflict `VER-0001`; `range` out of bounds `VER-0002`; budget overflow red | `V-7` section (fx/ver-conflict, ver-range, showcase) | each of the two codes hit once + exit 1; closure of 5 plugins, provider before consumer on every init edge, `totals` and `platform_capacity` listed separately | ✅ |
 | V-8 | positive/negative for the three hard prohibitions; phase-monotonicity counterexample; **`sched-coop → platform` not falsely rejected** | `V-8` section (fx/tax-*, phase-*) | three counterexamples exit 1 + name both sides; `DEP-0009` / `DEP-0010` each hit once without mixing; positive cases exit 0 | ✅ |
 | V-9 | zero compile dependencies (**running tests** needs no cc/cargo/nm); `--json` schema stable | `V-9` section + `N-4` | minimal PATH (only python3/sh/coreutils) + bootstrap seed **single-file** entry runs new→check→closure→publish→status→gen; no cargo/g++ inside the scripts; structured snapshots | ✅ |
@@ -77,10 +77,10 @@ same artifacts and cannot drift apart.
 | V-16 | `unfreeze` without `--note` ⇒ red; release inside the window ⇒ `IFACE-0009`; empty unfreeze + refreeze ⇒ four segments unchanged | `V-16` section (fx/unfreeze) | without `--note` ⇒ exit **2** (argparse required, see §3); release inside window exit 1 + `IFACE-0009`, dev exit 0; empty unfreeze ⇒ version string unchanged | ✅ |
 | V-17 | `BR_MAX 16→4096` and ops slot added **must** produce different hashes; enum reorder is hash-visible | `V-17` section (fx/iface-*) | all three `declaration_hash` values differ; declaration order does not affect the hash; two publishes of the same input are byte-identical | ✅ |
 | V-18 | three glue-layer purity items | `tests/purity.sh` (called by run.sh) | (a) `--selftest` yields `ok 432 cases` under `PATH=/nonexistent`; (b) for 3 fixtures the "stub replacement" diagnostic sequence/count/code set exactly matches the real core; (c) 7 forbidden patterns with zero hits + 4 positive controls | ✅ |
-| V-19 | four items: ① P3/P4 or `map` ⇒ `PRIV-0001` ② `P2` declaring `map` ⇒ red ③ budget overflow red + difference ④ IRQ/DMA conflict red + both sides | `V-19` section (fx/priv-*, budget, res-conflict) | ①② `PRIV-0001`; ③ difference 188 KiB / 6 KiB; ④ 2 diagnostics naming `service/irq-a` and `service/irq-b`; two other orthogonal-table positives green | ✅ |
-| V-20 | three items (ADR-0036): ① `show bricks` = closure as a reading view (origin root/dep, budget) ② `show brick-init-flow` = the **runtime** boot chain (platform-first EARLY, category-decided CORE/LATE, one IRQ step, START with APP last, selftest pass) ③ a declared phase the runtime would not honour is red | `V-20` section (fx/showcase) | ① `6 plugins, 2 roots`, `root:app`/`dep` marks, budget line; ② counts `early 5 / irq 1 / start 5`, first step `early_init platform/qemu-aarch64`; ③ `phase = "late"` on an app ⇒ exit 2 | ✅ |
+| V-19 | four items: ① P3/P4 or `map` ⇒ `PRIV-0001` ② `P2` declaring `map` ⇒ red ③ budget overflow red + difference ④ IRQ/DMA conflict red + both sides | `V-19` section (fx/priv-*, budget, res-conflict) | ①② `PRIV-0001`; ③ difference 188 KiB / 6 KiB; ④ 2 diagnostics naming `provider/irq-a` and `provider/irq-b`; two other orthogonal-table positives green | ✅ |
+| V-20 | three items (ADR-0036): ① `show bricks` = closure as a reading view (origin root/dep, budget) ② `show brick-init-flow` = the **runtime** boot chain (platform-first EARLY, category-decided CORE/LATE, one IRQ step, START with APP last, selftest pass) ③ a declared phase the runtime would not honour is red | `V-20` section (fx/showcase) | ① `6 plugins, 2 roots`, `root:app`/`dep` marks, budget line; ② counts `early 5 / irq 1 / start 5`, first step `early_init runtime/qemu-aarch64`; ③ `phase = "late"` on an app ⇒ exit 2 | ✅ |
 | V-21 | two items (ADR-0037): ① the APP descriptor emits **no** `early_init` (and no prototype) while other types still do ② the APP's `init` is the last init, in the `app` phase, immediately before the IRQ hand-off | `V-21` section (fx/showcase, generated descriptors) | ① `\.early_init = BR_PLUGIN_NO_HOOK` on `app/hsm`, no `int hsm_early_init(void);`, `coop_early_init` still emitted; ② `counts.app=1`, `steps.8` = phase `app` / plugin `app/hsm`, `steps.9` = `irq` | ✅ |
-| V-B① | planned shape of `build --dry-run --json`: component/source/step counts, key sets of `data.steps[i]`/`data.units[i]`/`data.tools[i]`, `[build.target]` arch flags and linker script in argv, tool **candidate order** (ruling R-14) | `V-B` section (fx/build) | exit 0; `unit_count=6` / `source_count=7` / `steps_total=9`; argv contains `-mstrict-align` and `-Wl,-T,platform/qemu-aarch64/src/link.ld`; `cc` candidates `[<cross>gcc, gcc-16…, cc]`; `fail_code=BRV-BLD-0011` / `tool_code=BRV-BLD-0005` | ✅ |
+| V-B① | planned shape of `build --dry-run --json`: component/source/step counts, key sets of `data.steps[i]`/`data.units[i]`/`data.tools[i]`, `[build.target]` arch flags and linker script in argv, tool **candidate order** (ruling R-14) | `V-B` section (fx/build) | exit 0; `unit_count=6` / `source_count=7` / `steps_total=9`; argv contains `-mstrict-align` and `-Wl,-T,runtime/qemu-aarch64/src/link.ld`; `cc` candidates `[<cross>gcc, gcc-16…, cc]`; `fail_code=BRV-BLD-0011` / `tool_code=BRV-BLD-0005` | ✅ |
 | V-B② | `product.toml` missing `[build]` ⇒ declaration-surface error | `V-B` section (fx/build, starting from removing `[build]`) | exit 2 + `BRV-BLD-0001` | ✅ |
 | V-B③ | no plugin declares `[build.target]` ⇒ target facts unknowable | `V-B` section (fx/build, removing `[build.target]`) | exit 2 + `BRV-BLD-0003` | ✅ |
 | V-B④ | literal path in `[build].sources` does not exist ⇒ error (wildcard non-match does not count) | `V-B` section (fx/build, appending `src/nope.c`) | exit 2 + `BRV-BLD-0007` + span `build.sources` | ✅ |
@@ -118,7 +118,7 @@ implementation-side ruling is already registered in `rust/README.md` §10, and t
 | 9 | V-19: dedicated codes for resource/budget/scheduling conflicts | borrows `BRV-MF-0001`, message names both sides/difference | ruling R-9 |
 | 10 | V-7: topological order "provider first" | the case asserts the **invariant** "the provider comes first on every init edge" (nodes without init edges are unconstrained), not a fixed list | §7.6 / solver implementation |
 | 11 | §10's V-1…V-19 contain **no** build family | added §V-B (ADR-0004 / S1–S4 of design ADR-0003), using the newly opened codes `BRV-BLD-0001..0014`; cases only run `--dry-run`/`--emit-backends`/`judge`, **never invoking a compiler** | contract §3/§5.4/§7.4 + §9 R-13…R-17; the boundary discipline constrains only **combination-time** commands (R-13) |
-| 12 | **path convention** (the pitfall hit when V-B① first turned this into a criterion) | **all paths in the plan/`data` are relative to root** (`platform/qemu-aarch64/src/start.S`, `…/src/link.ld`); declaration-surface paths in `[build].sources`/`includes`/`linker_script` are **relative to the plugin root** and enter `data` only after core expands them. Write criteria against the shape of `data`, not against the line in `brick.toml` | the "path convention" note in contract §5.4; V-B① therefore asserts full root-relative paths, and additionally pins "assembly goes through asflags (no `-std=c11`)" |
+| 12 | **path convention** (the pitfall hit when V-B① first turned this into a criterion) | **all paths in the plan/`data` are relative to root** (`runtime/qemu-aarch64/src/start.S`, `…/src/link.ld`); declaration-surface paths in `[build].sources`/`includes`/`linker_script` are **relative to the plugin root** and enter `data` only after core expands them. Write criteria against the shape of `data`, not against the line in `brick.toml` | the "path convention" note in contract §5.4; V-B① therefore asserts full root-relative paths, and additionally pins "assembly goes through asflags (no `-std=c11`)" |
 
 ## 4. Implementation defects found by measurement
 
@@ -137,7 +137,7 @@ implementation-side ruling is already registered in `rust/README.md` §10, and t
   cd prototype
   make tools-prebuilt-check          # read-only gate
   # or ask the seed core directly:
-  mkdir -p /tmp/t && cd /tmp/t && mkdir -p service/x && printf 'schema = 1\n[plugin]\nname = "service/x"\nplugin_type = "ability"\napi_type = "native"\nlang = "c"\nsubkind = "service"\nphase = "late"\nversion = "0.1.0.0"\n[compat]\ncore = ">=1.0.0"\nhash_scope = "decl"\ntruth = "decl"\n' > service/x/brick.toml
+  mkdir -p /tmp/t && cd /tmp/t && mkdir -p provider/x && printf 'schema = 1\n[plugin]\nname = "provider/x"\nplugin_type = "ability"\napi_type = "native"\nlang = "c"\nsubkind = "service"\nphase = "late"\nversion = "0.1.0.0"\n[compat]\ncore = ">=1.0.0"\nhash_scope = "decl"\ntruth = "decl"\n' > provider/x/brick.toml
   echo '{"protocol":1,"command":"check","root":"'"$PWD"'"}' \
     | /home/zhuyh/workspace/unikernel-dev/prototype/prebuilts/seed/brickie/x86-64/linux/bin/brickie-core
   ```
@@ -160,11 +160,11 @@ implementation-side ruling is already registered in `rust/README.md` §10, and t
   ```sh
   cp -r tools/brickie/tests/fx/unfreeze /tmp/fz && cd /tmp/fz && echo rfc > rfc.md
   export BRICKIE_CORE=…/build/host/x86-64/linux/bin/brickie-core BRICKIE_GEN=…/brickie-gen PYTHONPATH=…/python
-  python3 -m brickie iface publish service/crypto#crypto
-  python3 -m brickie iface unfreeze service/crypto#crypto --note rfc.md
-  python3 -m brickie iface show service/crypto#crypto --json
+  python3 -m brickie iface publish provider/crypto#crypto
+  python3 -m brickie iface unfreeze provider/crypto#crypto --note rfc.md
+  python3 -m brickie iface show provider/crypto#crypto --json
   python3 -m brickie check --profile release
-  grep freeze_state api/iface/service/crypto/crypto.toml
+  grep freeze_state api/iface/provider/crypto/crypto.toml
   ```
 * Expected: `iface show` uses the **same effective freeze state** rule (declaration OR snapshot) as
   `check`/`publish`/snapshots, so inside a window it should show `unfreezing` (`rust/README` §10 S-19 already writes this rule as "publish preserves the effective freeze state").

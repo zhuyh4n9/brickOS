@@ -6,9 +6,9 @@
 | | |
 |---|---|
 | **是** | 表本身 + 它的语义(分配/查询/flags/释放/dup/dup2/退出清空) |
-| **不是** | POSIX 的 `open/read/write/…` —— 那是 **runtime/posix** 的面 |
+| **不是** | POSIX 的 `open/read/write/…` —— 那是 **provider/posix** 的面 |
 
-fd 表项统一持有 `br_file_t*`, `br_open` 是它的底层原语。runtime/posix 把二者接起来(**零转换**): `br_open_err` 分配文件句柄后交 `br_ft_alloc` 取 fd(分配失败要 `br_file_close` 回滚), `br_ft_get` 取回句柄再调 `br_file_read`(`errno = -ret`), `close` 先 `br_ft_release`(失败 ⇒ `-EBADF`), 只有返回了**最后一个引用**(非 `BR_NULL`)时才真关文件。
+fd 表项统一持有 `br_file_t*`, `br_open` 是它的底层原语。provider/posix 把二者接起来(**零转换**): `br_open_err` 分配文件句柄后交 `br_ft_alloc` 取 fd(分配失败要 `br_file_close` 回滚), `br_ft_get` 取回句柄再调 `br_file_read`(`errno = -ret`), `close` 先 `br_ft_release`(失败 ⇒ `-EBADF`), 只有返回了**最后一个引用**(非 `BR_NULL`)时才真关文件。
 
 ## 声明面(`brick.toml` 是唯一真值)
 
@@ -29,10 +29,10 @@ fd 表项统一持有 `br_file_t*`, `br_open` 是它的底层原语。runtime/po
 4. **并发 = 关中断临界区**(core 的 `br_irq_lock`, 嵌套安全): 每次表操作只有几条指令, **从不在临界区里睡眠**。不需要锁对象、不需要 init; `SAFE_PREEMPT` 的依据也在这里。
 
 ## 已知的语义边界(诚实清单)
-- **`flags` 是每 fd 的快照**: 访问模式按 POSIX 是每 fd 的, 而 `O_APPEND`/`O_NONBLOCK` 属 **open file description**(共享)。本件只存一份快照; 共享位的真值在 `br_file_t` 侧(`br_file_flags`)与驱动里 ⇒ runtime/posix 的 `F_SETFL` 要把共享位**同时**落到文件侧, 不能只改本表。
+- **`flags` 是每 fd 的快照**: 访问模式按 POSIX 是每 fd 的, 而 `O_APPEND`/`O_NONBLOCK` 属 **open file description**(共享)。本件只存一份快照; 共享位的真值在 `br_file_t` 侧(`br_file_flags`)与驱动里 ⇒ provider/posix 的 `F_SETFL` 要把共享位**同时**落到文件侧, 不能只改本表。
 - **`br_ft_set_flags` 是整体替换**(不是"只改状态位"): 一个能改访问模式的 setter 存在才是危险的 —— 要保留访问模式就自己按位并回来。
 - **没有 `F_DUPFD`(指定下限)**: 需要时用 `br_ft_dup2`, 或按 ADR 追加一个函数(面预算)。
-- **0/1/2 不是特殊槽**: 标准流由 runtime/posix 在 init 里先装, 于是**自然**占住最小三个号 —— 不需要"保留段"这种额外机制。
+- **0/1/2 不是特殊槽**: 标准流由 provider/posix 在 init 里先装, 于是**自然**占住最小三个号 —— 不需要"保留段"这种额外机制。
 
 ## 一致性用例
 `file_table_selftest()` 在 `src/ft_selftest.c`, 逐例打印 `[FTCONF] PASS/FAIL <tag> <desc>`, 末尾 `[FTCONF] SUMMARY pass=%u fail=%u total=%u`。11 例 `TC-FT-001..011`: 空表与最小号 / 最小可用 fd / 表满与空句柄 / 非法 fd 一律 `-EBADF` / flags 往返 / 最后一个引用判定 / dup 共享 / dup2 顶替与 displaced / release_all 去重与 `-ENOSPC` / errno 取值 / 边界与观测面。
@@ -52,4 +52,4 @@ tests/smoke.toml               ← 声明面用例骨架(与 in-image TC-FT-* �
 
 ## 已知欠账(不在本插件目录可修)
 - `br-wa-test-001`: `TC-FT-001..011` 是**自编号** —— 设计用例表(`6-01`)里没有文件表这一组。还债动作: 先补出 `6-01` 的用例组, 再把自编号改回正式编号(见根目录 `WORKAROUNDS.md`)。
-- **消费者已到位**: `runtime/posix` 经 `[[dep]] kind = "init"` 依赖本件, 于是它在 `product.toml` 里本可以只靠闭包进入。仍显式列着是刻意的 —— 见 `product.toml` 那一行的注释(让"文件表在 POSIX 运行时之外也有独立证据"这件事可读)。
+- **消费者已到位**: `provider/posix` 经 `[[dep]] kind = "init"` 依赖本件, 于是它在 `product.toml` 里本可以只靠闭包进入。仍显式列着是刻意的 —— 见 `product.toml` 那一行的注释(让"文件表在 POSIX 运行时之外也有独立证据"这件事可读)。

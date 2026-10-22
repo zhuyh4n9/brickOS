@@ -153,7 +153,7 @@ pub fn boot_flow(tree: &TreeLoad, closure: &Closure, selftest_on: bool) -> Flow 
     // The runtime finds the platform by `plugin_type`, scanning the section -- the first one wins.
     let platform = order
         .iter()
-        .find(|n| get(n).map(|p| p.plugin_type == "platform").unwrap_or(false))
+        .find(|n| get(n).map(|p| p.plugin_type == "runtime").unwrap_or(false))
         .cloned();
 
     let mut steps: Vec<Step> = Vec::new();
@@ -187,7 +187,7 @@ pub fn boot_flow(tree: &TreeLoad, closure: &Closure, selftest_on: bool) -> Flow 
         }
     }
     // 3. CORE, LATE then APP: `init`, phase decided by the category. The APP is last of all init
-    //    (ADR-0037), so it runs after every driver/service/skin, with IRQs still masked.
+    //    (ADR-0037), so it runs after every driver/provider/skin, with IRQs still masked.
     for phase in ["core", "late", "app"] {
         for name in &order {
             if get(name).map(|p| runtime_init_phase(p) == phase).unwrap_or(false) {
@@ -294,7 +294,7 @@ pub fn cmd_bricks(req: &Request) -> Response {
 
     // Every `plugin_type`, in layer order (ADR-0039 added `hal`); a type missing here would be
     // silently absent from the totals line.
-    let groups = ["app", "platform", "core", "hal", "interface", "ability"];
+    let groups = ["app", "runtime", "core", "hal", "interface", "ability"];
     let mut rows: Vec<(String, Value)> = Vec::new();
     for name in &c.selected {
         let Some(p) = tree.by_name(name) else { continue };
@@ -337,8 +337,8 @@ pub fn cmd_bricks(req: &Request) -> Response {
             "ram_kib": tree.product.as_ref().and_then(|p| p.budget_ram_kib),
             "stack_kib": tree.product.as_ref().and_then(|p| p.budget_stack_kib),
         },
-        "platform_capacity": {"ram_kib": c.capacity_ram, "stack_kib": c.capacity_stack},
-        "has_platform": c.has_platform,
+        "runtime_capacity": {"ram_kib": c.capacity_ram, "stack_kib": c.capacity_stack},
+        "has_runtime": c.has_runtime,
         "by_type": groups
             .iter()
             .map(|g| {

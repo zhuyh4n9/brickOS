@@ -31,7 +31,7 @@
 /* ---- byte heap (TLSF) ---- */
 void *br_malloc (br_size_t n);
 void *br_calloc (br_size_t n, br_size_t size);
-void *br_realloc(void *p, br_size_t n);     /* runtime/posix `realloc` forwards here directly (ADR-0014) */
+void *br_realloc(void *p, br_size_t n);     /* provider/posix `realloc` forwards here directly (ADR-0014) */
 void  br_free   (void *p);
 
 /* ---- physically contiguous memory (CA-7): separate contig pool, not the TLSF heap ---- */

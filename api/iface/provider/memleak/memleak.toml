@@ -1,0 +1,61 @@
+# brickie:generated
+# api/iface 快照 api/iface/provider/memleak/memleak.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "provider/memleak#memleak"
+provider = "provider/memleak"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.1.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:e0c8af553f57b1688e0962b7ed3df883b45923a839e1b693181a536f9470c526"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "func"
+name = "br_memleak_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_memleak_report"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_memleak_live"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_memleak_live_by_owner"
+sig = "br_u32 (br_owner_t)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_memleak_corruptions"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_memleak_owner"
+sig = "br_owner_t (void)"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_MEMLEAK_MAX_ROWS_PER_OWNER"
+value = "8"
+status = "experimental"

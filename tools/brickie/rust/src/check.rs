@@ -241,9 +241,9 @@ fn deps_usage_checks(
 ) -> Vec<(&'static str, Diag)> {
     let mut out: Vec<(&'static str, Diag)> = Vec::new();
     for u in model::cross_plugin_includes(root, tree, &closure.selected) {
-        // The core plugin is platform-agnostic: it uses the platform *contract* (`br/platform/**`)
+        // The core plugin is platform-agnostic: it uses the platform *contract* (`br/runtime/**`)
         // without naming a platform plugin, so that include family is exempt (same rule as `build`).
-        if u.header.starts_with("br/platform/")
+        if u.header.starts_with("br/runtime/")
             && tree
                 .plugins
                 .iter()
@@ -253,7 +253,7 @@ fn deps_usage_checks(
         }
         // A-2: an APP must not reach below the iface layer. Any *other* consumer is judged by the
         // ordinary dependency rule below (ADR-0038: core is a provider like any other, so its
-        // headers need `[[dep]] runtime/core` -- no ambient exemption).
+        // headers need `[[dep]] provider/core` -- no ambient exemption).
         if u.provider == "core/c_core" {
             let is_app = tree
                 .plugins
@@ -537,7 +537,7 @@ fn iface_checks(
     // Unit identity is `<provider>#<unit>` (§5.6), and that is what must be unique: a unit file
     // lives at `api/iface/<provider>/<unit>.toml`, so two providers may each call a unit `trace`.
     // (ADR-0038 §3 moved this from bare unit names to ids: `core/c_core#trace` and
-    // `service/trace#trace` are different units and now coexist, which "one header = one unit"
+    // `provider/trace#trace` are different units and now coexist, which "one header = one unit"
     // naming needs.)
     let mut by_id: std::collections::BTreeMap<String, String> = std::collections::BTreeMap::new();
     for p in &selected {

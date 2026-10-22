@@ -9,7 +9,7 @@
 #include <br/core/br_error.h>
 #include <br/core/br_log.h>
 #include <br/core/br_types.h>
-#include <br/platform/br_plat_pci.h>
+#include <br/runtime/br_plat_pci.h>
 
 /* Referenced by the generated plugin_desc.c .selftest hook. */
 int pci_core_selftest(void);

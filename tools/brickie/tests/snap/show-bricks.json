@@ -49,11 +49,26 @@
       },
       {
         "api_type": "native",
-        "name": "platform/qemu-aarch64",
-        "namespace": "platform",
+        "name": "provider/crypto",
+        "namespace": "provider",
+        "origin": "dep",
+        "phase": "late",
+        "plugin_type": "ability",
+        "ram_kib": 48,
+        "root_alias": "",
+        "root_kind": "",
+        "selftest": false,
+        "stack_kib": 4,
+        "subkind": "service",
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "name": "runtime/qemu-aarch64",
+        "namespace": "runtime",
         "origin": "dep",
         "phase": "core",
-        "plugin_type": "platform",
+        "plugin_type": "runtime",
         "ram_kib": 8192,
         "root_alias": "",
         "root_kind": "",
@@ -75,21 +90,6 @@
         "selftest": false,
         "stack_kib": 0,
         "subkind": "scheduler",
-        "version": "0.1.0.0"
-      },
-      {
-        "api_type": "native",
-        "name": "service/crypto",
-        "namespace": "service",
-        "origin": "dep",
-        "phase": "late",
-        "plugin_type": "ability",
-        "ram_kib": 48,
-        "root_alias": "",
-        "root_kind": "",
-        "selftest": false,
-        "stack_kib": 4,
-        "subkind": "service",
         "version": "0.1.0.0"
       }
     ],
@@ -115,16 +115,16 @@
         "core": 1,
         "hal": 0,
         "interface": 1,
-        "platform": 1
+        "runtime": 1
       },
-      "has_platform": true,
-      "platform_capacity": {
-        "ram_kib": 8192,
-        "stack_kib": 64
-      },
+      "has_runtime": true,
       "plugins": 6,
       "ram_kib": 48,
       "roots": 2,
+      "runtime_capacity": {
+        "ram_kib": 8192,
+        "stack_kib": 64
+      },
       "stack_kib": 4
     }
   },

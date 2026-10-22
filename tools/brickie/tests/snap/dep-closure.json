@@ -2,15 +2,15 @@
   "command": "dep closure",
   "data": {
     "cycles": [],
-    "has_platform": true,
+    "has_runtime": true,
     "init_edges": [
       {
-        "from": "sched/coop",
-        "to": "platform/qemu-aarch64"
+        "from": "provider/crypto",
+        "to": "sched/coop"
       },
       {
-        "from": "service/crypto",
-        "to": "sched/coop"
+        "from": "sched/coop",
+        "to": "runtime/qemu-aarch64"
       }
     ],
     "plugins": [
@@ -50,9 +50,20 @@
       {
         "api_type": "native",
         "compat_gen": 0,
-        "name": "platform/qemu-aarch64",
+        "name": "provider/crypto",
+        "phase": "late",
+        "plugin_type": "ability",
+        "ram_kib": 48,
+        "selected": true,
+        "stack_kib": 4,
+        "version": "0.1.0.0"
+      },
+      {
+        "api_type": "native",
+        "compat_gen": 0,
+        "name": "runtime/qemu-aarch64",
         "phase": "core",
-        "plugin_type": "platform",
+        "plugin_type": "runtime",
         "ram_kib": 8192,
         "selected": true,
         "stack_kib": 64,
@@ -68,17 +79,6 @@
         "selected": true,
         "stack_kib": 0,
         "version": "0.1.0.0"
-      },
-      {
-        "api_type": "native",
-        "compat_gen": 0,
-        "name": "service/crypto",
-        "phase": "late",
-        "plugin_type": "ability",
-        "ram_kib": 48,
-        "selected": true,
-        "stack_kib": 4,
-        "version": "0.1.0.0"
       }
     ],
     "profile": "dev",
@@ -89,7 +89,7 @@
       },
       {
         "from": "iface/hsm-api",
-        "to": "service/crypto"
+        "to": "provider/crypto"
       }
     ],
     "seeds": [
@@ -100,28 +100,28 @@
       "app/hsm",
       "core/c_core",
       "iface/hsm-api",
-      "platform/qemu-aarch64",
-      "sched/coop",
-      "service/crypto"
+      "provider/crypto",
+      "runtime/qemu-aarch64",
+      "sched/coop"
     ],
     "topo_order": [
       "app/hsm",
       "core/c_core",
       "iface/hsm-api",
-      "platform/qemu-aarch64",
+      "runtime/qemu-aarch64",
       "sched/coop",
-      "service/crypto"
+      "provider/crypto"
     ],
     "totals": {
       "budget": {
         "ram_kib": 512,
         "stack_kib": 16
       },
-      "platform_capacity": {
+      "ram_kib": 48,
+      "runtime_capacity": {
         "ram_kib": 8192,
         "stack_kib": 64
       },
-      "ram_kib": 48,
       "stack_kib": 4
     },
     "type_edges": []

@@ -169,13 +169,13 @@ version = "0.1.0.0"
 stage = "dev"
 
 [[lock.plugins]]
-name = "service/crypto"
+name = "provider/crypto"
 version = "0.1.0.0"
 compat_gen = 0
 
 [[lock.units]]
-id = "service/crypto#crypto"
-provider = "service/crypto"
+id = "provider/crypto#crypto"
+provider = "provider/crypto"
 unit = "crypto"
 api_iface = "native"
 version = "0.1.0.0"
@@ -190,14 +190,14 @@ truth = "decl"
 ### 6.2 `build/index/dependents.json` (`emit::render_dependents`, shape = `schema/index.schema.json`)
 
 ```json
-{"schema": 1, "dependents": {"service/crypto": [{"from": "app/hsm", "kind": "runtime"}]}}
+{"schema": 1, "dependents": {"provider/crypto": [{"from": "app/hsm", "kind": "runtime"}]}}
 ```
 
 keys are sorted with `BTreeMap`; edges are built only from **declared** `[[dep]]` (runtime registry lookups produce no edge).
 
 ### 6.3 Snapshot reading `api/iface/<provider path segments>/<unit>.toml`
 
-`model::load_snapshots` reads **tolerantly**: fields may be flat or under `[unit_meta]`; entry table names accept `[[entry]]` / `[[entries]]` / `[[export.entries]]`; it also reads `strict_params` (rule 10), `baseline_hash` and `[[baseline_entry]]` (the unfreeze baseline of ruling R-7). `provider` is derived from the relative path (`api/iface/service/crypto/crypto.toml` ⇒ `service/crypto`), `id = <provider>#<unit>` (ruling R-11). `api/iface` missing ⇒ empty table + no diagnostics = "not published"; `brickie.lock` missing ⇒ `None`.
+`model::load_snapshots` reads **tolerantly**: fields may be flat or under `[unit_meta]`; entry table names accept `[[entry]]` / `[[entries]]` / `[[export.entries]]`; it also reads `strict_params` (rule 10), `baseline_hash` and `[[baseline_entry]]` (the unfreeze baseline of ruling R-7). `provider` is derived from the relative path (`api/iface/provider/crypto/crypto.toml` ⇒ `provider/crypto`), `id = <provider>#<unit>` (ruling R-11). `api/iface` missing ⇒ empty table + no diagnostics = "not published"; `brickie.lock` missing ⇒ `None`.
 
 ### 6.4 Machine files added by the second cut
 
@@ -213,7 +213,7 @@ keys are sorted with `BTreeMap`; edges are built only from **declared** `[[dep]]
 
 | # | Item | This implementation | Basis |
 |---|---|---|---|
-| D-1 | `[plugin].phase` allowed set | `interface` / `ability.service` ⇒ `{early,late}` (giving `core` ⇒ error); `platform` / `ability(other)` ⇒ `{early,core}`; `app` ⇒ `{early,core,app}`. **`early` is always legal** = no `init` hook | parent-agent clarification + §7.2; case in point: the init edge `platform/qemu-aarch64(phase=core)` × `sched-coop(phase=core)` does **not** report `BRV-DEP-0009` |
+| D-1 | `[plugin].phase` allowed set | `interface` / `ability.service` ⇒ `{early,late}` (giving `core` ⇒ error); `platform` / `ability(other)` ⇒ `{early,core}`; `app` ⇒ `{early,core,app}`. **`early` is always legal** = no `init` hook | parent-agent clarification + §7.2; case in point: the init edge `runtime/qemu-aarch64(phase=core)` × `sched-coop(phase=core)` does **not** report `BRV-DEP-0009` |
 | D-2 | phase derivation defaults | `platform`/`ability(non-service)` ⇒ `core`; `ability.service`/`interface` ⇒ `late`; `app` ⇒ `app`; no `init` ⇒ `early` | same. **Note**: the cxx first cut derived `scheduler` as `early`; this implementation derives `core` per §7.2 (consistent with the parent-agent clarification) |
 | D-3 | `plan-init`'s `brickie.lock` | the plan carries `{path:"brickie.lock", kind:"machine", template:""}`, with the text separately in `data.lock_content` | contract says plans produce no content, but lock is a **core-owned machine file** (§4); keeping both makes it easy for L5 to write it directly |
 | D-4 | template placeholders | provide **both** lower-case (`{{name}}`) and upper-case (`{{PLUGIN_NAME}}`) variable sets | current `templates/` use lower case, the cxx first cut used upper case; extra variables have no side effect on rendering |
@@ -313,7 +313,7 @@ keys are sorted with `BTreeMap`; edges are built only from **declared** `[[dep]]
 | **S-10** | the "dependents still match" gate hook of `publish --profile release` makes **any** `COMPAT_GEN` jump rejected under release | follows the §6.5 table (`BRV-VER-0001`) and hints in the message to coordinate the dependents first | state in §6.5 that "a jump requires the dependents to change too" |
 | **S-11** | `SEMANTIC` changes have no input in v0.1 (pure behavioural semantics are unobservable from TOML) | does not produce `SEMANTIC`; `BRV-IFACE-0010` has nothing to report | note in §6.3 that "v0.1's SEMANTIC is manually declared/unobservable" |
 | **S-12** | semantics of `iface status`'s `files:[if write-back needed]` | the gate **does not write to disk**; when inconsistent, the expected snapshot goes in `data.expected_snapshot` | clarify in contract §5.1 |
-| **S-13** | §7.3's app row "ability ✗" + §10 V-12② "`app → service/sqlite` must pass" | take V-12: `app` may depend on an ability with `api_type = third_party` (the precise form of "must not call **native** directly"); the app branch of `rules::dep_direction_ok` adds that exception | write the exception into the §7.3 table |
+| **S-13** | §7.3's app row "ability ✗" + §10 V-12② "`app → provider/sqlite` must pass" | take V-12: `app` may depend on an ability with `api_type = third_party` (the precise form of "must not call **native** directly"); the app branch of `rules::dep_direction_ok` adds that exception | write the exception into the §7.3 table |
 | **S-14** | R-6 "platform's `[[res]]` is also capacity" — if it **also enters Σ**, the physical cap is always red (§8.1 note ① loses meaning) | `platform`'s `[[res]]` becomes `platform_capacity` and does **not** enter the consumer-side Σ (`totals.ram_kib` = sum of non-platform) | clarify R-6: the platform declares **supply**, not its own consumption |
 | **S-15** | does `unfreeze`'s baseline take "the last published frozen surface" or "the declaration surface at unfreeze time" | takes the **last published snapshot entries** (the truth of the commitment); unpublished changes inside the unfreeze window are counted at `refreeze` as "changed frozen entries" | add a baseline definition in §5.3.4 |
 | **S-16** | the deprecation cycle's "two minors with no use" has no symbol-level input in v0.1 | only the **zero use on the declaration surface** hard gate is done; the ability to downgrade the symbol surface to a warning under release is **not implemented** (no symbol-level data) | clarify in §6.4 that v0.1 only handles the declaration surface |

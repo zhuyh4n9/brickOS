@@ -14,7 +14,7 @@ hash_scope = "decl"
 truth      = "decl"
 
 [[dep]]
-name  = "service/sqlite"
+name  = "provider/sqlite"
 range = "*"
 kind  = "runtime"
 

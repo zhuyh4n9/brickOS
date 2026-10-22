@@ -35,9 +35,9 @@ Example:
 ```sh
 echo '{"protocol":1,"command":"render","args":{
   "templates_root":"'$PWD'/templates",
-  "artifacts":[{"path":"service/crypto/brick.toml",
+  "artifacts":[{"path":"provider/crypto/brick.toml",
                 "template":"native/ability/c/brick.toml.tmpl",
-                "vars":{"name":"service/crypto","short":"crypto", "...":"..."}}]}}' \
+                "vars":{"name":"provider/crypto","short":"crypto", "...":"..."}}]}}' \
 | build/host/x86-64/linux/bin/brickie-gen
 ```
 
@@ -49,7 +49,7 @@ echo '{"protocol":1,"command":"render","args":{
 
 | Variable | Meaning | User |
 |---|---|---|
-| `name` | full plugin name (`service/crypto`) | all |
+| `name` | full plugin name (`provider/crypto`) | all |
 | `schema` | `brick.toml`'s `schema` value (`1`) | brick.toml |
 | `plugin_type` | `app`/`interface`/`ability`/`platform`/`core` (template directories are already split; current templates hardcode it literally per directory) | (reserved) |
 | `api_type` | `native`/`runtime_adapter`/`third_party` | brick.toml / README |
@@ -132,7 +132,7 @@ make prebuilt-check # whether the three pieces lag behind (does not touch disk)
 
 * `cd prototype && make tools` — g++ 15.2 all green, zero warnings; `make selftest` — all 30 items `ok`; `make launcher-smoke` — `brickie 0.1.0`.
 * `render` — 4 plugin kinds × 5 templates + descriptors + product (31 files total) rendered with the variable set that `brickie-core` actually emits: `exit_code = 0`, `files` complete, no diagnostics; the 9 error paths — missing variable / out-of-bounds path / invalid mode / protocol mismatch, etc. — all return `exit_code = 2`.
-* End-to-end (via the single-file `brickie` ELF): `brickie new` for each of the four plugin kinds all `exit 0` with all 6 artifacts present (`platform/qemu-aarch64`'s symbol prefix measured as `qemu_aarch64_`); `brickie init hsm` `exit 0`, with product.toml + app skeleton + `brickie.lock` present (the machine file `brickie.lock` is correctly skipped by render, and its content is written by L5).
-* Seed: the **three pieces** were published via the regular `core → cxx` path; when this file was written, the seed's `brickie-core --selftest` = `ok 247 cases`. Byte-for-byte consistency holds only when "after the last publication the payload sources did not change again"; if they did, `make prebuilt` must republish. Copying only the single file `brickie` into an empty directory, under `env -i PATH=/usr/bin:/bin`, `new platform/qemu-aarch64` produced all 6 artifacts (BRICKIE_GEN / BRICKIE_CORE both point at the unpacked embedded pieces).
+* End-to-end (via the single-file `brickie` ELF): `brickie new` for each of the four plugin kinds all `exit 0` with all 6 artifacts present (`runtime/qemu-aarch64`'s symbol prefix measured as `qemu_aarch64_`); `brickie init hsm` `exit 0`, with product.toml + app skeleton + `brickie.lock` present (the machine file `brickie.lock` is correctly skipped by render, and its content is written by L5).
+* Seed: the **three pieces** were published via the regular `core → cxx` path; when this file was written, the seed's `brickie-core --selftest` = `ok 247 cases`. Byte-for-byte consistency holds only when "after the last publication the payload sources did not change again"; if they did, `make prebuilt` must republish. Copying only the single file `brickie` into an empty directory, under `env -i PATH=/usr/bin:/bin`, `new runtime/qemu-aarch64` produced all 6 artifacts (BRICKIE_GEN / BRICKIE_CORE both point at the unpacked embedded pieces).
 * Running `make cxx` again is a no-op (0 compilations) ⇒ the payload/ELF is reproducible; `prebuilt-check` is all green only when the seed keeps up with the **last publication**.
 * Payload: embeds `bin/brickie-gen` and `bin/brickie-core` (both 0755); the launcher was measured setting `BRICKIE_GEN` / `BRICKIE_CORE`, forwarding the exit code, and not overriding explicit environment variables; conditional embedding and the three-piece `prebuilt` / `prebuilt-check` were verified with a "fake core" (cleaned up after verification).

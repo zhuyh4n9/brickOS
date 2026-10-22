@@ -3,7 +3,7 @@
 // come from brickie-core via args.artifacts[].vars; here we only read template → substitute
 // {{key}} → return files[].
 // Request: {"protocol":1,"command":"render","args":{"templates_root":"<abs path>","artifacts":
-//           [{"path":"service/crypto/brick.toml","template":"native/ability/c/brick.toml.tmpl",
+//           [{"path":"provider/crypto/brick.toml","template":"native/ability/c/brick.toml.tmpl",
 //             "vars":{...}}]}}
 // Response files[]: [{"path":..., "kind":"rendered", "content":..., "mode":"0644"}]
 // Rules: kind is always "rendered" (generated files come only from brickie-gen; L5 only

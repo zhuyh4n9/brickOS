@@ -1,0 +1,17 @@
+/* {{name}} — public declaration surface (human-written)
+ *
+ * This file is included by the same plugin's src/ and by the generated plugin_desc.c.
+ * v0.1 declares only lifecycle callbacks; add the real public API here per the §3.5 api_type rules,
+ * and `brickie iface publish` collects it into the interface surface snapshot (api/iface/<provider>/<unit>.toml).
+ */
+#ifndef {{header_guard}}
+#define {{header_guard}}
+
+/* Lifecycle callbacks: invoked by phase via the br_plugin_t descriptor (`1-01` §6.2) */
+int {{symbol_prefix}}early_init(void);
+int {{symbol_prefix}}init(void);
+int {{symbol_prefix}}start(void);
+
+/* TODO: runtime data plane (region table / early console / linker data) */
+
+#endif /* {{header_guard}} */

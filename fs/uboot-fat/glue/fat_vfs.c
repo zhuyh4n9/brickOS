@@ -585,7 +585,7 @@ static br_s64 uboot_fat_file_lseek(br_file_t *f, br_s64 off, int whence)
     return pos;
 }
 
-/* fops->fsync (= fsync(fd) in runtime/posix). The write path commits data and dirents call by call;
+/* fops->fsync (= fsync(fd) in provider/posix). The write path commits data and dirents call by call;
  * the only state possibly left in memory is the FAT cache (fsdata.fatbuf, a 6-sector window dirtied
  * by set_fatent_value), so fsync writes back that window and lets bdev flush -- BR_NULL would
  * wrongly hand consumers -ENOTSUP. Node via br_file_inode(), not br_file_fpriv(): a dir handle's

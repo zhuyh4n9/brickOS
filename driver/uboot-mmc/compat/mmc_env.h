@@ -528,7 +528,7 @@ void *memset (void *dst, int c, size_t n);
 int   memcmp (const void *a, const void *b, size_t n);
 
 /* u-boot `malloc.h` wired to the core heap. Macros, not functions, so products that do not select
- * runtime/posix still link. */
+ * provider/posix still link. */
 #define malloc(n)        br_malloc((br_size_t)(n))
 #define calloc(n, s)     br_calloc((br_size_t)(n), (br_size_t)(s))
 #define realloc(p, n)    br_realloc((p), (br_size_t)(n))

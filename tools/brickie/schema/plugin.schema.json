@@ -38,10 +38,10 @@
       "interface",
       "ability",
       "hal",
-      "platform",
+      "runtime",
       "core"
      ],
-     "description": "Plugin layer. `core` is the single boot/phase driver, `platform` the SoC layer, `hal` the infrastructure layer (peer of `ability`, ADR-0039), `ability` a concrete implementation, `interface` a skin, `app` the product's application."
+     "description": "Plugin layer. `core` is the single boot/phase driver, `runtime` the target runtime (SoC/board port; renamed from `platform` by ADR-0040), `hal` the infrastructure layer (peer of `ability`), `ability` a concrete implementation, `interface` a skin, `app` the application."
     },
     "api_type": {
      "type": "string",
@@ -79,7 +79,7 @@
     },
     "symbol_prefix": {
      "type": "string",
-     "description": "Hook/descriptor symbol-prefix override (optional). Default is derived from name_short; when different namespaces share a short name (e.g. iface/posix and runtime/posix) a unique prefix must be given explicitly."
+     "description": "Hook/descriptor symbol-prefix override (optional). Default is derived from name_short; when different namespaces share a short name (e.g. iface/posix and provider/posix) a unique prefix must be given explicitly."
     },
     "sched_class": {
      "type": "string",

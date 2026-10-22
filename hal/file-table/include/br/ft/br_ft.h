@@ -66,7 +66,7 @@ int br_ft_release_all(br_file_t **out, br_u32 cap);
  * per-slot snapshot. Returns the lowest free fd, -EBADF (bad oldfd) or -EMFILE (table full;
  * oldfd untouched).
  * The access mode is per fd, while O_APPEND/O_NONBLOCK belong to the open file description: those
- * shared bits live on the br_file_t side (br_file_flags) and runtime/posix F_SETFL must update them
+ * shared bits live on the br_file_t side (br_file_flags) and provider/posix F_SETFL must update them
  * there too.
  */
 int br_ft_dup(int oldfd);

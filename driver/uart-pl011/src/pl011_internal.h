@@ -9,7 +9,7 @@
 
 #include <br/core/br_types.h>
 
-/* Platform data (QEMU virt; same origin as platform/qemu-aarch64/src/console_pl011.c). A value
+/* Platform data (QEMU virt; same origin as runtime/qemu-aarch64/src/console_pl011.c). A value
  * that disagrees with the console side is reported by each side's _Static_assert. */
 
 /* PL011 base on QEMU virt (platform data written directly in v1). */

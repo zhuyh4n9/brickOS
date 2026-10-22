@@ -1030,7 +1030,7 @@ int br_closedir(br_dir_t *d)
     return rc;
 }
 
-/* Path-level convenience surface (1:1 map for runtime/posix): two-part "parent inode + name". */
+/* Path-level convenience surface (1:1 map for provider/posix): two-part "parent inode + name". */
 
 int br_fstat(br_file_t *f, br_stat_t *st)
 {

@@ -4,7 +4,7 @@ brickOS 的**可运行原型**。开发分支 `brickOS-prototype-v0.x.0`; 冻结
 `brickOS-prototype-v0.2.0`(版本声明 `product.toml [product].version` = `0.2.0.0`)。
 
 > **"设计 / 原型"双线分行**: 设计文档在 **`brickOS-Design`** 分支(`docs/` + `comment/`), 原型代码在本分支(仓库根 `brickOS/`), `main` 上只有 `LICENSE` ⇒ 本分支**没有** `docs/`, 下文的设计引用是 `brickOS-Design` 分支上的章节号(如 `docs/3-os-core/3-01-core-api-list.md` = `3-01`)。
-> **落点约定**: 开发中的原型树 = 仓库根 `brickOS/`(core / platform 两个顶层); 一个版本稳定后再冻结为 `brickOS-prototype-v<版本>/`(或按分支/标签冻结), 冻结件只读。
+> **落点约定**: 开发中的原型树 = 仓库根 `brickOS/`(core / runtime 两个顶层); 一个版本稳定后再冻结为 `brickOS-prototype-v<版本>/`(或按分支/标签冻结), 冻结件只读。
 
 ---
 
@@ -16,8 +16,9 @@ v0.1.0 交付**声明期**(插件发现/校验/描述符生成 + `brickie` 组�
 |---|---|---|
 | core 启动与调度 | 四阶段启动链 `br_core_main`; 心跳/tick HZ 可配; 中断下半部 + 工作队列 + IRQ 出口抢占换栈; 时间片轮转(抢占)调度器 | 0008/0011/0016/0017 |
 | 组合期 | `brickie build`(声明面驱动, 取代组合段 Makefile); 声明依赖的**包含面**执法; 接口发布/冻结状态; **源码纪律 R1/R2/R3**(`check --src` + `.a` 符号审计) | 0004/0018/0038 |
-| 分层 | **`hal` 成为一等 `plugin_type`**(与 `ability` 平级, 位于其下): `framework/` 改名 `hal/`, core 的机制拆成 `hal/{int,mm,sched}`; `ability` 选中 `hal`, `platform` 实现 HAL 契约 | **0039** |
-| 服务与接口 | POSIX 运行时(`runtime/posix`)+ fd 表 + errno 逐值对齐 + `iface/posix` 皮肤; APP 只依赖 Interface | 0012/0014/0015/0019/0020 |
+| 分层 | **`hal` 成为一等 `plugin_type`**(与 `ability` 平级, 位于其下): `framework/` 改名 `hal/`, core 的机制拆成 `hal/{int,mm,sched}`; `ability` 选中 `hal`, runtime 实现 HAL 契约 | **0039** |
+| 命名 | **`platform` → `runtime`**(类型/命名空间/目录/契约头 `br/runtime/**`/产品根键), **`service/` + `runtime/` → `provider/`**(唯一实现层命名空间) | **0040** |
+| 服务与接口 | POSIX 运行时(`provider/posix`)+ fd 表 + errno 逐值对齐 + `iface/posix` 皮肤; APP 只依赖 Interface | 0012/0014/0015/0019/0020 |
 | 错误码 | **POSIX 错误码的名字归 core**(`br/core/br_errno.h`)—— 有没有 POSIX 运行都拿得到同一套编号; 三方移植件因此不再各自抄映射表 | **0023** |
 | 存储 | VFS 存储栈(四层 ops + 瞬态 inode + 链接族); **bdev 块设备子分类**; 真 eMMC(SDHCI)三方驱动; 第三方 **FAT12/16/32** 与 **EROFS(只读 + LZ4)** 文件系统 | 0009/0013/0021/**0022** |
 | 设备 | dev-core/cdev-core 设备框架 + devfs; 通用 **PCI(e)** 枚举/BAR 分配/INTx | 0009/0021 |
@@ -36,7 +37,7 @@ v0.1.0 交付**声明期**(插件发现/校验/描述符生成 + `brickie` 组�
 ```
 (Platform 插件) Start.S ─► br_core_main ─► 四阶段启动链(ADR-0008)
     ① core 平台无关(时钟/日志/中断框架/插件管理扫段)
-    ② platform 插件初始化(早期 console + GICv3 PIC + IRQ 绑定表 + region 表 + 页表 ops)
+    ② runtime 插件初始化(早期 console + GICv3 PIC + IRQ 绑定表 + region 表 + 页表 ops)
     ③ core 依赖平台(三池认领 br_mem_init + 恒等映射页表建立/开 MMU)
     ④ plugin_manager: EARLY → CORE → LATE → 开中断 → START(APP 最后)
          → 自检 pass(ADR-0010: 逐插件 selftest, 全部 start 之后) → br_sched_run() → APP 线程 MainLoop(延时 + 日志 + 心跳)
@@ -48,19 +49,19 @@ v0.1.0 交付**声明期**(插件发现/校验/描述符生成 + `brickie` 组�
 
 | 环节 | 内容 | 代码 |
 |---|---|---|
-| **Platform Entry**(`platform/qemu-aarch64` 插件) | reset、选核、EL2→EL1 降级、栈、**异常向量表**、BSS 清零 | `platform/qemu-aarch64/src/start.S` / `vectors.S` |
-| | 早期 console(PL011 轮询)、arch timer 读数 | `platform/qemu-aarch64/src/console_pl011.c` / `timer_arch.c` |
-| | **GICv3 驱动**(`br_pic_ops` 方言) + 板级 IRQ 绑定表 + 中断初始化/开跑 | `platform/qemu-aarch64/src/gicv3.c` / `board_irq.c` |
-| | **4 KiB 恒等映射页表**(4 级 / TTBR0 / MAIR / 低 1 GiB Device 块 + 8 MiB RAM 页窗)+ **region 表** + 开 MMU | `platform/qemu-aarch64/src/mmu.c` / `memmap.c` |
-| | **中断一致性用例**(target-only, 编进镜像) | `platform/qemu-aarch64/src/irq_conf.c` |
-| | **内存/MMU 一致性用例**(target-only) | `platform/qemu-aarch64/src/mm_conf.c` |
-| | 链接脚本(含 `.br_extable` 收集) | `platform/qemu-aarch64/src/link.ld` |
+| **Platform Entry**(`runtime/qemu-aarch64` 插件) | reset、选核、EL2→EL1 降级、栈、**异常向量表**、BSS 清零 | `runtime/qemu-aarch64/src/start.S` / `vectors.S` |
+| | 早期 console(PL011 轮询)、arch timer 读数 | `runtime/qemu-aarch64/src/console_pl011.c` / `timer_arch.c` |
+| | **GICv3 驱动**(`br_pic_ops` 方言) + 板级 IRQ 绑定表 + 中断初始化/开跑 | `runtime/qemu-aarch64/src/gicv3.c` / `board_irq.c` |
+| | **4 KiB 恒等映射页表**(4 级 / TTBR0 / MAIR / 低 1 GiB Device 块 + 8 MiB RAM 页窗)+ **region 表** + 开 MMU | `runtime/qemu-aarch64/src/mmu.c` / `memmap.c` |
+| | **中断一致性用例**(target-only, 编进镜像) | `runtime/qemu-aarch64/src/irq_conf.c` |
+| | **内存/MMU 一致性用例**(target-only) | `runtime/qemu-aarch64/src/mm_conf.c` |
+| | 链接脚本(含 `.br_extable` 收集) | `runtime/qemu-aarch64/src/link.ld` |
 | **框架件**(`hal/`) | `vfs-core`(纯 VFS)/ `dev-core`(通用设备注册表)/ `cdev-core`(字符设备 + 会话适配)/ **`file-table`(fd 表: 小整数 → `br_file_t*`, ADR-0012)** | `hal/*/src/*.c`(+ 各自的 `*_selftest.c`) |
 | **存储**(`fs/`) | `tmpfs`(**rootfs "/"**)、`devfs`(**/dev** 设备节点投影) | `fs/tmpfs/src/tmpfs.c` / `fs/devfs/src/devfs.c` |
 | **驱动**(`driver/`) | `uart-pl011`: PL011 注册为 cdev ⇒ `/dev/uart0`(本仓自研); `uboot-mmc`: u-boot MMC/SDHCI 移植 ⇒ `emmc0..3`(GPL 源码在 `third_party/`, 适配归本插件) | `driver/uart-pl011/src/uart_pl011.c` · `driver/uboot-mmc/glue/emmc_bdev.c` |
 | **APP**(`app/hello` 插件) | **POSIX 多线程样例**(ADR-0019): APP 线程用 `pthread_create` 建, 先跑 `[APPCONF]` 多线程自判(barrier/mutex 计数/join retval/condvar/TLS key/detach/每线程 errno/rwlock/once/线程名), 再进每秒心跳日志("不早醒"判据); 只**读** core 的心跳计数 `br_clock_tick_count()`(纯 P0 消费者); POSIX 面**只经 Interface 皮肤 `iface/posix`** 取得(设计 §7.3/D18)。**不驱动插件自检**(ADR-0010: 自检归 core) | `app/hello/src/main.c` |
-| **POSIX 运行时**(`runtime/posix`, 设计名 `svc-posix`) | **D18 的实现半边**: fd/文件/目录/链接/线程/同步/时间/stdio 子集的 POSIX 面; `errno = -ret` 零转换; cwd 归它(vfs 只认绝对路径)。覆盖范围 = `11-02` 的 TR-A/TR-B; `printf`/信号/`fork`/`mmap` 明确不做 | `runtime/posix/**`(ADR-0014) |
-| **调试服务插件**(`service/*`) | `trace`(core 16B 事件环的唯一消费方)/ `backtrace`(x29 帧链捕获)/ `hexdump`(16 B/行契约格式)/ `memleak`(按归属标签出账)/ `dump`(现场编排 + `[DBGCONF]` 入口) | `service/*/src/*.c` |
+| **POSIX 运行时**(`provider/posix`, 设计名 `svc-posix`) | **D18 的实现半边**: fd/文件/目录/链接/线程/同步/时间/stdio 子集的 POSIX 面; `errno = -ret` 零转换; cwd 归它(vfs 只认绝对路径)。覆盖范围 = `11-02` 的 TR-A/TR-B; `printf`/信号/`fork`/`mmap` 明确不做 | `provider/posix/**`(ADR-0014) |
+| **调试服务插件**(`provider/*`) | `trace`(core 16B 事件环的唯一消费方)/ `backtrace`(x29 帧链捕获)/ `hexdump`(16 B/行契约格式)/ `memleak`(按归属标签出账)/ `dump`(现场编排 + `[DBGCONF]` 入口) | `provider/*/src/*.c` |
 | **调度器**(`sched/`) | `rr`(**时间片轮转抢占**, 镜像选它): FIFO 就绪队列 + 每线程时间片, 用尽即请 core 在 IRQ 出口换栈; `coop`(协作式, 留树/宿主用例覆盖): 只在显式点换栈 | `sched/rr/src/rr.c` / `sched/coop/src/coop.c` |
 | **Core 插件**(`core/c_core`; ADR-0031: `plugin_type = "core"`, 必须有且仅有一个, **不定义生命周期** —— 它是驱动者) | **中断框架 Stage 1 + 下半部**: 号空间/描述符池、生命周期(ack→ISR→eoi 单出口)、三层屏蔽、优先级语义、级联域(**FAST 与 SLOW**)、fault/extable、最小 trace 环; **按线的 BH 分发**与 **IRQ 出口的 workqueue drain**(ADR-0011) | `core/c_core/src/irq/*.c`, `core/c_core/src/work/work_core.c`, `core/c_core/src/{panic,trace}.c` |
 | | **调度框架**: 线程状态机 / 切换 asm / 超时唤醒 / idle / **IRQ 出口的抢占换栈** / bh 禁令 | `core/c_core/src/sched/{sched_core.c,switch.S}` |
@@ -113,7 +114,7 @@ v0.1.0 交付**声明期**(插件发现/校验/描述符生成 + `brickie` 组�
 | `br_fault_handler_register` 的消费方(ramdump) | v2(`3-02 §10.5`); 挂接点与现场结构已在, 缺的是注册 API 与捕获插件 |
 | `br_mm_map`/`br_mm_unmap` 的**运行期实现** | v1 按设计返回 `-ENOTSUP`(`6-01` 的 `TC-MM-003` 就是这个期望): 签名先行、实现随 v2 重定位; 运行期**改属性**走 `br_mm_set_attrs`(已可用, 用例用它做真 RO 保护验证) |
 | 设备注册 / devfs / cdev | M2。早期 console 是**轮询**形态 —— 这是设计内的 M0 形态(`1-01 §8` console 双形态), **不是** workaround |
-| ~~libc / POSIX 运行时~~ | **`runtime/posix` 已交付**(ADR-0014): POSIX 面自带宽窄两族 —— `str*`/`atoi`/`malloc` 别名是**本件定义**的, `mem*` 仍是 core 的(`core/c_core/src/string.c`, 因为 core 在 EARLY 相就要用, 而 runtime/posix 是 LATE 相的服务 ⇒ 符号归一**做不到**, 见 ADR-0014 §4)。**仍未做**: `printf` 家族(libc 选型未拍)、`fork`/信号/`mmap`/`gettimeofday`(见 `11-02` 的 TR-C/TR-D) |
+| ~~libc / POSIX 运行时~~ | **`provider/posix` 已交付**(ADR-0014): POSIX 面自带宽窄两族 —— `str*`/`atoi`/`malloc` 别名是**本件定义**的, `mem*` 仍是 core 的(`core/c_core/src/string.c`, 因为 core 在 EARLY 相就要用, 而 provider/posix 是 LATE 相的服务 ⇒ 符号归一**做不到**, 见 ADR-0014 §4)。**仍未做**: `printf` 家族(libc 选型未拍)、`fork`/信号/`mmap`/`gettimeofday`(见 `11-02` 的 TR-C/TR-D) |
 | ~~文件系统(介质类)~~ | **FAT(读写)与 EROFS(只读 + LZ4)已交付**(ADR-0022), 架在 ADR-0021 的真 eMMC 上, 判据由**外部权威工具**造的字节给出。**仍未做**: ① EROFS 只支持未压缩 + LZ4(命中 deflate/zstd ⇒ `-ENOTSUP`); ② 分区表(MBR/GPT)与 `br_bdev_partition`(设计 SD-9, v1.x)⇒ 一块卡 = 一个卷; ③ FAT12/FAT32 的**写**面没有独立用例(`br-wa-emmc-002`); ④ 名字长于 31 字节取不到(`BR_NAME_MAX` 是 vfs 的 v1 契约); ⑤ FAT32 的 FSInfo 空闲计数不维护 |
 | 共享中断线 / MSI | 见 ADR-0022 D-2: core 的 IRQ 框架规定"**每根物理线恰一属主**"(INV-A), 而 QEMU virt 只接 4 根 INTx ⇒ 最多 4 块 `sdhci-pci`。第 5 块卡需要共享线(Level IRQ 多属主)或 MSI —— 两者都是契约变更, 不在本代 |
 
@@ -123,9 +124,9 @@ v0.1.0 交付**声明期**(插件发现/校验/描述符生成 + `brickie` 组�
 brickOS/
 ├── Makefile                     只编工具 + 镜像侧的过渡别名(真身 = brickie build)
 ├── README.md                    本文件 · WORKAROUNDS.md WORKAROUND 登记表(欠债清单)
-├── product.toml                 产品声明: 根记录(app/platform/core/[[product.ability]]) / 预算 / 时钟节拍(HZ) / 构建策略
+├── product.toml                 产品声明: 根记录(app/runtime/core/[[product.ability]]) / 预算 / 时钟节拍(HZ) / 构建策略
 ├── mk/host.mk                   宿主三元组 + 宿主产物目录(build/host/… 与 prebuilts/…)
-├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`** / **0034 选择面收敛为闭包根(`[product].platform`/`ability`)** / **0035 根记录形态 `{ brick, requires }` + `[[product.ability]]`(硬切换, BRV-TAX-0024)** / **0036 `show bricks` + `show brick-init-flow`(运行期启动顺序); `phase = "app"` 收紧为非法** / **0037 APP 无 `early_init` 且其 init 最后(APP 相, `phase = "app"` 合法; TC-PLUG-004)** / **0038 core 一等接口化(20 个单元, 一头一单位)+ `runtime/core` 规格皮肤 + 三条源码纪律(R1 自包含 / R2 全局不出插件 / R3 显式依赖; `.a` 符号审计强制)** / **0039 `hal` 与 `ability` 平级(framework/ 改名 hal/)+ core 拆分为 `hal/{int,mm,sched}`(IRQ 出口改为钩子表, selftest 源按插件声明)**
+├── docs/decisions/              决策记录(ADR): 0001 插件化 / 0002 中断 / 0003 内存 / 0004 构建 / 0005 插件管理器 / 0006 调度 / 0007 同步 / 0008 core 启动链 / 0009 VFS 存储栈 / 0010 插件自检(selftest) / … / 0031 core 成为第一类插件(`plugin_type = "core"`, 唯一且无生命周期) / 0032 命名空间 `io/` → `driver/`(`driver/` ⇒ `api_type = native`, BRV-TAX-0021) / **0033 解散 `adapter/`** / **0034 选择面收敛为闭包根(`[product].platform`/`ability`)** / **0035 根记录形态 `{ brick, requires }` + `[[product.ability]]`(硬切换, BRV-TAX-0024)** / **0036 `show bricks` + `show brick-init-flow`(运行期启动顺序); `phase = "app"` 收紧为非法** / **0037 APP 无 `early_init` 且其 init 最后(APP 相, `phase = "app"` 合法; TC-PLUG-004)** / **0038 core 一等接口化(20 个单元, 一头一单位)+ `runtime/core` 规格皮肤 + 三条源码纪律(R1 自包含 / R2 全局不出插件 / R3 显式依赖; `.a` 符号审计强制)** / **0039 `hal` 与 `ability` 平级(framework/ 改名 hal/)+ core 拆分为 `hal/{int,mm,sched}`(IRQ 出口改为钩子表, selftest 源按插件声明)** / **0040 `platform` → `runtime`(类型/目录/契约头/产品根键)+ `service/`·`runtime/` → `provider/`**
 ├── prebuilts/toolchain/         外部工具链**下载缓存**(派生, 不进库; fetch-prebuilt.py)
 ├── prebuilts/                   宿主工具**自举种子**(进库; 见下, 详见其 README): seed/brickie/<host-arch>/<host-os>/bin/{brickie,brickie-gen,brickie-core}
 ├── tools/                       host-detect.sh 宿主 arch/os 探测(布局映射的唯一真值) · check-workarounds.sh 源码标记 ↔ 登记表 一致性检查 · check-build.sh 构建接线门禁(宿主产物出树 / 自举种子进库)
@@ -135,8 +136,8 @@ brickOS/
 │       ├── python/brickie/      L5 前端(子命令 / 输出 / 退出码 / 文件编排) · schema/*.schema.json 声明面形状(机器可读)
 │       └── docs/contract.md     跨语言接口契约(唯一权威) · templates/ 骨架模板(五类 × c) · tests/ 端到端用例
 ├── app/hello/                   【APP 插件】MainLoop(镜像唯一 app; 下层一律经 iface 皮肤): brick.toml 人写 ← 插件级唯一真值([[dep]] iface/posix + iface/min) · src/main.c MainLoop(延时 + 日志 + 读心跳计数; 原 core/c_core/src/startup/main.c)
-├── iface/posix/                 【Interface 插件】POSIX 薄皮肤(ADR-0018): form = "skin", reexport_of = runtime/posix#posix; 零状态(皮肤里没有函数体) · iface/min/ 【Interface 插件】core 极简皮肤(ADR-0020/0038): form = "skin", reexport_of = runtime/core#{log,time,version}, APP 不再直连 core 头
-├── runtime/core/                【能力插件】core 层**规格皮肤**(ADR-0038): form = "skin", 把 20 个单元(一头一单位)原样转出 —— 其中 8 个来自 hal/{int,mm,sched}(ADR-0039); 是 core 层唯一的对外门; README 是 core 层规范正文
+├── iface/posix/                 【Interface 插件】POSIX 薄皮肤(ADR-0018): form = "skin", reexport_of = provider/posix#posix; 零状态(皮肤里没有函数体) · iface/min/ 【Interface 插件】core 极简皮肤(ADR-0020/0038): form = "skin", reexport_of = provider/core#{log,time,version}, APP 不再直连 core 头
+├── provider/core/                【能力插件】core 层**规格皮肤**(ADR-0038): form = "skin", 把 20 个单元(一头一单位)原样转出 —— 其中 8 个来自 hal/{int,mm,sched}(ADR-0039); 是 core 层唯一的对外门; README 是 core 层规范正文
 ├── hal/                         【HAL 层】`plugin_type = "hal"`, 与 ability 平级、位于其下(ADR-0039): 只放**机制**, 不放策略
 │   ├── int/ mm/ sched/          ★ 由 core 拆出: 中断框架 / 三池+TLSF+地址映射 / 调度框架+同步+下半部(switch.S 同砖)
 │   └── {dev,cdev,bdev,vfs,file-table,pci}-core   原 framework/(改名, 内容不变) —— ability 通过 [[dep]] 选中它们
@@ -146,7 +147,7 @@ brickOS/
 │                                所以不参与它自己驱动的相位机; 它的头 br/core/** 是全体插件的环境包含基座)
 │   ├── brick.toml               core 的唯一构建真值: [build] sources/includes + [selftest] cases = 42;
 │   │                            **不写 [compat]**(core 不能自指兼容区间); symbol_prefix = "br_core_"
-│   ├── include/br/core/         br_types.h 基础类型(不用 <stdint.h>) · br_error.h 负 errno 子集(设计 3-01 §11) · br_version.h 版本标识 · br_console.h 早期 console 契约(接口在 core, 实现在 platform) · br_log.h 日志契约 · br_time.h 时钟/延时契约 · br_irq.h 【中断】native API(9 件)+ 域 API + 绑定表 + 状态字
+│   ├── include/br/core/         br_types.h 基础类型(不用 <stdint.h>) · br_error.h 负 errno 子集(设计 3-01 §11) · br_version.h 版本标识 · br_console.h 早期 console 契约(接口在 core, 实现在 runtime 插件) · br_log.h 日志契约 · br_time.h 时钟/延时契约 · br_irq.h 【中断】native API(9 件)+ 域 API + 绑定表 + 状态字
 │   │                            br_pic.h 【中断】PIC 填表契约(core ↔ ISA 方言, 非 native 面) · br_exc.h 异常帧布局(asm 桩 ↔ fault 路径的同一处真值) · br_fault.h fault 分类 / extable 宏 / panic 两入口 · br_trace.h 最小 trace 环(ISR-safe 留痕) · br_mem.h 【内存】native 11 件 + 观测契约(堆遍历/自检)+ 归属记账
 │   │                            br_mm.h 【内存】region 表/属性 + MMU 派发 + 平台侧 br_mm_ops_t · br_plugin.h 【插件】元契约(描述符/依赖边/相位)+ 插件管理器入口 · br_svc.h 【插件】服务注册表(publish/lookup + 观测) · br_sched.h 【调度】线程/任务 + br_sched_ops 注册点 + idle
 │   │                            br_sync.h 【调度】mutex / sem / cond / spinlock · br_work.h 【调度】延迟工作(bottom half): br_work_submit/drain + bh 契约(ADR-0011) · br_main.h 【启动】core 启动入口契约: br_core_main() 四阶段链(ADR-0008)
@@ -162,17 +163,17 @@ brickOS/
 ├── hal/                   【框架件插件】(设计 D19: 能力框架 = 插件身份 + core 纪律)
 │   ├── vfs-core/                **纯 VFS**(D21): br_file_t 句柄 + 挂载表单路由 + 四层 ops + lookup 走查(+ src/vfs_selftest.c: TC-VFS-* 自检, 开关见 product.toml [selftest])
 │   ├── dev-core/                通用设备注册表: 唯一扁平命名空间 + 子分类注册协议 + open_file 钩子透传 · cdev-core/ 字符设备子分类: br_cdev_ops + flash 子型 + **通用 br_file_ops 会话适配**
-│   └── file-table/              **fd 表**(ADR-0012): 小整数 → br_file_t*, 最小可用 fd / dup / 最后一个引用(零依赖: 只持指针不解引用 ⇒ 不把 vfs-core 拉进组合; runtime/posix 的底座)
-├── runtime/posix/               【运行时插件】(ADR-0015: "整套运行时"单独一个命名空间) **POSIX 运行时**(ADR-0014/0015/0019): include/ 是一整套 POSIX 头(unistd/fcntl/dirent/…), pthread 面已补齐(每线程 errno / mutexattr / once / rwlock / barrier / key / 惰性 detach); src/posix.c 只做翻译; fd 表主人在 hal/file-table
-├── service/                     【服务/调试插件】(每个目录 = 一个插件; 顶层 = namespace): trace/ core 16 B 事件环的唯一消费方(drain/解码/计数/呈现) · backtrace/ x29 帧链捕获(符号化归 host 离线工具) · hexdump/ 16 字节/行契约格式(地址 + hex + ASCII) · memleak/ 按归属标签出泄漏账 + 红区/毒化违约计数 · dump/ 现场编排(regions/heap/leaks/trace/backtrace)+ [DBGCONF] 入口
+│   └── file-table/              **fd 表**(ADR-0012): 小整数 → br_file_t*, 最小可用 fd / dup / 最后一个引用(零依赖: 只持指针不解引用 ⇒ 不把 vfs-core 拉进组合; provider/posix 的底座)
+├── provider/posix/               【运行时插件】(ADR-0015: "整套运行时"单独一个命名空间) **POSIX 运行时**(ADR-0014/0015/0019): include/ 是一整套 POSIX 头(unistd/fcntl/dirent/…), pthread 面已补齐(每线程 errno / mutexattr / once / rwlock / barrier / key / 惰性 detach); src/posix.c 只做翻译; fd 表主人在 hal/file-table
+├── provider/                     【服务/调试插件】(每个目录 = 一个插件; 顶层 = namespace): trace/ core 16 B 事件环的唯一消费方(drain/解码/计数/呈现) · backtrace/ x29 帧链捕获(符号化归 host 离线工具) · hexdump/ 16 字节/行契约格式(地址 + hex + ASCII) · memleak/ 按归属标签出泄漏账 + 红区/毒化违约计数 · dump/ 现场编排(regions/heap/leaks/trace/backtrace)+ [DBGCONF] 入口
 ├── fs/                          【FS 插件】(依赖 vfs-core; 顶层 = namespace): tmpfs/ **rootfs("/")** RAM 文件系统(完整文件语义, 预建 /dev /data /tmp) · devfs/ **/dev** 把 dev-core 注册表投影成节点(实时枚举, open 经类钩子)
 ├── driver/                      【驱动插件】(ADR-0032: 顶层 = namespace; **本仓自研(native)驱动**住这里
 │                                —— `driver/` ⇒ `api_type` 必须为 `native`, 由 `brickie check` 的 BRV-TAX-0021 执法;
 │                                移植/自研只看 `api_type` 与 `[build]` 是否触及 `third_party/`)
 │   └── uart-pl011/              PL011 注册为 cdev ⇒ /dev/uart0(向 cdev-core 注册; M2 形态 A 侧; v1 轮询, 见 br-wa-io-001)
 ├── tests/host/                  【宿主侧用例】不需要交叉工具链/QEMU: mem_test.c TLSF/页位图/region 表 20 万次随机操作 + 不变量 · string_test.c 编译器支持例程: 语义 + 越界哨兵 + 参考实现对拍 · host_stubs.c br_log_write / br_console_* 的宿主替身
-└── platform/qemu-aarch64/       【Platform 插件】与平台/ISA 绑定的部分: brick.toml 人写 ← 插件级唯一真值(声明两个接口单元: #plat / #gicv3)
-    ├── include/br/              board_irq.h 板级 virq 名(设计 3-02 §3.1 的"退路": 手写静态头) · platform/br_plat.h Platform Entry 契约(含 IRQ/内存初始化 + 两套一致性入口) · platform/br_gicv3.h GICv3 方言契约(ISA 层) · platform/br_mmu.h 页表/MMU 观测面 + 窗口常量(ISA 层)
+└── runtime/qemu-aarch64/       【Platform 插件】与平台/ISA 绑定的部分: brick.toml 人写 ← 插件级唯一真值(声明两个接口单元: #plat / #gicv3)
+    ├── include/br/              board_irq.h 板级 virq 名(设计 3-02 §3.1 的"退路": 手写静态头) · runtime/br_plat.h Runtime Entry 契约(含 IRQ/内存初始化 + 两套一致性入口) · runtime/br_gicv3.h GICv3 方言契约(ISA 层) · runtime/br_mmu.h 页表/MMU 观测面 + 窗口常量(ISA 层)
     ├── src/                     start.S 入口(reset / 选核 / BSS / 交 core br_core_main) · vectors.S 16 槽异常向量表 + 保存/恢复桩(ISA 层) · link.ld 链接脚本(text/rodata/data + .br_extable 收集 + .stack) · plat_qemu_virt.c 平台身份 + early_init + 异常兜底
     ├── src/                     console_pl011.c PL011 轮询 putc · timer_arch.c CNTFRQ_EL0 / CNTPCT_EL0 · gicv3.c GICv3 方言(实现 br_pic_ops_t) · board_irq.c 绑定表 + 中断初始化 + timer PPI 心跳 + 触发/hwirq 查询
     ├── src/                     irq_conf.c 中断一致性用例(TC-IRQ-*, 编进镜像) · memmap.c region 表声明(镜像/三池/MMIO/保留区; 只声明不认领) · mmu.c 4 KiB 恒等映射页表 + 开 MMU + br_mm_ops(ISA 层) · mm_conf.c 内存/MMU 一致性用例(TC-MEM-*/TC-MM-*, 编进镜像)
@@ -181,11 +182,11 @@ brickOS/
 
 `product.toml [lint].allow_edges` 现在**是空的** —— 跨层边全部是方向表里的**合法边**(历史上几条非法边分别被 ADR-0008/0010/0016/0018 处理):
 
-- **Platform Entry → Core**: `start.S` 只做 reset/BSS, 然后 `bl br_core_main()`(四阶段启动链: ① 平台无关初始化 → ② platform 插件初始化 → ③ 堆 + 地址映射的建立 → ④ 插件相位驱动; 见 `docs/decisions/0008-core-main-boot-chain.md`);
-- **APP → Interface(`iface/posix` + `iface/min`)**: `app/hello` 用 POSIX(`usleep`/`pthread_*`/`stdio`)与 core native(日志/时钟/tick/版本), 但**只经 Interface 皮肤**取得声明(设计 `1-01` §7.3/D18: **APP 只依赖 interface**)。`[[dep]] iface/posix` 与 `[[dep]] iface/min`(都 `kind = "runtime"`)是**正解边**(不是 allow_edges 例外); 两个皮肤都零状态: `iface/posix` 再导出 `runtime/posix#posix`, `iface/min` 直通 core native ⇒ 实现仍只有一份。声明与使用的一致性由 ADR-0018 的"包含面 = 声明依赖闭包"执法; **APP 直连 `<br/core/...>`**(iface 层以下)由 ADR-0020 在 `brickie check`/`brickie build` 两侧判红。见 [iface/posix/README.md](iface/posix/README.md)、[iface/min/README.md](iface/min/README.md)、`docs/decisions/0018-…`、`docs/decisions/0020-…`。
-- ~~**APP → VFS(存储域总套件)**~~ ⇒ **ADR-0010 之后已删**(自检改由 core 统一驱动); ~~**APP → Platform**~~ ⇒ **ADR-0016 之后已删**(`app/hello` 原先直读 `br_plat_name()` / `br_plat_isa()` 与 `br_plat_timer_ticks()`) —— 心跳计数**收归 core**(platform 的 timer ISR 每拍调 `br_clock_tick_notify()`, 计数由 core 持有, APP 读 `br_clock_tick_count()`), 平台身份日志改由 platform 自己的 `qemu_aarch64_start()` 打, 因而 `product.toml [lint].allow_edges` 的最后一条同时删除、该表清空(见 `docs/decisions/0016-core-timer-heartbeat.md`); `service/dump` 的 `br_dump_all()`/`br_dump_trace()` 也不再在 APP 里 —— 启动快照由 dump 自己的 LATE init 打(见 `service/dump/README.md`)。
+- **Runtime Entry → Core**: `start.S` 只做 reset/BSS, 然后 `bl br_core_main()`(四阶段启动链: ① 与运行环境无关的初始化 → ② runtime 插件初始化 → ③ 堆 + 地址映射的建立 → ④ 插件相位驱动; 见 `docs/decisions/0008-core-main-boot-chain.md`);
+- **APP → Interface(`iface/posix` + `iface/min`)**: `app/hello` 用 POSIX(`usleep`/`pthread_*`/`stdio`)与 core native(日志/时钟/tick/版本), 但**只经 Interface 皮肤**取得声明(设计 `1-01` §7.3/D18: **APP 只依赖 interface**)。`[[dep]] iface/posix` 与 `[[dep]] iface/min`(都 `kind = "runtime"`)是**正解边**(不是 allow_edges 例外); 两个皮肤都零状态: `iface/posix` 再导出 `provider/posix#posix`, `iface/min` 直通 core native ⇒ 实现仍只有一份。声明与使用的一致性由 ADR-0018 的"包含面 = 声明依赖闭包"执法; **APP 直连 `<br/core/...>`**(iface 层以下)由 ADR-0020 在 `brickie check`/`brickie build` 两侧判红。见 [iface/posix/README.md](iface/posix/README.md)、[iface/min/README.md](iface/min/README.md)、`docs/decisions/0018-…`、`docs/decisions/0020-…`。
+- ~~**APP → VFS(存储域总套件)**~~ ⇒ **ADR-0010 之后已删**(自检改由 core 统一驱动); ~~**APP → runtime 插件**~~ ⇒ **ADR-0016 之后已删**(`app/hello` 原先直读 `br_plat_name()` / `br_plat_isa()` 与 `br_plat_timer_ticks()`) —— 心跳计数**收归 core**(runtime 插件的 timer ISR 每拍调 `br_clock_tick_notify()`, 计数由 core 持有, APP 读 `br_clock_tick_count()`), 身份日志改由 runtime 插件自己的 `qemu_aarch64_start()` 打, 因而 `product.toml [lint].allow_edges` 的最后一条同时删除、该表清空(见 `docs/decisions/0016-core-timer-heartbeat.md`); `provider/dump` 的 `br_dump_all()`/`br_dump_trace()` 也不再在 APP 里 —— 启动快照由 dump 自己的 LATE init 打(见 `provider/dump/README.md`)。
 
-**中断的三层归属**(设计 `1-01 §8` / `3-02 §1.3`): 机制在 **core**、GICv3 寄存器序列在 **`gicv3.c` + `vectors.S`**(设计归 ISA 共享库, 原型同目录 + 文件边界, 欠债 `br-wa-isa-001`)、绑定表/基址/静态 prio 在 **platform 数据**。
+**中断的三层归属**(设计 `1-01 §8` / `3-02 §1.3`): 机制在 **core**、GICv3 寄存器序列在 **`gicv3.c` + `vectors.S`**(设计归 ISA 共享库, 原型同目录 + 文件边界, 欠债 `br-wa-isa-001`)、绑定表/基址/静态 prio 在 **runtime 数据**。
 
 ## 4. 构建与运行
 
@@ -193,7 +194,7 @@ brickOS/
 
 ```
 ① tools/    工具段(顶层 `make`, 缺省目标): 宿主 g++ 编 C++ 渲染器 + Python 前端; cargo 编 Rust 核心 → 合并进同一个自包含入口 ELF(不碰交叉工具链, 组合期零编译依赖)
-② 声明面    product.toml [build] + 各插件 brick.toml [build] + platform 的 [build.target] + tests/gates.toml(门禁) ── **镜像的唯一真值**
+② 声明面    product.toml [build] + 各插件 brick.toml [build] + runtime 插件的 [build.target] + tests/gates.toml(门禁) ── **镜像的唯一真值**
 ③ 镜像       `brickie build`(入口 ELF): 组合期 check → gen 生成物 → 编译/链接 → `[build].post` 门禁; 步骤计划由 brickie-core 给, L5 只执行
 ```
 
@@ -269,7 +270,7 @@ make tools-test         # 工具自身用例: 渲染器自检 + 端到端回归(
 >
 > **为什么加 clang**(本轮改判, 选型留痕见 `prebuilts/toolchain.lock.toml`): ① 裸机镜像更小(clang 1.55 MB vs gcc 2.28 MB ELF); ② `-Werror` 下诊断更严(例如 `incompatible-pointer-types` 在 clang 是默认开启的硬错误, 这是后续"禁止隐式类型转换"的执法前提); ③ 带 `libclang`, 为 brickie 将来的接口依赖扫描(C 的 AST 级判据)**留下同一份工具链**。代价如实登记: 这 7 个 `.deb` 动态链接宿主 glibc, 属"钉住版本"而非"与环境无关"。
 
-> ⚠ **QEMU 必须 ≥ 10.2**(不是"随便一个 qemu-system-aarch64")。`platform/qemu-aarch64` 挂了四块 `-device emmc`, 而 eMMC 卡模型虽然 **9.1** 就进了 QEMU, 当时却是 `dc->user_creatable = false`(注释 "Soldered on board"), 直到 **10.2.0** 才成为可插拔设备 —— 更早的版本跑 `make run` 只会得到 `'emmc' is not a valid device model name`。仓库的参考环境是 Ubuntu 26.04 的 **10.2.1**。宿主自带的不够新时, **不用换发行版也不用 root**: `bash tools/fetch-qemu.sh` 会把 10.2.1(Ubuntu 26.04 "resolute" 归档的 11 个包, URL + SHA256 钉在脚本里)**就地解包**到 `prebuilts/toolchain/qemu/`, 并在 `prebuilts/toolchain/bin/` 放一个包装器 —— `brickie` 的工具解析**先看那个目录**(`resolve_tool`), 所以 `make run` / `make emmc-test` 不必改任何配置; `brickie` 自己也会**预检**(步骤里出现 `-device emmc` 而版本 < 10.2 时当场给出上面这段修法)。
+> ⚠ **QEMU 必须 ≥ 10.2**(不是"随便一个 qemu-system-aarch64")。`runtime/qemu-aarch64` 挂了四块 `-device emmc`, 而 eMMC 卡模型虽然 **9.1** 就进了 QEMU, 当时却是 `dc->user_creatable = false`(注释 "Soldered on board"), 直到 **10.2.0** 才成为可插拔设备 —— 更早的版本跑 `make run` 只会得到 `'emmc' is not a valid device model name`。仓库的参考环境是 Ubuntu 26.04 的 **10.2.1**。宿主自带的不够新时, **不用换发行版也不用 root**: `bash tools/fetch-qemu.sh` 会把 10.2.1(Ubuntu 26.04 "resolute" 归档的 11 个包, URL + SHA256 钉在脚本里)**就地解包**到 `prebuilts/toolchain/qemu/`, 并在 `prebuilts/toolchain/bin/` 放一个包装器 —— `brickie` 的工具解析**先看那个目录**(`resolve_tool`), 所以 `make run` / `make emmc-test` 不必改任何配置; `brickie` 自己也会**预检**(步骤里出现 `-device emmc` 而版本 < 10.2 时当场给出上面这段修法)。
 
 **目标表**(`make <目标>`; 镜像侧的每个名字都是**薄委派**, 真身在右侧):
 
@@ -311,12 +312,12 @@ make clean              # 清掉工具与镜像两侧的派生物(只清工具: 
 # product.toml
 [product]
 app      = { brick = "app/hello", requires = {} }                        # 恰一个
-platform = { brick = "platform/qemu-aarch64", requires = {} }             # 可选
+runtime = { brick = "runtime/qemu-aarch64", requires = {} }              # 可选
 core     = { brick = "core/c_core", requires = { version = ">=0.1.0" } }  # 可选
 stage    = "dev"
 
 [[product.ability]]                     # 直接选中的能力件; 键只是可读别名, 身份一律取自 brick
-dump  = { brick = "service/dump", requires = {} }
+dump  = { brick = "provider/dump", requires = {} }
 devfs = { brick = "fs/devfs", requires = {} }
 ```
 
@@ -326,9 +327,9 @@ devfs = { brick = "fs/devfs", requires = {} }
 
 | 项(声明位置) | 值 | 为什么 |
 |---|---|---|
-| `[build.target].arch_flags`(platform 插件) | `-mstrict-align` 必须带 | 它**曾经是硬要求**: MMU 未开 ⇒ 全部访存按 Device-nGnRnE ⇒ 非对齐访问必取 Alignment fault(实测: `stur xzr,[sp,#36]` 给 12 字节局部结构清零 ⇒ 开机 data abort)。**现在 MMU 已开**(4 KiB 恒等映射, RAM 是 Normal 属性、`SCTLR.SA/SA0` 显式清零), 非对齐访问不再 fault ⇒ 本项退化为**防御性旋钮**(Device 区的非对齐访问仍会 fault, 留着它把"编译器的内存模型"与"MMIO 的真实约束"钉在一起) |
-| `product.toml [build].cflags` | `-fno-omit-frame-pointer` 必须 | **`service/backtrace` 的编译期前提**: 栈回溯靠 `x29` 帧链(设计 `5-01 §3` 的"各线程栈"捕获), `-O2` 默认把 fp 当普通寄存器省掉 ⇒ 链断在第一帧。代价是每函数多一对 `stp/ldp` |
-| `[build.target.qemu].machine`(platform 插件) | `virt,gic-version=3` 必须显式钉住 | QEMU virt 的**缺省是 GICv2**(`-M virt,dumpdtb` 的 compatible = `arm,cortex-a15-gic`)。镜像里是 GICv3 驱动, 配错型号的症状是 `mrs icc_sre_el1` 未定义指令 ⇒ panic, 或"PIC 初始化完毕却收不到中断" |
+| `[build.target].arch_flags`(runtime 插件) | `-mstrict-align` 必须带 | 它**曾经是硬要求**: MMU 未开 ⇒ 全部访存按 Device-nGnRnE ⇒ 非对齐访问必取 Alignment fault(实测: `stur xzr,[sp,#36]` 给 12 字节局部结构清零 ⇒ 开机 data abort)。**现在 MMU 已开**(4 KiB 恒等映射, RAM 是 Normal 属性、`SCTLR.SA/SA0` 显式清零), 非对齐访问不再 fault ⇒ 本项退化为**防御性旋钮**(Device 区的非对齐访问仍会 fault, 留着它把"编译器的内存模型"与"MMIO 的真实约束"钉在一起) |
+| `product.toml [build].cflags` | `-fno-omit-frame-pointer` 必须 | **`provider/backtrace` 的编译期前提**: 栈回溯靠 `x29` 帧链(设计 `5-01 §3` 的"各线程栈"捕获), `-O2` 默认把 fp 当普通寄存器省掉 ⇒ 链断在第一帧。代价是每函数多一对 `stp/ldp` |
+| `[build.target.qemu].machine`(runtime 插件) | `virt,gic-version=3` 必须显式钉住 | QEMU virt 的**缺省是 GICv2**(`-M virt,dumpdtb` 的 compatible = `arm,cortex-a15-gic`)。镜像里是 GICv3 驱动, 配错型号的症状是 `mrs icc_sre_el1` 未定义指令 ⇒ panic, 或"PIC 初始化完毕却收不到中断" |
 
 > ⚠ **工具接管了镜像的"声明面"与"编译编排", 但还没接管"调用点"**: `brickie build`
 > 现在真的按声明面组合镜像(哪些源、用什么标志、链哪个脚本都由 `product.toml` /
@@ -360,7 +361,7 @@ grep 'SELFTEST\] SUMMARY' build/logs/smoke.log
 
 7 道 QEMU 门禁都 require `ran=[1-9][0-9]* … fails=0 errors=0` ⇒ **关掉开关会让门禁全红**(而不是静默少跑一堆测试)。这是有意的绊线: 开关只该在"我真的不要测试"时关, 而那一刻门禁本来就不该绿。
 
-**时钟节拍(CONFIG_HZ 口径, ADR-0017)**: `[kernel].hz` = **每秒多少次时钟中断**; 缺省 200(整表不写 = 200)⇒ 5 ms 一拍。`brickie build` 把它转成 `-DBR_CFG_TICK_HZ` 下发到**全部**编译单元 —— platform 的 timer 装弹周期与 core 的 jiffies(`br_clock_tick_count()`)读同一个宏 ⇒ "改频率"只改这一处:
+**时钟节拍(CONFIG_HZ 口径, ADR-0017)**: `[kernel].hz` = **每秒多少次时钟中断**; 缺省 200(整表不写 = 200)⇒ 5 ms 一拍。`brickie build` 把它转成 `-DBR_CFG_TICK_HZ` 下发到**全部**编译单元 —— runtime 插件的 timer 装弹周期与 core 的 jiffies(`br_clock_tick_count()`)读同一个宏 ⇒ "改频率"只改这一处:
 
 ```toml
 # product.toml
@@ -368,12 +369,12 @@ grep 'SELFTEST\] SUMMARY' build/logs/smoke.log
 hz = 200          # 每秒时钟中断次数; 缺省 200(5 ms 一拍); 合法 1..100000
 ```
 
-判据: 日志里 platform 的 `int: timer PPI armed … N Hz = M us` 行与 MainLoop 的 `irq_ticks` 增速同步变化(`irq_ticks` 每拍约 +HZ)。
+判据: 日志里 runtime 插件的 `int: timer PPI armed … N Hz = M us` 行与 MainLoop 的 `irq_ticks` 增速同步变化(`irq_ticks` 每拍约 +HZ)。
 
 换交叉工具链前缀改**声明面**(这是 `br-wa-toolchain-001` 的还债口), 构建规则不动:
 
 ```bash
-# platform/qemu-aarch64/brick.toml 的 [build.target].cross
+# runtime/qemu-aarch64/brick.toml 的 [build.target].cross
 # 候选序与解析在 brickie-core(contract §9 R-14); 查询口仍可用:
 make print-cross-compile
 ```
@@ -382,15 +383,15 @@ make print-cross-compile
 
 ```
 [    0.000050] INFO  brickOS-prototype v0.2.0 -- core MainLoop (interrupt heartbeat + delay + logging)
-[    0.000684] INFO  platform: qemu-aarch64/virt (aarch64)
+[    0.000684] INFO  runtime: qemu-aarch64/virt (aarch64)
 [    0.002937] INFO  mem: heap=1048576 contig=262144 page=1048576(256 pages) dma=262144
 [    0.003849] INFO  mem: identity map on (SCTLR=0x30d51825, regions=9, 4 KiB pages=2048, 2 MiB device blocks=512)
 [    0.004479] INFO  mem: TTBR0=0x400a3000 TCR=0x200803d19 MAIR=0x4400ff
-[    0.001157] INFO  entry chain: start.S -> br_core_main (core.init -> platform.init -> core.plat.init -> plugin_manager: EARLY/CORE/LATE -> irq on -> START) -> app thread -> br_sched_run
+[    0.001157] INFO  entry chain: start.S -> br_core_main (core.init -> runtime.init -> core.plat.init -> plugin_manager: EARLY/CORE/LATE -> irq on -> START) -> app thread -> br_sched_run
 [    0.009748] INFO  vfs: mount / (root type=1)
 [    0.011129] INFO  vfs: mount /dev (root type=1)
 [    0.012543] INFO  devfs: /dev mounted (1 device(s) visible so far)
-[    0.032862] INFO  int: timer PPI armed by platform (virq=0 INTID=30, 200 Hz = 5000 us)
+[    0.032862] INFO  int: timer PPI armed by runtime (virq=0 INTID=30, 200 Hz = 5000 us)
 ...                                                                    ← START 相跑完; 下面是**自检 pass**(ADR-0010)
 [    0.030486] INFO  [SELFTEST] ---- plugin self-tests (START 之后, 调度器接管之前) ----
 [    0.075021] INFO  [DEVCONF] SUMMARY pass=6 fail=0 total=6
@@ -433,19 +434,19 @@ v0.2.0 的欠债全部登记在 **[WORKAROUNDS.md](WORKAROUNDS.md)** —— 本�
 | id | 一句话 |
 |---|---|
 | `br-wa-fs-001` | **挂载点是代码常量**: `fs/tmpfs` 的 `/`、`fs/devfs` 的 `/dev` 写死在源码里, 而 `brick.toml` 的 `[[mount]]` 只是**人读的声明面** —— 缺"manifest → 挂载计划"的生成链路(**两处真值**, 与 `br-wa-mem-001` 同源) |
-| `br-wa-io-001` | **PL011 是"轮询 cdev", 不是设计写的"中断 tty"**: 不开 UART 中断、阻塞 read 靠 `br_task_sleep` 轮询、无 tty 层(欠债在 ADR-0011 后**收窄**成"驱动侧还没用 bh 做 RX 唤醒" —— bh 本身已就位); 另: `SET_BAUD` 会连带改内核日志速率(与 platform 的早期 console 共用同一根 UART) |
-| `br-wa-boot-001` | **① 已还**(ADR-0008: 有了独立的 `core.init` 入口 —— 四阶段启动链)。**② 已还**(ADR-0016: 心跳计数收归 core `br_clock_tick_notify/count`、平台身份日志归 platform 自己打 ⇒ APP 的 `[[dep]]` 与 `allow_edges` 最后一条同时删除, 该表清空; 机制与台账原文的"发布成服务"不同, 属换形态还清)。**仍欠一件**: ③ 日志/trace 直写 console/RAM 环, 未经服务注册表(与 `br-wa-debug-002` 同源) |
-| `br-wa-isa-001` | **ISA 共享库这一层还没有独立存在**: GICv3 方言、异常向量桩、**4 KiB 页表构造(`mmu.c`)** 暂居 platform 插件目录(靠文件边界分层); 异常帧布局因 extable fixup 暂放 core |
-| `br-wa-toolchain-001` | 工具链用外部 gcc; 目标事实写在声明面(`product.toml` + platform 的 `[build.target]`), **工具候选序与解析在 `brickie-core`**(裁定 R-14) |
-| `br-wa-mem-001` | **三池比例写死在 platform 的 region 表里**(heap 1 MiB / contig 256 KiB / page 1 MiB / DMA 256 KiB / 保留 16 KiB), 未经 manifest 的 `[budget]`/`[[res]]` 生成 —— 编译编排**已落地**(`brickie build`), 仍欠的是 `budget → region` 的**生成链路** |
+| `br-wa-io-001` | **PL011 是"轮询 cdev", 不是设计写的"中断 tty"**: 不开 UART 中断、阻塞 read 靠 `br_task_sleep` 轮询、无 tty 层(欠债在 ADR-0011 后**收窄**成"驱动侧还没用 bh 做 RX 唤醒" —— bh 本身已就位); 另: `SET_BAUD` 会连带改内核日志速率(与 runtime 的早期 console 共用同一根 UART) |
+| `br-wa-boot-001` | **① 已还**(ADR-0008: 有了独立的 `core.init` 入口 —— 四阶段启动链)。**② 已还**(ADR-0016: 心跳计数收归 core `br_clock_tick_notify/count`、身份日志归 runtime 插件自己打 ⇒ APP 的 `[[dep]]` 与 `allow_edges` 最后一条同时删除, 该表清空; 机制与台账原文的"发布成服务"不同, 属换形态还清)。**仍欠一件**: ③ 日志/trace 直写 console/RAM 环, 未经服务注册表(与 `br-wa-debug-002` 同源) |
+| `br-wa-isa-001` | **ISA 共享库这一层还没有独立存在**: GICv3 方言、异常向量桩、**4 KiB 页表构造(`mmu.c`)** 暂居 runtime 插件目录(靠文件边界分层); 异常帧布局因 extable fixup 暂放 core |
+| `br-wa-toolchain-001` | 工具链用外部 gcc; 目标事实写在声明面(`product.toml` + runtime 插件的 `[build.target]`), **工具候选序与解析在 `brickie-core`**(裁定 R-14) |
+| `br-wa-mem-001` | **三池比例写死在 runtime 插件的 region 表里**(heap 1 MiB / contig 256 KiB / page 1 MiB / DMA 256 KiB / 保留 16 KiB), 未经 manifest 的 `[budget]`/`[[res]]` 生成 —— 编译编排**已落地**(`brickie build`), 仍欠的是 `budget → region` 的**生成链路** |
 | `br-wa-debug-001` | **memleak 的"归属标签" ≠ v2 的 per-plugin arena 记账**: 能报"谁没还、在哪分配的", 没有预算上限/强制归属/OOM 策略 |
 | `br-wa-debug-002` | **dump/trace 直写早期 console**, 未经 `5-01 §2` 的 debug bridge(COBS + CRC16 成帧 + `MEMRD`/`TRACE_READ` 命令面, M3) |
 
-**`br-wa-entry-001` 已注销**(v0.2.0): ① `brickie check`/`gen` 按布局发现与校验插件; ② `platform/` 收敛为插件 `platform/qemu-aarch64`; ③ 源集合改由 `[build].sources` 声明(ADR-0003 的 S1/S4); ④ **启动链的调用点改成 `.br_plugins` 段枚举驱动**(ADR-0005, 后由 ADR-0008 收敛成 `bl br_core_main`)。历史留档见 [WORKAROUNDS.md](WORKAROUNDS.md) 的"已注销"表。
+**`br-wa-entry-001` 已注销**(v0.2.0): ① `brickie check`/`gen` 按布局发现与校验插件; ② `runtime/` 收敛为插件 `runtime/qemu-aarch64`; ③ 源集合改由 `[build].sources` 声明(ADR-0003 的 S1/S4); ④ **启动链的调用点改成 `.br_plugins` 段枚举驱动**(ADR-0005, 后由 ADR-0008 收敛成 `bl br_core_main`)。历史留档见 [WORKAROUNDS.md](WORKAROUNDS.md) 的"已注销"表。
 
 **`br-wa-test-001`(用例编号债)**从三套扩到九套: 新增的 `TC-VFS-*`(13)/`TC-DEV-*`(6)/`TC-CDEV-*`(8)/`TC-IO-*`(12)在设计的 `6-01` 里**整组不存在**(7-storage/8-device 两域尚无用例表)⇒ 自编号, 补齐设计侧用例组后再改回正式编号; `fs-test` 门禁对这 39 个 tag **逐条点名**, 所以"裁掉一个用例"会立刻变红。ADR-0011 追加的自编号: `TC-TASK-102/103/104`(抢占与 I2 的可观测面)、`TC-IRQ-015/016/017`(BH 分发 / 原子上下文守卫 / §11.4.1 抑制不重放)、`TC-WQ-001..007`(下半部/工作队列)—— 同样待 `6-01` 补齐正式编号。
 ADR-0012 追加的自编号: `TC-FT-001..011`(文件表 / fd 表)—— `plugin-test` 逐条点名; 设计侧连"fd 表归哪一篇"都还没成篇(它现在写作 `svc-posix` 的共享状态)。
-ADR-0014 追加的自编号: `TC-POSIX-001..020`(POSIX 面)—— `posix-test` 逐条点名; ADR-0015(改名 `runtime/posix` + 新增 `runtime` 命名空间)不改用例, 只改插件身份与目录。同时把 vfs-core 的 `TC-VFS-014..020`(链接族)加进 `fs-test` 的点名名单。
+ADR-0014 追加的自编号: `TC-POSIX-001..020`(POSIX 面)—— `posix-test` 逐条点名; ADR-0015(改名 `provider/posix` + 新增 `runtime` 命名空间)不改用例, 只改插件身份与目录。同时把 vfs-core 的 `TC-VFS-014..020`(链接族)加进 `fs-test` 的点名名单。
 
 代码里的标记形如 `WORKAROUND(br-wa-boot-001)`, 与登记表由 `make check-workarounds` 绑死: **任一侧多/少即报红** —— 欠债最怕的不是欠着, 是没人知道欠着。
 
@@ -454,55 +455,55 @@ ADR-0014 追加的自编号: `TC-POSIX-001..020`(POSIX 面)—— `posix-test` �
 | 本原型 | 设计出处(`brickOS-Design` 分支) | 形态差异 |
 |---|---|---|
 | `start.S` 的 reset/BSS | `1-01 §9` 启动序列 | 设计是 Platform **插件**的汇编; 此处随插件 `[build].sources` 编进镜像。reset/BSS 后只 `bl br_core_main()`, 编排权全在 core(ADR-0008; 旧的"APP 直调"已还清 `br-wa-entry-001`) |
-| `br_plat_early_init()` | `1-01 §9` 的 `platform.early_init`; `1-01 §8` 三层模式 | console + GICv3 PIC 注册 + 绑定表(§14.3 步 1–3)+ **region 表声明 + 页表 ops 注册**(池的认领与 MMU 激活归 core 的阶段 ③, 见 ADR-0008) |
+| `br_plat_early_init()` | `1-01 §9` 的 `runtime.early_init`; `1-01 §8` 三层模式 | console + GICv3 PIC 注册 + 绑定表(§14.3 步 1–3)+ **region 表声明 + 页表 ops 注册**(池的认领与 MMU 激活归 core 的阶段 ③, 见 ADR-0008) |
 | `br_console_*` | `1-01 §8` console 双形态; `3-01 §10` 平台侧接口表 | 形态一致(轮询早期 console) |
-| `br_clock_now()` / `br_time_t` | `3-01 §4`(br-sched 组); `3-01 §14` CA-1(us) | 读数 + `br_deadline_from_now`; 超时表/唤醒已交付(ADR-0006 §3.3: **周期 tick 上的到期扫描**, 分辨率 = tick = `1/HZ`(`product.toml [kernel].hz`, 缺省 200 ⇒ 5 ms; ADR-0017); tickless 的比较器装弹仍欠)。**原型扩展**(ADR-0016): `br_clock_tick_notify()`/`br_clock_tick_count()` —— IRQ 心跳计数收归 core(设计 `3-01 §4` 无此对), 目的是让 P0 的 APP 不必直读 platform 接口 |
+| `br_clock_now()` / `br_time_t` | `3-01 §4`(br-sched 组); `3-01 §14` CA-1(us) | 读数 + `br_deadline_from_now`; 超时表/唤醒已交付(ADR-0006 §3.3: **周期 tick 上的到期扫描**, 分辨率 = tick = `1/HZ`(`product.toml [kernel].hz`, 缺省 200 ⇒ 5 ms; ADR-0017); tickless 的比较器装弹仍欠)。**原型扩展**(ADR-0016): `br_clock_tick_notify()`/`br_clock_tick_count()` —— IRQ 心跳计数收归 core(设计 `3-01 §4` 无此对), 目的是让 P0 的 APP 不必直读 runtime 插件的接口 |
 | **`br_sched_ops` / `br_sched_run` / 线程面** | `3-01 §2/§5.1`; `3-03`(总纲) | ADR-0006: ops 成文表 + 分工(core 机制 / 插件策略); **ADR-0011 追加抢占接缝** `br_sched_request_resched` 与 **bh 禁令**(bh 内阻塞 `-EPERM`/让出拒绝/退出 panic)。偏离: 同步原语归 core(ADR-0006 §3.5)、`irq_epilogue` 是 core 内部函数(同 §2 裁定 S-2) |
 | **`sched/rr`(时间片轮转抢占)** | `3-01 §5.1` 的注册点 + `3-02 §11.2` 的 IRQ 出口接缝 | **ADR-0011 新增**: `on_tick` 递减时间片, 用尽请 core 在 IRQ 出口换栈(设计 `3-02 §11.2` 的接缝第一次真的切栈)。它与 `sched/coop` 是"同一套 core 机制换一个策略"的证据: 插件里**没有一行切换代码** |
 | **`br_work_submit` / 下半部 / workqueue** | `3-01 §5`(延迟工作 = bottom half; 队列深度静态、满 ⇒ `-EAGAIN`)+ `3-02 §11.1/§11.4.1/§12.4/§9.4/IR-10` | **ADR-0011 新增, 且归属偏离**: 设计把 work queue 放调度插件, 本原型按用户裁定**整体放 core**(理由见 ADR-0011 §3.1)。执行点 = IRQ 出口(eoi 之后、ERET 之前)⇒ 延迟**有界**(与设计 §11.3 的"无上界"相反, 是更强的承诺); 代价是 bh 上下文更严(关中断、禁阻塞)。三个消费者: 按线的 `DISPATCH_BH`、SLOW 域 demux、任意 ISR 的裸提交 |
 | `br_log_*` | `5-01`(trace 观测)/ `11-01`(日志 Service) | v0.1.0 是 core 内的最小打印设施, 不是那个服务 |
-| `br_core_main()` | `1-01 §9` + `§6.2` 阶段表 | **四阶段启动链**(① 平台无关 → ② platform 插件 → ③ 堆/地址映射 → ④ 插件相位驱动), ADR-0008 |
+| `br_core_main()` | `1-01 §9` + `§6.2` 阶段表 | **四阶段启动链**(① 与运行环境无关 → ② runtime 插件 → ③ 堆/地址映射 → ④ 插件相位驱动), ADR-0008 |
 | **插件自检(selftest)** | `6-01`(用例是交付物; §2 运行基建)+ `1-01 §6.2`(四相与"两个完成点") | ADR-0010: 测试搬进各插件 `src/*_selftest.c`, 由 core 的**自检 pass**在 START 之后统一驱动(描述符的 `selftest` 钩子); 开关 `product.toml [selftest]` 是**生成期**的(关掉 ⇒ 描述符 NO_HOOK + `core/c_core/selftest/` 不编译 ⇒ 测试代码被裁出镜像)。**自检不是第五相**(它没有依赖语义, 对所有插件在同一时刻发生) |
 | **测试入口不进 `[[export]]`** | ADR-0005 裁定 9(钩子是组合期契约) | 11 个 `*_conformance`/`*_selftest` 从各 `brick.toml` 的 `[[export]]` 移除 ⇒ 改用例不再算接口变更(接口快照已重发)。测试需要的插件私有符号走 `<plugin>/src/<short>_internal.h`(在 `src/` 而非 `include/`, 因为 `include/` 下的一切都是对外面) |
 | **`hal/file-table`(fd 表)** | `11-01 §1`(D18: **fd 表 = 共享状态单一主人**判例)、`1-01 §7.2` 规则 3 + D19(框架件)、`3-06 §2`(三类共享状态主人)、`7-01 §1/§4.1`(fd 表项 = `br_file_t*`) | **ADR-0012**: 设计把 fd 表写作 `svc-posix` 的一部分(且当时那个插件未落地); 本原型按 D19 的口径把它**抽成框架件** —— 归属从"服务"移到"框架件", 但规则 3 要保的"恰一个主人"不变(全树只有它写表)。它**零依赖**(只持 `br_file_t*` 不解引用)⇒ `br_file_close` 写成"最后一个引用时回报句柄"由消费者调。errno 表随之从 20 码改为 **errno-base 整表 + generic 按需**, 并新增宿主逐码对拍 |
-| **`runtime/posix`(POSIX 运行时)** | `1-01` §7.2/§7.3/§7.4/§7.6(D18 双角色 + 依赖宪法 + 移植双模式)、`11-01` §1/§2、**`11-02`(覆盖清单 TR-A/TR-B)**、`7-01` §1/§4.1、`3-01` §2/§3/§4/§7 | **ADR-0014**(内容)/ **ADR-0015**(插件名与命名空间: 原名 `service/svc-posix`)/ **ADR-0019**(pthread 面补齐 + 多线程样例): 实现 `11-02` 的 TR-A/TR-B。三条承重口径: ① `errno = -ret` 零转换(ADR-0012 的对齐是前提); ② **两条错误通道**(系统调用 `-1`+`errno` / pthread 返回错误号); ③ 访问模式执法归本件(vfs 刻意不做, ADR-0009 §5 遗留项 5)。`chmod/chown/access` 按用户裁定是空操作(但 `access` 仍查存在性)。ADR-0019 后: `errno` 是**宏**(每线程槽位), `pthread_detach` = 惰性回收 |
+| **`provider/posix`(POSIX 运行时)** | `1-01` §7.2/§7.3/§7.4/§7.6(D18 双角色 + 依赖宪法 + 移植双模式)、`11-01` §1/§2、**`11-02`(覆盖清单 TR-A/TR-B)**、`7-01` §1/§4.1、`3-01` §2/§3/§4/§7 | **ADR-0014**(内容)/ **ADR-0015**(插件名与命名空间: 原名 `provider/svc-posix`)/ **ADR-0019**(pthread 面补齐 + 多线程样例): 实现 `11-02` 的 TR-A/TR-B。三条承重口径: ① `errno = -ret` 零转换(ADR-0012 的对齐是前提); ② **两条错误通道**(系统调用 `-1`+`errno` / pthread 返回错误号); ③ 访问模式执法归本件(vfs 刻意不做, ADR-0009 §5 遗留项 5)。`chmod/chown/access` 按用户裁定是空操作(但 `access` 仍查存在性)。ADR-0019 后: `errno` 是**宏**(每线程槽位), `pthread_detach` = 惰性回收 |
 | **符号链接与硬链接(vfs + tmpfs)** | `7-01` §2(inode ops 的 v2 预留槽位) | **ADR-0013(提前落地)**: 链接的**解析在 vfs**(目标可能是绝对/相对路径 ⇒ 只有掌握挂载表的人做得到; 用**重启**而非递归, 免得压穿 4 KiB 栈); tmpfs 的数据从节点字段变成**带引用计数的 `tmpfs_body_t`**(硬链接 = 两个名字共享一个体); 三个槽位按 append-only **追加在 `br_inode_ops` 表尾** |
-| **`br/core/br_errno.h`(POSIX 错误码**名字**)** | `3-01 §11`(负 errno)、`11-01 §2`(`errno = -ret` 零转换)、`11-02` P-4(core 无通用 TLS) | **ADR-0023**: 数值只有一处真值(`br_error.h`, 逐字取自内核 + 宿主 `ft-test` 逐码对拍); 本头是**同一批数值的 POSIX 拼写**(逐条 `BR_E*` 别名)。★ 名字归 **core** —— 从前挂在 `runtime/posix` 上, 于是 ① 产品不选 POSIX 运行时就一个名字都没有, ② 三方件只好各自抄一份映射表。`errno` **变量**(每线程槽位)仍归 `runtime/posix`: 那是运行时的状态, core 没有 TLS |
+| **`br/core/br_errno.h`(POSIX 错误码**名字**)** | `3-01 §11`(负 errno)、`11-01 §2`(`errno = -ret` 零转换)、`11-02` P-4(core 无通用 TLS) | **ADR-0023**: 数值只有一处真值(`br_error.h`, 逐字取自内核 + 宿主 `ft-test` 逐码对拍); 本头是**同一批数值的 POSIX 拼写**(逐条 `BR_E*` 别名)。★ 名字归 **core** —— 从前挂在 `provider/posix` 上, 于是 ① 产品不选 POSIX 运行时就一个名字都没有, ② 三方件只好各自抄一份映射表。`errno` **变量**(每线程槽位)仍归 `provider/posix`: 那是运行时的状态, core 没有 TLS |
 | **`br_error.h` 的 errno 值域** | `3-01 §11`(负 errno; 编号沿用 Linux)、`8-01 §4`(SD-10 各域子集) | **ADR-0012**: 值表与域子集分开 —— 值表**逐字抄内核**(`errno-base.h` 整表 1–34 + `errno.h` generic 按需), 域子集仍按 SD-10 分域成文。判据 = 宿主 `ft-test` 拿 `<errno.h>` 对拍 49 码(宿主/目标同用内核 `asm-generic` 编号 ⇒ 对目标同样成立) |
 | **`br_irq_*` 九件 + 域四件** | `3-01 §8/§8.1`(签名冻结)+ `3-02 §3–§9`(机制) | Stage 1 全量; `register/enable/disable` 的 thread-only 加了**运行期拒绝**(设计侧靠静态扫描), ADR-0011 起判据是"ISR **或** bh"(`br_irq_in_atomic`)。**`BR_IRQ_F_DISPATCH_BH` 真的生效**、**SLOW 域可用**(ADR-0011); 新增三个查询面(`br_irq_in_isr`/`br_irq_in_atomic`/`br_irq_lock_depth`)与 `br_irq_stat_t` 的 bh 三项 |
-| **`br_pic_register` / `br_irq_bindings_set` / `br_pic_ops_t`** | `3-02 §4.1/§14.3`(platform 侧契约) | 新增的核心符号, 未回灌 `3-01 §10` 的登记(属 Design 仓库, 见 ADR-0002 §4) |
-| **GICv3 方言(`br_gicv3_*`)** | `3-01 §8` 表"中断控制器 → GICv3 驱动"; `3-02 §4.1.1/§5.3/§7.1` | ISA 层代码暂居 platform 目录(`br-wa-isa-001`); 1020–1023 折算 / EOImode=0 / MSB 对齐量化 |
+| **`br_pic_register` / `br_irq_bindings_set` / `br_pic_ops_t`** | `3-02 §4.1/§14.3`(runtime 插件的契约) | 新增的核心符号, 未回灌 `3-01 §10` 的登记(属 Design 仓库, 见 ADR-0002 §4) |
+| **GICv3 方言(`br_gicv3_*`)** | `3-01 §8` 表"中断控制器 → GICv3 驱动"; `3-02 §4.1.1/§5.3/§7.1` | ISA 层代码暂居 runtime 插件目录(`br-wa-isa-001`); 1020–1023 折算 / EOImode=0 / MSB 对齐量化 |
 | **异常向量表 + 帧** | `3-02 §5.2/§10.2` | 每槽 0x80 B 放不下完整桩 ⇒ 槽内跳板 + 槽外桩体(`P-IRQ-ASM-1`); 帧布局放 core(`br-wa-isa-001`) |
 | **fault 分类 + extable + panic** | `3-02 §10.3/§10.4/§10.6`; `§8.3.1` 的 bare 路径 | 分类/extable/double-fault 兜底齐; `br_fault_handler_register` 属 v2(签名在 `3-02 §14.5`) |
-| **trace 环** | `5-01 §1`(16 B 定长事件, ISR 内可记) | 环与 ISR 发射点在 core(CA-3 白名单要求中断路径不依赖服务 init), `service/trace` 是它的**唯一消费方**(drain/解码/计数/呈现) |
-| **`br_malloc` 族 / contig / page / dma / heap_usage** | `3-01 §6`(br-mem 11 函数, 签名逐字一致)+ `CA-6/CA-7/CA-8` | 三池由 platform 的 region 表按 `BR_MM_KIND_*` 划; TLSF + 红区/毒化是 `5-01 §4` 的 v1.x 便宜层; 归属标签只是 v2 arena 的近似(`br-wa-debug-001`) |
+| **trace 环** | `5-01 §1`(16 B 定长事件, ISR 内可记) | 环与 ISR 发射点在 core(CA-3 白名单要求中断路径不依赖服务 init), `provider/trace` 是它的**唯一消费方**(drain/解码/计数/呈现) |
+| **`br_malloc` 族 / contig / page / dma / heap_usage** | `3-01 §6`(br-mem 11 函数, 签名逐字一致)+ `CA-6/CA-7/CA-8` | 三池由 runtime 插件的 region 表按 `BR_MM_KIND_*` 划; TLSF + 红区/毒化是 `5-01 §4` 的 v1.x 便宜层; 归属标签只是 v2 arena 的近似(`br-wa-debug-001`) |
 | **`br_mm_region_add` / `br_mm_map` / `br_mm_unmap` / `br_mm_cache_*`** | `3-01 §7`(br-mm 5 函数) | `map`/`unmap` 按 `TC-MM-003` 的期望返回 `-ENOTSUP`(v2 重定位); 运行期改属性走 `br_mm_set_attrs`(用例做真 RO 保护验证); region 种类位是原型新增载体 |
-| **`br_mm_ops_t` / `br_mm_register` / `br_mm_activate`** | `3-01 §10`"平台侧接口"行(同 `br_pic` ops 手法)+ `1-01 §8` 三层模式 | 状态机(未注册→已注册→已激活)在 core, 页表构造在 platform; 描述符编码属 ISA 层 ⇒ `br-wa-isa-001` 范围扩大 |
+| **`br_mm_ops_t` / `br_mm_register` / `br_mm_activate`** | `3-01 §10`"平台侧接口"行(同 `br_pic` ops 手法)+ `1-01 §8` 三层模式 | 状态机(未注册→已注册→已激活)在 core, 页表构造在 runtime 插件; 描述符编码属 ISA 层 ⇒ `br-wa-isa-001` 范围扩大 |
 | **`hal/{vfs-core,dev-core,cdev-core}`** | `7-01`(§1 SD-1/§2 SD-15/§3 SD-7)、`8-01`(§1 框架件归属与形态 A/B/C、§2 注册表与 open_file 钩子、§3 子分类与 D22 预留)、`1-01` §4.5(D19) | 三件的依赖方向**逐条照 §7.3/`8-01` §1.3**: `cdev-core→dev-core`(init)、`cdev-core→vfs-core`(type)、`dev-core→vfs-core`(**type** —— 写成 runtime 会推翻形态 B); `vfs-core` 的 deps **为空**(D21 撤销设备路由后的纯 VFS)。增量: `br_inode_t` 加 `fpriv`、补路径级便捷面与 `br_open_err`、补 5 个存储域错误码(见 ADR-0009 §3) |
 | **`fs/{tmpfs,devfs}`** | `7-03`(§2 tmpfs rootfs / §3 devfs 设备节点 / §6 挂载计划) | tmpfs 挂 "/" 并预建 `/dev /data /tmp`; devfs 把 dev-core 注册表**实时投影**为节点(打开经类 open_file 钩子)⇒ `/dev/uart0` 可 `br_open`。两件的挂载点是**代码常量**(`[[mount]]` 声明面工具侧尚未消费)⇒ `br-wa-fs-001` |
-| **`hal/{bdev-core,pci-core}`** | `7-02` §1(bdev 类形状)、`8-01` §1.3/§3(块设备子分类)、`1-03` §1(bdev-core 在清单里) | **ADR-0021**: bdev 与 cdev 并列的存储域第二条设备链(扇区 read/write/flush + 几何 + DMA/PIO 声明位); PCI(e) 是本刀**新增的域**(设计无条目)⇒ 通用机制在 `pci-core`、板级事实(ECAM/MMIO/INTx 起点)留 `platform`。`br_bdev_get` 是"FS 绑定块设备"的入口 |
+| **`hal/{bdev-core,pci-core}`** | `7-02` §1(bdev 类形状)、`8-01` §1.3/§3(块设备子分类)、`1-03` §1(bdev-core 在清单里) | **ADR-0021**: bdev 与 cdev 并列的存储域第二条设备链(扇区 read/write/flush + 几何 + DMA/PIO 声明位); PCI(e) 是本刀**新增的域**(设计无条目)⇒ 通用机制在 `pci-core`、板级事实(ECAM/MMIO/INTx 起点)留 `runtime/qemu-aarch64`。`br_bdev_get` 是"FS 绑定块设备"的入口 |
 | **`driver/uboot-mmc`** | `7-02` §1/§4/§5(bdev 形状、DMA/PIO 要能指出、ISR→bh→唤醒) | **ADR-0021 + ADR-0029**: u-boot `drivers/mmc/**` + `include/{mmc,sdhci}.h` 的**上游原样编译**(原件在 `third_party/uboot-imx/`, 适配在 `driver/uboot-mmc/{compat,glue}`); 偏离 = 中断驱动(上游轮询 ⇒ 环境层的 `get_timer()`/`udelay()` 变成可被设备中断唤醒的睡眠等待)+ ADMA2/PIO 运行期可选 + **多卡静态实例表**(ADR-0022); flush 只做"等卡不忙"⇒ `br-wa-emmc-001` |
 | **`fs/{uboot-fat,uboot-erofs}`** | `7-01` §1~§3(四层 ops/瞬态 inode)、`7-03` §1~§2(介质 FS) | **ADR-0022 + ADR-0026/0029 + ADR-0033**: u-boot `fs/fat/**`(读写)与 `fs/erofs/**`(只读 + LZ4)的**上游原样编译**(同一个三角; erofs 见 ADR-0026, fat 见 ADR-0029); inode = **瞬态路径包装**(设计给介质 FS 的形状), 复用上游的路径风格 API ⇒ 上游函数逐一对得上; 两件**不抛接口** ⇒ `api_type = native`(表面分类无对象), 来源由 `license = "GPL-2.0-or-later"` + `third_party/` 承载, 工具链禁则由 `BRV-TAX-0023` 守卫。EROFS 的写面填槽位返回 `-EROFS`(不是留空得 `-ENOTSUP`) |
-| **`driver/uart-pl011`** | `1-03 §1`(M0 轮询 console → **M2 注册 cdev**)、`8-01` §6(驱动编写者契约)、§5(ioctl 编码) | v1 交付**注册 cdev + 轮询式会话**(`/dev/uart0` 可开/读/写/ioctl/poll + 严格独占); **不开 UART 中断**(bh 已在 ADR-0011 就位, 欠的是驱动侧还没用它做 RX 唤醒)⇒ `br-wa-io-001`。与 platform 的 `console_pl011.c` 是同一硬件的两种**设计内**形态(后者是 panic 通道, 不能注册设备) |
-| **`service/{trace,backtrace,hexdump,memleak,dump}`** | `1-03 §1`(v1.0 插件清单: `service/trace`)+ `5-01`(§1 trace / §2 bridge / §3 ramdump 捕获集 / §4 memleak) | `service/trace` 与清单同名; 另四件是本次补的调试服务(6-01 尚无 `TC-DBG-*` 组, 属回灌项); 调用点**不再经 APP** —— 调试域用例归 core 的 selftest pass(ADR-0010), `allow_edges` 现为空(ADR-0016 删掉最后一条, 见 `br-wa-boot-001`) |
+| **`driver/uart-pl011`** | `1-03 §1`(M0 轮询 console → **M2 注册 cdev**)、`8-01` §6(驱动编写者契约)、§5(ioctl 编码) | v1 交付**注册 cdev + 轮询式会话**(`/dev/uart0` 可开/读/写/ioctl/poll + 严格独占); **不开 UART 中断**(bh 已在 ADR-0011 就位, 欠的是驱动侧还没用它做 RX 唤醒)⇒ `br-wa-io-001`。与 runtime 插件的 `console_pl011.c` 是同一硬件的两种**设计内**形态(后者是 panic 通道, 不能注册设备) |
+| **`provider/{trace,backtrace,hexdump,memleak,dump}`** | `1-03 §1`(v1.0 插件清单: `provider/trace`)+ `5-01`(§1 trace / §2 bridge / §3 ramdump 捕获集 / §4 memleak) | `provider/trace` 与清单同名; 另四件是本次补的调试服务(6-01 尚无 `TC-DBG-*` 组, 属回灌项); 调用点**不再经 APP** —— 调试域用例归 core 的 selftest pass(ADR-0010), `allow_edges` 现为空(ADR-0016 删掉最后一条, 见 `br-wa-boot-001`) |
 | **`tests/host/mem_test.c` + `make mem-test`** | `1-03` 的"host 平台插件: CI 秒级 + ASan 白捡" | 完整 host 平台插件未落地; 本原型先做到"内存实现编成宿主可执行跑算法压测"(无需交叉工具链/QEMU) |
-| **`board_irq.h`** | `3-02 §3.1`(IR-2 生成头) | 走设计明示的**退路**: platform 导出静态头(brickie v0.1 不生成该头, 属 2-01 的 O-4) |
+| **`board_irq.h`** | `3-02 §3.1`(IR-2 生成头) | 走设计明示的**退路**: runtime 插件导出静态头(brickie v0.1 不生成该头, 属 2-01 的 O-4) |
 
 ## 7. 下一步(往 M0 走)
 
 按设计 `1-03 §3`, M0 = **启动链 + 插件管理**, 验收 = "hello + init 链打印 + 故意造环看组合器报错"。本原型离它还差以下几步(状态按当前 checkout):
 
-1. **组合器 `brickie` 的声明面** —— **已交付**(三语言: L5 Python 前端 23 条叶子命令、L0/L1 Rust 核心、L2 C++ 渲染器, 入口 = 单文件自包含 ELF); `platform/qemu-aarch64` 与 `app/hello` 已被它接管(manifest + `check` + 快照 + lock + 描述符生成物)。这是 `br-wa-entry-001` 第 ③ 条的前提, 前提已具备。
+1. **组合器 `brickie` 的声明面** —— **已交付**(三语言: L5 Python 前端 23 条叶子命令、L0/L1 Rust 核心、L2 C++ 渲染器, 入口 = 单文件自包含 ELF); `runtime/qemu-aarch64` 与 `app/hello` 已被它接管(manifest + `check` + 快照 + lock + 描述符生成物)。这是 `br-wa-entry-001` 第 ③ 条的前提, 前提已具备。
 2. 插件描述符段(`.br_plugins` + `__br_plugins_start/stop`)与**声明面唯一真值**(`2-02` BR-D2): manifest / 描述符生成物已在 `build/gen/**`, 缺的是**运行期按段枚举**。
 3. `start.S` 的调用点改为段枚举驱动 → 兑掉 `br-wa-entry-001` 的第 ③ 条(第 ①② 条已随插件化还清)。
 4. ~~中断框架(M0/M1 的 Stage 1)~~ ⇒ **已交付**(设计 `3-02` 的 Stage 1 全量: 号空间/PIC 抽象/生命周期/屏蔽三层/优先级/触发/级联域/fault+extable, 加 GICv3 方言与向量桩; `make irq-test` 的 91 项在 QEMU 上全绿)。**ADR-0011 追加了 Stage 2 的第一件**: 按线的 **BH 分发** + **SLOW 级联域走下半部**(workqueue 在 core)。**仍欠的**: `BR_IRQ_F_DISPATCH_THREAD`(线程化 IRQ)、§12.3 动态升级、v2b 的亲和性/负载均衡/IPI, 与 `br_fault_handler_register`(v2)。
 5. ~~内存: 恒等映射 + 三池 + 堆~~ ⇒ **已交付**(设计 `3-04`/`3-01 §6/§7`: 4 KiB 恒等映射页表 + region 表 + TLSF 堆 + contig/DMA 池 + 页位图池 + cache 维护; `make dbg-test` 的 `[MEMCONF]` 与 `make mem-test` 在目标/宿主两侧全绿)。**仍欠的**是重定位(v2)、MPU 目标(vx)、池比例由 manifest 生成(`br-wa-mem-001`)。
 6. ~~调试插件: trace / dump / hexdump / backtrace / memleak~~ ⇒ **已交付**(五个 service 插件, 声明面由 brickie 治理; `make dbg-test` 的 `[DBGCONF]` 全绿)。**仍欠的**是 debug bridge(M3)、per-plugin arena 记账(v2)、栈 canary 与目标侧 ASan。
-7. ~~调度器(M1)~~ ⇒ **已交付**(ADR-0006 的调度框架 + `sched/coop`; ADR-0011 追加 `sched/rr`(时间片抢占)与 **IRQ 出口的抢占换栈**): APP 线程 + `br_sched_run()`, timer PPI 的 ISR 仍按 `P-IRQ-17` 留在 platform, 调试插件的 init 由插件管理器按 `[[dep]]` 驱动。**仍欠的**: `sched-tt`(v3 调度表)、优先级/PI、SMP。
+7. ~~调度器(M1)~~ ⇒ **已交付**(ADR-0006 的调度框架 + `sched/coop`; ADR-0011 追加 `sched/rr`(时间片抢占)与 **IRQ 出口的抢占换栈**): APP 线程 + `br_sched_run()`, timer PPI 的 ISR 仍按 `P-IRQ-17` 留在 runtime 插件, 调试插件的 init 由插件管理器按 `[[dep]]` 驱动。**仍欠的**: `sched-tt`(v3 调度表)、优先级/PI、SMP。
 
-⇒ 剩下的主线其实是**同一条**: **插件管理器 / 阶段机 / 调度器**(上面 4/7 两行已走通); 原计划之一"**服务化**"(平台身份/心跳进服务注册表, 让最后一条 `allow_edges` 豁免消失)**已由 ADR-0016 以 core 接口的形态解决**(心跳计数收归 core、身份日志归 platform 自己打, `allow_edges` 现在是空表; 没有引入服务注册表, 理由见该 ADR §2.5)。仍在的主线是 "**debug bridge**"(M3)与真正的共享状态服务化(fd 表 / socket 表 / trace 环)。
+⇒ 剩下的主线其实是**同一条**: **插件管理器 / 阶段机 / 调度器**(上面 4/7 两行已走通); 原计划之一"**服务化**"(平台身份/心跳进服务注册表, 让最后一条 `allow_edges` 豁免消失)**已由 ADR-0016 以 core 接口的形态解决**(心跳计数收归 core、身份日志归 runtime 插件自己打, `allow_edges` 现在是空表; 没有引入服务注册表, 理由见该 ADR §2.5)。仍在的主线是 "**debug bridge**"(M3)与真正的共享状态服务化(fd 表 / socket 表 / trace 环)。
 
-> **v0.2.0 现状补记(ADR-0008)**: `br_core_main` **没有"被拆掉", 而是以"四阶段启动链"的形态重建** —— 按 ① 平台无关初始化 → ② platform 插件初始化 → ③ 堆 + 地址映射的建立 → ④ 插件相位驱动 编排(`core/c_core/include/br/core/br_main.h` / `docs/decisions/0008-*.md`); `start.S` 只 reset/BSS 再 `bl br_core_main()`。timer PPI 的 ISR 仍按 `P-IRQ-17` 留在 platform 的 `start` 相(权限模型, 见 ADR-0002)。
+> **v0.2.0 现状补记(ADR-0008)**: `br_core_main` **没有"被拆掉", 而是以"四阶段启动链"的形态重建** —— 按 ① 与运行环境无关的初始化 → ② runtime 插件初始化 → ③ 堆 + 地址映射的建立 → ④ 插件相位驱动 编排(`core/c_core/include/br/core/br_main.h` / `docs/decisions/0008-*.md`); `start.S` 只 reset/BSS 再 `bl br_core_main()`。timer PPI 的 ISR 仍按 `P-IRQ-17` 留在 runtime 插件 的 `start` 相(权限模型, 见 ADR-0002)。
 
 ### 中断侧的实现裁定(与设计文档的偏差都记在这里, 细节见 ADR-0002)
 
@@ -514,7 +515,7 @@ ADR-0014 追加的自编号: `TC-POSIX-001..020`(POSIX 面)—— `posix-test` �
 | `P-IRQ-5` | `br_irq_cpu_init()` 兼初始化描述符池的 `pic_id/dom_id = -1` | 0 是合法编码(BSS 零不等于"无效") |
 | `P-IRQ-15` | GICv3 拒绝"量化后落在最低可实现档"的请求(`-ENOTSUP`) | 那档与 PMR 相等 ⇒ 永远收不到; 降到上一档是**提权**, IR-7 禁止 |
 | `P-IRQ-16` | 一致性用例用**非对齐访存**造可恢复 fault | ~~MMU-off ⇒ Device 内存 ⇒ 非对齐必取 Alignment fault~~ **已被 `P-MM-3` 取代**: MMU 开 + Normal 属性 + `SA/SA0=0` 之后非对齐不再 fault, 改用**窗口外未映射地址**取翻译 fault |
-| `P-IRQ-17` | timer PPI 的 ISR 与"全局开中断"归 **platform**, 不归 APP | 设计 `3-01 §13.6` 把"中断控制"归 **P3**、APP 是 **P0** ⇒ 放置避免越权 |
+| `P-IRQ-17` | timer PPI 的 ISR 与"全局开中断"归 **runtime 插件**, 不归 APP | 设计 `3-01 §13.6` 把"中断控制"归 **P3**、APP 是 **P0** ⇒ 放置避免越权 |
 | `P-IRQ-ASM-1/2` | 槽内跳板 + 槽外桩体; 恢复路径不写 `msr daif`(无此编码, `eret` 从 SPSR 恢复) | 一槽 0x80 B 装不下 320 B 帧的存取 |
 | `P-IRQ-PLAT-1` | `ICC_CTLR_EL1.PRIbits` 按 `field + 1` 解码并夹到 [5,8] | 实测 QEMU: field=4 ⇒ 5 位; 回读断言(0x01→0x08)是它的执法 |
 
@@ -539,7 +540,7 @@ ADR-0014 追加的自编号: `TC-POSIX-001..020`(POSIX 面)—— `posix-test` �
 | `P-MEM-1` | **native 面零增量**: br-mem 11 + br-mm 5 与 `3-01 §6/§7` 逐字一致 | 新增的初始化/观测/记账/平台面共 16 个符号**分类登记**在 ADR-0003 §2.1, 不动 CA-5 的 48 预算 |
 | `P-MEM-2` | TLSF 二级位图(32 × 32), `BR_MALLOC_ALIGN = 16` | AAPCS64 的 SP 16 对齐 ⇒ 结构体自然对齐上界是 16; 取 4/8 会让 `aligned(16)` 对象放不进 malloc 的 buffer |
 | `P-MEM-3` | 用户块 = `[头 32B][用户区][红区 0xA5][尾 8B]`; 双 free 检出后**直接返回** | `5-01 §4` 的 "TLSF 红区 + freelist 毒化" 落地; 二次入链会毁堆, 拦截比报错重要 |
-| `P-MEM-4` | region 种类位 `attrs[11:8]`(`BR_MM_KIND_*`)= `3-01 §13.6` regions 轴的**可执行载体** | 设计只给了取值域没给载体; core 按种类认领池(机制), platform 只声明数据 |
+| `P-MEM-4` | region 种类位 `attrs[11:8]`(`BR_MM_KIND_*`)= `3-01 §13.6` regions 轴的**可执行载体** | 设计只给了取值域没给载体; core 按种类认领池(机制), runtime 插件只声明数据 |
 | `P-MEM-5` | 镜像 + 启动栈声明为**一条** `IMAGE` region | region 重叠禁则 + 页对齐: 镜像尾与栈底只差十几字节, 拆两条必然重叠 |
 | `P-MEM-6` | 页池位图按 `BR_PAGE_MAX_PAGES = 4096` 静态预置(**16 MiB** 池上界, 位图 512 B) | 无运行期分配; 超出上界在 `br_mem_init` 就 `-ENOMEM`, 不静默截断 |
 | `P-MM-1` | 4 KiB 粒度 / 4 级 / 仅 TTBR0 / T0SZ=25 / IPS=40 位; 7 张静态页表(28 KiB) | 逐页 4 KiB 映射是 `set_attrs`(RO/NX)与 v2 重定位能按页生效的前提 |

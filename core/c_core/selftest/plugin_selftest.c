@@ -134,8 +134,8 @@ int br_plugin_selftest(void)
         pc_report(ok, "TC-PLUG-003",
                   "phase monotonicity: provider completion rank <= consumer for every init edge");
 
-        pc_report((v->plat_index != (br_u32)-1) && (v->first_early_name != BR_NULL)
-                  && (v->first_early_name == v->plugins[v->plat_index]->name),
+        pc_report((v->rt_index != (br_u32)-1) && (v->first_early_name != BR_NULL)
+                  && (v->first_early_name == v->plugins[v->rt_index]->name),
                   "TC-PLUG-003",
                   "first early-phase step = platform plugin's early_init (explicit plugin_type, not topological order)");
 

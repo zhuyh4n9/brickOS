@@ -222,7 +222,7 @@ def _render_closure(data: dict, extra: dict) -> list[str]:
     totals = _as_dict(data.get("totals"))
     if totals:
         budget = _as_dict(totals.get("budget"))
-        capacity = _as_dict(totals.get("platform_capacity"))
+        capacity = _as_dict(totals.get("runtime_capacity"))
         lines.append(
             f"total: RAM {totals.get('ram_kib', '-')} KiB / stack {totals.get('stack_kib', '-')} KiB"
             f" (platform capacity RAM {capacity.get('ram_kib', '-')} / stack {capacity.get('stack_kib', '-')};"
@@ -268,11 +268,11 @@ def _render_show_bricks(data: dict, extra: dict) -> list[str]:
     lines.extend(_table(["plugin", "type", "subkind", "phase", "RAM", "stack", "origin"], rows))
 
     budget = _as_dict(totals.get("budget"))
-    capacity = _as_dict(totals.get("platform_capacity"))
+    capacity = _as_dict(totals.get("runtime_capacity"))
     lines.append(
         f"total: RAM {totals.get('ram_kib', '-')} KiB / stack {totals.get('stack_kib', '-')} KiB"
         f"   (product budget RAM {budget.get('ram_kib', '-')} / stack {budget.get('stack_kib', '-')};"
-        f" platform capacity RAM {capacity.get('ram_kib', '-')} / stack {capacity.get('stack_kib', '-')})"
+        f" runtime capacity RAM {capacity.get('ram_kib', '-')} / stack {capacity.get('stack_kib', '-')})"
     )
     by_type = _as_dict(totals.get("by_type"))
     parts = [f"{k} {v}" for k, v in by_type.items() if v]

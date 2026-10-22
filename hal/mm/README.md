@@ -28,4 +28,4 @@
 
 * 池**比例**写死在 platform 的 region 表里（`WORKAROUNDS.md` `br-wa-mem-001`：budget → region 的生成链路仍未做）；
 * 页表**构造**在 `platform/src/mmu.c`，本砖只调 ops 表；
-* 不含 `hal/mm` 以外的分配器（POSIX 的 `malloc` 别名在 `runtime/posix`，最终落到这里）。
+* 不含 `hal/mm` 以外的分配器（POSIX 的 `malloc` 别名在 `provider/posix`，最终落到这里）。

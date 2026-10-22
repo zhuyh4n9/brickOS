@@ -33,7 +33,7 @@ static void er_conf(br_bool ok, const char *tag, const char *what)
     }
 }
 
-/* ---- small helpers (selftest-local; no runtime/posix dependency) ---- */
+/* ---- small helpers (selftest-local; no provider/posix dependency) ---- */
 
 static br_size_t ef_strlen(const char *s)
 {

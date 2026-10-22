@@ -5,7 +5,7 @@
  * br_delay_* is only a busy-wait primitive; blocking sleep is br_task_sleep().
  */
 #include <br/core/br_time.h>
-#include <br/platform/br_plat.h>
+#include <br/runtime/br_plat.h>
 
 /* QEMU virt arch timer is 62.5 MHz; fallback only when CNTFRQ_EL0 reads 0 or absurdly small. */
 #define BR_CLOCK_FALLBACK_HZ   62500000u

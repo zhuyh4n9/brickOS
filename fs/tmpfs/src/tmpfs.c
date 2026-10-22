@@ -534,7 +534,7 @@ static int tmpfs_file_open(br_file_t *f, br_u32 flags)
     }
 
     /* O_TRUNC: truncate to 0 on open. Permission checks (a read-only fd must not write) are
-     * the vfs/runtime/posix fd layer's job, not repeated here. */
+     * the vfs/provider/posix fd layer's job, not repeated here. */
     if ((flags & BR_O_TRUNC) != 0u) {
         rc = tmpfs_file_truncate(node, 0u);
         if (rc != BR_OK) {
@@ -895,7 +895,7 @@ static int tmpfs_rmdir(br_inode_t *dir, const char *name)
     }
     if (victim->child != BR_NULL) {
         /* -ENOTEMPTY (39), not -EBUSY: that means "mount point not removable" (TC-VFS-012),
-         * and runtime/posix errno mapping needs the distinction. */
+         * and provider/posix errno mapping needs the distinction. */
         return BR_ERR(ENOTEMPTY);
     }
     /* The root cannot be rmdir'd: it has no parent entry, and "." / ".." are rejected by the

@@ -20,15 +20,15 @@
       "unsatisfied": []
     },
     "files_planned": [
-      "api/iface/service/a/a.toml",
+      "api/iface/provider/a/a.toml",
       "api/iface/CHANGELOG.md",
       "brickie.lock"
     ],
     "freeze_state": "unfrozen",
     "from": "0.1.0.0",
-    "hash": "sha256:03c394cc333d0d95d0e974082f38f80df097f388c9d7c762251b74b0659f4846",
-    "hash_short": "03c394cc333d",
-    "id": "service/a#a",
+    "hash": "sha256:5d1814d214020eb07e66ad68aee2385e2ed016aa3fa48595988ea3b905172c65",
+    "hash_short": "5d1814d21402",
+    "id": "provider/a#a",
     "noop": false,
     "published": true,
     "report": {
@@ -55,7 +55,7 @@
   "protocol": 1,
   "status": "ok",
   "written": [
-    "api/iface/service/a/a.toml",
+    "api/iface/provider/a/a.toml",
     "api/iface/CHANGELOG.md",
     "brickie.lock"
   ]

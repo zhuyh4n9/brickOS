@@ -22,7 +22,7 @@ platform = ["qemu-aarch64"]
 
 [[case]]
 id       = "TC-PLUG-002"
-pre      = "同上; 插件树里 service/dump 对四个 service 声明了 kind = \"init\" 的边"
+pre      = "同上; 插件树里 provider/dump 对四个 service 声明了 kind = \"init\" 的边"
 steps    = ["取拓扑序", "逐条检查: 每条 init 边的提供方位次 < 消费方位次"]
 expect   = "全部 init 边被拓扑序满足(违例时报出具体边)"
 sched    = ["coop"]

@@ -10,14 +10,14 @@ schema = 1
 name     = "brickos-prototype"
 version  = "0.2.0.0"             # COMPAT_GEN.MAJOR.MINOR.REVISE
 app      = { brick = "app/hello", requires = {} }
-platform = { brick = "platform/qemu-aarch64", requires = {} }
+runtime = { brick = "runtime/qemu-aarch64", requires = {} }
 core     = { brick = "core/c_core", requires = { version = ">=0.1.0" } }
 stage    = "dev"                 # dev | release; CLI overrides (§7.5)
 
 
 [[product.ability]]
 rr    = { brick = "sched/rr", requires = {} }
-dump  = { brick = "service/dump", requires = {} }
+dump  = { brick = "provider/dump", requires = {} }
 fat   = { brick = "fs/uboot-fat", requires = {} }
 erofs = { brick = "fs/uboot-erofs", requires = {} }
 tmpfs = { brick = "fs/tmpfs", requires = {} }
@@ -64,7 +64,7 @@ obj_dir          = "build/obj"
 # Cross-compilation discipline (every flag has a reason, not a casual optimization switch):
 #   -ffreestanding / -fno-builtin  no host runtime assumptions; no silent loop->memcpy
 #   -fno-stack-protector           no libc __stack_chk_fail
-#   -fno-omit-frame-pointer        compile-time precondition of service/backtrace: unwinding walks
+#   -fno-omit-frame-pointer        compile-time precondition of provider/backtrace: unwinding walks
 #                                  the x29(fp) chain, while -O2 treats fp as an ordinary register
 #                                  => the chain breaks at frame one (one stp/ldp each).
 #   -ffunction-sections/-fdata-sections + -Wl,--gc-sections  bare-metal image: unused code stays out

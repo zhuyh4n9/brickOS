@@ -3,7 +3,7 @@
  *
  * It lives in `compat/std-names/` and is deliberately NOT listed in `includes`: brickie's
  * include-surface criterion is name-level and cannot see per-unit `-I`, so a standard-name header
- * in `includes` would be misjudged as included by `runtime/posix` (false positive). It ships via
+ * in `includes` would be misjudged as included by `provider/posix` (false positive). It ships via
  * one `-Idriver/uboot-mmc/compat/std-names` in `[build].cflags`, which only affects this
  * plugin's units. Move it back to `compat/` once that criterion resolves per-unit `-I`.
  *

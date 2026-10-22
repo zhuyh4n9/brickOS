@@ -88,7 +88,7 @@ prototype/
 | `pr_err/pr_info/pr_debug`、`erofs_err/dbg` | 接到 `br_log_write`(前缀 `uboot-erofs: `) | 上游 `internal.h` **自己**把 `erofs_*` 映射到 `pr_*` ⇒ 名字由上游给, 实现由我们给 |
 | `BUILD_BUG_ON` | u-boot 的机制(函数体内 `if` + `__compiletime_error`) | **不能**用 `_Static_assert`: 上游 `erofs_fs.h` 最后一条自检的条件不是整型常量表达式 |
 | `get_unaligned/put_unaligned`、`__rcode`、`RELOC_LOADER`、`IS_ENABLED` | 宏/常量 | 上游原文直接用到; `IS_ENABLED` 这里给 `CONFIG_LZ4 1`/`CONFIG_ZLIB 0`, 于是上游的 `#if` 原样成立 |
-| `strlen/strnlen/strcmp/strncmp/strchr` | 本文件自研的 `static inline`(加 `uboot_erofs_` 前缀再用宏接回上游裸名) | 任务书硬约束: 不依赖 runtime/posix; 且整编译单元 `-fno-builtin`, 不会自撞 |
+| `strlen/strnlen/strcmp/strncmp/strchr` | 本文件自研的 `static inline`(加 `uboot_erofs_` 前缀再用宏接回上游裸名) | 任务书硬约束: 不依赖 provider/posix; 且整编译单元 `-fno-builtin`, 不会自撞 |
 | `EFSCORRUPTED` / `E*` 裸名字 | `<br/core/br_errno.h>`(ADR-0023) | errno 名字是 core 的单一真值; `EFSCORRUPTED` 照抄上游 `internal.h` 的 `#ifdef EUCLEAN` 构造, 一个字不改 |
 | `struct erofs_sb_info sbi` 的**存储** | 由 `glue/erofs_vfs.c` 定义 | 上游把它放在 `fs/erofs/fs.c`(u-boot 的 blk/DM 胶水层), 本插件不编译那份 ⇒ 缺的那块环境由我们补, 上游代码一个字不改 |
 

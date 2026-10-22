@@ -214,10 +214,10 @@ pub fn judge(req: &crate::proto::Request) -> Response {
             }
         }
         // Documented exception (ADR-0038 §5①): the core plugin is platform-agnostic -- it uses the
-        // platform *contract* (`br/platform/**`: the console hooks, `br_plat_ticks_*`) without
+        // platform *contract* (`br/runtime/**`: the console hooks, `br_plat_ticks_*`) without
         // naming a platform plugin, and the direction table forbids it from declaring one.
         if cp.plugin_type == "core" {
-            for p in tree.plugins.iter().filter(|p| p.plugin_type == "platform") {
+            for p in tree.plugins.iter().filter(|p| p.plugin_type == "runtime") {
                 for id in idents_for(&p.name) {
                     visible.insert(id);
                 }

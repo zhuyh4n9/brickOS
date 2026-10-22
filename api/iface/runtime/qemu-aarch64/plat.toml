@@ -1,0 +1,97 @@
+# brickie:generated
+# api/iface 快照 api/iface/runtime/qemu-aarch64/plat.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "runtime/qemu-aarch64#plat"
+provider = "runtime/qemu-aarch64"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.4.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:3863fa62c2d559a6b3ca3e81fc5d99f75b188ec0b2203ddacf331cdfb92139a7"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "func"
+name = "br_plat_early_init"
+sig = "void (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_name"
+sig = "const char* (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_isa"
+sig = "const char* (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_ticks_freq"
+sig = "br_u64 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_ticks_now"
+sig = "br_u64 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_park_forever"
+sig = "void (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_unexpected_exception"
+sig = "void (br_u64)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_irq_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_irq_start"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_timer_ticks"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_timer_stop"
+sig = "void (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_irq_trigger"
+sig = "int (br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_plat_irq_hwirq"
+sig = "int (br_u32, br_u32*)"
+status = "experimental"

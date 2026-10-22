@@ -16,7 +16,7 @@ int file_table_start(void);
 
 typedef struct ft_slot {
     br_file_t *file;    /* BR_NULL = empty slot (this is the presence test) */
-    br_u32     flags;   /* opaque: only stored and returned; the consumer (runtime/posix) interprets it */
+    br_u32     flags;   /* opaque: only stored and returned; the consumer (provider/posix) interprets it */
 } ft_slot_t;
 
 static ft_slot_t s_slots[BR_FT_MAX];

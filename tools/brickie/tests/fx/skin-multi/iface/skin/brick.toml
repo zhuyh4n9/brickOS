@@ -22,7 +22,7 @@ compat_gen   = 0
 freeze_state = "unfrozen"
 hash         = ""
 status       = "experimental"
-reexport_of  = ["service/ra-crypto#crypto", "service/ra-keyring#keyring"]
+reexport_of  = ["provider/ra-crypto#crypto", "provider/ra-keyring#keyring"]
 
 [build]
 sources  = ["src/*.c"]

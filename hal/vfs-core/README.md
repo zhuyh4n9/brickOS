@@ -24,7 +24,7 @@
 2. **路径规范化 + 逐级 lookup 走查链** + 瞬态 inode 释放时机管理(v1 走查即弃, 无 cache)。匹配带**分量边界**: `/devx` 不会错配到 `/dev`。
 3. **文件句柄的分配/释放 + 层 3 派发**: `br_open`/`br_open_err` → 末级 inode → `fops->open` 建会话; `br_file_read/write/lseek/ioctl/fsync/poll/close`; 槽位缺失 ⇒ `-ENOTSUP`; `f == NULL` ⇒ `-EINVAL`; `br_file_close(NULL)`/`br_closedir(NULL)` 幂等 0。
 4. **目录迭代(泛型)**: `br_opendir` 就是对目录 inode 做一次 `O_RDONLY` 打开, `br_readdir` 泛型地调 `fops->read` 取一条定长 `br_dirent_t`(返回 `1`/`0`/负 errno)—— 不需要任何"目录专用 ops"(四层分层的收益)。
-5. **路径级便捷面**: `br_stat`/`br_mkdir`/`br_rmdir`/`br_unlink`/`br_rename`/`br_truncate` —— "路径 → 父目录 inode + 名字"两段式的翻译层, 即 runtime/posix 的 1:1 映射口。
+5. **路径级便捷面**: `br_stat`/`br_mkdir`/`br_rmdir`/`br_unlink`/`br_rename`/`br_truncate` —— "路径 → 父目录 inode + 名字"两段式的翻译层, 即 provider/posix 的 1:1 映射口。
 6. **存储域一致性用例** `vfs_core_selftest()`, 在 `src/vfs_selftest.c`(见下)。
 
 句柄/inode 访问器(`br_file_inode`/`br_file_fpriv`/`br_file_set_fpriv`/`br_file_flags`/`br_file_offset`/`br_file_set_offset`/`br_inode_priv`)是 fops 实现者读写私有状态的唯一入口 ——`br_file_t` 不透明, 布局只活在本件里。
@@ -32,8 +32,8 @@
 ## 边界纪律 / 不做什么
 - **零设备知识**: 本文件没有任何 `br_cdev`/`br_dev`/设备名分支 —— vfs 看到的只是"某个 FS 的某个 inode 带了 fops/fpriv"。设备经 `fs/devfs` 以 `/dev` 文件节点出现。
 - **无 inode/dentry cache**: inode 是走查的中间产物, `free_inode` 即弃; `br_dentry_ops` v1 全 NULL, 槽位先占免得 v2 改布局。路径走查**零特判**, 一切经挂载表。
-- **不做访问模式执法**: `flags` 只做合法性校验(未知位置位 ⇒ `-EINVAL`), 在只读句柄上 write、无写权限时 `O_TRUNC` 都不拒绝 —— 访问模式策略归 runtime/posix 的 fd 层(遗留项)。
-- **不做 cwd**: cwd 是 POSIX 概念, 归 runtime/posix; native API 只认绝对路径。
+- **不做访问模式执法**: `flags` 只做合法性校验(未知位置位 ⇒ `-EINVAL`), 在只读句柄上 write、无写权限时 `O_TRUNC` 都不拒绝 —— 访问模式策略归 provider/posix 的 fd 层(遗留项)。
+- **不做 cwd**: cwd 是 POSIX 概念, 归 provider/posix; native API 只认绝对路径。
 - **不做运行时挂载/卸载**: 挂载点本身 `unlink`/`rmdir` ⇒ `-EBUSY`(卸载语义不早于 v3); `unmount`/`sync` 是签名先行的可空槽位。
 - **不实现事件等待**: `poll_attach` v1 恒 NULL ⇒ `-ENOTSUP`; `br_file_poll` 只查就绪位。
 - **不认 FS 名字、不替 FS 做策略**: `vfs_core_selftest()` 对"rootfs 是 tmpfs"这个事实只当作"挂载表里有一个 `/`"(契约头原话)。

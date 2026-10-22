@@ -73,7 +73,7 @@ pub fn run(req: &Request) -> Response {
 /// One compilation unit (core body / plugin / generated artifacts); paths are relative to root.
 #[derive(Clone, Debug, Default)]
 struct Unit {
-    /// Plugin name (`service/trace`), or `core` / `build/gen (generated)`.
+    /// Plugin name (`provider/trace`), or `core` / `build/gen (generated)`.
     name: String,
     /// Unit dir (`""` = repo root).
     dir: String,
@@ -639,13 +639,13 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     // Per-unit include surface = self + transitive declared dep closure; no global union, so an
     // undeclared dep is a hard compile error. **Core is not ambient** (ADR-0038 §6): since core is
     // a first-class interface provider, a plugin that wants `<br/core/**>` declares
-    // `[[dep]] runtime/core` (or `core/c_core`), and the declaration is the compile prerequisite --
+    // `[[dep]] provider/core` (or `core/c_core`), and the declaration is the compile prerequisite --
     // exactly the discipline ADR-0018 introduced for every other provider. The core unit
     // additionally gets the platform headers, because its clock reads the platform timer.
-    let platform_incs: Vec<String> = tree
+    let runtime_incs: Vec<String> = tree
         .plugins
         .iter()
-        .filter(|p| p.plugin_type == "platform" && closure.selected.contains(&p.name))
+        .filter(|p| p.plugin_type == "runtime" && closure.selected.contains(&p.name))
         .flat_map(plugin_incs)
         .collect();
     let is_core_unit = |u: &Unit| {
@@ -678,7 +678,7 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
             // Core is platform-agnostic: it reads the platform *contract* without naming a
             // platform plugin, so the selected platform's headers are ambient for it.
             if is_core_unit(u) {
-                incs.extend(platform_incs.clone());
+                incs.extend(runtime_incs.clone());
             }
         }
         // Dedup keeping the **first** occurrence (order-preserving), and drop empties.
@@ -691,9 +691,9 @@ fn load_ctx(req: &Request, tree: &TreeLoad) -> Result<(Ctx, Diags), Diags> {
     // glibc headers mask common names such as `unistd.h`. `check` calls the same function.
     for u in model::cross_plugin_includes(&root, &tree, &closure.selected) {
         // The core plugin is the base and is platform-agnostic: it includes the platform *contract*
-        // (`br/platform/**`, provided by whichever platform plugin is selected) without naming a
+        // (`br/runtime/**`, provided by whichever platform plugin is selected) without naming a
         // platform plugin, so that one include family is not dep-closure-checked.
-        if u.header.starts_with("br/platform/")
+        if u.header.starts_with("br/runtime/")
             && tree
                 .plugins
                 .iter()

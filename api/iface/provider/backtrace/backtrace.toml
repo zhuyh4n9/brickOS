@@ -1,0 +1,85 @@
+# brickie:generated
+# api/iface 快照 api/iface/provider/backtrace/backtrace.toml — 机器拥有的文件, 请勿手改; 同一输入两次运行逐字节相同(contract §4)
+
+schema = 1
+unit = "provider/backtrace#backtrace"
+provider = "provider/backtrace"
+NOT_ABI = "声明面 hash ≠ ABI 兼容证明(v0.1 truth=decl, §6.6/RV-3)"
+
+[unit_meta]
+api_iface = "native"
+form = "api"
+version = "0.1.1.0"
+compat_gen = 0
+freeze_state = "unfrozen"
+status = "experimental"
+hash = "sha256:f6f23bd46f4507650af50a9e0945514c8e4965375995652ec014c28b3fb15f28"
+hash_scope = "decl"
+truth = "decl"
+strict_params = false
+
+[[entry]]
+kind = "func"
+name = "br_bt_init"
+sig = "int (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_bt_set_stack_bounds"
+sig = "int (br_uintptr_t, br_uintptr_t)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_bt_capture"
+sig = "br_u32 (br_bt_frame_t*, br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_bt_capture_from"
+sig = "br_u32 (br_uintptr_t, br_uintptr_t, br_bt_frame_t*, br_u32)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_bt_print"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_bt_print_from"
+sig = "br_u32 (br_uintptr_t, br_uintptr_t)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_bt_last_count"
+sig = "br_u32 (void)"
+status = "experimental"
+
+[[entry]]
+kind = "func"
+name = "br_bt_last"
+sig = "const br_bt_frame_t* (void)"
+status = "experimental"
+
+[[entry]]
+kind = "type"
+name = "br_bt_frame_t"
+layout = "# {pc, fp, sp, depth}"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_BT_MAX_FRAMES"
+value = "16"
+status = "experimental"
+
+[[entry]]
+kind = "macro"
+name = "BR_BT_MAX_DEPTH"
+value = "32"
+status = "experimental"

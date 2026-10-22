@@ -29,7 +29,7 @@ br_bool   = "int"
 br_size_t = "size_t"
 
 # Core layer (ADR-0038/0039): a HAL brick is **inside the trusted base**, below `ability`, so it
-# names `core/c_core` directly -- the `runtime/core` skin exists to keep *ability/interface*
+# names `core/c_core` directly -- the `provider/core` skin exists to keep *ability/interface*
 # consumers from being tied to core's identity, and the direction table forbids `hal -> ability`.
 [[dep]]
 name  = "core/c_core"

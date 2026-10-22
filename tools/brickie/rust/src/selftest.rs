@@ -225,51 +225,51 @@ fn range_cases(h: &mut Harness) {
 
 fn name_and_subkind(h: &mut Harness) {
     for ok in [
-        "service/crypto",
+        "provider/crypto",
         "sched-coop",
         "sched/sched-coop",
         "iface-min",
         "app/hsm",
-        "platform/qemu-aarch64",
+        "runtime/qemu-aarch64",
         "hal/cdev-core",
         "driver/virtio-hsm",
         "fs/tmpfs",
     ] {
         h.check(rules::valid_plugin_name(ok), format!("name contract accepts `{ok}`"));
     }
-    for bad in ["Service/Crypto", "service//crypto", "service/", "1crypto", "", "service/-x", "-x"] {
+    for bad in ["Service/Crypto", "provider//crypto", "provider/", "1crypto", "", "provider/-x", "-x"] {
         h.check(!rules::valid_plugin_name(bad), format!("name contract rejects `{bad}`"));
     }
-    h.eq(rules::name_namespace("service/crypto"), "service", "namespace extraction");
-    h.eq(rules::name_short("service/crypto"), "crypto", "short extraction");
+    h.eq(rules::name_namespace("provider/crypto"), "provider", "namespace extraction");
+    h.eq(rules::name_short("provider/crypto"), "crypto", "short extraction");
     h.eq(rules::name_namespace("sched-coop"), "", "bare name has empty namespace");
-    h.check(rules::is_recommended_form("service/crypto"), "recommended form");
+    h.check(rules::is_recommended_form("provider/crypto"), "recommended form");
     h.check(!rules::is_recommended_form("sched-coop"), "bare name is not the recommended form");
     h.check(rules::is_recommended_form("ability/x") == false, "`ability/` is not a recommended namespace");
-    h.check(rules::is_recommended_form("runtime/posix"), "recommended form: runtime/posix (ADR-0015)");
+    h.check(rules::is_recommended_form("provider/posix"), "recommended form: provider/posix (ADR-0015)");
 
-    h.eq(rules::derive_subkind("service/crypto"), Some("service"), "subkind: service/⇒service");
+    h.eq(rules::derive_subkind("provider/crypto"), Some("service"), "subkind: provider/⇒service");
     h.eq(rules::derive_subkind("sched/coop"), Some("scheduler"), "subkind: sched/⇒scheduler");
     h.eq(rules::derive_subkind("hal/dev-core"), None, "subkind: hal/ has no subkind (ADR-0039: a type, not a subkind)");
     h.eq(rules::derive_subkind("driver/virtio-hsm"), Some("io"), "subkind: driver/⇒io (ADR-0032)");
     h.eq(rules::derive_subkind("fs/tmpfs"), Some("fs"), "subkind: fs/");
     h.eq(rules::derive_subkind("sched-coop"), None, "subkind: bare name cannot be derived");
     h.eq(rules::derive_subkind("iface/min"), None, "subkind: iface/ has no subkind");
-    h.eq(rules::derive_subkind("runtime/posix"), Some("service"), "subkind: runtime/⇒service");
+    h.eq(rules::derive_subkind("provider/posix"), Some("service"), "subkind: runtime/⇒service");
     h.check(rules::is_recommended_form("driver/uart-pl011"), "recommended form: driver/uart-pl011 (ADR-0032)");
     h.check(!rules::is_recommended_form("io/uart-pl011"), "the old `io/` namespace is no longer recommended (ADR-0032)");
     h.eq(rules::namespace_plugin_type("driver"), Some("ability"), "driver/⇒ability (ADR-0032)");
 
     h.eq(rules::namespace_plugin_type("iface"), Some("interface"), "namespace: iface⇒interface");
     h.eq(rules::namespace_plugin_type("sched"), Some("ability"), "namespace: sched⇒ability");
-    h.eq(rules::namespace_plugin_type("platform"), Some("platform"), "namespace: platform");
-    h.eq(rules::namespace_plugin_type("runtime"), Some("ability"), "namespace: runtime⇒ability");
+    h.eq(rules::namespace_plugin_type("runtime"), Some("runtime"), "namespace: runtime");
+    h.eq(rules::namespace_plugin_type("provider"), Some("ability"), "namespace: provider⇒ability");
     h.eq(
         rules::namespace_plugin_type("hal"),
         Some("hal"),
         "namespace: hal⇒plugin_type hal (ADR-0039: peer of ability)",
     );
-    h.eq(rules::namespace_subkind("runtime"), Some("service"), "namespace: runtime⇒subkind service");
+    h.eq(rules::namespace_subkind("provider"), Some("service"), "namespace: provider⇒subkind service");
     h.eq(rules::namespace_plugin_type("nope"), None, "namespace: unknown");
 }
 
@@ -279,7 +279,7 @@ fn phase_cases(h: &mut Harness) {
     h.eq(rules::phase_rank("late"), Some(2), "LATE=2");
     h.eq(rules::phase_rank("app"), Some(3), "APP=3");
 
-    h.eq(rules::derive_phase("platform", None, true), "core", "platform ⇒ core");
+    h.eq(rules::derive_phase("runtime", None, true), "core", "runtime ⇒ core");
     h.eq(rules::derive_phase("ability", Some("scheduler"), true), "core", "scheduler ⇒ core");
     h.eq(rules::derive_phase("ability", Some("service"), true), "late", "service ⇒ late");
     h.eq(rules::derive_phase("ability", Some("fs"), true), "core", "fs ⇒ core");
@@ -291,8 +291,8 @@ fn phase_cases(h: &mut Harness) {
     h.check(rules::phase_reason("interface", None, "core").is_some(), "interface+core ⇒ wrong");
     h.check(rules::phase_reason("ability", Some("service"), "late").is_none(), "service+late ok");
     h.check(rules::phase_reason("ability", Some("service"), "core").is_some(), "service+core ⇒ wrong");
-    h.check(rules::phase_reason("platform", None, "core").is_none(), "platform+core ok");
-    h.check(rules::phase_reason("platform", None, "late").is_some(), "platform+late ⇒ wrong");
+    h.check(rules::phase_reason("runtime", None, "core").is_none(), "runtime+core ok");
+    h.check(rules::phase_reason("runtime", None, "late").is_some(), "runtime+late ⇒ wrong");
     h.check(rules::phase_reason("ability", Some("scheduler"), "core").is_none(), "scheduler+core ok");
     h.check(rules::phase_reason("app", None, "app").is_none(), "app+app ok (ADR-0037)");
     h.check(
@@ -308,7 +308,7 @@ fn privilege_cases(h: &mut Harness) {
     h.eq(rules::max_privilege_level("interface", None), "P0", "interface ≤ P0");
     h.eq(rules::max_privilege_level("ability", Some("service")), "P2", "ability ≤ P2");
     h.eq(rules::max_privilege_level("ability", Some("scheduler")), "P3", "scheduler ≤ P3");
-    h.eq(rules::max_privilege_level("platform", None), "P4", "platform ≤ P4");
+    h.eq(rules::max_privilege_level("runtime", None), "P4", "runtime ≤ P4");
 
     h.check(rules::memory_combo_legal("alloc", "pool", "contig"), "pool lifecycle: alloc×pool×contig");
     h.check(rules::memory_combo_legal("free", "pool", "page"), "pool lifecycle: free×pool×page");
@@ -329,8 +329,8 @@ fn privilege_cases(h: &mut Harness) {
     let ok_input = rules::PrivInput {
         plugin_type: "ability",
         subkind: Some("service"),
-        target: "service/crypto",
-        file: "service/crypto/brick.toml",
+        target: "provider/crypto",
+        file: "provider/crypto/brick.toml",
         level: Some("P2"),
         memory: &ok_mem,
         has_resources: false,
@@ -348,8 +348,8 @@ fn privilege_cases(h: &mut Harness) {
     let bad_input = rules::PrivInput {
         plugin_type: "ability",
         subkind: Some("service"),
-        target: "service/crypto",
-        file: "service/crypto/brick.toml",
+        target: "provider/crypto",
+        file: "provider/crypto/brick.toml",
         level: Some("P2"),
         memory: &bad_mem,
         has_resources: false,
@@ -383,8 +383,8 @@ fn privilege_cases(h: &mut Harness) {
     let illegal_input = rules::PrivInput {
         plugin_type: "ability",
         subkind: Some("service"),
-        target: "service/crypto",
-        file: "service/crypto/brick.toml",
+        target: "provider/crypto",
+        file: "provider/crypto/brick.toml",
         level: Some("P2"),
         memory: &illegal,
         has_resources: false,
@@ -398,14 +398,14 @@ fn privilege_cases(h: &mut Harness) {
 
 fn dep_direction_cases(h: &mut Harness) {
     h.check(!rules::dep_direction_ok("app", "ability", false), "prohibition (1): app must not depend on ability");
-    h.check(!rules::dep_direction_ok("app", "platform", false), "prohibition (1): app must not depend on platform");
+    h.check(!rules::dep_direction_ok("app", "runtime", false), "prohibition (1): app must not depend on runtime");
     h.check(rules::dep_direction_ok("app", "interface", false), "app only via interface");
-    h.check(!rules::dep_direction_ok("platform", "ability", false), "platform depends on no plugin");
+    h.check(!rules::dep_direction_ok("runtime", "ability", false), "runtime must not depend on an ability");
     h.check(!rules::dep_direction_ok("interface", "third_party", true), "interface does not consume third-party");
     h.check(rules::dep_direction_ok("ability", "third_party", true), "ability is the only legal third-party consumer");
-    h.check(!rules::dep_direction_ok("platform", "interface", false), "prohibition (3): interface is a strict leaf");
+    h.check(!rules::dep_direction_ok("runtime", "interface", false), "prohibition (3): interface is a strict leaf");
     h.check(rules::dep_direction_ok("interface", "ability", false), "interface may re-export ability");
-    h.check(rules::dep_direction_ok("ability", "platform", false), "ability may depend on platform");
+    h.check(rules::dep_direction_ok("ability", "runtime", false), "ability may depend on runtime");
 
     h.check(
         rules::api_type_edge_reason("ability", "native", "runtime_adapter", "runtime").is_some(),
@@ -428,20 +428,20 @@ fn dep_direction_cases(h: &mut Harness) {
         "pure consumer (app) is outside the api_type prohibitions",
     );
 
-    let edges = vec![("platform/soc".to_string(), "ability/helper".to_string())];
+    let edges = vec![("runtime/soc".to_string(), "ability/helper".to_string())];
     h.check(
         rules::dep_edge_violation(
-            "platform/soc", "platform", "native", "ability/helper", "ability", "native", "init", &edges,
+            "runtime/soc", "runtime", "native", "ability/helper", "ability", "native", "init", &edges,
         )
         .is_none(),
         "allow_edges whitelist exempts the direction table",
     );
     h.check(
         rules::dep_edge_violation(
-            "platform/soc", "platform", "native", "ability/helper", "ability", "native", "init", &[],
+            "runtime/soc", "runtime", "native", "ability/helper", "ability", "native", "init", &[],
         )
         .is_some(),
-        "without whitelist platform→ability violates",
+        "without whitelist runtime→ability violates",
     );
     h.check(
         rules::dep_edge_violation(
@@ -487,8 +487,8 @@ fn export_invariant_cases(h: &mut Harness) {
         "invariant 3 ⇒ BRV-TAX-0018",
     );
     let rr: Vec<String> = vec![
-        "service/crypto#crypto".into(),
-        "service/keyring#keyring".into(),
+        "provider/crypto#crypto".into(),
+        "provider/keyring#keyring".into(),
     ];
     let skin_ok = vec![rules::ExportView {
         api_iface: "native",
@@ -513,8 +513,8 @@ fn export_invariant_cases(h: &mut Harness) {
             .any(|(_, c, _)| *c == "BRV-TAX-0019"),
         "invariant 4 ⇒ BRV-TAX-0019",
     );
-    h.check(rules::valid_unit_ref("service/crypto#crypto"), "unit ref shape");
-    h.check(!rules::valid_unit_ref("service/crypto"), "unit ref missing #");
+    h.check(rules::valid_unit_ref("provider/crypto#crypto"), "unit ref shape");
+    h.check(!rules::valid_unit_ref("provider/crypto"), "unit ref missing #");
 }
 
 /// `driver/` namespace ⇔ `api_type = "native"` (`BRV-TAX-0021`, ADR-0032).
@@ -674,11 +674,11 @@ fn model_cases(h: &mut Harness) {
     let root = tmpdir("model-ok");
     write(
         &root,
-        "service/crypto/brick.toml",
+        "provider/crypto/brick.toml",
         r#"schema = 1
 
 [plugin]
-name        = "service/crypto"
+name        = "provider/crypto"
 plugin_type = "ability"
 api_type    = "native"
 subkind     = "service"
@@ -721,11 +721,11 @@ device_names = ["hsm0"]
     h.eq(tree.diags.len(), 0, "valid model has no diagnostics");
     h.eq(tree.plugins.len(), 1, "valid model loads 1 plugin");
     if let Some(p) = tree.plugins.first() {
-        h.eq(p.name.clone(), "service/crypto".to_string(), "plugin name");
+        h.eq(p.name.clone(), "provider/crypto".to_string(), "plugin name");
         h.eq(p.phase.clone(), "late".to_string(), "phase");
         h.eq(p.version, Version::new(0, 1, 0, 0), "four-segment version");
         h.eq(p.res_totals(), (48, 0), "[[res]] sum");
-        h.eq(p.unit_ids(), vec!["service/crypto#crypto".to_string()], "interface unit id");
+        h.eq(p.unit_ids(), vec!["provider/crypto#crypto".to_string()], "interface unit id");
         let privd = p.privileged.as_ref().expect("privileged should exist");
         h.eq(privd.resources.irq.clone(), vec![32], "[[privileged.resources]] is an array of tables");
         h.eq(privd.resources.dma_channels.clone(), vec![3], "dma_channels accumulate");
@@ -743,11 +743,11 @@ device_names = ["hsm0"]
     let root_cap = tmpdir("model-cap");
     write(
         &root_cap,
-        "platform/soc/brick.toml",
+        "runtime/soc/brick.toml",
         r#"schema = 1
 [plugin]
-name = "platform/soc"
-plugin_type = "platform"
+name = "runtime/soc"
+plugin_type = "runtime"
 api_type = "native"
 lang = "c"
 phase = "core"
@@ -761,8 +761,8 @@ used_kib = 16
 "#,
     );
     let tree_cap = model::load_tree(&root_cap);
-    h.eq(tree_cap.diags.len(), 0, "valid platform has no diagnostics");
-    h.eq(tree_cap.platform_capacity(), (512, 16), "R-6: platform [[res]] is the platform capacity");
+    h.eq(tree_cap.diags.len(), 0, "valid runtime plugin has no diagnostics");
+    h.eq(tree_cap.runtime_capacity(), (512, 16), "R-6: the runtime plugin's [[res]] is the capacity");
 
     let root2 = tmpdir("model-noname");
     write(
@@ -788,7 +788,7 @@ version = "0.1.0.0"
         "b/brick.toml",
         r#"schema = 1
 [plugin]
-name = "service/b"
+name = "provider/b"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -807,7 +807,7 @@ version = "0.1.0"
         "c/brick.toml",
         r#"schema = 1
 [plugin]
-name = "service/c"
+name = "provider/c"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -828,7 +828,7 @@ core = ">=1.2.3.4"
         "d/brick.toml",
         r#"schema = 1
 [plugin]
-name = "service/d"
+name = "provider/d"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -843,10 +843,10 @@ version = "0.1.0.0"
     let root6 = tmpdir("model-subkind");
     write(
         &root6,
-        "service/e/brick.toml",
+        "provider/e/brick.toml",
         r#"schema = 1
 [plugin]
-name = "service/e"
+name = "provider/e"
 plugin_type = "ability"
 api_type = "native"
 subkind = "fs"
@@ -862,10 +862,10 @@ version = "0.1.0.0"
     let root7 = tmpdir("model-dup");
     write(
         &root7,
-        "service/x/brick.toml",
+        "provider/x/brick.toml",
         r#"schema = 1
 [plugin]
-name = "service/x"
+name = "provider/x"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -876,10 +876,10 @@ version = "0.1.0.0"
     );
     write(
         &root7,
-        "service/x2/brick.toml",
+        "provider/x2/brick.toml",
         r#"schema = 1
 [plugin]
-name = "service/x"
+name = "provider/x"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -913,10 +913,10 @@ version = "0.1.0.0"
     let root10 = tmpdir("model-compat");
     write(
         &root10,
-        "service/g/brick.toml",
+        "provider/g/brick.toml",
         r#"schema = 1
 [plugin]
-name = "service/g"
+name = "provider/g"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -933,10 +933,10 @@ api_rev = 1
     let root11 = tmpdir("model-export");
     write(
         &root11,
-        "service/h/brick.toml",
+        "provider/h/brick.toml",
         r#"schema = 1
 [plugin]
-name = "service/h"
+name = "provider/h"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -958,10 +958,10 @@ status     = "experimental"
     let root12 = tmpdir("model-priv");
     write(
         &root12,
-        "service/i/brick.toml",
+        "provider/i/brick.toml",
         r#"schema = 1
 [plugin]
-name = "service/i"
+name = "provider/i"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -983,9 +983,9 @@ fn snapshot_and_lock_cases(h: &mut Harness) {
     let root = tmpdir("snap");
     write(
         &root,
-        "api/iface/service/crypto/crypto.toml",
+        "api/iface/provider/crypto/crypto.toml",
         r#"schema = 1
-unit = "service/crypto#crypto"
+unit = "provider/crypto#crypto"
 
 [unit_meta]
 api_iface   = "native"
@@ -1009,7 +1009,7 @@ status = "experimental"
     let snaps = model::load_snapshots(&root, &mut d);
     h.eq(snaps.len(), 1, "load 1 snapshot");
     if let Some(s) = snaps.first() {
-        h.eq(s.id.clone(), "service/crypto#crypto".to_string(), "snapshot id");
+        h.eq(s.id.clone(), "provider/crypto#crypto".to_string(), "snapshot id");
         h.eq(s.unit.clone(), "crypto".to_string(), "snapshot unit");
         h.eq(s.entries.len(), 1, "snapshot entry count");
     }
@@ -1030,13 +1030,13 @@ status = "experimental"
             stage: "dev".into(),
         }),
         plugins: vec![model::LockPlugin {
-            name: "service/crypto".into(),
+            name: "provider/crypto".into(),
             version: "0.1.0.0".into(),
             compat_gen: 0,
         }],
         units: vec![model::LockUnit {
-            id: "service/crypto#crypto".into(),
-            provider: "service/crypto".into(),
+            id: "provider/crypto#crypto".into(),
+            provider: "provider/crypto".into(),
             unit: "crypto".into(),
             api_iface: "native".into(),
             version: "0.1.0.0".into(),
@@ -1068,7 +1068,7 @@ status = "experimental"
         dependents: {
             let mut m = std::collections::BTreeMap::new();
             m.insert(
-                "service/crypto".to_string(),
+                "provider/crypto".to_string(),
                 vec![model::DependentEdge {
                     from: "app/hsm".into(),
                     kind: "runtime".into(),
@@ -1088,8 +1088,8 @@ fn plan_cases(h: &mut Harness) {
     let cases = [
         ("app", "app/hsm", "app", "native/app/c/brick.toml.tmpl"),
         ("interface", "iface/posix", "late", "native/interface/c/brick.toml.tmpl"),
-        ("ability", "service/crypto", "late", "native/ability/c/brick.toml.tmpl"),
-        ("platform", "platform/qemu-aarch64", "core", "native/platform/c/brick.toml.tmpl"),
+        ("ability", "provider/crypto", "late", "native/ability/c/brick.toml.tmpl"),
+        ("runtime", "runtime/qemu-aarch64", "core", "native/runtime/c/brick.toml.tmpl"),
     ];
     for (pt, name, want_phase, want_tpl) in cases {
         let a = args(json!({
@@ -1147,7 +1147,7 @@ fn plan_cases(h: &mut Harness) {
     h.eq(arts.len(), 0, "shape error ⇒ no artifacts produced");
 
     let a = args(json!({
-        "plugin_type": "ability", "name": "service/crypto", "api_type": "native",
+        "plugin_type": "ability", "name": "provider/crypto", "api_type": "native",
         "lang": "c", "subkind": "fs",
     }));
     let (d, _) = plan::plan_new(&a, &Map::new());
@@ -1155,7 +1155,7 @@ fn plan_cases(h: &mut Harness) {
     h.exit_is(&d, 1, "TAX-0015 ⇒ exit code 1");
 
     let a = args(json!({
-        "plugin_type": "ability", "name": "service/crypto", "api_type": "runtime_adapter", "lang": "c",
+        "plugin_type": "ability", "name": "provider/crypto", "api_type": "runtime_adapter", "lang": "c",
     }));
     let (d, arts) = plan::plan_new(&a, &Map::new());
     h.has_code(&d, "BRV-TAX-0014", "undelivered template ⇒ TAX-0014");
@@ -1219,10 +1219,10 @@ fn plan_cases(h: &mut Harness) {
     // other plugin type still does. The runtime re-proves the APP half on the section (TC-PLUG-004).
     let hooks = tmpdir("gen-hooks");
     write(&hooks, "app/a/brick.toml", &app_toml("app/a", ""));
-    write(&hooks, "service/s/brick.toml", &ability_toml("service/s", "service", "late", ""));
-    write(&hooks, "platform/p/brick.toml", &platform_toml("platform/p", "core", ""));
+    write(&hooks, "provider/s/brick.toml", &ability_toml("provider/s", "service", "late", ""));
+    write(&hooks, "runtime/p/brick.toml", &runtime_toml("runtime/p", "core", ""));
     let (d, arts) = plan::gen_plan(&hooks, &Map::new());
-    h.exit_is(&d, 0, "gen-plan app/ability/platform exit code 0");
+    h.exit_is(&d, 0, "gen-plan app/ability/runtime exit code 0");
     let var = |path: &str, key: &str| {
         arts.iter()
             .find(|a| a.path == path)
@@ -1231,8 +1231,8 @@ fn plan_cases(h: &mut Harness) {
     };
     for (path, who) in [
         ("build/gen/app/a/plugin_desc.c", "app"),
-        ("build/gen/service/s/plugin_desc.c", "ability"),
-        ("build/gen/platform/p/plugin_desc.c", "platform"),
+        ("build/gen/provider/s/plugin_desc.c", "ability"),
+        ("build/gen/runtime/p/plugin_desc.c", "runtime"),
     ] {
         let early = var(path, "early_hook");
         if who == "app" {
@@ -1382,9 +1382,9 @@ fn app_toml(name: &str, extra: &str) -> String {
     typed_toml(name, "app", "", "app", extra)
 }
 
-fn platform_toml(name: &str, phase: &str, extra: &str) -> String {
+fn runtime_toml(name: &str, phase: &str, extra: &str) -> String {
     format!(
-        "schema = 1\n[plugin]\nname = \"{name}\"\nplugin_type = \"platform\"\napi_type = \"native\"\n\
+        "schema = 1\n[plugin]\nname = \"{name}\"\nplugin_type = \"runtime\"\napi_type = \"native\"\n\
          lang = \"c\"\nphase = \"{phase}\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n{extra}"
     )
 }
@@ -1416,19 +1416,19 @@ fn product_records(app: &str, core: Option<&str>, abilities: &[&str]) -> String 
     s
 }
 
-/// The record-shaped selection surface (`[product].app/platform/core` + `[[product.ability]]`):
+/// The record-shaped selection surface (`[product].app/runtime/core` + `[[product.ability]]`):
 /// roots drive the closure, the record's kind fixes the brick's type, `requires.version` is
 /// checked against that brick, and the pre-ADR-0035 forms are hard-rejected.
 fn product_selection_cases(h: &mut Harness) {
     let t = tmpdir("prodsel");
     write(&t, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
-    write(&t, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
+    write(&t, "runtime/fake/brick.toml", &runtime_toml("runtime/fake", "early", ""));
     write(&t, "app/m/brick.toml", &app_toml("app/m", ""));
     write(
         &t,
-        "service/mem/brick.toml",
+        "provider/mem/brick.toml",
         &ability_toml(
-            "service/mem",
+            "provider/mem",
             "service",
             "late",
             "\n[[dep]]\nname = \"fs/f\"\nkind = \"init\"\n",
@@ -1445,11 +1445,11 @@ fn product_selection_cases(h: &mut Harness) {
         &format!(
             "schema = 1\n[product]\nname = \"p\"\nversion = \"1.0.0.0\"\n\
              app = {{ brick = \"app/m\", requires = {{}} }}\n\
-             platform = {{ brick = \"platform/fake\", requires = {{}} }}\n\
+             runtime = {{ brick = \"runtime/fake\", requires = {{}} }}\n\
              core = {{ brick = \"core/c_core\", requires = {{ version = \">=1.0.0\" }} }}\n\
              stage = \"dev\"\n\
              [[product.ability]]\n\
-             mem = {{ brick = \"service/mem\", requires = {{}} }}\n"
+             mem = {{ brick = \"provider/mem\", requires = {{}} }}\n"
         ),
     );
     let resp = check::run(&mk_req("check", &t, json!({"profile": "dev"})));
@@ -1467,11 +1467,11 @@ fn product_selection_cases(h: &mut Harness) {
     let got = solver::solve(&tree, "dev", false).closure.selected;
     h.eq(
         got.clone(),
-        ["app/m", "core/c_core", "fs/f", "platform/fake", "service/mem"]
+        ["app/m", "core/c_core", "fs/f", "runtime/fake", "provider/mem"]
             .iter()
             .map(|s| s.to_string())
             .collect(),
-        "records: app + platform + core + ability roots derive the closure",
+        "records: app + runtime + core + ability roots derive the closure",
     );
     h.check(
         got.contains("fs/f"),
@@ -1488,15 +1488,15 @@ fn product_selection_cases(h: &mut Harness) {
     write(&alias, "app/m/brick.toml", &app_toml("app/m", ""));
     write(
         &alias,
-        "service/mem/brick.toml",
-        &ability_toml("service/mem", "service", "late", ""),
+        "provider/mem/brick.toml",
+        &ability_toml("provider/mem", "service", "late", ""),
     );
     write(
         &alias,
         "product.toml",
         "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n\
          core = { brick = \"core/c_core\", requires = {} }\n\
-         [[product.ability]]\nanything-at-all = { brick = \"service/mem\", requires = {} }\n",
+         [[product.ability]]\nanything-at-all = { brick = \"provider/mem\", requires = {} }\n",
     );
     let resp = check::run(&mk_req("check", &alias, json!({"profile": "dev"})));
     h.check(!has_code(&resp, "BRV-MF-0001"), "records: the ability alias is not a plugin name");
@@ -1505,30 +1505,30 @@ fn product_selection_cases(h: &mut Harness) {
     for (tag, prod, want) in [
         (
             "app",
-            "app = { brick = \"service/mem\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n",
+            "app = { brick = \"provider/mem\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n",
             "app record naming an ability",
         ),
         (
-            "platform",
-            "app = { brick = \"app/m\", requires = {} }\nplatform = { brick = \"core/c_core\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n",
-            "platform record naming a core",
+            "runtime",
+            "app = { brick = \"app/m\", requires = {} }\nruntime = { brick = \"core/c_core\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n",
+            "runtime record naming a core",
         ),
         (
             "core",
-            "app = { brick = \"app/m\", requires = {} }\ncore = { brick = \"service/mem\", requires = {} }\n",
+            "app = { brick = \"app/m\", requires = {} }\ncore = { brick = \"provider/mem\", requires = {} }\n",
             "core record naming an ability",
         ),
         (
             "ability",
-            "app = { brick = \"app/m\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n[[product.ability]]\nx = { brick = \"platform/fake\", requires = {} }\n",
-            "ability record naming a platform",
+            "app = { brick = \"app/m\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n[[product.ability]]\nx = { brick = \"runtime/fake\", requires = {} }\n",
+            "ability record naming the runtime",
         ),
     ] {
         let w = tmpdir(&format!("prodsel-kind-{tag}"));
         write(&w, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
-        write(&w, "platform/fake/brick.toml", &platform_toml("platform/fake", "early", ""));
+        write(&w, "runtime/fake/brick.toml", &runtime_toml("runtime/fake", "early", ""));
         write(&w, "app/m/brick.toml", &app_toml("app/m", ""));
-        write(&w, "service/mem/brick.toml", &ability_toml("service/mem", "service", "late", ""));
+        write(&w, "provider/mem/brick.toml", &ability_toml("provider/mem", "service", "late", ""));
         write(&w, "product.toml", &format!("schema = 1\n[product]\nname = \"p\"\n{prod}"));
         let resp = check::run(&mk_req("check", &w, json!({"profile": "dev"})));
         h.check(has_code(&resp, "BRV-TAX-0024"), format!("records: {want} ⇒ BRV-TAX-0024"));
@@ -1554,7 +1554,7 @@ fn product_selection_cases(h: &mut Harness) {
     let resp = check::run(&mk_req("check", &skin, json!({"profile": "dev"})));
     h.check(
         !has_code(&resp, "BRV-TAX-0024"),
-        "records: an interface skin selected as an ability is legal (only app/platform/core are rejected)",
+        "records: an interface skin selected as an ability is legal (only app/runtime/core are rejected)",
     );
 
     // `requires.version` is checked against the brick it names.
@@ -1587,7 +1587,7 @@ fn product_selection_cases(h: &mut Harness) {
         ),
         (
             "ability-list",
-            "app = { brick = \"app/m\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\nability = [\"service/mem\"]\n",
+            "app = { brick = \"app/m\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\nability = [\"provider/mem\"]\n",
             "the flat `ability = [\"plugin/name\"]` list",
         ),
         (
@@ -1604,7 +1604,7 @@ fn product_selection_cases(h: &mut Harness) {
         let w = tmpdir(&format!("prodsel-old-{tag}"));
         write(&w, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
         write(&w, "app/m/brick.toml", &app_toml("app/m", ""));
-        write(&w, "service/mem/brick.toml", &ability_toml("service/mem", "service", "late", ""));
+        write(&w, "provider/mem/brick.toml", &ability_toml("provider/mem", "service", "late", ""));
         write(&w, "product.toml", &format!("schema = 1\n[product]\nname = \"p\"\n{prod}"));
         let resp = check::run(&mk_req("check", &w, json!({"profile": "dev"})));
         h.eq(resp.exit_code, 2, &format!("records: {want} ⇒ exit code 2"));
@@ -1633,7 +1633,7 @@ fn product_selection_cases(h: &mut Harness) {
         "product.toml",
         "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n\
          core = { brick = \"core/c_core\", requires = {} }\n\
-         [[product.ability]]\nghost = { brick = \"service/ghost\", requires = {} }\n",
+         [[product.ability]]\nghost = { brick = \"provider/ghost\", requires = {} }\n",
     );
     let resp = check::run(&mk_req("check", &ghost, json!({"profile": "dev"})));
     h.check(
@@ -1649,17 +1649,17 @@ fn product_selection_cases(h: &mut Harness) {
         &unset,
         "product.toml",
         "schema = 1\n[product]\nname = \"p\"\napp = { brick = \"app/m\", requires = {} }\n\
-         platform = { brick = \"\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n",
+         runtime = { brick = \"\", requires = {} }\ncore = { brick = \"core/c_core\", requires = {} }\n",
     );
     let tree = model::load_tree(&unset);
     h.check(
-        tree.product.as_ref().unwrap().platform.is_empty(),
-        "records: an empty `platform.brick` selects nothing (plan-init skeleton)",
+        tree.product.as_ref().unwrap().runtime.is_empty(),
+        "records: an empty `runtime.brick` selects nothing (plan-init skeleton)",
     );
     h.eq(
         tree.diags.items().iter().filter(|d| d.code.as_deref() == Some("BRV-MF-0001")).count(),
         0,
-        "records: an empty `platform.brick` is not a reference error",
+        "records: an empty `runtime.brick` is not a reference error",
     );
 }
 
@@ -1698,10 +1698,10 @@ fn show_cases(h: &mut Harness) {
         "show: a cycle reports the unschedulable nodes",
     );
 
-    // The fixture: app -> iface (runtime) and crypto -> coop -> platform (init).
+    // The fixture: app -> iface (runtime) and crypto -> coop -> runtime (init).
     let t = tmpdir("show-flow");
     write(&t, "core/c_core/brick.toml", &core_toml("core/c_core", ""));
-    write(&t, "platform/qemu-aarch64/brick.toml", &platform_toml("platform/qemu-aarch64", "core", ""));
+    write(&t, "runtime/qemu-aarch64/brick.toml", &runtime_toml("runtime/qemu-aarch64", "core", ""));
     write(
         &t,
         "app/hsm/brick.toml",
@@ -1718,14 +1718,14 @@ fn show_cases(h: &mut Harness) {
             "interface",
             "",
             "late",
-            "\n[[dep]]\nname = \"service/crypto\"\nkind = \"runtime\"\n",
+            "\n[[dep]]\nname = \"provider/crypto\"\nkind = \"runtime\"\n",
         ),
     );
     write(
         &t,
-        "service/crypto/brick.toml",
+        "provider/crypto/brick.toml",
         &ability_toml(
-            "service/crypto",
+            "provider/crypto",
             "service",
             "late",
             "\n[[dep]]\nname = \"sched/coop\"\nkind = \"init\"\n",
@@ -1738,7 +1738,7 @@ fn show_cases(h: &mut Harness) {
             "sched/coop",
             "scheduler",
             "core",
-            "\n[[dep]]\nname = \"platform/qemu-aarch64\"\nkind = \"init\"\n",
+            "\n[[dep]]\nname = \"runtime/qemu-aarch64\"\nkind = \"init\"\n",
         ),
     );
     write(
@@ -1762,26 +1762,26 @@ fn show_cases(h: &mut Harness) {
     h.eq(
         seq,
         vec![
-            ("early", "platform/qemu-aarch64"),
+            ("early", "runtime/qemu-aarch64"),
             ("early", "iface/hsm-api"),
             ("early", "sched/coop"),
-            ("early", "service/crypto"),
-            ("core", "platform/qemu-aarch64"),
+            ("early", "provider/crypto"),
+            ("core", "runtime/qemu-aarch64"),
             ("core", "sched/coop"),
             ("late", "iface/hsm-api"),
-            ("late", "service/crypto"),
+            ("late", "provider/crypto"),
             ("app", "app/hsm"),
             ("irq", ""),
             ("start", "iface/hsm-api"),
-            ("start", "platform/qemu-aarch64"),
+            ("start", "runtime/qemu-aarch64"),
             ("start", "sched/coop"),
-            ("start", "service/crypto"),
+            ("start", "provider/crypto"),
             ("start", "app/hsm"),
         ]
         .iter()
         .map(|(p, n)| (p.to_string(), n.to_string()))
         .collect::<Vec<_>>(),
-        "show: platform-first EARLY (no APP), category-decided CORE/LATE, APP init last, IRQ, then START with APP last",
+        "show: runtime-first EARLY (no APP), category-decided CORE/LATE, APP init last, IRQ, then START with APP last",
     );
     h.check(
         resp.data["counts"]["irq"].as_u64() == Some(1),
@@ -1801,7 +1801,7 @@ fn show_cases(h: &mut Harness) {
         "sched/coop",
         "scheduler",
         "core",
-        "\n[[dep]]\nname = \"platform/qemu-aarch64\"\nkind = \"init\"\n[selftest]\ncases = 1\n",
+        "\n[[dep]]\nname = \"runtime/qemu-aarch64\"\nkind = \"init\"\n[selftest]\ncases = 1\n",
     ));
     let resp = show::cmd_init_flow(&mk_req("show-init-flow", &t, json!({})));
     let last = resp.data["steps"].as_array().and_then(|a| a.last()).cloned().unwrap_or(json!({}));
@@ -1824,7 +1824,7 @@ fn show_cases(h: &mut Harness) {
     h.eq(origin("app/hsm"), "root".to_string(), "show: the app record makes app/hsm a root");
     h.eq(origin("core/c_core"), "root".to_string(), "show: the core record makes core/c_core a root");
     h.eq(
-        origin("platform/qemu-aarch64"),
+        origin("runtime/qemu-aarch64"),
         "dep".to_string(),
         "show: a brick reached only through init edges is a closure member, not a root",
     );
@@ -1888,9 +1888,9 @@ fn core_type_cases(h: &mut Harness) {
     write(&two, "app/m/brick.toml", &app_toml("app/m", ""));
     write(
         &two,
-        "service/mem/brick.toml",
+        "provider/mem/brick.toml",
         &ability_toml(
-            "service/mem",
+            "provider/mem",
             "service",
             "late",
             "\n[[dep]]\nname = \"core/r_core\"\nkind = \"init\"\n",
@@ -1899,7 +1899,7 @@ fn core_type_cases(h: &mut Harness) {
     write(
         &two,
         "product.toml",
-        &product_records("app/m", Some("core/c_core"), &["service/mem"]),
+        &product_records("app/m", Some("core/c_core"), &["provider/mem"]),
     );
     let resp = check::run(&mk_req("check", &two, json!({"profile": "dev"})));
     h.eq(resp.exit_code, 1, "core: two cores ⇒ exit code 1");
@@ -1927,9 +1927,9 @@ fn core_type_cases(h: &mut Harness) {
     h.check(dep_direction_ok_public("app", "core"), "core: app → core is legal");
     h.check(dep_direction_ok_public("interface", "core"), "core: interface → core is legal");
     h.check(dep_direction_ok_public("ability", "core"), "core: ability → core is legal");
-    h.check(dep_direction_ok_public("platform", "core"), "core: platform → core is legal (start.S enters br_core_main)");
+    h.check(dep_direction_ok_public("runtime", "core"), "core: runtime → core is legal (start.S enters br_core_main)");
     h.check(!dep_direction_ok_public("core", "core"), "core: core → core is illegal (exactly one core)");
-    h.check(dep_direction_ok_public("core", "platform"), "core: core → platform is legal (contract-level call)");
+    h.check(dep_direction_ok_public("core", "runtime"), "core: core → runtime is legal (contract-level call)");
     h.check(!dep_direction_ok_public("core", "app"), "core: core → app is illegal");
 }
 
@@ -2009,15 +2009,15 @@ fn phase_check_cases(h: &mut Harness) {
     );
 
     let ok = tmpdir("phase-ok2");
-    write(&ok, "sched-coop/brick.toml", &ability_toml("sched-coop", "scheduler", "core", "[[dep]]\nname = \"platform/qemu-aarch64\"\nrange = \">=0.1.0\"\nkind = \"init\"\nphase = \"core\"\n"));
-    write(&ok, "platform/qemu-aarch64/brick.toml", &platform_toml("platform/qemu-aarch64", "core", ""));
+    write(&ok, "sched-coop/brick.toml", &ability_toml("sched-coop", "scheduler", "core", "[[dep]]\nname = \"runtime/qemu-aarch64\"\nrange = \">=0.1.0\"\nkind = \"init\"\nphase = \"core\"\n"));
+    write(&ok, "runtime/qemu-aarch64/brick.toml", &runtime_toml("runtime/qemu-aarch64", "core", ""));
     let resp = check::run(&mk_req("check", &ok, json!({"profile": "dev"})));
-    h.eq(resp.exit_code, 0, "V-8: sched-coop→platform is no false positive ⇒ exit code 0");
+    h.eq(resp.exit_code, 0, "V-8: sched-coop→runtime is no false positive ⇒ exit code 0");
     h.check(!has_code(&resp, "BRV-DEP-0009"), "V-8: does not report BRV-DEP-0009");
     let sol_ok = solver::solve(&model::load_tree(&ok), "dev", false);
     h.eq(
         sol_ok.closure.topo_order.clone(),
-        vec!["platform/qemu-aarch64".to_string(), "sched-coop".to_string()],
+        vec!["runtime/qemu-aarch64".to_string(), "sched-coop".to_string()],
         "§7.2: topo_order is the init order (provider first)",
     );
 
@@ -2060,9 +2060,9 @@ fn version_solver_cases(h: &mut Harness) {
     );
 
     let bud = tmpdir("budget2");
-    write(&bud, "platform/soc/brick.toml", &platform_toml("platform/soc", "core", "[[res]]\nkind = \"ram\"\nused_kib = 64\n"));
-    write(&bud, "service/mem/brick.toml", &ability_toml("service/mem", "service", "late", "[[res]]\nkind = \"ram\"\nused_kib = 200\n"));
-    write(&bud, "product.toml", "schema = 1\n[product]\nname = \"p\"\nversion = \"0.1.0.0\"\napp = { brick = \"\", requires = {} }\nplatform = { brick = \"platform/soc\", requires = {} }\nstage = \"dev\"\n[[product.ability]]\nmem = { brick = \"service/mem\", requires = {} }\n[budget]\nram_kib = 100\nstack_kib = 8\n");
+    write(&bud, "runtime/soc/brick.toml", &runtime_toml("runtime/soc", "core", "[[res]]\nkind = \"ram\"\nused_kib = 64\n"));
+    write(&bud, "provider/mem/brick.toml", &ability_toml("provider/mem", "service", "late", "[[res]]\nkind = \"ram\"\nused_kib = 200\n"));
+    write(&bud, "product.toml", "schema = 1\n[product]\nname = \"p\"\nversion = \"0.1.0.0\"\napp = { brick = \"\", requires = {} }\nruntime = { brick = \"runtime/soc\", requires = {} }\nstage = \"dev\"\n[[product.ability]]\nmem = { brick = \"provider/mem\", requires = {} }\n[budget]\nram_kib = 100\nstack_kib = 8\n");
     let resp = check::run(&mk_req("check", &bud, json!({"profile": "dev"})));
     h.eq(resp.exit_code, 1, "V-19③: budget overrun ⇒ exit code 1");
     h.check(
@@ -2070,27 +2070,27 @@ fn version_solver_cases(h: &mut Harness) {
         "V-19③: budget message carries the delta (200-100)",
     );
     h.check(
-        msg_of(&resp, "BRV-MF-0001").contains("exceeds the platform capacity 64"),
-        "V-7: physical limit (platform capacity) reported separately",
+        msg_of(&resp, "BRV-MF-0001").contains("exceeds the runtime capacity 64"),
+        "V-7: physical limit (runtime capacity) reported separately",
     );
-    h.j(&resp.data["summary"]["closure"]["ram_kib"], json!(200), "S-14: platform [[res]] is capacity, not part of the consumer Σ");
+    h.j(&resp.data["summary"]["closure"]["ram_kib"], json!(200), "S-14: runtime [[res]] is capacity, not part of the consumer Σ");
 }
 
 fn iface_crossfile_cases(h: &mut Harness) {
     let root = tmpdir("skin-miss");
-    write(&root, "iface/skin/brick.toml", "schema = 1\n[plugin]\nname = \"iface/skin\"\nplugin_type = \"interface\"\napi_type = \"native\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n[[export]]\napi_iface = \"native\"\nform = \"skin\"\nname = \"skin\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\nreexport_of = [\"service/nope#u\"]\n");
+    write(&root, "iface/skin/brick.toml", "schema = 1\n[plugin]\nname = \"iface/skin\"\nplugin_type = \"interface\"\napi_type = \"native\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n[[export]]\napi_iface = \"native\"\nform = \"skin\"\nname = \"skin\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\nreexport_of = [\"provider/nope#u\"]\n");
     let resp = check::run(&mk_req("check", &root, json!({"profile": "dev"})));
     h.check(has_code(&resp, "BRV-TAX-0018"), "V-12: skin points at a nonexistent unit ⇒ BRV-TAX-0018");
 
     let root2 = tmpdir("skin-cls");
-    write(&root2, "service/back/brick.toml", &ability_toml("service/back", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
-    write(&root2, "iface/skin/brick.toml", "schema = 1\n[plugin]\nname = \"iface/skin\"\nplugin_type = \"interface\"\napi_type = \"runtime_adapter\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n[[export]]\napi_iface = \"runtime_adapter\"\nform = \"skin\"\nname = \"skin\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\nreexport_of = [\"service/back#u\"]\n");
+    write(&root2, "provider/back/brick.toml", &ability_toml("provider/back", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
+    write(&root2, "iface/skin/brick.toml", "schema = 1\n[plugin]\nname = \"iface/skin\"\nplugin_type = \"interface\"\napi_type = \"runtime_adapter\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n[[export]]\napi_iface = \"runtime_adapter\"\nform = \"skin\"\nname = \"skin\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\nreexport_of = [\"provider/back#u\"]\n");
     let resp = check::run(&mk_req("check", &root2, json!({"profile": "dev"})));
     h.check(has_code(&resp, "BRV-TAX-0018"), "V-12: skin classification mismatch ⇒ BRV-TAX-0018");
 
     let root3 = tmpdir("collide");
-    write(&root3, "service/one/brick.toml", &ability_toml("service/one", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"dup\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\nsymbols = [\"symA\"]\n"));
-    write(&root3, "service/two/brick.toml", &ability_toml("service/two", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"dup\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
+    write(&root3, "provider/one/brick.toml", &ability_toml("provider/one", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"dup\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\nsymbols = [\"symA\"]\n"));
+    write(&root3, "provider/two/brick.toml", &ability_toml("provider/two", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"dup\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
     let resp = check::run(&mk_req("check", &root3, json!({"profile": "dev"})));
     h.check(
         !has_code(&resp, "BRV-MF-0001"),
@@ -2098,8 +2098,8 @@ fn iface_crossfile_cases(h: &mut Harness) {
     );
 
     let root4 = tmpdir("profile14");
-    write(&root4, "service/prov/brick.toml", &ability_toml("service/prov", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
-    write(&root4, "service/cons/brick.toml", &ability_toml("service/cons", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"c\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n[[dep]]\nname = \"service/prov\"\nrange = \">=0.1.0\"\nkind = \"runtime\"\n[[compat.requires_iface]]\nid = \"service/prov#u\"\napi_iface = \"native\"\ncompat_gen = 0\nrange = \">=1.0.0\"\nmode = \"decl\"\n"));
+    write(&root4, "provider/prov/brick.toml", &ability_toml("provider/prov", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
+    write(&root4, "provider/cons/brick.toml", &ability_toml("provider/cons", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"c\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n[[dep]]\nname = \"provider/prov\"\nrange = \">=0.1.0\"\nkind = \"runtime\"\n[[compat.requires_iface]]\nid = \"provider/prov#u\"\napi_iface = \"native\"\ncompat_gen = 0\nrange = \">=1.0.0\"\nmode = \"decl\"\n"));
     let dev = check::run(&mk_req("check", &root4, json!({"profile": "dev"})));
     let rel = check::run(&mk_req("check", &root4, json!({"profile": "release"})));
     h.eq(dev.exit_code, 0, "V-14: dev ⇒ exit code 0");
@@ -2115,8 +2115,8 @@ fn iface_crossfile_cases(h: &mut Harness) {
 
     let with_iface = solver::run(&mk_req("closure", &root4, json!({"profile": "dev"})));
     let root5 = tmpdir("profile-noiface");
-    write(&root5, "service/prov/brick.toml", &ability_toml("service/prov", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
-    write(&root5, "service/cons/brick.toml", &ability_toml("service/cons", "service", "late", "[[dep]]\nname = \"service/prov\"\nrange = \">=0.1.0\"\nkind = \"runtime\"\n"));
+    write(&root5, "provider/prov/brick.toml", &ability_toml("provider/prov", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
+    write(&root5, "provider/cons/brick.toml", &ability_toml("provider/cons", "service", "late", "[[dep]]\nname = \"provider/prov\"\nrange = \">=0.1.0\"\nkind = \"runtime\"\n"));
     let without = solver::run(&mk_req("closure", &root5, json!({"profile": "dev"})));
     h.eq(
         serde_json::to_string(&with_iface.data.clone()).unwrap(),
@@ -2124,7 +2124,7 @@ fn iface_crossfile_cases(h: &mut Harness) {
         "V-10②: requires_iface does not affect closure data",
     );
 
-    let show = iface::run(&mk_req("iface-show", &root4, json!({"id": "service/cons#c"})));
+    let show = iface::run(&mk_req("iface-show", &root4, json!({"id": "provider/cons#c"})));
     h.check(
         has_code_sev(&show, "BRV-MF-0001", "info"),
         "V-10③: iface show reports info only for requires_iface",
@@ -2137,18 +2137,18 @@ fn iface_crossfile_cases(h: &mut Harness) {
 
 fn priv_and_sched_cases(h: &mut Harness) {
     let root = tmpdir("res-conflict2");
-    write(&root, "service/a/brick.toml", &ability_toml("service/a", "service", "late", "[[privileged.resources]]\nirq = [32]\ndma_channels = [3]\n"));
-    write(&root, "service/b/brick.toml", &ability_toml("service/b", "service", "late", "[[privileged.resources]]\nirq = [32]\ndma_channels = [7]\n"));
+    write(&root, "provider/a/brick.toml", &ability_toml("provider/a", "service", "late", "[[privileged.resources]]\nirq = [32]\ndma_channels = [3]\n"));
+    write(&root, "provider/b/brick.toml", &ability_toml("provider/b", "service", "late", "[[privileged.resources]]\nirq = [32]\ndma_channels = [7]\n"));
     let resp = check::run(&mk_req("check", &root, json!({"profile": "dev", "scopes": ["priv"]})));
     h.eq(resp.exit_code, 1, "V-19④: IRQ exclusivity conflict ⇒ exit code 1");
     h.check(
-        msg_of(&resp, "BRV-MF-0001").contains("service/a") && msg_of(&resp, "BRV-MF-0001").contains("service/b"),
+        msg_of(&resp, "BRV-MF-0001").contains("provider/a") && msg_of(&resp, "BRV-MF-0001").contains("provider/b"),
         "V-19④: reports both conflicting parties",
     );
     h.check(msg_of(&resp, "BRV-MF-0001").contains("irq `32`"), "V-19④: names the resource");
 
     let privroot = tmpdir("priv19");
-    write(&privroot, "service/p/brick.toml", &ability_toml("service/p", "service", "late", "[privileged]\nlevel = \"P2\"\n[[privileged.memory]]\ngranularity = \"page\"\nops = [\"map\"]\nregions = [\"mmio\"]\n"));
+    write(&privroot, "provider/p/brick.toml", &ability_toml("provider/p", "service", "late", "[privileged]\nlevel = \"P2\"\n[[privileged.memory]]\ngranularity = \"page\"\nops = [\"map\"]\nregions = [\"mmio\"]\n"));
     let resp = check::run(&mk_req("check", &privroot, json!({"profile": "dev"})));
     h.check(has_code(&resp, "BRV-PRIV-0001"), "V-19②: ability declares P2 yet uses map ⇒ BRV-PRIV-0001");
     h.check(
@@ -2156,7 +2156,7 @@ fn priv_and_sched_cases(h: &mut Harness) {
         "§3.4: page×map×mmio is a legal combination (only the level is too low ⇒ PRIV-0001 only)",
     );
     let bad2 = tmpdir("priv19b2");
-    write(&bad2, "service/pp/brick.toml", &ability_toml("service/pp", "service", "late", "[privileged]\nlevel = \"P4\"\n[[privileged.memory]]\ngranularity = \"pool\"\nops = [\"map\"]\nregions = [\"page\"]\n"));
+    write(&bad2, "provider/pp/brick.toml", &ability_toml("provider/pp", "service", "late", "[privileged]\nlevel = \"P4\"\n[[privileged.memory]]\ngranularity = \"pool\"\nops = [\"map\"]\nregions = [\"page\"]\n"));
     let resp2 = check::run(&mk_req("check", &bad2, json!({"profile": "dev"})));
     h.check(has_code(&resp2, "BRV-PRIV-0002"), "V-19①: illegal (ops×granularity×region) ⇒ BRV-PRIV-0002");
     h.check(
@@ -2169,13 +2169,13 @@ fn priv_and_sched_cases(h: &mut Harness) {
     );
 
     let pool = tmpdir("priv-pool");
-    write(&pool, "service/q/brick.toml", &ability_toml("service/q", "service", "late", "[privileged]\nlevel = \"P2\"\n[[privileged.memory]]\ngranularity = \"pool\"\nops = [\"alloc\", \"free\"]\nregions = [\"contig\", \"page\"]\n"));
+    write(&pool, "provider/q/brick.toml", &ability_toml("provider/q", "service", "late", "[privileged]\nlevel = \"P2\"\n[[privileged.memory]]\ngranularity = \"pool\"\nops = [\"alloc\", \"free\"]\nregions = [\"contig\", \"page\"]\n"));
     let resp = check::run(&mk_req("check", &pool, json!({"profile": "dev"})));
     h.eq(resp.exit_code, 0, "V-19①: P2 pool lifecycle is legal ⇒ exit code 0");
 
     let ttr = tmpdir("sched-tt");
-    write(&ttr, "service/t/brick.toml", &ability_toml("service/t", "service", "late", ""));
-    let p = ttr.join("service/t/brick.toml");
+    write(&ttr, "provider/t/brick.toml", &ability_toml("provider/t", "service", "late", ""));
+    let p = ttr.join("provider/t/brick.toml");
     let s = fs::read_to_string(&p).unwrap().replace("version = \"0.1.0.0\"", "version = \"0.1.0.0\"\nsched_class = \"TT_SAFE\"");
     fs::write(&p, s).unwrap();
     let resp = check::run(&mk_req("check", &ttr, json!({"profile": "dev", "scopes": ["tax"]})));
@@ -2186,8 +2186,8 @@ fn priv_and_sched_cases(h: &mut Harness) {
 
     let coopbad = tmpdir("sched-coopbad");
     write(&coopbad, "sched-preempt/brick.toml", &ability_toml("sched-preempt", "scheduler", "core", ""));
-    write(&coopbad, "service/c/brick.toml", &ability_toml("service/c", "service", "late", ""));
-    let p = coopbad.join("service/c/brick.toml");
+    write(&coopbad, "provider/c/brick.toml", &ability_toml("provider/c", "service", "late", ""));
+    let p = coopbad.join("provider/c/brick.toml");
     let s = fs::read_to_string(&p).unwrap().replace("version = \"0.1.0.0\"", "version = \"0.1.0.0\"\nsched_class = \"COOP_ONLY\"");
     fs::write(&p, s).unwrap();
     let resp = check::run(&mk_req("check", &coopbad, json!({"profile": "dev", "scopes": ["tax"]})));
@@ -2199,8 +2199,8 @@ fn priv_and_sched_cases(h: &mut Harness) {
 
     let coopok = tmpdir("sched-coopok");
     write(&coopok, "sched-coop/brick.toml", &ability_toml("sched-coop", "scheduler", "core", ""));
-    write(&coopok, "service/c/brick.toml", &ability_toml("service/c", "service", "late", ""));
-    let p = coopok.join("service/c/brick.toml");
+    write(&coopok, "provider/c/brick.toml", &ability_toml("provider/c", "service", "late", ""));
+    let p = coopok.join("provider/c/brick.toml");
     let s = fs::read_to_string(&p).unwrap().replace("version = \"0.1.0.0\"", "version = \"0.1.0.0\"\nsched_class = \"COOP_ONLY\"");
     fs::write(&p, s).unwrap();
     let resp = check::run(&mk_req("check", &coopok, json!({"profile": "dev", "scopes": ["tax"]})));
@@ -2395,10 +2395,10 @@ fn iface_ir_cases(h: &mut Harness) {
     h.check(kinds.contains(&"EXTENDED"), "V-15: change_set contains EXTENDED (enum end)");
 }
 
-const PUB_UNIT: &str = "service/pub/brick.toml";
+const PUB_UNIT: &str = "provider/pub/brick.toml";
 fn pub_toml(macro_value: &str) -> String {
     format!(
-        "schema = 1\n[plugin]\nname = \"service/pub\"\nplugin_type = \"ability\"\napi_type = \"native\"\n\
+        "schema = 1\n[plugin]\nname = \"provider/pub\"\nplugin_type = \"ability\"\napi_type = \"native\"\n\
          subkind = \"service\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n\
          [compat]\ncore = \">=1.0.0\"\n\
          [[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\n\
@@ -2410,7 +2410,7 @@ fn pub_toml(macro_value: &str) -> String {
 fn publish_cases(h: &mut Harness) {
     let root = tmpdir("publish");
     write(&root, PUB_UNIT, &pub_toml("16"));
-    let r1 = iface::run(&mk_req("iface-publish", &root, json!({"id": "service/pub#u"})));
+    let r1 = iface::run(&mk_req("iface-publish", &root, json!({"id": "provider/pub#u"})));
     h.eq(r1.exit_code, 0, "V-5: first publish exit code 0");
     h.eq(r1.files.as_array().map(|a| a.len()), Some(3), "V-5: first run yields 3 machine files");
     let paths: Vec<String> = r1
@@ -2421,7 +2421,7 @@ fn publish_cases(h: &mut Harness) {
         .map(|f| f["path"].as_str().unwrap_or("").to_string())
         .collect();
     h.check(
-        paths.contains(&"api/iface/service/pub/u.toml".to_string()),
+        paths.contains(&"api/iface/provider/pub/u.toml".to_string()),
         "V-5: snapshot path = api/iface/<provider path segments>/<unit>.toml (R-11)",
     );
     h.check(
@@ -2440,7 +2440,7 @@ fn publish_cases(h: &mut Harness) {
     h.check(snapshot_text.contains("strict_params = false"), "§6.2 rule 10: strict_params stored in the snapshot");
     apply_files(&root, &r1);
 
-    let r2 = iface::run(&mk_req("iface-publish", &root, json!({"id": "service/pub#u"})));
+    let r2 = iface::run(&mk_req("iface-publish", &root, json!({"id": "provider/pub#u"})));
     h.eq(r2.exit_code, 0, "V-5: second publish exit code 0");
     h.eq(r2.files.as_array().map(|a| a.len()), Some(0), "V-5: surface unchanged ⇒ no files (no-op)");
     h.j(&r2.data["noop"], json!(true), "V-5: data.noop = true");
@@ -2448,50 +2448,50 @@ fn publish_cases(h: &mut Harness) {
 
     let root_b = tmpdir("publish-b");
     write(&root_b, PUB_UNIT, &pub_toml("16"));
-    let rb = iface::run(&mk_req("iface-publish", &root_b, json!({"id": "service/pub#u"})));
+    let rb = iface::run(&mk_req("iface-publish", &root_b, json!({"id": "provider/pub#u"})));
     h.eq(
         serde_json::to_string(&r1.files.clone()).unwrap(),
         serde_json::to_string(&rb.files.clone()).unwrap(),
         "§4: two publishes of the same input are byte-identical",
     );
 
-    let st0 = iface::run(&mk_req("iface-status", &root, json!({"id": "service/pub#u", "check": true})));
+    let st0 = iface::run(&mk_req("iface-status", &root, json!({"id": "provider/pub#u", "check": true})));
     h.j(&st0.data["consistent"], json!(true), "V-5: after publish status --check is consistent");
     h.eq(st0.exit_code, 0, "V-5: status --check exit code 0");
     write(&root, PUB_UNIT, &pub_toml("4096"));
-    let st1 = iface::run(&mk_req("iface-status", &root, json!({"id": "service/pub#u", "check": true})));
+    let st1 = iface::run(&mk_req("iface-status", &root, json!({"id": "provider/pub#u", "check": true})));
     h.j(&st1.data["consistent"], json!(false), "V-17: after the BR_MAX change status is inconsistent");
     h.eq(st1.exit_code, 1, "V-17: inconsistent ⇒ exit code 1");
-    let d = iface::run(&mk_req("iface-diff", &root, json!({"id": "service/pub#u"})));
+    let d = iface::run(&mk_req("iface-diff", &root, json!({"id": "provider/pub#u"})));
     h.j(&d.data["changes"][0]["kind"], json!("CHANGED"), "V-15: diff reports CHANGED");
     h.j(&d.data["version"]["to"], json!("0.1.1.0"), "V-4: experimental-only change ⇒ MINOR+1");
-    let r3 = iface::run(&mk_req("iface-publish", &root, json!({"id": "service/pub#u"})));
+    let r3 = iface::run(&mk_req("iface-publish", &root, json!({"id": "provider/pub#u"})));
     h.eq(r3.exit_code, 0, "V-17: publish after the change succeeds");
     h.j(&r3.data["to"], json!("0.1.1.0"), "V-4(b): add/change ⇒ COMPAT_GEN unchanged");
     h.j(&r3.data["compat_gen_changed"], json!(false), "V-4(b): compat_gen_changed=false");
     apply_files(&root, &r3);
-    let st2 = iface::run(&mk_req("iface-status", &root, json!({"id": "service/pub#u", "check": true})));
+    let st2 = iface::run(&mk_req("iface-status", &root, json!({"id": "provider/pub#u", "check": true})));
     h.j(&st2.data["consistent"], json!(true), "V-5: after republishing status is consistent");
 }
 
 fn freeze_window_cases(h: &mut Harness) {
     let root = tmpdir("unfreeze");
-    let toml_frozen = "schema = 1\n[plugin]\nname = \"service/w\"\nplugin_type = \"ability\"\napi_type = \"native\"\n\
+    let toml_frozen = "schema = 1\n[plugin]\nname = \"provider/w\"\nplugin_type = \"ability\"\napi_type = \"native\"\n\
         subkind = \"service\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n\
         [[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\n\
         compat_gen = 0\nfreeze_state = \"frozen\"\nhash = \"\"\nstatus = \"frozen\"\n\
         [[export.entries]]\nkind = \"type\"\nname = \"ctx\"\nlayout = \"struct { u32 a; }\"\nstatus = \"frozen\"\n";
-    write(&root, "service/w/brick.toml", toml_frozen);
+    write(&root, "provider/w/brick.toml", toml_frozen);
     write(&root, "NOTE.md", "decision record\n");
-    let r0 = iface::run(&mk_req("iface-publish", &root, json!({"id": "service/w#u"})));
+    let r0 = iface::run(&mk_req("iface-publish", &root, json!({"id": "provider/w#u"})));
     h.eq(r0.exit_code, 0, "V-16: initial publish succeeds");
     apply_files(&root, &r0);
     let ver0 = r0.data["to"].clone();
 
-    let r1 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "service/w#u"})));
+    let r1 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "provider/w#u"})));
     h.eq(r1.exit_code, 1, "V-16: unfreeze without --note ⇒ error");
 
-    let r2 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "service/w#u", "note": "NOTE.md"})));
+    let r2 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "provider/w#u", "note": "NOTE.md"})));
     h.eq(r2.exit_code, 0, "V-16: unfreeze succeeds");
     h.j(&r2.data["freeze_state"], json!("unfreezing"), "V-16: enters the unfreeze window");
     let snap_text = r2.files.as_array().unwrap()[0]["content"].as_str().unwrap_or("");
@@ -2504,7 +2504,7 @@ fn freeze_window_cases(h: &mut Harness) {
     let dev = check::run(&mk_req("check", &root, json!({"profile": "dev"})));
     h.eq(dev.exit_code, 0, "V-16: dev inside the window ⇒ exit code 0");
 
-    let r3 = iface::run(&mk_req("iface-refreeze", &root, json!({"id": "service/w#u"})));
+    let r3 = iface::run(&mk_req("iface-refreeze", &root, json!({"id": "provider/w#u"})));
     h.eq(r3.exit_code, 0, "V-16: refreeze succeeds");
     h.j(&r3.data["empty_unfreeze"], json!(true), "V-16: detected as an empty unfreeze");
     h.j(&r3.data["from"], ver0.clone(), "V-16: empty unfreeze ⇒ original version");
@@ -2512,10 +2512,10 @@ fn freeze_window_cases(h: &mut Harness) {
     h.j(&r3.data["compat_gen_changed"], json!(false), "V-16: empty unfreeze does not bump COMPAT_GEN");
     apply_files(&root, &r3);
 
-    let r4 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "service/w#u", "note": "NOTE.md"})));
+    let r4 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "provider/w#u", "note": "NOTE.md"})));
     apply_files(&root, &r4);
-    write(&root, "service/w/brick.toml", &toml_frozen.replace("struct { u32 a; }", "struct { u32 a; u32 b; }"));
-    let r5 = iface::run(&mk_req("iface-refreeze", &root, json!({"id": "service/w#u", "note": "NOTE.md"})));
+    write(&root, "provider/w/brick.toml", &toml_frozen.replace("struct { u32 a; }", "struct { u32 a; u32 b; }"));
+    let r5 = iface::run(&mk_req("iface-refreeze", &root, json!({"id": "provider/w#u", "note": "NOTE.md"})));
     h.eq(r5.exit_code, 0, "V-4(a): refreeze changing a frozen entry succeeds");
     h.j(&r5.data["compat_gen_changed"], json!(true), "V-4(a): a frozen entry really changed ⇒ COMPAT_GEN+1");
     h.j(&r5.data["compat_gen"], json!(1), "V-4(a): compat_gen goes from 0 to 1");
@@ -2527,27 +2527,27 @@ fn freeze_window_cases(h: &mut Harness) {
         "V-4(a): change set contains CHANGED",
     );
     apply_files(&root, &r5);
-    let r6 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "service/w#u", "note": "NOTE.md"})));
+    let r6 = iface::run(&mk_req("iface-unfreeze", &root, json!({"id": "provider/w#u", "note": "NOTE.md"})));
     h.eq(r6.exit_code, 0, "unfreeze requires frozen (just refrozen back to frozen)");
     apply_files(&root, &r6);
 
     write(
         &root,
-        "service/w/brick.toml",
+        "provider/w/brick.toml",
         &toml_frozen
             .replace("struct { u32 a; }", "struct { u32 a; u32 b; u32 c; }"),
     );
     let p1 = iface::run(&mk_req(
         "iface-publish",
         &root,
-        json!({"id": "service/w#u", "note": "NOTE.md"}),
+        json!({"id": "provider/w#u", "note": "NOTE.md"}),
     ));
     h.eq(p1.exit_code, 0, "S-19: in-window publish of a hard change (with note) succeeds");
     h.j(&p1.data["compat_gen_changed"], json!(true), "S-19: publish records COMPAT_GEN+1");
     let cg1 = p1.data["compat_gen"].clone();
     h.j(&p1.data["freeze_state"], json!("unfreezing"), "S-19: publish does not erase the unfreeze window");
     apply_files(&root, &p1);
-    let p2 = iface::run(&mk_req("iface-refreeze", &root, json!({"id": "service/w#u"})));
+    let p2 = iface::run(&mk_req("iface-refreeze", &root, json!({"id": "provider/w#u"})));
     h.eq(p2.exit_code, 0, "S-19: refreeze closes the window");
     h.j(&p2.data["empty_unfreeze"], json!(true), "S-19: publish already consumed the baseline ⇒ empty unfreeze");
     h.j(&p2.data["compat_gen"], cg1, "S-19: COMPAT_GEN is not bumped twice");
@@ -2555,23 +2555,23 @@ fn freeze_window_cases(h: &mut Harness) {
 
 fn gate_cases(h: &mut Harness) {
     let root = tmpdir("removed-gate");
-    let toml_gone = "schema = 1\n[plugin]\nname = \"service/g\"\nplugin_type = \"ability\"\napi_type = \"native\"\n\
+    let toml_gone = "schema = 1\n[plugin]\nname = \"provider/g\"\nplugin_type = \"ability\"\napi_type = \"native\"\n\
         subkind = \"service\"\nlang = \"c\"\nphase = \"late\"\nversion = \"0.1.0.0\"\n[compat]\ncore = \">=1.0.0\"\n\
         [[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"0.1.0.0\"\n\
         compat_gen = 0\nfreeze_state = \"frozen\"\nhash = \"\"\nstatus = \"frozen\"\n\
         [[export.entries]]\nkind = \"func\"\nname = \"gone\"\nsig = \"void(void)\"\nstatus = \"frozen\"\n\
         [[export.entries]]\nkind = \"func\"\nname = \"keep\"\nsig = \"void(void)\"\nstatus = \"frozen\"\n";
-    write(&root, "service/g/brick.toml", toml_gone);
+    write(&root, "provider/g/brick.toml", toml_gone);
     write(&root, "NOTE.md", "n\n");
-    let r0 = iface::run(&mk_req("iface-publish", &root, json!({"id": "service/g#u"})));
+    let r0 = iface::run(&mk_req("iface-publish", &root, json!({"id": "provider/g#u"})));
     apply_files(&root, &r0);
     let s2 = toml_gone.replace(
         "[[export.entries]]\nkind = \"func\"\nname = \"gone\"\nsig = \"void(void)\"\nstatus = \"frozen\"\n",
         "",
     );
-    write(&root, "service/g/brick.toml", &s2);
+    write(&root, "provider/g/brick.toml", &s2);
 
-    let r1 = iface::run(&mk_req("iface-publish", &root, json!({"id": "service/g#u", "note": "NOTE.md"})));
+    let r1 = iface::run(&mk_req("iface-publish", &root, json!({"id": "provider/g#u", "note": "NOTE.md"})));
     h.eq(r1.exit_code, 1, "§6.3: REMOVED not deprecated ⇒ error");
     h.check(
         msg_of2(&r1).contains("REMOVED"),
@@ -2581,7 +2581,7 @@ fn gate_cases(h: &mut Harness) {
     let f = iface::run(&mk_req(
         "iface-freeze",
         &root,
-        json!({"id": "service/g#u", "entry": "keep", "note": "NOTE.md"}),
+        json!({"id": "provider/g#u", "entry": "keep", "note": "NOTE.md"}),
     ));
     h.eq(f.exit_code, 0, "iface freeze: entry filtering succeeds");
     let content = f.files[0]["content"].as_str().unwrap_or("");
@@ -2594,8 +2594,8 @@ fn gate_cases(h: &mut Harness) {
 
 fn dep_command_cases(h: &mut Harness) {
     let root = tmpdir("depcmds");
-    write(&root, "service/consumer/brick.toml", &ability_toml("service/consumer", "service", "late", "[[dep]]\nname = \"service/provider\"\nrange = \">=0.1.0\"\nkind = \"runtime\"\n"));
-    write(&root, "service/provider/brick.toml", &ability_toml("service/provider", "service", "late", ""));
+    write(&root, "provider/consumer/brick.toml", &ability_toml("provider/consumer", "service", "late", "[[dep]]\nname = \"provider/provider\"\nrange = \">=0.1.0\"\nkind = \"runtime\"\n"));
+    write(&root, "provider/provider/brick.toml", &ability_toml("provider/provider", "service", "late", ""));
 
     let g = solver::run(&mk_req("dep-graph", &root, json!({"format": "json"})));
     h.j(&g.data["format"], json!("json"), "dep graph: format");
@@ -2620,11 +2620,11 @@ fn dep_command_cases(h: &mut Harness) {
     let badfmt = solver::run(&mk_req("dep-graph", &root, json!({"format": "svg"})));
     h.eq(badfmt.exit_code, 2, "dep graph: unknown format ⇒ usage error 2");
 
-    let w = solver::run(&mk_req("dep-why", &root, json!({"from": "service/consumer", "to": "service/provider"})));
+    let w = solver::run(&mk_req("dep-why", &root, json!({"from": "provider/consumer", "to": "provider/provider"})));
     h.j(&w.data["found"], json!(true), "dep why: path found");
-    h.j(&w.data["path"], json!(["service/consumer", "service/provider"]), "dep why: shortest path");
+    h.j(&w.data["path"], json!(["provider/consumer", "provider/provider"]), "dep why: shortest path");
     h.j(&w.data["edges"][0]["kind"], json!("runtime"), "dep why: edge carries kind");
-    let w2 = solver::run(&mk_req("dep-why", &root, json!({"from": "service/provider", "to": "service/consumer"})));
+    let w2 = solver::run(&mk_req("dep-why", &root, json!({"from": "provider/provider", "to": "provider/consumer"})));
     h.j(&w2.data["found"], json!(false), "dep why: reverse direction not found ⇒ found=false");
     h.eq(w2.exit_code, 0, "dep why: not found is not an error (exit 0)");
 
@@ -2638,7 +2638,7 @@ fn dep_command_cases(h: &mut Harness) {
     h.j(&idx.files[0]["path"], json!("build/index/dependents.json"), "dep index: path");
     let content = idx.files[0]["content"].as_str().unwrap_or("");
     h.check(content.contains("\"schema\": 1"), "dep index: JSON contains schema");
-    h.j(&idx.data["dependents"]["service/provider"][0]["from"], json!("service/consumer"), "dep index: reverse edge");
+    h.j(&idx.data["dependents"]["provider/provider"][0]["from"], json!("provider/consumer"), "dep index: reverse edge");
     let idx2 = solver::run(&mk_req("dep-index", &root, json!({})));
     h.eq(
         idx.files[0]["content"].clone(),
@@ -2649,15 +2649,15 @@ fn dep_command_cases(h: &mut Harness) {
 
 fn ver_command_cases(h: &mut Harness) {
     let root = tmpdir("vercmds");
-    write(&root, "service/v/brick.toml", &ability_toml("service/v", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"1.2.3.4\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
-    let s = iface::run(&mk_req("ver-show", &root, json!({"id": "service/v#u"})));
+    write(&root, "provider/v/brick.toml", &ability_toml("provider/v", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"u\"\nversion = \"1.2.3.4\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
+    let s = iface::run(&mk_req("ver-show", &root, json!({"id": "provider/v#u"})));
     h.eq(s.exit_code, 0, "ver show: exit code 0");
     h.j(&s.data["version"], json!("1.2.3.4"), "ver show: four-segment version");
     h.j(&s.data["segments"], json!({"compat_gen": 1, "major": 2, "minor": 3, "revise": 4}), "ver show: segments");
     h.j(&s.data["source"], json!("declaration"), "ver show: unpublished ⇒ source=declaration");
     h.j(&s.data["compat_gen_source"]["kind"], json!("never-frozen"), "ver show: compat_gen source");
 
-    let b = iface::run(&mk_req("ver-bump", &root, json!({"id": "service/v#u", "rule": "revise"})));
+    let b = iface::run(&mk_req("ver-bump", &root, json!({"id": "provider/v#u", "rule": "revise"})));
     h.eq(b.exit_code, 0, "ver bump: exit code 0");
     h.j(&b.data["from"], json!("1.2.3.4"), "ver bump: from");
     h.j(&b.data["to"], json!("1.2.3.5"), "V-4(e): ver bump revise ⇒ REVISE+1");
@@ -2667,35 +2667,35 @@ fn ver_command_cases(h: &mut Harness) {
             .as_array()
             .unwrap()
             .iter()
-            .any(|f| f["path"] == json!("api/iface/service/v/u.toml")),
+            .any(|f| f["path"] == json!("api/iface/provider/v/u.toml")),
         "ver bump: writes the unit snapshot",
     );
     apply_files(&root, &b);
-    let s2 = iface::run(&mk_req("ver-show", &root, json!({"id": "service/v#u"})));
+    let s2 = iface::run(&mk_req("ver-show", &root, json!({"id": "provider/v#u"})));
     h.j(&s2.data["source"], json!("snapshot"), "ver show: after publish source=snapshot");
     h.j(&s2.data["published"], json!(true), "ver show: published=true");
 
-    let maj = iface::run(&mk_req("ver-bump", &root, json!({"id": "service/v#u", "rule": "major"})));
+    let maj = iface::run(&mk_req("ver-bump", &root, json!({"id": "provider/v#u", "rule": "major"})));
     h.j(&maj.data["to"], json!("1.3.0.0"), "V-4(c): ver bump major ⇒ MAJOR+1, compat_gen unchanged");
     h.j(&maj.data["compat_gen"], json!(1), "V-4(c): compat_gen unchanged");
 
-    let bad = iface::run(&mk_req("ver-bump", &root, json!({"id": "service/v#u", "rule": "compat_gen"})));
+    let bad = iface::run(&mk_req("ver-bump", &root, json!({"id": "provider/v#u", "rule": "compat_gen"})));
     h.eq(bad.exit_code, 2, "ver bump: compat_gen is not a rule ⇒ usage error 2");
 
     let root2 = tmpdir("vermulti");
-    write(&root2, "service/m/brick.toml", &ability_toml("service/m", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"a\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"b\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
-    let amb = iface::run(&mk_req("ver-show", &root2, json!({"id": "service/m"})));
+    write(&root2, "provider/m/brick.toml", &ability_toml("provider/m", "service", "late", "[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"a\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n[[export]]\napi_iface = \"native\"\nform = \"api\"\nname = \"b\"\nversion = \"0.1.0.0\"\ncompat_gen = 0\nfreeze_state = \"unfrozen\"\nhash = \"\"\nstatus = \"experimental\"\n"));
+    let amb = iface::run(&mk_req("ver-show", &root2, json!({"id": "provider/m"})));
     h.eq(amb.exit_code, 2, "R-3: plugin name with multiple exports ⇒ usage error 2");
 
     let list = iface::run(&mk_req("iface-list", &root, json!({})));
     h.j(&list.data["count"], json!(1), "iface list: count");
-    h.j(&list.data["units"][0]["id"], json!("service/v#u"), "iface list: unit id");
+    h.j(&list.data["units"][0]["id"], json!("provider/v#u"), "iface list: unit id");
     h.j(&list.data["units"][0]["published"], json!(true), "iface list: published");
 
-    let f0 = iface::run(&mk_req("iface-freeze", &root, json!({"id": "service/v#u"})));
+    let f0 = iface::run(&mk_req("iface-freeze", &root, json!({"id": "provider/v#u"})));
     h.eq(f0.exit_code, 1, "A-26: freeze without --note ⇒ error");
     write(&root, "NOTE.md", "note\n");
-    let f1 = iface::run(&mk_req("iface-freeze", &root, json!({"id": "service/v#u", "note": "NOTE.md"})));
+    let f1 = iface::run(&mk_req("iface-freeze", &root, json!({"id": "provider/v#u", "note": "NOTE.md"})));
     h.eq(f1.exit_code, 0, "A-26: freeze produces a proposal");
     h.j(&f1.data["proposal"], json!("build/gen/proposals/u.toml"), "A-26: proposal path build/gen/proposals/<unit>.toml");
     h.eq(
@@ -2774,14 +2774,14 @@ fn mk_req_ctx(command: &str, root: &Path, args: Value, context: Value) -> Reques
     r
 }
 
-/// Synthetic buildable tree: product.toml + platform (with [build.target]) + ability + app, plus
+/// Synthetic buildable tree: product.toml + runtime plugin (with [build.target]) + ability + app, plus
 /// source files so globs match; the plan is computed from the declaration surface, not mocked. Tool
 /// resolution is off via `context.path = ""`, so any machine replays it.
 fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
     write(root, "core/c_core/src/core.c", "int core_fn(void){return 0;}\n");
-    write(root, "platform/fake/src/plat.c", "int plat_fn(void){return 0;}\n");
-    write(root, "platform/fake/src/start.S", "nop\n");
-    write(root, "platform/fake/src/link.ld", "SECTIONS { }\n");
+    write(root, "runtime/fake/src/plat.c", "int plat_fn(void){return 0;}\n");
+    write(root, "runtime/fake/src/start.S", "nop\n");
+    write(root, "runtime/fake/src/link.ld", "SECTIONS { }\n");
     write(root, "app/m/src/main.c", "int app_fn(void){return 0;}\n");
     write(
         root,
@@ -2790,7 +2790,7 @@ fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
             "schema = 1\n\
              [product]\nname = \"p\"\nversion = \"1.0.0.0\"\n\
              app = {{ brick = \"app/m\", requires = {{}} }}\n\
-             platform = {{ brick = \"platform/fake\", requires = {{}} }}\n\
+             runtime = {{ brick = \"runtime/fake\", requires = {{}} }}\n\
              core = {{ brick = \"core/c_core\", requires = {{ version = \">=0.0.0\" }} }}\n\
              stage = \"dev\"\n\
              [build]\n\
@@ -2806,9 +2806,9 @@ fn write_build_tree(root: &Path, extra_build: &str, target: &str) {
     );
     write(
         root,
-        "platform/fake/brick.toml",
+        "runtime/fake/brick.toml",
         &format!(
-            "schema = 1\n[plugin]\nname = \"platform/fake\"\nplugin_type = \"platform\"\napi_type = \"native\"\n\
+            "schema = 1\n[plugin]\nname = \"runtime/fake\"\nplugin_type = \"runtime\"\napi_type = \"native\"\n\
              lang = \"c\"\nphase = \"early\"\nversion = \"1.0.0.0\"\n\
              [build]\nsources = [\"src/*.c\", \"src/*.S\"]\nincludes = [\"include\"]\n{target}"
         ),
@@ -2888,7 +2888,7 @@ fn build_cases(h: &mut Harness) {
     );
     let (d, data) = build::selftest_plan(&root, &req);
     h.exit_is(&d, 0, "build: synthetic-tree plan has no diagnostics");
-    h.j(&data["unit_count"], json!(3), "build: unit count = core + platform + app");
+    h.j(&data["unit_count"], json!(3), "build: unit count = core + runtime + app");
     h.j(&data["source_count"], json!(4), "build: source count = core 1 + plat 2 + app 1");
     let steps = data["steps"].as_array().cloned().unwrap_or_default();
     h.j(
@@ -2912,11 +2912,11 @@ fn build_cases(h: &mut Harness) {
         .collect();
     h.check(
         all.iter().any(|s| s.contains("-march=armv8-a") && s.contains("-mstrict-align")),
-        "build: arch_flags enter the compile command (from platform's [build.target])",
+        "build: arch_flags enter the compile command (from the runtime plugin's [build.target])",
     );
     h.check(
-        all.iter().any(|s| s.contains("-Wl,-T,platform/fake/src/link.ld")),
-        "build: linker script comes from platform and resolves against the plugin root",
+        all.iter().any(|s| s.contains("-Wl,-T,runtime/fake/src/link.ld")),
+        "build: linker script comes from the runtime plugin and resolves against the plugin root",
     );
     h.check(
         all.iter().any(|s| s.contains("-MF build/obj/core/c_core/src/core.o.d")),
@@ -2927,8 +2927,8 @@ fn build_cases(h: &mut Harness) {
         "build: link command carries product ldflags and the artifact location",
     );
     h.check(
-        data["target"]["owner"] == json!("platform/fake"),
-        "build: target facts are owned by the single platform",
+        data["target"]["owner"] == json!("runtime/fake"),
+        "build: target facts are owned by the single runtime plugin",
     );
     h.check(
         data["outputs"]["obj_dir"] == json!("build/obj"),
@@ -2977,8 +2977,8 @@ fn build_cases(h: &mut Harness) {
     write_build_tree(&root4, "", TARGET_OK);
     write(
         &root4,
-        "platform/other/brick.toml",
-        "schema = 1\n[plugin]\nname = \"platform/other\"\nplugin_type = \"platform\"\n\
+        "runtime/other/brick.toml",
+        "schema = 1\n[plugin]\nname = \"runtime/other\"\nplugin_type = \"runtime\"\n\
          api_type = \"native\"\nlang = \"c\"\nphase = \"early\"\nversion = \"1.0.0.0\"\n\
          [build]\nsources = [\"src/*.c\"]\n[build.target]\narch = \"aarch64\"\n",
     );
@@ -3011,7 +3011,7 @@ fn build_cases(h: &mut Harness) {
         TARGET_OK,
     );
     write(&root8, "build/gen/app/m/plugin_desc.c", "int app_desc;\n");
-    write(&root8, "build/gen/service/out/plugin_desc.c", "int out_desc;\n");
+    write(&root8, "build/gen/provider/out/plugin_desc.c", "int out_desc;\n");
     write(
         &root8,
         "build/gen/third_party/uboot-mmc/plugin_desc.c",
@@ -3020,8 +3020,8 @@ fn build_cases(h: &mut Harness) {
     write(&root8, "generated/hand.c", "int hand;\n");
     write(
         &root8,
-        "service/out/brick.toml",
-        "schema = 1\n[plugin]\nname = \"service/out\"\nplugin_type = \"ability\"\n\
+        "provider/out/brick.toml",
+        "schema = 1\n[plugin]\nname = \"provider/out\"\nplugin_type = \"ability\"\n\
          api_type = \"native\"\nsubkind = \"service\"\nlang = \"c\"\nphase = \"late\"\n\
          version = \"1.0.0.0\"\n[build]\nsources = [\"src/*.c\"]\n",
     );
@@ -3061,7 +3061,7 @@ fn build_cases(h: &mut Harness) {
         "gen_sources: `**` matched an in-closure plugin's artifact",
     );
     h.check(
-        !gen_srcs.iter().any(|s| s.contains("service/out")),
+        !gen_srcs.iter().any(|s| s.contains("provider/out")),
         "gen_sources: a non-closure plugin's artifact does **not** enter the image",
     );
     h.check(

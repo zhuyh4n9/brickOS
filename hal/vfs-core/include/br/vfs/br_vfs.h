@@ -229,7 +229,7 @@ int    br_file_close(br_file_t *f);                   /* free session + handle; 
  * FS extension point, not a consumer entry point). */
 int br_fstat(br_file_t *f, br_stat_t *st);
 
-/* Path-level convenience surface (1:1 mapping for runtime/posix), all via "parent inode + name".
+/* Path-level convenience surface (1:1 mapping for provider/posix), all via "parent inode + name".
  * br_stat follows a final symlink, br_lstat does not; both follow intermediate components. */
 int br_stat    (const char *path, br_stat_t *st);
 int br_lstat   (const char *path, br_stat_t *st);

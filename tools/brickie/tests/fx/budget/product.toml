@@ -4,13 +4,13 @@ schema = 1
 name     = "hsm"
 version  = "0.1.0.0"
 app      = { brick = "app/hsm", requires = {} }
-platform = { brick = "platform/qemu-aarch64", requires = {} }
+runtime = { brick = "runtime/qemu-aarch64", requires = {} }
 core     = { brick = "core/c_core", requires = {} }
 stage    = "dev"
 
 [[product.ability]]
-big-a = { brick = "service/big-a", requires = {} }
-big-b = { brick = "service/big-b", requires = {} }
+big-a = { brick = "provider/big-a", requires = {} }
+big-b = { brick = "provider/big-b", requires = {} }
 
 [budget]
 ram_kib   = 512

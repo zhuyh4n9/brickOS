@@ -45,7 +45,7 @@ allow_edges = []
 #   The default below is the minimal usable set for "AArch64 bare-metal ELF, no libc" — every entry has a reason:
 #     -ffreestanding / -fno-builtin   no host runtime assumptions; loops are not silently turned into memcpy
 #     -fno-stack-protector            no libc __stack_chk_fail
-#     -fno-omit-frame-pointer         **compile-time prerequisite** for stack traces (service/backtrace): -O2 drops fp
+#     -fno-omit-frame-pointer         **compile-time prerequisite** for stack traces (provider/backtrace): -O2 drops fp
 #     -fno-pic / -fno-pie             bare metal, no relocations
 #     -ffunction-sections/-fdata-sections + -Wl,--gc-sections   unused code stays out of the image
 gen_sources   = []                                    # whether `brickie gen` outputs (descriptors etc.) go into the image

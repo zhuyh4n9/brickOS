@@ -9,7 +9,7 @@ phase         = "late"
 version       = "0.1.0.0"
 
 symbol_prefix = "iface_posix_"
-summary       = "POSIX 薄皮肤: 再导出 runtime/posix#posix(APP 只依赖 Interface)"
+summary       = "POSIX 薄皮肤: 再导出 provider/posix#posix(APP 只依赖 Interface)"
 license       = "WTFPL"
 
 [[res]]
@@ -25,7 +25,7 @@ truth      = "decl"
 abi_id     = ""
 
 [[dep]]
-name  = "runtime/posix"
+name  = "provider/posix"
 range = ">=0.1.0"
 kind  = "init"
 phase = "late"
@@ -42,7 +42,7 @@ freeze_state = "unfrozen"
 
 hash         = "sha256:7ccb8d3d4a6ef85aad5e08604d14102a635f19974fcad8f517a71537838ede2f"
 status       = "experimental"
-reexport_of  = ["runtime/posix#posix"]
+reexport_of  = ["provider/posix#posix"]
 
 symbols      = ["usleep", "pthread", "sem"]
 

@@ -16,7 +16,7 @@ hash_scope = "decl"
 truth      = "decl"
 
 [[dep]]
-name  = "platform/qemu-aarch64"
+name  = "runtime/qemu-aarch64"
 range = "*"
 kind  = "init"
 

@@ -40,7 +40,7 @@ eq "core --selftest runs directly" "0" "$("$CORE" --selftest >/dev/null 2>&1; ec
 
 # ---- V-1 skeleton generation
 section "V-1 new for all five kinds × c, immediate check has 0 errors"
-for pair in "app:app/hsm:" "interface:iface/posix:" "ability:service/crypto:--subkind service" "platform:platform/qemu-aarch64:" "core:core/c_core:";
+for pair in "app:app/hsm:" "interface:iface/posix:" "ability:provider/crypto:--subkind service" "runtime:runtime/qemu-aarch64:" "core:core/c_core:";
 do
     ptype="${pair%%:*}"; rest="${pair#*:}"; name="${rest%%:*}"; extra="${rest#*:}"
     W="$(new_work)"
@@ -64,8 +64,8 @@ done
 W="$(new_work)"
 run_brickie "$W" new app app/hsm
 run_brickie "$W" new interface iface/posix
-run_brickie "$W" new ability service/crypto --subkind service
-run_brickie "$W" new platform platform/qemu-aarch64
+run_brickie "$W" new ability provider/crypto --subkind service
+run_brickie "$W" new runtime runtime/qemu-aarch64
 run_brickie "$W" new core core/c_core
 run_json "$W" check
 eq "V-1 five kinds one tree check exit code 0" "0" "$RC"
@@ -74,7 +74,7 @@ eqj "V-1 five kinds one tree closure has 5 plugins" "$JQ_RESP" "data.summary.clo
 # ---- V-2 generated artifacts idempotent
 section "V-2 gen idempotence / --check byte-identical"
 W="$(new_work)"
-run_brickie "$W" new ability service/crypto --subkind service
+run_brickie "$W" new ability provider/crypto --subkind service
 H1="$(tree_hash "$W")"
 run_brickie "$W" gen
 eq "V-2 second gen exit code 0" "0" "$RC"
@@ -84,7 +84,7 @@ eq "V-2 two gen runs byte-identical" "$H1" "$H2"
 run_brickie "$W" gen --check
 eq "V-2 gen --check consistent exit code 0" "0" "$RC"
 grep_at_least "V-2 gen --check text" 'byte-identical to recomputation' "$OUT"
-printf '\n/* hand edit */\n' >>"$W/build/gen/service/crypto/plugin_desc.c"
+printf '\n/* hand edit */\n' >>"$W/build/gen/provider/crypto/plugin_desc.c"
 run_brickie "$W" gen --check
 eq "V-2 tampered gen --check exit code 1" "1" "$RC"
 run_json "$W" gen --check
@@ -119,16 +119,16 @@ run_json "$W" check
 eq "V-3 check on a cycle exit code 1" "1" "$RC"
 eq "V-3 cycle diagnostic code BRV-MF-0001 (R-9 gap stand-in)" "1" \
     "$(grep -c 'BRV-MF-0001' "$ERR" || true)"
-grep_at_least "V-3 text reports the full cycle path" 'service/a → service/b → service/c → service/a' "$ERR"
+grep_at_least "V-3 text reports the full cycle path" 'provider/a → provider/b → provider/c → provider/a' "$ERR"
 eqj "V-3 check --json contains the cycle diagnostic" "$JQ_RESP" "diagnostics.0.code" "BRV-MF-0001"
 run_json "$W" dep closure
 eqj "V-3 closure --json exit_code=1" "$JQ_RESP" "exit_code" "1"
 eqjc "V-3 closure --json cycles count" "$JQ_RESP" "data.cycles" "1"
 eqj "V-3 cycles[0].path complete (first == last)" "$JQ_RESP" "data.cycles.0.path" \
-    '["service/a", "service/b", "service/c", "service/a"]'
+    '["provider/a", "provider/b", "provider/c", "provider/a"]'
 eqjc "V-3 cycles[0].edges structured edge list has 3 entries" "$JQ_RESP" "data.cycles.0.edges" "3"
-eqj "V-3 cycles[0].edges[0] shape {from,to}" "$JQ_RESP" "data.cycles.0.edges.0.from" "service/a"
-eqj "V-3 cycles[0].edges[0].to" "$JQ_RESP" "data.cycles.0.edges.0.to" "service/b"
+eqj "V-3 cycles[0].edges[0] shape {from,to}" "$JQ_RESP" "data.cycles.0.edges.0.from" "provider/a"
+eqj "V-3 cycles[0].edges[0].to" "$JQ_RESP" "data.cycles.0.edges.0.to" "provider/b"
 
 # ---- V-4 version bump table
 section "V-4 event → segment bump table, row by row"
@@ -142,74 +142,74 @@ segments_of() { # segments_of <work> <id> ⇒ "cg.major.minor.revise"
         "$(jqget "$JQ_RESP" data.segments.minor)" \
         "$(jqget "$JQ_RESP" data.segments.revise)"
 }
-run_brickie "$W" iface publish service/crypto#crypto
-eq "V-4 first publish = file creation, no segment bump (S-8)" "0.1.0.0" "$(segments_of "$W" service/crypto#crypto)"
-run_brickie "$W" iface unfreeze service/crypto#crypto --note rfc.md
+run_brickie "$W" iface publish provider/crypto#crypto
+eq "V-4 first publish = file creation, no segment bump (S-8)" "0.1.0.0" "$(segments_of "$W" provider/crypto#crypto)"
+run_brickie "$W" iface unfreeze provider/crypto#crypto --note rfc.md
 eq "V-4(f) unfreeze enters the window" "0" "$RC"
-run_brickie "$W" iface refreeze service/crypto#crypto
+run_brickie "$W" iface refreeze provider/crypto#crypto
 eq "V-4(f) empty-unfreeze refreeze exit code 0" "0" "$RC"
-eq "V-4(f) empty unfreeze ⇒ all four segments stay put" "0.1.0.0" "$(segments_of "$W" service/crypto#crypto)"
-run_brickie "$W" iface unfreeze service/crypto#crypto --note rfc.md
+eq "V-4(f) empty unfreeze ⇒ all four segments stay put" "0.1.0.0" "$(segments_of "$W" provider/crypto#crypto)"
+run_brickie "$W" iface unfreeze provider/crypto#crypto --note rfc.md
 sed -i 's/int(const uint8_t\*, size_t)/int(const uint8_t*, size_t, uint8_t*)/' \
-    "$W/service/crypto/brick.toml"
-run_brickie "$W" iface refreeze service/crypto#crypto --note rfc.md
+    "$W/provider/crypto/brick.toml"
+run_brickie "$W" iface refreeze provider/crypto#crypto --note rfc.md
 eq "V-4(a) refreeze exit code 0" "0" "$RC"
 eq "V-4(a) edited frozen entry ⇒ only COMPAT_GEN+1 (MAJOR not dragged in)" "1.1.0.0" \
-    "$(segments_of "$W" service/crypto#crypto)"
-python3 - "$W/service/crypto/brick.toml" <<'PY'
+    "$(segments_of "$W" provider/crypto#crypto)"
+python3 - "$W/provider/crypto/brick.toml" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 s = s.replace("[build]", '[[export.entries]]\nkind   = "func"\nname   = "crypto_new"\n'
                         'sig    = "int(void)"\nstatus = "experimental"\n\n[build]', 1)
 p.write_text(s)
 PY
-run_brickie "$W" iface publish service/crypto#crypto
+run_brickie "$W" iface publish provider/crypto#crypto
 eq "V-4(b) added entry publish exit code 0" "0" "$RC"
-eq "V-4(b) addition ⇒ COMPAT_GEN stays put + MINOR+1" "1.1.1.0" "$(segments_of "$W" service/crypto#crypto)"
-run_brickie "$W" ver bump service/crypto#crypto --rule major
+eq "V-4(b) addition ⇒ COMPAT_GEN stays put + MINOR+1" "1.1.1.0" "$(segments_of "$W" provider/crypto#crypto)"
+run_brickie "$W" ver bump provider/crypto#crypto --rule major
 eq "V-4(c) ver bump major exit code 0" "0" "$RC"
-eq "V-4(c) only MAJOR+1, COMPAT_GEN stays put" "1.2.0.0" "$(segments_of "$W" service/crypto#crypto)"
-run_brickie "$W" ver bump service/crypto#crypto --rule minor
-eq "V-4(d) minor ⇒ MINOR+1" "1.2.1.0" "$(segments_of "$W" service/crypto#crypto)"
-run_brickie "$W" ver bump service/crypto#crypto --rule revise
-eq "V-4(e) revise ⇒ REVISE+1" "1.2.1.1" "$(segments_of "$W" service/crypto#crypto)"
-run_brickie "$W" ver bump service/crypto#crypto --rule compat_gen
+eq "V-4(c) only MAJOR+1, COMPAT_GEN stays put" "1.2.0.0" "$(segments_of "$W" provider/crypto#crypto)"
+run_brickie "$W" ver bump provider/crypto#crypto --rule minor
+eq "V-4(d) minor ⇒ MINOR+1" "1.2.1.0" "$(segments_of "$W" provider/crypto#crypto)"
+run_brickie "$W" ver bump provider/crypto#crypto --rule revise
+eq "V-4(e) revise ⇒ REVISE+1" "1.2.1.1" "$(segments_of "$W" provider/crypto#crypto)"
+run_brickie "$W" ver bump provider/crypto#crypto --rule compat_gen
 eq "V-4 COMPAT_GEN is not a rule (usage error 2)" "2" "$RC"
 
 # ---- V-5 interface publishing
 section "V-5 publish output + idempotence + --check independent recompute"
 W="$(cp_fx publish)"
-run_json "$W" iface publish service/a#a
+run_json "$W" iface publish provider/a#a
 eq "V-5 first publish exit code 0" "0" "$RC"
 eqj "V-5 first publish noop=false" "$JQ_RESP" "data.noop" "false"
 eqjc "V-5 3 files written (snapshot+CHANGELOG+lock)" "$JQ_RESP" "written" "3"
-for f in "api/iface/service/a/a.toml" "api/iface/CHANGELOG.md" "brickie.lock"; do
+for f in "api/iface/provider/a/a.toml" "api/iface/CHANGELOG.md" "brickie.lock"; do
     eq "V-5 artifact in place $f" "yes" "$([ -f "$W/$f" ] && echo yes || echo no)"
 done
-grep_at_least "V-5 snapshot header carries NOT_ABI" 'NOT_ABI' "$W/api/iface/service/a/a.toml"
-grep_at_least "V-5 snapshot header carries hash_scope" 'hash_scope = "decl"' "$W/api/iface/service/a/a.toml"
-grep_at_least "V-5 snapshot header carries truth" 'truth = "decl"' "$W/api/iface/service/a/a.toml"
-grep_at_least "V-5 snapshot carries the brickie:generated marker" 'brickie:generated' "$W/api/iface/service/a/a.toml"
-grep_at_least "V-5 CHANGELOG keyed by version segment, no dates" '^## service/a#a v0\.1\.0\.0' "$W/api/iface/CHANGELOG.md"
+grep_at_least "V-5 snapshot header carries NOT_ABI" 'NOT_ABI' "$W/api/iface/provider/a/a.toml"
+grep_at_least "V-5 snapshot header carries hash_scope" 'hash_scope = "decl"' "$W/api/iface/provider/a/a.toml"
+grep_at_least "V-5 snapshot header carries truth" 'truth = "decl"' "$W/api/iface/provider/a/a.toml"
+grep_at_least "V-5 snapshot carries the brickie:generated marker" 'brickie:generated' "$W/api/iface/provider/a/a.toml"
+grep_at_least "V-5 CHANGELOG keyed by version segment, no dates" '^## provider/a#a v0\.1\.0\.0' "$W/api/iface/CHANGELOG.md"
 eq "V-5 CHANGELOG carries no dates (byte-reproducible)" "0" \
     "$(grep -cE '[0-9]{4}-[0-9]{2}-[0-9]{2}' "$W/api/iface/CHANGELOG.md" || true)"
 grep_at_least "V-5 lock carries the brickie:generated marker" 'brickie:generated' "$W/brickie.lock"
 H1="$(tree_hash "$W/api/iface"; printf '-'; cat "$W/brickie.lock" | sha256sum)"
-run_json "$W" iface publish service/a#a
+run_json "$W" iface publish provider/a#a
 eq "V-5 surface unchanged ⇒ no-op exit code 0" "0" "$RC"
 eqj "V-5 surface unchanged ⇒ noop=true" "$JQ_RESP" "data.noop" "true"
 eqjc "V-5 surface unchanged ⇒ writes no files" "$JQ_RESP" "written" "0"
 H2="$(tree_hash "$W/api/iface"; printf '-'; cat "$W/brickie.lock" | sha256sum)"
 eq "V-5 no-op is byte-identical" "$H1" "$H2"
-run_json "$W" iface status service/a#a --check
+run_json "$W" iface status provider/a#a --check
 eq "V-5 status --check consistent exit code 0" "0" "$RC"
 eqj "V-5 status --check consistent=true" "$JQ_RESP" "data.consistent" "true"
-run_json "$W" iface publish service/a#a --check
+run_json "$W" iface publish provider/a#a --check
 eq "V-5 publish --check exit code 0" "0" "$RC"
 eqjc "V-5 publish --check writes nothing" "$JQ_RESP" "written" "0"
 sed -i 's/^hash = "sha256:[0-9a-f]*"$/hash = "sha256:0000000000000000000000000000000000000000000000000000000000000000"/' \
-    "$W/api/iface/service/a/a.toml"
-run_json "$W" iface status service/a#a --check
+    "$W/api/iface/provider/a/a.toml"
+run_json "$W" iface status provider/a#a --check
 eq "V-5 hand-edited snapshot ⇒ status --check exit code 1" "1" "$RC"
 eqj "V-5 hand-edited snapshot ⇒ consistent=false" "$JQ_RESP" "data.consistent" "false"
 
@@ -217,31 +217,31 @@ eqj "V-5 hand-edited snapshot ⇒ consistent=false" "$JQ_RESP" "data.consistent"
 section "V-6 impact report for a frozen-entry edit / --note hard gate"
 W="$(cp_fx dependents)"
 printf 'RFC: signature change\n' >"$W/rfc.md"
-run_brickie "$W" iface publish service/crypto#crypto
+run_brickie "$W" iface publish provider/crypto#crypto
 eq "V-6 file-creation publish exit code 0" "0" "$RC"
-run_brickie "$W" iface unfreeze service/crypto#crypto --note rfc.md
+run_brickie "$W" iface unfreeze provider/crypto#crypto --note rfc.md
 eq "V-6 unfreeze exit code 0" "0" "$RC"
 sed -i 's/int(const uint8_t\*, size_t)/int(const uint8_t*, size_t, uint8_t*)/' \
-    "$W/service/crypto/brick.toml"
-run_json "$W" iface diff service/crypto#crypto
+    "$W/provider/crypto/brick.toml"
+run_json "$W" iface diff provider/crypto#crypto
 eq "V-6 diff exit code 0" "0" "$RC"
 eqj "V-6 changes[0].kind=CHANGED" "$JQ_RESP" "data.changes.0.kind" "CHANGED"
 eqj "V-6 change set takes the strictest: compat_gen_changed=true" "$JQ_RESP" "data.compat_gen_changed" "true"
 eqjc "V-6 2 direct dependents" "$JQ_RESP" "data.dependents.direct" "2"
 eqjc "V-6 3 transitive dependents" "$JQ_RESP" "data.dependents.transitive" "3"
 eqjc "V-6 1 unsatisfied dependent" "$JQ_RESP" "data.dependents.unsatisfied" "1"
-eqj "V-6 unsatisfied dependent named + reason" "$JQ_RESP" "data.dependents.unsatisfied.0.plugin" "service/consumer"
+eqj "V-6 unsatisfied dependent named + reason" "$JQ_RESP" "data.dependents.unsatisfied.0.plugin" "provider/consumer"
 grep_at_least "V-6 mismatch reason explains the compat_gen change" 'compat_gen changed from 0 to 1' "$OUT"
-run_json "$W" iface publish service/crypto#crypto
+run_json "$W" iface publish provider/crypto#crypto
 eq "V-6 requires unfreeze but --note is missing ⇒ exit code 1" "1" "$RC"
 grep_at_least "V-6 missing --note reports BRV-MF-0001" 'BRV-MF-0001' "$ERR"
-run_json "$W" iface publish service/crypto#crypto --note rfc.md
+run_json "$W" iface publish provider/crypto#crypto --note rfc.md
 eq "V-6 publish with --note exit code 0" "0" "$RC"
 eqj "V-6 COMPAT_GEN bumped after publish" "$JQ_RESP" "data.compat_gen" "1"
-run_brickie "$W" iface refreeze service/crypto#crypto
+run_brickie "$W" iface refreeze provider/crypto#crypto
 eq "V-6 publish in window consumed the baseline ⇒ refreeze is an empty unfreeze" "0" "$RC"
 # Use unfreeze here: an unchanged-surface publish is a no-op and skips the --note gate.
-run_brickie "$W" iface unfreeze service/crypto#crypto --note no-such.md
+run_brickie "$W" iface unfreeze provider/crypto#crypto --note no-such.md
 eq "V-6 --note points at a missing path ⇒ usage error 2" "2" "$RC"
 
 # ---- V-7 dependency solving
@@ -259,7 +259,7 @@ W="$(cp_fx showcase)"
 run_json "$W" dep closure
 eq "V-7 closure exit code 0" "0" "$RC"
 eqj "V-7 closure plugin list" "$JQ_RESP" "data.selected" \
-    '["app/hsm", "core/c_core", "iface/hsm-api", "platform/qemu-aarch64", "sched/coop", "service/crypto"]'
+    '["app/hsm", "core/c_core", "iface/hsm-api", "provider/crypto", "runtime/qemu-aarch64", "sched/coop"]'
 # Only the "provider first" invariant is required; nodes without init edges may sit anywhere.
 init_order_ok() {
     python3 - "$1" <<'PYX'
@@ -273,9 +273,9 @@ print("yes" if not bad and not missing else f"no:{bad}{missing}")
 PYX
 }
 eq "V-7 topological order puts the provider first for every init edge" "yes" "$(init_order_ok "$JQ_RESP")"
-eqj "V-7 total RAM (platform capacity not in Σ, S-14)" "$JQ_RESP" "data.totals.ram_kib" "48"
+eqj "V-7 total RAM (runtime capacity not in Σ, S-14)" "$JQ_RESP" "data.totals.ram_kib" "48"
 eqj "V-7 total stack" "$JQ_RESP" "data.totals.stack_kib" "4"
-eqj "V-7 platform capacity reported separately" "$JQ_RESP" "data.totals.platform_capacity.ram_kib" "8192"
+eqj "V-7 runtime capacity reported separately" "$JQ_RESP" "data.totals.runtime_capacity.ram_kib" "8192"
 eqj "V-7 budget" "$JQ_RESP" "data.totals.budget.ram_kib" "512"
 
 # ---- V-8 taxonomy and phase
@@ -302,7 +302,7 @@ eq "V-8 R2 reports BRV-DEP-0010" "1" "$(grep -c 'BRV-DEP-0010' "$ERR" || true)"
 eq "V-8 R2 does not report DEP-0009" "0" "$(grep -c 'BRV-DEP-0009' "$ERR" || true)"
 W="$(cp_fx phase-ok)"
 run_json "$W" check
-eq "V-8 sched-coop → platform is not a false positive, exit code 0" "0" "$RC"
+eq "V-8 sched-coop → runtime is not a false positive, exit code 0" "0" "$RC"
 eq "V-8 no false positive: no DEP-0009" "0" "$(grep -c 'BRV-DEP-0009' "$ERR" || true)"
 eq "V-8 no false positive: no DEP-0010" "0" "$(grep -c 'BRV-DEP-0010' "$ERR" || true)"
 
@@ -334,20 +334,20 @@ run_seed() { # run via the seed entry under a minimal PATH; CORE/GEN explicitly 
         BRICKIE_CORE="$CORE" BRICKIE_GEN="$GEN" "$DIST/brickie" "$@" ) >"$OUT" 2>"$ERR"
     RC=$?
 }
-run_seed "$W" new ability service/crypto --subkind service
+run_seed "$W" new ability provider/crypto --subkind service
 eq "V-9 loop ① new exit code 0" "0" "$RC"
 run_seed "$W" check
 eq "V-9 loop ② check exit code 0" "0" "$RC"
 run_seed "$W" dep closure
 eq "V-9 loop ③ dep closure exit code 0" "0" "$RC"
-run_seed "$W" iface publish service/crypto#crypto
+run_seed "$W" iface publish provider/crypto#crypto
 eq "V-9 loop ④ iface publish exit code 0" "0" "$RC"
-run_seed "$W" iface status service/crypto#crypto --check
+run_seed "$W" iface status provider/crypto#crypto --check
 eq "V-9 loop ⑤ iface status --check exit code 0" "0" "$RC"
 run_seed "$W" gen --check
 eq "V-9 loop ⑥ gen --check exit code 0" "0" "$RC"
 eq "V-9 the whole loop is green with no compiler present" "yes" \
-    "$([ -f "$W/api/iface/service/crypto/crypto.toml" ] && echo yes || echo no)"
+    "$([ -f "$W/api/iface/provider/crypto/crypto.toml" ] && echo yes || echo no)"
 grep_none "V-9 suite scripts do not call cargo/g++" \
     '(^|[;&|(])[[:space:]]*(cargo|g\+\+)[[:space:]]' \
     "$TESTS_DIR/run.sh" "$TESTS_DIR/purity.sh" "$TESTS_DIR/lib.sh"
@@ -364,45 +364,45 @@ A="$(cat "$OUT")"
 run_brickie "$W2" dep closure --json
 B="$(cat "$OUT")"
 eq "V-10② closure byte-identical with/without requires_iface" "$A" "$B"
-run_json "$W" iface show service/consumer#consumer
+run_json "$W" iface show provider/consumer#consumer
 eq "V-10③ iface show exit code 0" "0" "$RC"
 eq "V-10③ registered as info (NOT_ABI + requires_iface, two entries)" "2" \
     "$(grep -c '"severity": "info"' "$JQ_RESP" || true)"
 grep_at_least "V-10③ message says v0.1 does not scan" 'does not scan' "$JQ_RESP"
 grep_at_least "V-10③ span = compat.requires_iface[0]" 'compat.requires_iface\[0\]' "$JQ_RESP"
 W3="$(cp_fx req-iface)"
-sed -i '/^compat_gen = 0$/d' "$W3/service/consumer/brick.toml"
+sed -i '/^compat_gen = 0$/d' "$W3/provider/consumer/brick.toml"
 run_json "$W3" check
 eq "V-10① missing compat_gen ⇒ exit code 2" "2" "$RC"
 eq "V-10① reports BRV-MF-0001" "1" "$(grep -c 'BRV-MF-0001' "$ERR" || true)"
 grep_at_least "V-10① span names compat_gen" 'compat.requires_iface\[0\].compat_gen' "$ERR"
 W3="$(cp_fx req-iface)"
-sed -i '/^api_iface  = "native"$/d' "$W3/service/consumer/brick.toml"
+sed -i '/^api_iface  = "native"$/d' "$W3/provider/consumer/brick.toml"
 run_json "$W3" check
 eq "V-10① missing api_iface ⇒ exit code 2" "2" "$RC"
 
 # ---- V-11 hash semantics
 section "V-11 hash_scope/truth paired / NOT_ABI / hash cross-check"
 W="$(cp_fx truth)"
-run_json "$W" iface show service/x#x
+run_json "$W" iface show provider/x#x
 eqj "V-11① --json carries hash_scope" "$JQ_RESP" "data.hash_scope" "decl"
 eqj "V-11① --json carries truth" "$JQ_RESP" "data.truth" "decl"
 eqj "V-11③ --json carries not_abi" "$JQ_RESP" "data.not_abi" "true"
 grep_at_least "V-11③ text folds in the NOT_ABI hint" 'NOT_ABI' "$OUT"
 Ws="$(cp_fx truth)"
-sed -i 's/^hash_scope = "decl"$/hash_scope = "sym"/' "$Ws/service/x/brick.toml"
+sed -i 's/^hash_scope = "decl"$/hash_scope = "sym"/' "$Ws/provider/x/brick.toml"
 run_json "$Ws" check
 eq "V-11② hash_scope=sym ⇒ exit code 1" "1" "$RC"
 eq "V-11② reports BRV-IFACE-0011" "1" "$(grep -c 'BRV-IFACE-0011' "$ERR" || true)"
 Wt="$(cp_fx truth)"
-sed -i 's/^truth      = "decl"$/truth      = "header"/' "$Wt/service/x/brick.toml"
+sed -i 's/^truth      = "decl"$/truth      = "header"/' "$Wt/provider/x/brick.toml"
 run_json "$Wt" check
 eq "V-11② truth=header ⇒ exit code 1" "1" "$RC"
 eq "V-11② reports BRV-IFACE-0011" "1" "$(grep -c 'BRV-IFACE-0011' "$ERR" || true)"
 Wp="$(cp_fx publish)"
-run_brickie "$Wp" iface publish service/a#a
-sed -i 's/^hash         = ""$/hash         = "sha256:deadbeef"/' "$Wp/service/a/brick.toml"
-run_json "$Wp" iface status service/a#a
+run_brickie "$Wp" iface publish provider/a#a
+sed -i 's/^hash         = ""$/hash         = "sha256:deadbeef"/' "$Wp/provider/a/brick.toml"
+run_json "$Wp" iface status provider/a#a
 eq "V-11④ hash mismatch ⇒ status exit code 1" "1" "$RC"
 eq "V-11④ reports BRV-IFACE-0012" "1" "$(grep -c 'BRV-IFACE-0012' "$ERR" || true)"
 grep_at_least "V-11④ message names both recorded places" 'one truth recorded in two places' "$ERR"
@@ -453,17 +453,17 @@ eq "V-13 short range right-padded with 0 (>=0.1 ≡ >=0.1.0) ⇒ exit code 0" "0
 run_brickie "$W" dep tree
 grep_at_least "V-13 canonical output right-pads with 0" '\[runtime >=0\.1\.0\]' "$OUT"
 W="$(cp_fx publish)"
-run_brickie "$W" iface publish service/a#a
-python3 - "$W/service/a/brick.toml" <<'PY'
+run_brickie "$W" iface publish provider/a#a
+python3 - "$W/provider/a/brick.toml" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 p.write_text(s.replace("[build]", '[[export.entries]]\nkind   = "func"\nname   = "g"\n'
                                 'sig    = "int(void)"\nstatus = "experimental"\n\n[build]', 1))
 PY
-run_json "$W" iface publish service/a#a --set 0.0.9.0
+run_json "$W" iface publish provider/a#a --set 0.0.9.0
 eq "V-13 --set below the current version ⇒ exit code 1" "1" "$RC"
 eq "V-13 reports BRV-VER-0007" "1" "$(grep -c 'BRV-VER-0007' "$ERR" || true)"
-run_json "$W" iface publish service/a#a --set 0.1.9.0
+run_json "$W" iface publish provider/a#a --set 0.1.9.0
 eq "V-13 --set forward ⇒ exit code 0" "0" "$RC"
 
 # ---- V-14 profile gating
@@ -482,47 +482,47 @@ snapj "check-release-ver0004" "$JQ_RESP"
 # ---- V-15 append vs modify
 section "V-15 entry-level append vs modify (§5.4)"
 W="$(cp_fx iface-enum)"
-run_brickie "$W" iface publish service/enums#enums
-sed -i 's/^value = \["A", "B"\]$/value = ["A", "B", "C"]/' "$W/service/enums/brick.toml"
-run_json "$W" iface diff service/enums#enums
+run_brickie "$W" iface publish provider/enums#enums
+sed -i 's/^value = \["A", "B"\]$/value = ["A", "B", "C"]/' "$W/provider/enums/brick.toml"
+run_json "$W" iface diff provider/enums#enums
 eqj "V-15 enum appended at the end ⇒ EXTENDED" "$JQ_RESP" "data.changes.0.kind" "EXTENDED"
 eqj "V-15 EXTENDED needs no unfreeze ⇒ compat_gen unchanged" "$JQ_RESP" "data.compat_gen_changed" "false"
 eqj "V-15 EXTENDED verdict=green" "$JQ_RESP" "data.verdict" "green"
-run_json "$W" iface publish service/enums#enums
+run_json "$W" iface publish provider/enums#enums
 eq "V-15 EXTENDED publish exit code 0" "0" "$RC"
 eqj "V-15 EXTENDED ⇒ MINOR+1" "$JQ_RESP" "data.version" "0.1.1.0"
 W="$(cp_fx iface-enum)"
-run_brickie "$W" iface publish service/enums#enums
-sed -i 's/^value = \["A", "B"\]$/value = ["B", "A"]/' "$W/service/enums/brick.toml"
-run_json "$W" iface diff service/enums#enums
+run_brickie "$W" iface publish provider/enums#enums
+sed -i 's/^value = \["A", "B"\]$/value = ["B", "A"]/' "$W/provider/enums/brick.toml"
+run_json "$W" iface diff provider/enums#enums
 eqj "V-15 enum reordering ⇒ CHANGED" "$JQ_RESP" "data.changes.0.kind" "CHANGED"
 eqj "V-15 enum reordering ⇒ compat_gen_changed" "$JQ_RESP" "data.compat_gen_changed" "true"
 eqj "V-15 not unfrozen ⇒ verdict=red" "$JQ_RESP" "data.verdict" "red"
-run_json "$W" iface publish service/enums#enums
+run_json "$W" iface publish provider/enums#enums
 eq "V-15 publish without unfreeze ⇒ exit code 1" "1" "$RC"
 W="$(cp_fx iface-struct)"
-run_brickie "$W" iface publish service/st#st
-sed -i 's/^layout = "{ void\* p; }"$/layout = "{ void* p; int n; }"/' "$W/service/st/brick.toml"
-run_json "$W" iface diff service/st#st
+run_brickie "$W" iface publish provider/st#st
+sed -i 's/^layout = "{ void\* p; }"$/layout = "{ void* p; int n; }"/' "$W/provider/st/brick.toml"
+run_json "$W" iface diff provider/st#st
 eqj "V-15 struct field added ⇒ CHANGED(D22)" "$JQ_RESP" "data.changes.0.kind" "CHANGED"
 eqj "V-15 struct field added ⇒ verdict=red" "$JQ_RESP" "data.verdict" "red"
-run_json "$W" iface publish service/st#st
+run_json "$W" iface publish provider/st#st
 eq "V-15 struct field added without unfreeze ⇒ exit code 1" "1" "$RC"
 W="$(cp_fx iface-ops)"
-run_brickie "$W" iface publish service/sv#sv
-sed -i 's/^ops = \["open", "close"\]$/ops = ["open", "close", "seek"]/' "$W/service/sv/brick.toml"
-run_json "$W" iface diff service/sv#sv
+run_brickie "$W" iface publish provider/sv#sv
+sed -i 's/^ops = \["open", "close"\]$/ops = ["open", "close", "seek"]/' "$W/provider/sv/brick.toml"
+run_json "$W" iface diff provider/sv#sv
 eqj "V-15 ops slot added ⇒ CHANGED" "$JQ_RESP" "data.changes.0.kind" "CHANGED"
 eqj "V-15 ops slot added ⇒ verdict=red" "$JQ_RESP" "data.verdict" "red"
 W="$(cp_fx iface-macro)"
-run_brickie "$W" iface publish service/crypto#crypto
-python3 - "$W/service/crypto/brick.toml" <<'PY'
+run_brickie "$W" iface publish provider/crypto#crypto
+python3 - "$W/provider/crypto/brick.toml" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 p.write_text(s.replace("[build]", '[[export.entries]]\nkind   = "func"\nname   = "crypto_new"\n'
                                 'sig    = "int(void)"\nstatus = "experimental"\n\n[build]', 1))
 PY
-run_json "$W" iface diff service/crypto#crypto
+run_json "$W" iface diff provider/crypto#crypto
 eqj "V-15 added entry ⇒ ADDED" "$JQ_RESP" "data.changes.0.kind" "ADDED"
 eqj "V-15 ADDED needs no unfreeze ⇒ verdict=green" "$JQ_RESP" "data.verdict" "green"
 eqj "V-15 ADDED ⇒ compat_gen unchanged" "$JQ_RESP" "data.compat_gen_changed" "false"
@@ -531,13 +531,13 @@ eqj "V-15 ADDED ⇒ compat_gen unchanged" "$JQ_RESP" "data.compat_gen_changed" "
 section "V-16 unfreeze gate / release block / empty unfreeze leaves all four segments alone"
 W="$(cp_fx unfreeze)"
 printf 'RFC\n' >"$W/rfc.md"
-run_brickie "$W" iface unfreeze service/crypto#crypto
+run_brickie "$W" iface unfreeze provider/crypto#crypto
 eq "V-16 unfreeze without --note ⇒ nonzero (argparse usage error 2)" "2" "$RC"
-run_brickie "$W" iface publish service/crypto#crypto
+run_brickie "$W" iface publish provider/crypto#crypto
 eq "V-16 file-creation publish exit code 0" "0" "$RC"
-run_brickie "$W" iface unfreeze service/crypto#crypto --note rfc.md
+run_brickie "$W" iface unfreeze provider/crypto#crypto --note rfc.md
 eq "V-16 with --note, entering the window, exit code 0" "0" "$RC"
-run_json "$W" iface status service/crypto#crypto
+run_json "$W" iface status provider/crypto#crypto
 eqj "V-16 entering the window does not change the surface (snapshot_hash == recomputed_hash)" "$JQ_RESP" \
     "data.snapshot_hash" "$(jqget "$JQ_RESP" data.recomputed_hash)"
 run_json "$W" check --profile release
@@ -545,10 +545,10 @@ eq "V-16 release inside the window ⇒ exit code 1" "1" "$RC"
 eq "V-16 reports BRV-IFACE-0009" "1" "$(grep -c 'BRV-IFACE-0009' "$ERR" || true)"
 run_json "$W" check --profile dev
 eq "V-16 dev inside the window ⇒ exit code 0" "0" "$RC"
-before_cg="$(jqget "$(run_json "$W" ver show service/crypto#crypto; echo "$JQ_RESP")" data.version)"
-run_brickie "$W" iface refreeze service/crypto#crypto
+before_cg="$(jqget "$(run_json "$W" ver show provider/crypto#crypto; echo "$JQ_RESP")" data.version)"
+run_brickie "$W" iface refreeze provider/crypto#crypto
 eq "V-16 empty-unfreeze refreeze exit code 0" "0" "$RC"
-run_json "$W" ver show service/crypto#crypto
+run_json "$W" ver show provider/crypto#crypto
 eq "V-16 empty unfreeze ⇒ all four segments stay put" "$before_cg" "$(jqget "$JQ_RESP" data.version)"
 eqj "V-16 empty unfreeze leaves compat_gen alone" "$JQ_RESP" "data.segments.compat_gen" "0"
 
@@ -559,27 +559,27 @@ hash_of() { # hash_of <work> <id>
     jqget "$JQ_RESP" data.declaration_hash
 }
 W="$(cp_fx iface-macro)"
-H0="$(hash_of "$W" service/crypto#crypto)"
-sed -i 's/^value = "16"$/value = "4096"/' "$W/service/crypto/brick.toml"
-H1="$(hash_of "$W" service/crypto#crypto)"
+H0="$(hash_of "$W" provider/crypto#crypto)"
+sed -i 's/^value = "16"$/value = "4096"/' "$W/provider/crypto/brick.toml"
+H1="$(hash_of "$W" provider/crypto#crypto)"
 eq "V-17 BR_MAX 16→4096 yields a different hash" "different" \
     "$([ "$H0" != "$H1" ] && echo different || echo same)"
 contains "V-17 hash is sha256:..." "sha256:" "$H0"
 W="$(cp_fx iface-ops)"
-H0="$(hash_of "$W" service/sv#sv)"
-sed -i 's/^ops = \["open", "close"\]$/ops = ["open", "close", "seek"]/' "$W/service/sv/brick.toml"
-H1="$(hash_of "$W" service/sv#sv)"
+H0="$(hash_of "$W" provider/sv#sv)"
+sed -i 's/^ops = \["open", "close"\]$/ops = ["open", "close", "seek"]/' "$W/provider/sv/brick.toml"
+H1="$(hash_of "$W" provider/sv#sv)"
 eq "V-17 adding a service ops slot yields a different hash" "different" \
     "$([ "$H0" != "$H1" ] && echo different || echo same)"
 W="$(cp_fx iface-enum)"
-H0="$(hash_of "$W" service/enums#enums)"
-sed -i 's/^value = \["A", "B"\]$/value = ["B", "A"]/' "$W/service/enums/brick.toml"
-H1="$(hash_of "$W" service/enums#enums)"
+H0="$(hash_of "$W" provider/enums#enums)"
+sed -i 's/^value = \["A", "B"\]$/value = ["B", "A"]/' "$W/provider/enums/brick.toml"
+H1="$(hash_of "$W" provider/enums#enums)"
 eq "V-17 enum reordering is seen by the hash" "different" \
     "$([ "$H0" != "$H1" ] && echo different || echo same)"
 W="$(cp_fx iface-macro)"
-H0="$(hash_of "$W" service/crypto#crypto)"
-python3 - "$W/service/crypto/brick.toml" <<'PY'
+H0="$(hash_of "$W" provider/crypto#crypto)"
+python3 - "$W/provider/crypto/brick.toml" <<'PY'
 import pathlib, re, sys
 p = pathlib.Path(sys.argv[1]); s = p.read_text()
 head, tail = s.split("[build]", 1)
@@ -589,14 +589,14 @@ out = head.replace(blocks[0], "@@B0@@").replace(blocks[1], "@@B1@@")
 out = out.replace("@@B0@@", blocks[1].rstrip() + "\n\n").replace("@@B1@@", blocks[0].rstrip() + "\n\n")
 p.write_text(out + "[build]" + tail)
 PY
-run_json "$W" iface show service/crypto#crypto
+run_json "$W" iface show provider/crypto#crypto
 eq "V-17 declaration order does not affect the hash (IFACE-IR rule 1)" "$H0" "$(jqget "$JQ_RESP" data.declaration_hash)"
 W="$(cp_fx publish)"
-run_brickie "$W" iface publish service/a#a
-S1="$(sha256sum "$W/api/iface/service/a/a.toml" "$W/brickie.lock" "$W/api/iface/CHANGELOG.md")"
+run_brickie "$W" iface publish provider/a#a
+S1="$(sha256sum "$W/api/iface/provider/a/a.toml" "$W/brickie.lock" "$W/api/iface/CHANGELOG.md")"
 W2="$(cp_fx publish)"
-run_brickie "$W2" iface publish service/a#a
-S2="$(sha256sum "$W2/api/iface/service/a/a.toml" "$W2/brickie.lock" "$W2/api/iface/CHANGELOG.md")"
+run_brickie "$W2" iface publish provider/a#a
+S2="$(sha256sum "$W2/api/iface/provider/a/a.toml" "$W2/brickie.lock" "$W2/api/iface/CHANGELOG.md")"
 eq "V-17 same input, two publish runs byte-identical" "${S1//$W/}" "${S2//$W2/}"
 
 # ---- full command-surface coverage
@@ -637,33 +637,33 @@ sweep() {
     S graph-dot       0 'digraph deps'            data.format         dot        dep graph --format dot
     S graph-mermaid   0 'graph LR'                data.format         mermaid    dep graph --format mermaid
     S graph-json      0 'format=json'             data.format         json       dep graph --format json
-    S why-hit         0 'dependency path'                data.found          true       dep why app/hsm service/crypto
-    S why-miss        0 'dependency path not found'          data.found          false      dep why service/crypto app/hsm
+    S why-hit         0 'dependency path'                data.found          true       dep why app/hsm provider/crypto
+    S why-miss        0 'dependency path not found'          data.found          false      dep why provider/crypto app/hsm
     S dep-index       0 'reverse dependency index'            data.dependents     present    dep index
     S gen             0 'generated-file rebuild plan'              data.count          6          gen
     S gen-check       0 'byte-identical to recomputation'              data.count          6          gen --check
-    S ver-show        0 'interface unit service/crypto#crypto' data.id     service/crypto#crypto ver show service/crypto
+    S ver-show        0 'interface unit provider/crypto#crypto' data.id     provider/crypto#crypto ver show provider/crypto
     S iface-list      0 'interface unit'                data.count          5          iface list
-    S iface-show      0 'declaration hash'             data.not_abi        true       iface show service/crypto#crypto
-    S iface-diff0     0 'interface change set'              data.id             present    iface diff service/crypto#crypto
-    S iface-status0   1 'consistency inconsistent:'                  data.consistent     false      iface status service/crypto#crypto
-    S iface-status-c0 1 'consistency inconsistent:'                  data.consistent     false      iface status service/crypto#crypto --check
-    S iface-publish   0 'interface publish'                data.noop           false      iface publish service/crypto#crypto
-    S iface-status1   0 'consistency consistent:'                    data.consistent     true       iface status service/crypto#crypto
-    S iface-noop      0 'no-op'                  data.noop           true       iface publish service/crypto#crypto
-    S iface-pchk      0 'no-op'                  data.noop           true       iface publish service/crypto#crypto --check
-    S ver-bump        0 'version bump'                data.rule           revise     ver bump service/crypto#crypto --rule revise
-    S iface-freeze    0 'promotion proposal pending'              data.proposal       present    iface freeze service/crypto#crypto --note rfc.md
-    S iface-deprecate 0 'deprecate'                data.status         deprecated iface deprecate service/crypto#crypto --note rfc.md
-    S iface-undep     0 'undeprecate'            data.status         frozen     iface undeprecate service/crypto#crypto --note rfc.md
-    S iface-unfreeze  0 'enter window'                data.freeze_state   unfreezing iface unfreeze service/crypto#crypto --note rfc.md
-    S iface-refreeze  0 'leave window'                data.freeze_state   frozen     iface refreeze service/crypto#crypto
+    S iface-show      0 'declaration hash'             data.not_abi        true       iface show provider/crypto#crypto
+    S iface-diff0     0 'interface change set'              data.id             present    iface diff provider/crypto#crypto
+    S iface-status0   1 'consistency inconsistent:'                  data.consistent     false      iface status provider/crypto#crypto
+    S iface-status-c0 1 'consistency inconsistent:'                  data.consistent     false      iface status provider/crypto#crypto --check
+    S iface-publish   0 'interface publish'                data.noop           false      iface publish provider/crypto#crypto
+    S iface-status1   0 'consistency consistent:'                    data.consistent     true       iface status provider/crypto#crypto
+    S iface-noop      0 'no-op'                  data.noop           true       iface publish provider/crypto#crypto
+    S iface-pchk      0 'no-op'                  data.noop           true       iface publish provider/crypto#crypto --check
+    S ver-bump        0 'version bump'                data.rule           revise     ver bump provider/crypto#crypto --rule revise
+    S iface-freeze    0 'promotion proposal pending'              data.proposal       present    iface freeze provider/crypto#crypto --note rfc.md
+    S iface-deprecate 0 'deprecate'                data.status         deprecated iface deprecate provider/crypto#crypto --note rfc.md
+    S iface-undep     0 'undeprecate'            data.status         frozen     iface undeprecate provider/crypto#crypto --note rfc.md
+    S iface-unfreeze  0 'enter window'                data.freeze_state   unfreezing iface unfreeze provider/crypto#crypto --note rfc.md
+    S iface-refreeze  0 'leave window'                data.freeze_state   frozen     iface refreeze provider/crypto#crypto
     S dep-add         0 'dep add only prints a snippet'      data.found          true       dep add app/hsm iface/hsm-api --kind runtime
-    S dep-rm          0 'dep rm only prints a snippet'       data.found          false      dep rm app/hsm service/nowhere
+    S dep-rm          0 'dep rm only prints a snippet'       data.found          false      dep rm app/hsm provider/nowhere
 
     local W0="$W"
     W="$(new_work)"
-    S new  0 'skeleton generated' data.count 6 new ability service/svc --subkind service
+    S new  0 'skeleton generated' data.count 6 new ability provider/svc --subkind service
     W="$(new_work)"
     S init 0 'skeleton generated' data.count 8 init hsm
     W="$W0"
@@ -712,14 +712,14 @@ W="$(cp_fx res-conflict)"
 run_json "$W" check
 eq "V-19④ IRQ/DMA exclusivity conflict ⇒ exit code 1" "1" "$RC"
 eqjc "V-19④ two conflicts (irq + dma)" "$JQ_RESP" "diagnostics" "2"
-grep_at_least "V-19④ reports both parties (irq)" 'irq `32` is declared by both `service/irq-a`.*and `service/irq-b`' "$ERR"
-grep_at_least "V-19④ reports both parties (dma)" 'dma_channel `3` is declared by both `service/irq-a`.*and `service/irq-b`' "$ERR"
+grep_at_least "V-19④ reports both parties (irq)" 'irq `32` is declared by both `provider/irq-a`.*and `provider/irq-b`' "$ERR"
+grep_at_least "V-19④ reports both parties (dma)" 'dma_channel `3` is declared by both `provider/irq-a`.*and `provider/irq-b`' "$ERR"
 W="$(cp_fx priv-pool-ok)"
 run_json "$W" check
 eq "V-19 orthogonality table: pool lifecycle (alloc/free, granularity=pool) is P2 ⇒ legal, 0" "0" "$RC"
 W="$(cp_fx priv-platform-p4)"
 run_json "$W" check
-eq "V-19 orthogonality table: map/protect are P4, platform may declare them ⇒ legal, 0" "0" "$RC"
+eq "V-19 orthogonality table: map/protect are P4, the runtime plugin may declare them ⇒ legal, 0" "0" "$RC"
 
 # ---- V-20 show family (ADR-0036): closure view + runtime init flow
 section "V-20 show family (bricks / brick-init-flow)"
@@ -728,7 +728,7 @@ run_brickie "$W" show bricks
 eq "V-20① show bricks exit code 0" "0" "$RC"
 grep_at_least "V-20① lists the closure" 'product bricks .*6 plugins, 2 roots' "$OUT"
 grep_at_least "V-20① marks a product root" 'app/hsm .*root:app' "$OUT"
-grep_at_least "V-20① marks a closure member" 'platform/qemu-aarch64 .*dep' "$OUT"
+grep_at_least "V-20① marks a closure member" 'runtime/qemu-aarch64 .*dep' "$OUT"
 grep_at_least "V-20① reports the budget it spends" 'product budget RAM 512 / stack 16' "$OUT"
 run_json "$W" show bricks
 eqj "V-20① roots counted" "$JQ_RESP" "data.totals.roots" "2"
@@ -737,24 +737,24 @@ eqj "V-20① root origin is recorded" "$JQ_RESP" "data.bricks.0.origin" "root"
 
 run_brickie "$W" show brick-init-flow
 eq "V-20② show brick-init-flow exit code 0" "0" "$RC"
-grep_at_least "V-20② platform early_init is the first step" '0  *early  *early_init  *platform/qemu-aarch64' "$OUT"
+grep_at_least "V-20② runtime early_init is the first step" '0  *early  *early_init  *runtime/qemu-aarch64' "$OUT"
 grep_none "V-20② no APP early_init step" 'early  *early_init  *app/hsm' "$OUT"
 grep_at_least "V-20② APP init comes after every LATE init" 'app/hsm  *APP init last' "$OUT"
 grep_at_least "V-20② APP start is the last start step" 'app/hsm  *APP last: explicit rule' "$OUT"
 grep_at_least "V-20② the IRQ hand-off is a step of its own" 'br_irq_cpu_enable\(\): after all init returned, before START' "$OUT"
 grep_at_least "V-20② the order basis names the runtime sort" 'FIFO Kahn over kind=init edges' "$OUT"
 run_json "$W" show brick-init-flow
-eqj "V-20② four early steps (platform + 3, no APP)" "$JQ_RESP" "data.counts.early" "4"
+eqj "V-20② four early steps (runtime + 3, no APP)" "$JQ_RESP" "data.counts.early" "4"
 eqj "V-20② exactly one IRQ step" "$JQ_RESP" "data.counts.irq" "1"
 eqj "V-20② five start steps" "$JQ_RESP" "data.counts.start" "5"
 eqj "V-20② exactly one APP-phase init" "$JQ_RESP" "data.counts.app" "1"
 hasj "V-20② the runtime order is reported" "$JQ_RESP" "data.order"
-eqj "V-20② the first step is the platform's early_init" "$JQ_RESP" "data.steps.0.hook" "early_init"
-eqj "V-20② the first step names the platform" "$JQ_RESP" "data.steps.0.plugin" "platform/qemu-aarch64"
+eqj "V-20② the first step is the runtime plugin's early_init" "$JQ_RESP" "data.steps.0.hook" "early_init"
+eqj "V-20② the first step names the runtime plugin" "$JQ_RESP" "data.steps.0.plugin" "runtime/qemu-aarch64"
 eqj "V-20② no phase divergence in a consistent tree" "$JQ_RESP" "data.counts.selftest" "0"
 
 # The runtime order is not the name-tie-broken `dep closure` order: for this fixture they differ
-# (section order puts platform before sched/coop, the name order does not), which is exactly why
+# (section order puts the runtime plugin before sched/coop, the name order does not), which is exactly why
 # the two views exist separately (ADR-0036 §2.1).
 run_json "$W" dep closure
 eqj "V-20② dep closure keeps its own topological order" "$JQ_RESP" "data.topo_order.0" "app/hsm"
@@ -811,28 +811,28 @@ eq "V-B① build --dry-run exit code 0" "0" "$RC"
 eqj "V-B① dry_run flag" "$JQ_RESP" "data.dry_run" "true"
 eqj "V-B① unit count = 6 (core + 5 plugins)" "$JQ_RESP" "data.unit_count" "6"
 eqjc "V-B① data.units matches unit_count" "$JQ_RESP" "data.units" "6"
-eqj "V-B① source file count" "$JQ_RESP" "data.source_count" "7"
-eqj "V-B① steps_total = 16 (7 compiles + 6 archives + 1 symbol audit + link + objcopy)" "$JQ_RESP" "data.steps_total" "16"
-eqjc "V-B① dry-run lists all steps" "$JQ_RESP" "data.steps" "16"
+eqj "V-B① source file count" "$JQ_RESP" "data.source_count" "6"
+eqj "V-B① steps_total = 14 (6 compiles + 5 archives + 1 symbol audit + link + objcopy)" "$JQ_RESP" "data.steps_total" "14"
+eqjc "V-B① dry-run lists all steps" "$JQ_RESP" "data.steps" "14"
 keysj "V-B① data.units[0] shape" "$JQ_RESP" "data.units.0" \
     "defines,dir,includes,name,plugin,sources,sources_list"
 keysj "V-B① data.steps[0] shape (contract §5.4)" "$JQ_RESP" "data.steps.0" \
     "argv,consumes,expect_timeout,fail_code,group,judge,kind,label,log,outputs,stdout_lines,timeout_s,tool_code"
 eqj "V-B① steps[0].fail_code = BRV-BLD-0011" "$JQ_RESP" "data.steps.0.fail_code" "BRV-BLD-0011"
 eqj "V-B① steps[0].tool_code = BRV-BLD-0005" "$JQ_RESP" "data.steps.0.tool_code" "BRV-BLD-0005"
-eqj "V-B① target comes from the platform plugin" "$JQ_RESP" "data.target.owner" "platform/qemu-aarch64"
+eqj "V-B① target comes from the runtime plugin" "$JQ_RESP" "data.target.owner" "runtime/qemu-aarch64"
 eqj "V-B① target.arch" "$JQ_RESP" "data.target.arch" "aarch64"
 eqj "V-B① target.cross" "$JQ_RESP" "data.target.cross" "aarch64-linux-gnu-"
 eqj "V-B① target.linker_script (relative to the plugin root)" "$JQ_RESP" "data.target.linker_script" \
-    "platform/qemu-aarch64/src/link.ld"
+    "runtime/qemu-aarch64/src/link.ld"
 STEPS_JSON="$(jqget "$JQ_RESP" data.steps)"
 contains "V-B① arch flag (-mstrict-align) enters the compile argv" '"-mstrict-align"' "$STEPS_JSON"
 contains "V-B① arch flag (-mgeneral-regs-only) enters the compile argv" '"-mgeneral-regs-only"' "$STEPS_JSON"
-contains "V-B① linker script enters -Wl,-T" '"-Wl,-T,platform/qemu-aarch64/src/link.ld"' "$STEPS_JSON"
+contains "V-B① linker script enters -Wl,-T" '"-Wl,-T,runtime/qemu-aarch64/src/link.ld"' "$STEPS_JSON"
 contains "V-B① -Wl,-Map uses the artifact path" '"-Wl,-Map,build/brick.map"' "$STEPS_JSON"
 contains "V-B① declared cflags enter argv" '"-DFX_BUILD=1"' "$STEPS_JSON"
 contains "V-B① the assembly source (.S) is in the plan too (paths relative to root)" \
-    'platform/qemu-aarch64/src/start.S' "$STEPS_JSON"
+    'runtime/qemu-aarch64/src/start.S' "$STEPS_JSON"
 # Every plan path is relative to root; the [build].sources glob is relative to the plugin root.
 asm_ok() { # asm_ok <resp.json> ⇒ yes / no:…
     "$PY" - "$1" <<'PYX'
@@ -879,7 +879,7 @@ eq "V-B② reports BRV-BLD-0001" "1" "$(grep -c 'BRV-BLD-0001' "$ERR" || true)"
 
 # ---------------------------------------------------------------- ③ missing [build.target]
 W="$(cp_fx build)"
-"$PY" - "$W/platform/qemu-aarch64/brick.toml" <<'PY'
+"$PY" - "$W/runtime/qemu-aarch64/brick.toml" <<'PY'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 p.write_text(p.read_text().split("[build.target]")[0].rstrip() + "\n")
@@ -973,7 +973,7 @@ eq "V-B⑨ build/gen/build.mk in place" "yes" "$([ -f "$W/build/gen/build.mk" ] 
 eq "V-B⑨ build/gen/build.ninja in place" "yes" "$([ -f "$W/build/gen/build.ninja" ] && echo yes || echo no)"
 grep_at_least "V-B⑨ build.mk carries the generated marker" 'brickie:generated' "$W/build/gen/build.mk"
 grep_at_least "V-B⑨ build.mk is BR-D4 backend A" '\$\(ELF\): \$\(OBJS\)' "$W/build/gen/build.mk"
-grep_at_least "V-B⑨ build.mk writes the linker script into the rule" '-Wl,-T,platform/qemu-aarch64/src/link.ld' \
+grep_at_least "V-B⑨ build.mk writes the linker script into the rule" '-Wl,-T,runtime/qemu-aarch64/src/link.ld' \
     "$W/build/gen/build.mk"
 grep_at_least "V-B⑨ build.ninja carries the generated marker" 'brickie:generated' "$W/build/gen/build.ninja"
 grep_at_least "V-B⑨ build.ninja is BR-D4 backend B" '^rule link$' "$W/build/gen/build.ninja"
@@ -993,11 +993,11 @@ eq "V-B⑨ dry-run writes no incremental state (it is derived)" "no" \
 section "V-22 source disciplines (R1/R2/R3, ADR-0038)"
 mk_discipline_tree() { # mk_discipline_tree <work>: two ability plugins, one provider, one consumer
     local w="$1"
-    mkdir -p "$w/service/prov/src" "$w/service/prov/include" "$w/service/cons/src" "$w/service/cons/include"
-    cat >"$w/service/prov/brick.toml" <<'TOML'
+    mkdir -p "$w/provider/prov/src" "$w/provider/prov/include" "$w/provider/cons/src" "$w/provider/cons/include"
+    cat >"$w/provider/prov/brick.toml" <<'TOML'
 schema = 1
 [plugin]
-name = "service/prov"
+name = "provider/prov"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -1020,20 +1020,20 @@ sig = "int (void)"
 sources = ["src/*.c"]
 includes = ["include"]
 TOML
-    cat >"$w/service/prov/include/prov.h" <<'H'
+    cat >"$w/provider/prov/include/prov.h" <<'H'
 #ifndef PROV_H
 #define PROV_H
 int prov_ping(void);
 #endif
 H
-    cat >"$w/service/prov/src/prov.c" <<'C'
+    cat >"$w/provider/prov/src/prov.c" <<'C'
 #include "prov.h"
 int prov_ping(void) { return 7; }
 C
-    cat >"$w/service/cons/brick.toml" <<'TOML'
+    cat >"$w/provider/cons/brick.toml" <<'TOML'
 schema = 1
 [plugin]
-name = "service/cons"
+name = "provider/cons"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -1041,14 +1041,14 @@ lang = "c"
 phase = "late"
 version = "0.1.0.0"
 [[dep]]
-name = "service/prov"
+name = "provider/prov"
 range = ">=0.1.0"
 kind = "runtime"
 [build]
 sources = ["src/*.c"]
 includes = ["include"]
 TOML
-    cat >"$w/service/cons/src/cons.c" <<'C'
+    cat >"$w/provider/cons/src/cons.c" <<'C'
 #include "prov.h"
 int cons_run(void) { return prov_ping(); }
 C
@@ -1056,7 +1056,7 @@ C
 
 # ① R1: a prototype with no definition in the same .c
 W="$(new_work)"; mk_discipline_tree "$W"
-printf 'int lonely(void);\n' >>"$W/service/cons/src/cons.c"
+printf 'int lonely(void);\n' >>"$W/provider/cons/src/cons.c"
 run_json "$W" check --src
 eq "V-22① prototype without definition ⇒ exit code 1" "1" "$RC"
 eqj "V-22① code is BRV-SRC-0001" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0001"
@@ -1064,33 +1064,33 @@ contains "V-22① message names the symbol" 'lonely' "$(cat "$ERR")"
 
 # ② R1: an `extern` declaration with no definition in the same .c
 W="$(new_work)"; mk_discipline_tree "$W"
-printf 'extern int elsewhere;\n' >>"$W/service/cons/src/cons.c"
+printf 'extern int elsewhere;\n' >>"$W/provider/cons/src/cons.c"
 run_json "$W" check --src
 eq "V-22② extern without definition ⇒ exit code 1" "1" "$RC"
 eqj "V-22② code is BRV-SRC-0001" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0001"
 
 # ③ R2: a file-scope object without `static`
 W="$(new_work)"; mk_discipline_tree "$W"
-printf 'int leaked_counter;\n' >>"$W/service/cons/src/cons.c"
+printf 'int leaked_counter;\n' >>"$W/provider/cons/src/cons.c"
 run_json "$W" check --src
 eq "V-22③ non-static global ⇒ exit code 1" "1" "$RC"
 eqj "V-22③ code is BRV-SRC-0002" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0002"
 # …and `static` is accepted (the positive half, so the rule is not "no globals")
 W="$(new_work)"; mk_discipline_tree "$W"
-printf 'static int s_counter;\n' >>"$W/service/cons/src/cons.c"
+printf 'static int s_counter;\n' >>"$W/provider/cons/src/cons.c"
 run_json "$W" check --src
 eq "V-22③ static global ⇒ exit code 0" "0" "$RC"
 
 # ④ R2: a public header exporting an object
 W="$(new_work)"; mk_discipline_tree "$W"
-printf 'extern int prov_state;\n' >>"$W/service/prov/include/prov.h"
+printf 'extern int prov_state;\n' >>"$W/provider/prov/include/prov.h"
 run_json "$W" check --src
 eq "V-22④ header exports an object ⇒ exit code 1" "1" "$RC"
 eqj "V-22④ code is BRV-SRC-0002" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0002"
 
 # ⑤ R2: `kind = "var"` in the export surface is refused
 W="$(new_work)"; mk_discipline_tree "$W"
-"$PY" - "$W/service/prov/brick.toml" <<'PYX'
+"$PY" - "$W/provider/prov/brick.toml" <<'PYX'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 p.write_text(p.read_text() + '[[export.entries]]\nkind = "var"\nname = "prov_state"\n')
@@ -1101,29 +1101,29 @@ eqj "V-22⑤ code is BRV-SRC-0002" "$JQ_RESP" "diagnostics.0.code" "BRV-SRC-0002
 
 # ⑥ R3: an include of a plugin that is only a *transitive* dependency
 W="$(new_work)"; mk_discipline_tree "$W"
-mkdir -p "$W/service/mid/src" "$W/service/mid/include"
+mkdir -p "$W/provider/mid/src" "$W/provider/mid/include"
 "$PY" - "$W" <<'PYX'
 import pathlib, sys
 w = pathlib.Path(sys.argv[1])
-(w / "service/mid/brick.toml").write_text(
-    'schema = 1\n[plugin]\nname = "service/mid"\nplugin_type = "ability"\n'
+(w / "provider/mid/brick.toml").write_text(
+    'schema = 1\n[plugin]\nname = "provider/mid"\nplugin_type = "ability"\n'
     'api_type = "native"\nsubkind = "service"\nlang = "c"\nphase = "late"\nversion = "0.1.0.0"\n'
-    '[[dep]]\nname = "service/prov"\nrange = ">=0.1.0"\nkind = "runtime"\n'
+    '[[dep]]\nname = "provider/prov"\nrange = ">=0.1.0"\nkind = "runtime"\n'
     '[build]\nsources = ["src/*.c"]\nincludes = ["include"]\n')
-cons = w / "service/cons/brick.toml"
-cons.write_text(cons.read_text().replace('name = "service/prov"', 'name = "service/mid"'))
+cons = w / "provider/cons/brick.toml"
+cons.write_text(cons.read_text().replace('name = "provider/prov"', 'name = "provider/mid"'))
 PYX
 run_json "$W" check --deps
 eq "V-22⑥ transitive-only include ⇒ exit code 1" "1" "$RC"
 eqj "V-22⑥ code is BRV-DEP-0012" "$JQ_RESP" "diagnostics.0.code" "BRV-DEP-0012"
 contains "V-22⑥ message says 'direct'" 'no **direct** dependency' "$(cat "$ERR")"
 # …and declaring the dependency directly makes it green again
-"$PY" - "$W/service/cons/brick.toml" <<'PYX'
+"$PY" - "$W/provider/cons/brick.toml" <<'PYX'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 p.write_text(p.read_text().replace(
     "[build]",
-    '[[dep]]\nname = "service/prov"\nrange = ">=0.1.0"\nkind = "runtime"\n\n[build]'))
+    '[[dep]]\nname = "provider/prov"\nrange = ">=0.1.0"\nkind = "runtime"\n\n[build]'))
 PYX
 run_json "$W" check --deps
 eq "V-22⑥ declaring it directly ⇒ exit code 0" "0" "$RC"
@@ -1131,15 +1131,15 @@ eq "V-22⑥ declaring it directly ⇒ exit code 0" "0" "$RC"
 # ⑧ the symbol half: the `.a` audit judge (the exact criteria `brickie build` runs)
 W="$(new_work)"; mk_discipline_tree "$W"
 cat >"$TMPROOT/nm-declared.log" <<'NM'
-build/lib/service/cons.a:cons.o:                 U prov_ping
-build/lib/service/prov.a:prov.o:0000000000000000 T prov_ping
+build/lib/provider/cons.a:cons.o:                 U prov_ping
+build/lib/provider/prov.a:prov.o:0000000000000000 T prov_ping
 NM
 core_judge "$W" symbol-audit "$TMPROOT/nm-declared.log"
 eqj "V-22⑧ audit: declared dependency ⇒ failed=0" "$JUDGE_RESP" "data.failed" "0"
-"$PY" - "$W/service/cons/brick.toml" <<'PYX'
+"$PY" - "$W/provider/cons/brick.toml" <<'PYX'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
-p.write_text(p.read_text().replace('[[dep]]\nname = "service/prov"\nrange = ">=0.1.0"\nkind = "runtime"\n', ''))
+p.write_text(p.read_text().replace('[[dep]]\nname = "provider/prov"\nrange = ">=0.1.0"\nkind = "runtime"\n', ''))
 PYX
 core_judge "$W" symbol-audit "$TMPROOT/nm-declared.log"
 eqj "V-22⑧ audit: undeclared dependency ⇒ failed=1" "$JUDGE_RESP" "data.failed" "1"
@@ -1150,16 +1150,16 @@ contains "V-22⑧ audit names the symbol" 'prov_ping' "$(cat "$JUDGE_RESP")"
 # even when the dependency is declared.
 W="$(new_work)"; mk_discipline_tree "$W"
 cat >"$TMPROOT/nm-data.log" <<'NM'
-build/lib/service/cons.a:cons.o:                 U prov_state
-build/lib/service/prov.a:prov.o:0000000000000008 D prov_state
+build/lib/provider/cons.a:cons.o:                 U prov_state
+build/lib/provider/prov.a:prov.o:0000000000000008 D prov_state
 NM
 core_judge "$W" symbol-audit "$TMPROOT/nm-data.log"
 eqj "V-22⑨ audit: data symbol across plugins ⇒ failed=1" "$JUDGE_RESP" "data.failed" "1"
 eqj "V-22⑨ audit: code is BRV-SRC-0002" "$JUDGE_RESP" "diagnostics.0.code" "BRV-SRC-0002"
 # A weak symbol is not evidence: every descriptor defines `br_plugin_gen_total` weak.
 cat >"$TMPROOT/nm-weak.log" <<'NM'
-build/lib/service/cons.a:cons.o:                 w br_plugin_gen_total
-build/lib/service/prov.a:prov.o:0000000000000000 V br_plugin_gen_total
+build/lib/provider/cons.a:cons.o:                 w br_plugin_gen_total
+build/lib/provider/prov.a:prov.o:0000000000000000 V br_plugin_gen_total
 NM
 core_judge "$W" symbol-audit "$TMPROOT/nm-weak.log"
 eqj "V-22⑨ audit: weak symbols are ignored ⇒ failed=0" "$JUDGE_RESP" "data.failed" "0"
@@ -1237,9 +1237,9 @@ eqj "V-22⑦ brickOS tree: src scope errors=0" "$JQ_RESP" "data.summary.errors" 
 
 # ---- V-23 HAL layer (ADR-0039): `hal` is a peer of `ability`, `ability` selects it
 section "V-23 hal layer (BRV-TAX-0025 + direction table)"
-mk_layers() { # mk_layers <work>: core + platform + one ability + one hal brick
+mk_layers() { # mk_layers <work>: core + runtime + one ability + one hal brick
     local w="$1"
-    mkdir -p "$w"/{core/c_core,platform/soc,service/impl,hal/iface}/src
+    mkdir -p "$w"/{core/c_core,runtime/soc,provider/impl,hal/iface}/src
     cat >"$w/core/c_core/brick.toml" <<'TOML'
 schema = 1
 [plugin]
@@ -1253,11 +1253,11 @@ version = "0.1.0.0"
 sources = ["src/*.c"]
 TOML
     printf 'int core_probe(void);\nint core_probe(void){return 0;}\n' >"$w/core/c_core/src/a.c"
-    cat >"$w/platform/soc/brick.toml" <<'TOML'
+    cat >"$w/runtime/soc/brick.toml" <<'TOML'
 schema = 1
 [plugin]
-name = "platform/soc"
-plugin_type = "platform"
+name = "runtime/soc"
+plugin_type = "runtime"
 api_type = "native"
 lang = "c"
 phase = "core"
@@ -1273,7 +1273,7 @@ kind = "runtime"
 [build]
 sources = ["src/*.c"]
 TOML
-    printf 'int plat_probe(void);\nint plat_probe(void){return 0;}\n' >"$w/platform/soc/src/a.c"
+    printf 'int plat_probe(void);\nint plat_probe(void){return 0;}\n' >"$w/runtime/soc/src/a.c"
     cat >"$w/hal/iface/brick.toml" <<'TOML'
 schema = 1
 [plugin]
@@ -1291,10 +1291,10 @@ kind = "runtime"
 sources = ["src/*.c"]
 TOML
     printf 'int hal_probe(void);\nint hal_probe(void){return 0;}\n' >"$w/hal/iface/src/a.c"
-    cat >"$w/service/impl/brick.toml" <<'TOML'
+    cat >"$w/provider/impl/brick.toml" <<'TOML'
 schema = 1
 [plugin]
-name = "service/impl"
+name = "provider/impl"
 plugin_type = "ability"
 api_type = "native"
 subkind = "service"
@@ -1312,7 +1312,7 @@ kind = "runtime"
 [build]
 sources = ["src/*.c"]
 TOML
-    printf 'int impl_probe(void);\nint impl_probe(void){return 0;}\n' >"$w/service/impl/src/a.c"
+    printf 'int impl_probe(void);\nint impl_probe(void){return 0;}\n' >"$w/provider/impl/src/a.c"
     cat >"$w/product.toml" <<'TOML'
 schema = 1
 [product]
@@ -1320,17 +1320,17 @@ name = "t"
 version = "0.1.0.0"
 stage = "dev"
 app = { brick = "", requires = {} }
-platform = { brick = "platform/soc", requires = {} }
+runtime = { brick = "runtime/soc", requires = {} }
 core = { brick = "core/c_core", requires = {} }
 [[product.ability]]
-a = { brick = "service/impl", requires = {} }
+a = { brick = "provider/impl", requires = {} }
 TOML
 }
 
-# ① the happy path: platform -> hal and ability -> hal are both legal
+# ① the happy path: runtime -> hal and ability -> hal are both legal
 W="$(new_work)"; mk_layers "$W"
 run_json "$W" check
-eq "V-23① platform→hal and ability→hal ⇒ exit code 0" "0" "$RC"
+eq "V-23① runtime→hal and ability→hal ⇒ exit code 0" "0" "$RC"
 eqj "V-23① summary errors=0" "$JQ_RESP" "data.summary.errors" "0"
 
 # ② `hal -> ability` is forbidden (the infrastructure must not depend on an implementation)
@@ -1339,7 +1339,7 @@ W="$(new_work)"; mk_layers "$W"
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 p.write_text(p.read_text().replace("[build]",
-    '[[dep]]\nname = "service/impl"\nrange = ">=0.1.0"\nkind = "runtime"\n\n[build]'))
+    '[[dep]]\nname = "provider/impl"\nrange = ">=0.1.0"\nkind = "runtime"\n\n[build]'))
 PYX
 run_json "$W" check --deps
 eq "V-23② hal→ability ⇒ exit code 1" "1" "$RC"
@@ -1356,9 +1356,9 @@ PYX
 run_json "$W" check
 eq "V-23③ hal/ declared as ability ⇒ exit code 1" "1" "$RC"
 grep_at_least "V-23③ code is BRV-TAX-0025" 'BRV-TAX-0025' "$ERR"
-# …and the reverse: a `service/` name declaring plugin_type = "hal"
+# …and the reverse: a `provider/` name declaring plugin_type = "hal"
 W="$(new_work)"; mk_layers "$W"
-"$PY" - "$W/service/impl/brick.toml" <<'PYX'
+"$PY" - "$W/provider/impl/brick.toml" <<'PYX'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 p.write_text(p.read_text().replace('plugin_type = "ability"', 'plugin_type = "hal"')
@@ -1368,12 +1368,12 @@ run_json "$W" check
 # A shape error outranks a red verdict (BRV-D9: exit 2 > 1): the phase/subkind combination is
 # shape-invalid for the new type, so the aggregate exit code is 2 even though BRV-TAX-0025 is also
 # reported (the grep below proves the semantic code is there, not just the shape one).
-eq "V-23③ service/ declared as hal ⇒ exit code 2 (shape outranks red)" "2" "$RC"
+eq "V-23③ provider/ declared as hal ⇒ exit code 2 (shape outranks red)" "2" "$RC"
 grep_at_least "V-23③ code is BRV-TAX-0025 (reverse)" 'BRV-TAX-0025' "$ERR"
 
 # ④ the `framework` subkind is retired: it is a shape error now
 W="$(new_work)"; mk_layers "$W"
-"$PY" - "$W/service/impl/brick.toml" <<'PYX'
+"$PY" - "$W/provider/impl/brick.toml" <<'PYX'
 import pathlib, sys
 p = pathlib.Path(sys.argv[1])
 p.write_text(p.read_text().replace('subkind = "service"', 'subkind = "framework"'))
@@ -1393,6 +1393,180 @@ eq "V-23⑤ core keeps 11 units after the split" "11" "$EQ_CORE_UNITS"
 eq "V-23⑤ hal/int exports the interrupt units" "4" "$(grep -c '^\[\[export\]\]' "$REPO_ROOT/hal/int/brick.toml")"
 eq "V-23⑤ hal/mm exports the memory units" "2" "$(grep -c '^\[\[export\]\]' "$REPO_ROOT/hal/mm/brick.toml")"
 eq "V-23⑤ hal/sched exports the scheduling units" "3" "$(grep -c '^\[\[export\]\]' "$REPO_ROOT/hal/sched/brick.toml")"
+
+# ---- V-24 naming convergence (ADR-0040): the target runtime vs. the provider namespace
+section "V-24 runtime/provider naming"
+mk_names() { # mk_names <work>: core + runtime + one hal + one provider
+    local w="$1"
+    mkdir -p "$w"/{core/c_core,runtime/soc,hal/iface,provider/impl}/src
+    cat >"$w/core/c_core/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "core/c_core"
+plugin_type = "core"
+api_type = "native"
+lang = "c"
+phase = "early"
+version = "0.1.0.0"
+[build]
+sources = ["src/*.c"]
+TOML
+    printf 'int core_probe(void)\n{\n    return 0;\n}\n' >"$w/core/c_core/src/a.c"
+    cat >"$w/runtime/soc/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "runtime/soc"
+plugin_type = "runtime"
+api_type = "native"
+lang = "c"
+phase = "core"
+version = "0.1.0.0"
+[[res]]
+kind = "ram"
+used_kib = 4096
+[[dep]]
+name = "core/c_core"
+range = ">=0.1.0"
+kind = "runtime"
+[[dep]]
+name = "hal/iface"
+range = ">=0.1.0"
+kind = "runtime"
+[build]
+sources = ["src/*.c"]
+[build.target]
+arch = "aarch64"
+cross = "aarch64-linux-gnu-"
+linker_script = "src/link.ld"
+TOML
+    printf 'int rt_probe(void)\n{\n    return 0;\n}\n' >"$w/runtime/soc/src/a.c"
+    printf 'SECTIONS { }\n' >"$w/runtime/soc/src/link.ld"
+    cat >"$w/hal/iface/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "hal/iface"
+plugin_type = "hal"
+api_type = "native"
+lang = "c"
+phase = "early"
+version = "0.1.0.0"
+[[dep]]
+name = "core/c_core"
+range = ">=0.1.0"
+kind = "runtime"
+[build]
+sources = ["src/*.c"]
+TOML
+    printf 'int hal_probe(void)\n{\n    return 0;\n}\n' >"$w/hal/iface/src/a.c"
+    cat >"$w/provider/impl/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "provider/impl"
+plugin_type = "ability"
+api_type = "native"
+subkind = "service"
+lang = "c"
+phase = "late"
+version = "0.1.0.0"
+[[dep]]
+name = "core/c_core"
+range = ">=0.1.0"
+kind = "runtime"
+[[dep]]
+name = "hal/iface"
+range = ">=0.1.0"
+kind = "runtime"
+[build]
+sources = ["src/*.c"]
+TOML
+    printf 'int impl_probe(void)\n{\n    return 0;\n}\n' >"$w/provider/impl/src/a.c"
+    cat >"$w/product.toml" <<'TOML'
+schema = 1
+[product]
+name = "t"
+version = "0.1.0.0"
+stage = "dev"
+app = { brick = "", requires = {} }
+runtime = { brick = "runtime/soc", requires = {} }
+core = { brick = "core/c_core", requires = {} }
+[[product.ability]]
+p = { brick = "provider/impl", requires = {} }
+TOML
+}
+
+# ① the new names are accepted: runtime type + runtime/ namespace + provider/ namespace
+W="$(new_work)"; mk_names "$W"
+run_json "$W" check
+eq "V-24① runtime + provider names ⇒ exit code 0" "0" "$RC"
+eqj "V-24① summary errors=0" "$JQ_RESP" "data.summary.errors" "0"
+# …and `provider/` derives subkind=service, so its phase is LATE
+run_json "$W" check
+eq "V-24① provider/ derives subkind service (phase late accepted)" "0" "$RC"
+
+# ② the old names are gone: `plugin_type = "platform"` is a shape error
+W="$(new_work)"; mk_names "$W"
+"$PY" - "$W/runtime/soc/brick.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('plugin_type = "runtime"', 'plugin_type = "platform"'))
+PYX
+run_json "$W" check
+eq "V-24② plugin_type=platform ⇒ exit code 2 (shape)" "2" "$RC"
+contains "V-24② message lists the legal types" "runtime" "$(cat "$ERR")"
+
+# ③ the old namespaces are gone: `service/` no longer means an ability
+W="$(new_work)"; mk_names "$W"
+mkdir -p "$W/service/old/src"
+cat >"$W/service/old/brick.toml" <<'TOML'
+schema = 1
+[plugin]
+name = "service/old"
+plugin_type = "ability"
+api_type = "native"
+subkind = "service"
+lang = "c"
+phase = "late"
+version = "0.1.0.0"
+[build]
+sources = ["src/*.c"]
+TOML
+printf 'int old_probe(void)\n{\n    return 0;\n}\n' >"$W/service/old/src/a.c"
+"$PY" - "$W/product.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text().replace('p = { brick = "provider/impl"', 'p = { brick = "service/old"'))
+PYX
+run_json "$W" check
+eq "V-24③ service/ namespace ⇒ red (BRV-TAX-0013 warns, shape stays ok)" "0" "$RC"
+contains "V-24③ warning names the recommended namespaces" "provider" "$(cat "$ERR")"
+
+# ④ the runtime plugin owns [build.target]; an ability may not declare it
+W="$(new_work)"; mk_names "$W"
+"$PY" - "$W/provider/impl/brick.toml" <<'PYX'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+p.write_text(p.read_text() + '\n[build.target]\narch = "aarch64"\n')
+PYX
+run_json "$W" check
+# Shape error, not a red verdict: which plugin may own `[build.target]` is a declaration-surface
+# shape rule (exit 2), unlike the semantic codes that return 1.
+eq "V-24④ [build.target] on an ability ⇒ exit code 2 (shape)" "2" "$RC"
+contains "V-24④ message names the runtime type" "runtime" "$(cat "$ERR")"
+
+# ⑤ the real tree: the two namespaces exist, the old ones do not
+run_json "$REPO_ROOT" show bricks
+eq "V-24⑤ brickOS closure exit code 0" "0" "$RC"
+eqj "V-24⑤ the closure has exactly one runtime plugin" "$JQ_RESP" "data.totals.by_type.runtime" "1"
+eq "V-24⑤ the runtime plugin is runtime/qemu-aarch64" "runtime/qemu-aarch64" \
+    "$(find "$REPO_ROOT/runtime" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | head -1 | sed 's|^|runtime/|')"
+eq "V-24⑤ the old platform/ directory is gone" "gone" \
+    "$([ -d "$REPO_ROOT/platform" ] && echo here || echo gone)"
+eq "V-24⑤ the old service/ directory is gone" "gone" \
+    "$([ -d "$REPO_ROOT/service" ] && echo here || echo gone)"
+eq "V-24⑤ provider/ holds the seven concrete implementations" "7" \
+    "$(find "$REPO_ROOT/provider" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+eq "V-24⑤ the contract headers moved to br/runtime/" "4" \
+    "$(find "$REPO_ROOT/runtime/qemu-aarch64/include/br/runtime" -name '*.h' | wc -l | tr -d ' ')"
 
 # ---- N-1 negative acceptance: help surface
 section "N-1 no undelivered §5.4 command appears in --help"
@@ -1432,7 +1606,7 @@ for c in api-dump verify dbg pack add env; do
 done
 run_brickie "$W" show nope
 eq "N-2 brickie show <unknown> ⇒ exit code 2" "2" "$RC"
-run_brickie "$W" iface check service/x#x
+run_brickie "$W" iface check provider/x#x
 eq "N-2 brickie iface check ⇒ exit code 2" "2" "$RC"
 run_brickie "$W" frobnicate
 eq "N-2 unknown subcommand ⇒ exit code 2" "2" "$RC"
@@ -1442,16 +1616,16 @@ eq "N-2 no subcommand ⇒ exit code 2" "2" "$RC"
 # ---- N-3 machine-file ownership
 section "N-3 machine files are written only by machines / hand edits go red"
 W="$(cp_fx publish)"
-run_brickie "$W" iface publish service/a#a
-PLUGIN_BEFORE="$(sha256sum "$W/service/a/brick.toml")"
-run_brickie "$W" iface publish service/a#a
+run_brickie "$W" iface publish provider/a#a
+PLUGIN_BEFORE="$(sha256sum "$W/provider/a/brick.toml")"
+run_brickie "$W" iface publish provider/a#a
 eq "N-3 publish does not rewrite brick.toml (§9.1.1 rule 1)" "$PLUGIN_BEFORE" \
-    "$(sha256sum "$W/service/a/brick.toml")"
-grep_at_least "N-3 the snapshot is a machine file (carries the generated marker)" 'brickie:generated' "$W/api/iface/service/a/a.toml"
+    "$(sha256sum "$W/provider/a/brick.toml")"
+grep_at_least "N-3 the snapshot is a machine file (carries the generated marker)" 'brickie:generated' "$W/api/iface/provider/a/a.toml"
 grep_at_least "N-3 the lock is a machine file" 'brickie:generated' "$W/brickie.lock"
 sed -i 's/^hash = "sha256:[0-9a-f]*"$/hash = "sha256:1111111111111111111111111111111111111111111111111111111111111111"/' \
-    "$W/api/iface/service/a/a.toml"
-run_json "$W" iface status service/a#a
+    "$W/api/iface/provider/a/a.toml"
+run_json "$W" iface status provider/a#a
 eq "N-3 hand-edited snapshot ⇒ status exit code 1" "1" "$RC"
 eqj "N-3 hand-edited snapshot ⇒ consistent=false" "$JQ_RESP" "data.consistent" "false"
 
@@ -1473,18 +1647,18 @@ run_json "$W" show brick-init-flow
 snapj "show-init-flow" "$JQ_RESP"
 run_json "$W" iface list
 snapj "iface-list" "$JQ_RESP"
-run_json "$W" iface show service/crypto#crypto
+run_json "$W" iface show provider/crypto#crypto
 snapj "iface-show" "$JQ_RESP"
 W="$(cp_fx cycle)"
 run_json "$W" check
 snapj "check-cycle" "$JQ_RESP"
 W="$(new_work)"
-run_json "$W" new ability service/crypto --subkind service
+run_json "$W" new ability provider/crypto --subkind service
 snapj "new-json" "$JQ_RESP"
 W="$(cp_fx publish)"
-run_json "$W" iface publish service/a#a
+run_json "$W" iface publish provider/a#a
 snapj "publish" "$JQ_RESP"
-run_json "$W" iface status service/a#a
+run_json "$W" iface status provider/a#a
 snapj "iface-status" "$JQ_RESP"
 
 # ---- summary

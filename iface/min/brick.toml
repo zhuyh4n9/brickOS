@@ -9,13 +9,13 @@ phase         = "late"
 version       = "0.1.0.0"
 
 symbol_prefix = "iface_min_"
-summary       = "core 极简别名皮肤: 只把 runtime/core 的 log / time / version 三个单元转出(APP 只依赖 Interface)"
+summary       = "core 极简别名皮肤: 只把 provider/core 的 log / time / version 三个单元转出(APP 只依赖 Interface)"
 license       = "WTFPL"
 
 # Why a **skin** and not a copy of core's declarations (ADR-0038 §4): this plugin used to
 # re-declare core's entries by hand (`form = "api"`), i.e. a second source of truth that drifts on
 # every core edit. A skin re-exports instead: `reexport_of` names the units, the declarations stay
-# in core, and `runtime/core` remains the core layer's only outward door.
+# in core, and `provider/core` remains the core layer's only outward door.
 
 [[res]]
 kind     = "ram"
@@ -41,7 +41,7 @@ br_time_t    = "br_u64"
 br_err_t     = "int"
 
 [[dep]]
-name  = "runtime/core"
+name  = "provider/core"
 range = ">=0.1.0"
 kind  = "type"
 
@@ -56,7 +56,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["runtime/core#log"]
+reexport_of  = ["provider/core#log"]
 
 [[export]]
 name         = "min-time"
@@ -66,7 +66,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["runtime/core#time"]
+reexport_of  = ["provider/core#time"]
 
 [[export]]
 name         = "min-version"
@@ -76,7 +76,7 @@ version      = "0.1.0.0"
 compat_gen   = 0
 freeze_state = "unfrozen"
 status       = "experimental"
-reexport_of  = ["runtime/core#version"]
+reexport_of  = ["provider/core#version"]
 
 [build]
 sources  = ["src/*.c"]

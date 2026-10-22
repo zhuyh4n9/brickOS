@@ -146,5 +146,5 @@ emmc3(16 MiB 的 eMMC 卡, 镜像从扇区 0 开始; 由 driver/uboot-mmc 注册
 2. **`br_mount_register` 的挂载点自动 mkdir 在本件用不上**: `/assets` 由 `fs/tmpfs` 的"挂载点在父 FS 缺失时自动 mkdir"(vfs 的 `mkdir_p`)建出来。
 3. **lookup 是 O(深度) 的路径重走**: 每次 `lookup` 都把"父的相对路径 + 名字"交给上游 `erofs_ilookup()` 从卷根重走(上游只认路径), 目录块内是线性扫描; v1 单 APP 规模可接受, 改进方向是 inode 缓存 nid → 包装的映射(v2 的 dcache, SD-3 明确推迟)。
 4. **超级块 checksum 不校验**: 上游 `super.c` 只把 `checksum` 读进 `sbi.checksum` 而不验(`sb_csum` 特性位存在时同样不验)。
-5. **`emmc3` 这个设备名是约定**: 本插件按 `br_bdev_get("emmc3")` 取设备; 平台侧(`platform/qemu-aarch64/brick.toml` 的 `[build.target.qemu].extra`)挂了**四块** `-device sdhci-pci` + `-device emmc`(`emmc0/1/2` = 三卷 FAT, `emmc3` = EROFS 卡), 后备文件与分工见 `tools/mk-fs-images.sh`。**设备不在 ⇒ 挂载失败 ⇒ 首败即停机**(刻意的); 这条与 `br-wa-fs-001`(挂载点/设备名是代码常量)是同一处欠债的两个侧面。
+5. **`emmc3` 这个设备名是约定**: 本插件按 `br_bdev_get("emmc3")` 取设备; 平台侧(`runtime/qemu-aarch64/brick.toml` 的 `[build.target.qemu].extra`)挂了**四块** `-device sdhci-pci` + `-device emmc`(`emmc0/1/2` = 三卷 FAT, `emmc3` = EROFS 卡), 后备文件与分工见 `tools/mk-fs-images.sh`。**设备不在 ⇒ 挂载失败 ⇒ 首败即停机**(刻意的); 这条与 `br-wa-fs-001`(挂载点/设备名是代码常量)是同一处欠债的两个侧面。
 6. **单块 I/O 走逐扇区**: 4 KiB 块 = 8 次单扇区 `read`, 满足 `max_rw ≤ 64` 的最强形式, 代价是命令数; 将来可用 `max_rw` 做多扇区批量, 但"整扇区读进中转缓冲"的约束仍在。

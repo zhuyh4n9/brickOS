@@ -2,7 +2,7 @@
   "command": "iface show",
   "data": {
     "compat_gen": 0,
-    "declaration_hash": "sha256:4876b2696f65ffb2d478602c4222d689c8d39201618fb7810ab92208956c2e85",
+    "declaration_hash": "sha256:4e01d9f0d59668722280a9a6ed2191b284bcd9dbc10bad187dd980f423a49966",
     "entries": [
       {
         "kind": "func",
@@ -25,7 +25,7 @@
     ],
     "freeze_state": "frozen",
     "hash_scope": "decl",
-    "id": "service/crypto#crypto",
+    "id": "provider/crypto#crypto",
     "not_abi": true,
     "published": false,
     "snapshot_hash": null,
@@ -36,13 +36,13 @@
       "api_iface": "native",
       "compat_gen": 0,
       "declaration_freeze_state": "frozen",
-      "declaration_hash": "sha256:4876b2696f65ffb2d478602c4222d689c8d39201618fb7810ab92208956c2e85",
-      "file": "service/crypto/brick.toml",
+      "declaration_hash": "sha256:4e01d9f0d59668722280a9a6ed2191b284bcd9dbc10bad187dd980f423a49966",
+      "file": "provider/crypto/brick.toml",
       "form": "api",
       "freeze_state": "frozen",
       "hash_scope": "decl",
-      "id": "service/crypto#crypto",
-      "provider": "service/crypto",
+      "id": "provider/crypto#crypto",
+      "provider": "provider/crypto",
       "published": false,
       "reexport_of": [],
       "snapshot_freeze_state": null,
@@ -58,10 +58,10 @@
   "diagnostics": [
     {
       "code": "BRV-MF-0001",
-      "file": "service/crypto/brick.toml",
+      "file": "provider/crypto/brick.toml",
       "severity": "info",
       "span": "export[0]",
-      "target": "service/crypto"
+      "target": "provider/crypto"
     }
   ],
   "exit_code": 0,

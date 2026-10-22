@@ -56,17 +56,17 @@
   "diagnostics": [
     {
       "code": "BRV-MF-0001",
-      "file": "service/consumer/brick.toml",
+      "file": "provider/consumer/brick.toml",
       "severity": "info",
       "span": "compat.requires_iface[0]",
-      "target": "service/consumer"
+      "target": "provider/consumer"
     },
     {
       "code": "BRV-VER-0004",
-      "file": "service/consumer/brick.toml",
+      "file": "provider/consumer/brick.toml",
       "severity": "error",
       "span": "compat.requires_iface[0]",
-      "target": "service/consumer"
+      "target": "provider/consumer"
     }
   ],
   "exit_code": 1,

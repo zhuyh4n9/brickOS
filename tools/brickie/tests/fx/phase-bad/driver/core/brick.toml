@@ -15,7 +15,7 @@ hash_scope = "decl"
 truth      = "decl"
 
 [[dep]]
-name  = "service/late"
+name  = "provider/late"
 range = "*"
 kind  = "init"
 
